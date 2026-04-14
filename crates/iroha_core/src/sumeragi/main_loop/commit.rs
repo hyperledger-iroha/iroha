@@ -1352,8 +1352,16 @@ impl Actor {
                     if let (Some(signers), Some(view_signers)) =
                         (qc_signers.as_ref(), view_signers.as_ref())
                     {
+                        let accepted_votes = self.accepted_votes_for_qc_slot(
+                            crate::sumeragi::consensus::Phase::Commit,
+                            block_hash,
+                            pending_height,
+                            pending_view,
+                            lock.epoch,
+                            &topology,
+                        );
                         let aggregate_signature = match super::aggregate_vote_signatures(
-                            &self.vote_log,
+                            &accepted_votes,
                             crate::sumeragi::consensus::Phase::Commit,
                             block_hash,
                             pending_height,
@@ -1980,13 +1988,21 @@ impl Actor {
                 );
 
                 if let Some(signers) = qc_signers.as_ref() {
+                    let accepted_votes = self.accepted_votes_for_qc_slot(
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                        &topology,
+                    );
                     let aggregate_signature = committed_cached_qc_tail.as_ref().map_or_else(
                         || {
                             view_signers
                                 .as_ref()
                                 .and_then(|view_signers| {
                                     super::aggregate_vote_signatures(
-                                        &self.vote_log,
+                                        &accepted_votes,
                                         crate::sumeragi::consensus::Phase::Commit,
                                         block_hash,
                                         pending_height,
@@ -2461,8 +2477,16 @@ impl Actor {
             if let (Some(signers), Some(view_signers)) =
                 (quorum_signers.as_ref(), view_signers.as_ref())
             {
+                let accepted_votes = self.accepted_votes_for_qc_slot(
+                    crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    &topology,
+                );
                 let aggregate_signature = match super::aggregate_vote_signatures(
-                    &self.vote_log,
+                    &accepted_votes,
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
                     pending_height,
@@ -3652,6 +3676,51 @@ impl Actor {
         }
 
         let now = Instant::now();
+        if height == self.committed_height_snapshot().saturating_add(1) {
+            let stall_window = self.frontier_slot_lag_window();
+            let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
+            let request_stalled = self
+                .pending
+                .missing_commit_qc_requests
+                .get(&block_hash)
+                .is_some_and(|stats| {
+                    now.saturating_duration_since(stats.last_dependency_progress) >= stall_window
+                        || now.saturating_duration_since(stats.first_seen) >= dwell_window
+                });
+            let lag_window_expired = self.frontier_slot_lag_window_expired(height, now);
+            let mut catchup_advance = FrontierRecoveryAdvance::None;
+            if request_stalled || lag_window_expired {
+                catchup_advance = self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset") {
+                if matches!(catchup_advance, FrontierRecoveryAdvance::None)
+                    && request_stalled
+                    && self.request_range_pull_from_anchor(
+                        height,
+                        "frontier_stall_reset_fallback",
+                        now,
+                    )
+                {
+                    catchup_advance = FrontierRecoveryAdvance::CatchUp;
+                }
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    request_stalled,
+                    catchup_advance = ?catchup_advance,
+                    trigger,
+                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                );
+                return true;
+            }
+        }
+
         let retry_window = self.missing_block_retry_window_with_rbc_progress(
             block_hash,
             height,
@@ -3999,15 +4068,34 @@ impl Actor {
         &self,
         vote: &crate::sumeragi::consensus::Vote,
     ) -> bool {
-        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        let local_public_key = self.common_config.peer.id().public_key().clone();
+        let identity_key = (
+            vote.phase,
+            vote.height,
+            vote.view,
+            vote.epoch,
+            vote.signer,
+            local_public_key.clone(),
+        );
         if self
-            .vote_log
-            .get(&key)
+            .vote_log_identities
+            .get(&identity_key)
             .is_some_and(|existing| existing.block_hash == vote.block_hash)
         {
             return true;
         }
-        let verify_key = super::VoteVerifyKey::from_vote(vote);
+        if self
+            .vote_log
+            .get(&(vote.phase, vote.height, vote.view, vote.epoch, vote.signer))
+            .filter(|existing| {
+                self.vote_identity_key_from_vote(existing).as_ref() == Some(&identity_key)
+            })
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        {
+            return true;
+        }
+        let verify_key =
+            super::VoteVerifyKey::from_vote_with_signer_public_key(vote, Some(local_public_key));
         self.subsystems
             .vote_verify
             .pending_validation
@@ -4085,14 +4173,15 @@ impl Actor {
             );
             return false;
         }
-        let sent_key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            height,
-            view,
-            epoch,
-            local_idx,
-        );
-        if self.vote_log.contains_key(&sent_key) {
+        if self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::Commit,
+                height,
+                view,
+                epoch,
+            )
+            .is_some_and(|existing| existing.block_hash == block_hash)
+        {
             debug!(
                 height,
                 view,
@@ -4119,6 +4208,7 @@ impl Actor {
         }
         if let Some(lock) = self.locked_qc {
             if !self.block_known_for_lock(lock.subject_block_hash) {
+                let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
                     view,
@@ -4335,14 +4425,12 @@ impl Actor {
                 return false;
             }
         }
-        let sent_key = (
+        if let Some(existing) = self.local_same_slot_vote(
             crate::sumeragi::consensus::Phase::NewView,
             height,
             view,
             epoch,
-            local_idx,
-        );
-        if let Some(existing) = self.vote_log.get(&sent_key) {
+        ) {
             if existing.block_hash != highest_qc.subject_block_hash {
                 warn!(
                     height,
@@ -4489,7 +4577,7 @@ impl Actor {
     ) -> Option<u64> {
         let local_peer = self.common_config.peer.id();
         let mut highest: Option<u64> = None;
-        for vote in self.vote_log.values() {
+        for vote in self.stored_votes() {
             if vote.phase != crate::sumeragi::consensus::Phase::NewView {
                 continue;
             }
@@ -4545,15 +4633,24 @@ impl Actor {
             epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signature_topology,
+        );
         if !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 block_hash,
                 height,
                 view,
                 epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         let vote_count = signers.len();
@@ -5492,15 +5589,24 @@ impl Actor {
             qc.epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            &signature_topology,
+        );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 qc.subject_block_hash,
                 qc.height,
                 qc.view,
                 qc.epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         if signers.is_empty() {
@@ -5570,7 +5676,7 @@ impl Actor {
             return None;
         }
         let aggregate_signature = match super::aggregate_vote_signatures(
-            &self.vote_log,
+            &accepted_votes,
             qc.phase,
             qc.subject_block_hash,
             qc.height,
@@ -5864,20 +5970,33 @@ impl Actor {
             .into_iter()
             .collect();
         for key in orphan_keys {
+            self.refresh_retained_rbc_summary_from_local_payload(key);
             // Commit cleanup should retain the final status summary for observability and
             // restart recovery, while still clearing all runtime-only RBC state. If the live
             // session has already retired (for example, exact-frontier snapshots), commit means
-            // the retained summary has reached the same delivered terminal state.
+            // the retained summary has reached the same delivered terminal state with the
+            // complete deterministic chunk set available from the local block payload.
             if let Some(mut summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key)
                 && !summary.invalid
-                && !summary.delivered
             {
-                summary.delivered = true;
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .status_handle
-                    .update(summary, SystemTime::now());
+                let mut changed = false;
+                if self.block_payload_available_for_progress(key.0)
+                    && summary.received_chunks != summary.total_chunks
+                {
+                    summary.received_chunks = summary.total_chunks;
+                    changed = true;
+                }
+                if !summary.delivered {
+                    summary.delivered = true;
+                    changed = true;
+                }
+                if changed {
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .status_handle
+                        .update(summary, SystemTime::now());
+                }
             }
             self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
             self.clear_rbc_runtime_state(key, false);
@@ -5937,6 +6056,44 @@ impl Actor {
             .flatten();
         if let Some(bytes) = bytes {
             self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
+    }
+
+    fn refresh_retained_rbc_summary_from_local_payload(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let needs_refresh = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none_or(|summary| {
+                !summary.invalid && summary.received_chunks < summary.total_chunks
+            });
+        if !needs_refresh {
+            return;
+        }
+
+        let Some(block) = self.local_signed_block_for_hash(key.0) else {
+            return;
+        };
+        let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
+        let payload_hash = Hash::new(&payload_bytes);
+        if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
+            key,
+            block.as_ref(),
+            payload_bytes.as_slice(),
+            payload_hash,
+        ) {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                ?err,
+                "failed to refresh retained committed RBC snapshot from local payload"
+            );
         }
     }
 
@@ -6616,7 +6773,9 @@ impl Actor {
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.vote_log_identities.clear();
         self.vote_validation_cache.clear();
+        self.vote_validation_cache_identities.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
         self.recovery_pending_baseline_restore.clear();

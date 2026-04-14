@@ -10,6 +10,7 @@ use std::{
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
     account::Account,
@@ -23,6 +24,7 @@ use iroha::data_model::{
     name::Name,
     prelude::*,
 };
+use iroha_config::parameters::defaults;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -36,15 +38,28 @@ const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_DOMAIN_ID: &str = "ivm.universal";
-const WAIT_HEIGHT: u64 = 16;
+const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
+const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(120);
+const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
+const STAKE_ASSET_NAME: &str = "NPOS Stake";
+const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
 
 #[derive(Clone, Copy)]
 enum StakeActivationProfile {
     MinStakeFilter,
     EntityCorrelationCap,
+}
+
+fn validator_account_id_for_index(index: usize) -> AccountId {
+    let key_pair = KeyPair::from_seed(
+        format!("integration_tests::sumeragi_npos_stake_activation::{index}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(key_pair.public_key().clone())
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
@@ -56,6 +71,25 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    defaults::nexus::fees::fee_asset_id()
+        .parse()
+        .expect("default nexus fee asset id")
+}
+
+fn nexus_fee_asset_id_literal() -> String {
+    nexus_fee_asset_definition_id().to_string()
+}
+
+#[test]
+fn opaque_nexus_fee_asset_id_uses_explicit_fixture_name() {
+    let fee_asset_id = nexus_fee_asset_definition_id();
+    assert!(fee_asset_id.is_opaque_canonical());
+
+    let _definition = AssetDefinition::new(fee_asset_id, NumericSpec::default())
+        .with_name(NEXUS_FEE_ASSET_NAME.to_owned());
 }
 
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
@@ -84,12 +118,17 @@ fn stake_genesis_post_topology_transactions(
     let stake_domain = DomainId::parse_fully_qualified(STAKE_DOMAIN_ID).expect("stake domain id");
     let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain id");
     let stake_asset_id = stake_asset_definition_id();
+    let fee_asset_id = nexus_fee_asset_definition_id();
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let definition = {
-        let __asset_definition_id = stake_asset_id.clone();
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_name(STAKE_ASSET_NAME.to_owned())
+    }
+    .with_metadata(Metadata::default());
+    let fee_definition = {
+        AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
+            .with_name(NEXUS_FEE_ASSET_NAME.to_owned())
     }
     .with_metadata(Metadata::default());
 
@@ -97,9 +136,24 @@ fn stake_genesis_post_topology_transactions(
         Register::domain(Domain::new(stake_domain.clone())).into(),
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
+        Register::asset_definition(fee_definition).into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
     ];
-    for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    if genesis_account_id != ALICE_ID.clone() {
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
+            )
+            .into(),
+        );
+    }
+    for (index, _peer) in topology.iter().enumerate() {
+        let validator_id = validator_account_id_for_index(index);
         let (stake, _) = profile_for_index(index, profile);
         if validator_id != genesis_account_id {
             bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -107,11 +161,18 @@ fn stake_genesis_post_topology_transactions(
         bootstrap_tx.push(
             Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
         );
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_account_id_for_index(index)),
+            )
+            .into(),
+        );
     }
 
     let mut validator_tx = Vec::new();
     for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_account_id_for_index(index);
         let (stake, entity) = profile_for_index(index, profile);
         let mut metadata = Metadata::default();
         if let Some(entity_name) = entity {
@@ -138,22 +199,33 @@ fn stake_genesis_post_topology_transactions(
 }
 
 async fn advance_to_height(
-    network: &sandbox::SerializedNetwork,
+    _network: &sandbox::SerializedNetwork,
     client: &Client,
     target_height: u64,
     log_prefix: &str,
 ) -> eyre::Result<()> {
-    loop {
+    let deadline = Instant::now() + HEIGHT_ADVANCE_RETRY;
+    let mut tick = 0_u64;
+    let mut next_submit = Instant::now();
+    let mut last_height = 0;
+
+    while Instant::now() <= deadline {
         let status = client.get_status()?;
+        last_height = last_height.max(status.blocks);
         if status.blocks >= target_height {
             return Ok(());
         }
-        let next = status.blocks.saturating_add(1);
-        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
-        network
-            .ensure_blocks_with(move |height| height.total >= next)
-            .await?;
+        if Instant::now() >= next_submit {
+            client.submit(Log::new(Level::INFO, format!("{log_prefix} {tick}")))?;
+            tick = tick.saturating_add(1);
+            next_submit = Instant::now() + HEIGHT_ADVANCE_POLL;
+        }
+        sleep(HEIGHT_ADVANCE_POLL).await;
     }
+
+    eyre::bail!(
+        "client height did not reach {target_height} for {log_prefix}; last observed height={last_height}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -168,6 +240,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id_literal(),
@@ -347,6 +423,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id_literal(),

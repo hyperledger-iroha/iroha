@@ -26,6 +26,7 @@ cli = [
     "dep:iroha_crypto",
     "dep:iroha_data_model",
     "dep:iroha_config",
+    "dep:iroha_primitives",
     "dep:ivm",
     "dep:tokio",
     "dep:eyre",
@@ -73,6 +74,11 @@ required-features = ["cli"]
 [[bin]]
 name = "sorafs_manifest_stub"
 path = "src/bin/sorafs_manifest_stub.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "sorafs_tx_stdin_builder"
+path = "src/bin/sorafs_tx_stdin_builder.rs"
 required-features = ["cli"]
 
 [[bin]]

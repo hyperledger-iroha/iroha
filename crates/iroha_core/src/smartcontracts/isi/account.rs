@@ -488,7 +488,7 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
-            request.approve(authority.clone());
+            request.approve(authority);
             let updated_request = request.clone();
             state_transaction
                 .world
@@ -1595,6 +1595,41 @@ pub mod query {
         }
     }
 
+    impl ValidSingularQuery for FindAccountByAlias {
+        #[metrics(+"find_account_by_alias")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Account, Error> {
+            let world = state_ro.world();
+            let account_id = if let Some(record) = world.account_rekey_records().get(self.alias()) {
+                record.active_account_id.clone()
+            } else if let Some(account_id) = world.account_aliases().get(self.alias()) {
+                account_id.clone()
+            } else {
+                let mut matched_account_id: Option<AccountId> = None;
+                for (account_id, value) in world.accounts().iter() {
+                    if value.as_ref().label() != Some(self.alias()) {
+                        continue;
+                    }
+                    if let Some(existing) = matched_account_id.as_ref()
+                        && existing != account_id
+                    {
+                        return Err(Error::Conversion(format!(
+                            "account alias `{:?}` is bound to multiple accounts: {existing} and {account_id}",
+                            self.alias()
+                        )));
+                    }
+                    matched_account_id = Some(account_id.clone());
+                }
+                matched_account_id.ok_or(Error::NotFound)?
+            };
+
+            let (account_id, account_value) = world
+                .accounts()
+                .get_key_value(&account_id)
+                .ok_or_else(|| Error::Find(FindError::Account(account_id.clone())))?;
+            Ok(account_from_entry(world, account_id, account_value))
+        }
+    }
+
     impl ValidSingularQuery for FindAliasesByAccountId {
         #[metrics(+"find_aliases_by_account_id")]
         fn execute(
@@ -2684,9 +2719,10 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new(linked_domain.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            stx.world.domains.insert(
+                linked_domain.clone(),
+                Domain::new(linked_domain.clone()).build(&ALICE_ID),
+            );
             seed_manage_account_alias_permissions(
                 &mut stx,
                 &ALICE_ID,
@@ -2701,9 +2737,14 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
-            Register::account(Account::new(account_id.clone()).with_label(Some(primary_label)))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let account = Account::new(account_id.clone())
+                .with_label(Some(primary_label.clone()))
+                .build(&account_id);
+            let (stored_account_id, stored_value) =
+                iroha_data_model::IntoKeyValue::into_key_value(account);
+            stx.world.accounts.insert(stored_account_id, stored_value);
+            stx.world
+                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
 
             stx.apply();
             state_block.commit().unwrap();
@@ -2748,6 +2789,72 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
+            stx.world.domains.insert(
+                linked_domain.clone(),
+                Domain::new(linked_domain.clone()).build(&ALICE_ID),
+            );
+            seed_manage_account_alias_permissions(
+                &mut stx,
+                &ALICE_ID,
+                &linked_domain,
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+
+            let (account_id, _) = gen_account_in("banka");
+            let primary_label = AccountAlias::new_in_dataspace(
+                "merchant".parse().expect("label"),
+                Some(alias_domain(&linked_domain)),
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            let account = Account::new(account_id.clone())
+                .with_label(Some(primary_label.clone()))
+                .build(&account_id);
+            let (stored_account_id, stored_value) =
+                iroha_data_model::IntoKeyValue::into_key_value(account);
+            stx.world.accounts.insert(stored_account_id, stored_value);
+            stx.world
+                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let aliases = FindAliasesByAccountId::new(
+                account_id,
+                Some("centralbank".to_owned()),
+                Some("bankb".to_owned()),
+            )
+            .execute(&view)
+            .unwrap();
+            assert!(aliases.is_empty());
+        }
+
+        #[test]
+        fn find_account_by_alias_resolves_primary_alias() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let linked_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                    iroha_data_model::nexus::DataSpaceMetadata::default(),
+                    iroha_data_model::nexus::DataSpaceMetadata {
+                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        alias: "centralbank".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("catalog");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
             Register::domain(Domain::new(linked_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2765,22 +2872,21 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
-            Register::account(Account::new(account_id.clone()).with_label(Some(primary_label)))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let account = Account::new(account_id.clone())
+                .with_label(Some(primary_label.clone()))
+                .build(&account_id);
+            let (stored_account_id, stored_value) =
+                iroha_data_model::IntoKeyValue::into_key_value(account);
+            stx.world.accounts.insert(stored_account_id, stored_value);
 
             stx.apply();
             state_block.commit().unwrap();
 
             let view = state.view();
-            let aliases = FindAliasesByAccountId::new(
-                account_id,
-                Some("centralbank".to_owned()),
-                Some("bankb".to_owned()),
-            )
-            .execute(&view)
-            .unwrap();
-            assert!(aliases.is_empty());
+            let account = FindAccountByAlias::new(primary_label)
+                .execute(&view)
+                .unwrap();
+            assert_eq!(account.id(), &account_id);
         }
 
         #[test]

@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a91fc8841580a836c80129942df7f79f5bc5dd5f6a72dccf1394b740d02536a5
-source_last_modified: "2025-11-23T15:30:33.687233+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - موّل سلطة العقد (مثلا `<i105-account-id>`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
 - استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `<i105-account-id>`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <i105-account-id>` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha ledger asset list all --verbose` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
 
 ## أدلة SDK ذات صلة
 

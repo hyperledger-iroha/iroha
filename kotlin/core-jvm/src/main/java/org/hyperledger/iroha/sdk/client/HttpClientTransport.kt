@@ -9,6 +9,7 @@ import java.time.Duration
 import java.util.Arrays
 import java.util.LinkedHashMap
 import java.util.Optional
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.Executors
@@ -139,6 +140,51 @@ class HttpClientTransport(
     }
 
     fun verifyRamLfeReceipt(receipt: Map<String, Any>, outputHex: String?): CompletableFuture<RamLfeReceiptVerifyResponse> = verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex))
+
+    fun deployContract(
+        authority: String,
+        privateKey: String,
+        codeB64: String,
+        contractAlias: String,
+        leaseExpiryMs: Long? = null,
+    ): CompletableFuture<Optional<ContractDeployResponse>> {
+        val body = encodeJsonBody(buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs))
+        return fetchOptionalJson(buildJsonPostRequest("/v1/contracts/deploy", body), ContractJsonParser::parseDeployResponse, "contract deploy")
+    }
+
+    fun callContract(
+        authority: String,
+        privateKey: String,
+        gasLimit: Long,
+        contractAddress: String? = null,
+        contractAlias: String? = null,
+        entrypoint: String? = null,
+        payload: Any? = null,
+        gasAssetId: String? = null,
+    ): CompletableFuture<ContractCallResponse> {
+        val body = encodeJsonBody(
+            buildContractCallPayload(
+                authority = authority,
+                privateKey = privateKey,
+                gasLimit = gasLimit,
+                contractAddress = contractAddress,
+                contractAlias = contractAlias,
+                entrypoint = entrypoint,
+                payload = payload,
+                gasAssetId = gasAssetId,
+            )
+        )
+        return fetchJson(buildJsonPostRequest("/v1/contracts/call", body), ContractJsonParser::parseCallResponse, "contract call")
+    }
+
+    fun getGovernanceContract(contractAddress: String): CompletableFuture<GovernanceContractResponse> {
+        val normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress")
+        return fetchJson(
+            buildJsonGetRequest("/v1/gov/contracts/${encodePathSegment(normalizedAddress)}", emptyMap()),
+            ContractJsonParser::parseGovernanceContractResponse,
+            "governance contract"
+        )
+    }
 
     fun offlineToriiClient(): OfflineToriiClient = config.toOfflineToriiClient(executor)
     fun subscriptionToriiClient(): SubscriptionToriiClient = config.toSubscriptionToriiClient(executor)
@@ -369,6 +415,18 @@ class HttpClientTransport(
         }; return future
     }
 
+    private fun <T : Any> fetchOptionalJson(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
+        notifyRequest(request); val future = CompletableFuture<Optional<T>>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
+            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
+            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
+            if (response.body.isEmpty()) { notifyResponse(request, clientResponse); future.complete(Optional.empty<T>()); return@whenComplete }
+            try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(Optional.of(parsed)) }
+            catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
+        }; return future
+    }
+
     companion object {
         private const val RETRY_SIGNAL_ID = "android.torii.http.retry"
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
@@ -435,6 +493,66 @@ class HttpClientTransport(
             val payload = LinkedHashMap<String, Any>(); payload["receipt"] = LinkedHashMap(receipt)
             if (outputHex != null) payload["output_hex"] = normalizeEvenLengthHex(outputHex, "outputHex")
             return payload
+        }
+
+        @JvmStatic internal fun buildDeployContractPayload(
+            authority: String,
+            privateKey: String,
+            codeB64: String,
+            contractAlias: String,
+            leaseExpiryMs: Long?,
+        ): Map<String, Any> {
+            val payload = LinkedHashMap<String, Any>()
+            payload["authority"] = normalizeNonBlank(authority, "authority")
+            payload["private_key"] = normalizeNonBlank(privateKey, "privateKey")
+            payload["code_b64"] = normalizeRequiredBase64Payload(codeB64, "codeB64")
+            payload["contract_alias"] = normalizeNonBlank(contractAlias, "contractAlias")
+            if (leaseExpiryMs != null) {
+                require(leaseExpiryMs >= 0) { "leaseExpiryMs must be non-negative" }
+                payload["lease_expiry_ms"] = leaseExpiryMs
+            }
+            return payload
+        }
+
+        @JvmStatic internal fun buildContractCallPayload(
+            authority: String,
+            privateKey: String,
+            gasLimit: Long,
+            contractAddress: String?,
+            contractAlias: String?,
+            entrypoint: String?,
+            payload: Any?,
+            gasAssetId: String?,
+        ): Map<String, Any> {
+            require(gasLimit >= 0) { "gasLimit must be non-negative" }
+            val normalized = LinkedHashMap<String, Any>()
+            normalized["authority"] = normalizeNonBlank(authority, "authority")
+            normalized["private_key"] = normalizeNonBlank(privateKey, "privateKey")
+            normalized.putAll(buildContractTargetSelector(contractAddress, contractAlias))
+            if (entrypoint != null) normalized["entrypoint"] = normalizeNonBlank(entrypoint, "entrypoint")
+            if (payload != null) normalized["payload"] = payload
+            if (gasAssetId != null) normalized["gas_asset_id"] = normalizeNonBlank(gasAssetId, "gasAssetId")
+            normalized["gas_limit"] = gasLimit
+            return normalized
+        }
+
+        @JvmStatic internal fun buildContractTargetSelector(contractAddress: String?, contractAlias: String?): Map<String, String> {
+            val hasContractAddress = contractAddress != null
+            val hasContractAlias = contractAlias != null
+            require(hasContractAddress != hasContractAlias) { "Exactly one of contractAddress or contractAlias must be provided" }
+            return if (hasContractAddress) mapOf("contract_address" to normalizeNonBlank(contractAddress!!, "contractAddress"))
+            else mapOf("contract_alias" to normalizeNonBlank(contractAlias!!, "contractAlias"))
+        }
+
+        @JvmStatic internal fun normalizeRequiredBase64Payload(value: String, field: String): String {
+            val normalized = normalizeNonBlank(value, field)
+            val decoded = try {
+                Base64.getDecoder().decode(normalized)
+            } catch (ex: IllegalArgumentException) {
+                throw IllegalArgumentException("$field must be valid base64", ex)
+            }
+            require(decoded.isNotEmpty()) { "$field must not decode to empty bytes" }
+            return normalized
         }
 
         @JvmStatic internal fun normalizeOptionalNonBlank(value: String?, field: String): String? = if (value == null) null else normalizeNonBlank(value, field)

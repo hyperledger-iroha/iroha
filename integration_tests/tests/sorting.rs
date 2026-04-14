@@ -141,7 +141,9 @@ where
 #[test]
 #[allow(clippy::too_many_lines)]
 fn correct_sorting_of_entities() {
-    let builder = NetworkBuilder::new();
+    let auxiliary_domain_id = DomainId::try_new("_neverland", "universal").expect("Valid");
+    let builder = NetworkBuilder::new()
+        .with_genesis_instruction(Register::domain(Domain::new(auxiliary_domain_id.clone())));
     let Some((network, _rt)) = start_network(builder, stringify!(correct_sorting_of_entities))
     else {
         return;
@@ -198,12 +200,6 @@ fn correct_sorting_of_entities() {
     );
 
     // Test sorting accounts
-
-    let domain_name = "_neverland";
-    let domain_id = DomainId::try_new(domain_name, "universal").unwrap();
-    test_client
-        .submit_blocking(Register::domain(Domain::new(domain_id.clone())))
-        .expect("should be committed");
 
     let mut accounts = vec![];
     let mut metadata_of_accounts = vec![];
@@ -264,6 +260,10 @@ fn correct_sorting_of_entities() {
         instructions.push(create_account);
     }
 
+    for domain_id in &domains {
+        ensure_domain_registration_lease_for_network(&network, domain_id)
+            .expect("should seed lease for sortable domains");
+    }
     submit_chunked(&test_client, &instructions).expect("Valid");
 
     let res = test_client
@@ -288,7 +288,7 @@ fn correct_sorting_of_entities() {
     let mut metadata_of_domains = vec![];
     let mut instructions = vec![];
     for (idx, val) in input {
-        let domain_id = DomainId::try_new(format!("neverland_{idx}"), "universal").expect("Valid");
+        let domain_id = DomainId::try_new(format!("sortland{idx}"), "universal").expect("Valid");
         let mut domain_metadata = Metadata::default();
         domain_metadata.insert(sort_by_metadata_key.clone(), val);
         let domain = Domain::new(domain_id.clone()).with_metadata(domain_metadata.clone());
@@ -299,6 +299,10 @@ fn correct_sorting_of_entities() {
         let create_account = Register::domain(domain);
         instructions.push(create_account);
     }
+    for domain_id in &domains {
+        ensure_domain_registration_lease_for_network(&network, domain_id)
+            .expect("should seed lease for underscore sortable domains");
+    }
     let _ = submit_chunked(&test_client, &instructions);
 
     let res = test_client
@@ -307,7 +311,7 @@ fn correct_sorting_of_entities() {
         .execute()
         .expect("Valid")
         .filter_map(Result::ok)
-        .filter(|domain| domain.id().name().as_ref().starts_with("neverland_"))
+        .filter(|domain| domain.id().name().as_ref().starts_with("sortland"))
         .collect::<Vec<_>>();
 
     assert_eq!(res[0].id(), &domains[1]);
@@ -392,6 +396,8 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
     let test_client = network.client();
 
     let domain_id = DomainId::parse_fully_qualified(TEST_DOMAIN).unwrap();
+    ensure_domain_registration_lease_for_network(&network, &domain_id)
+        .expect("should seed lease for sorting test domain");
     test_client
         .submit_blocking(Register::domain(Domain::new(domain_id.clone())))
         .expect("should be committed");

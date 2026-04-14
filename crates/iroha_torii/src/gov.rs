@@ -23,7 +23,9 @@ use iroha_core::{
 };
 use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 use iroha_data_model::{
-    governance::types::AtWindow, isi::governance::CouncilDerivationKind,
+    governance::types::AtWindow,
+    isi::governance::CouncilDerivationKind,
+    ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::ManifestProvenance,
 };
 use mv::storage::StorageReadOnly;
@@ -50,6 +52,8 @@ const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
 const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v1/gov/enact#authority";
 const CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT: &str =
     "/v1/gov/council/persist#candidate.account_id";
+const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
+    "/v1/ministry/agenda/proposals/draft#authority";
 const CONTEXT_GOV_COUNCIL_DERIVE_CANDIDATE_ACCOUNT: &str =
     "/v1/gov/council/derive-vrf#candidate.account_id";
 const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v1/gov/council/persist#authority";
@@ -210,6 +214,48 @@ pub struct ProposeDeployContractResponse {
     pub tx_instructions: Vec<TxInstr>,
 }
 
+#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+/// Request body for drafting a Ministry agenda proposal submission transaction.
+pub struct MinistryAgendaProposalDraftDto {
+    /// Agenda proposal payload that will be submitted on-chain.
+    pub proposal: AgendaProposalV1,
+    /// Canonical I105 account id that will sign the transaction.
+    pub authority: String,
+}
+
+#[derive(Debug, JsonSerialize)]
+/// Draft response for a Ministry agenda proposal submission.
+pub struct MinistryAgendaProposalDraftResponse {
+    /// Whether the draft generation succeeded.
+    pub ok: bool,
+    /// Stable agenda proposal identifier.
+    pub agenda_proposal_id: String,
+    /// Canonical I105 authority used for transaction construction.
+    pub authority: String,
+    /// Single-instruction transaction skeleton for wallets/clients that want an instruction preview.
+    pub tx_instructions: Vec<TxInstr>,
+    /// Base64-encoded canonical `TransactionPayload` bytes for Connect `SignRequestTx`.
+    pub signable_transaction_b64: String,
+}
+
+#[derive(Debug, JsonSerialize)]
+/// Lookup response for submitted Ministry agenda proposals.
+pub struct MinistryAgendaProposalGetResponse {
+    /// Whether the proposal record exists in committed state.
+    pub found: bool,
+    /// Persisted proposal record when found.
+    pub record: Option<AgendaProposalRecordV1>,
+}
+
+#[derive(Debug)]
+/// Result of drafting a Ministry agenda proposal transaction.
+pub enum MinistryAgendaProposalDraftOutcome {
+    /// Draft created successfully.
+    Draft(MinistryAgendaProposalDraftResponse),
+    /// Proposal id already exists in committed state.
+    Duplicate(MinistryAgendaProposalGetResponse),
+}
+
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 /// Request body for submitting a zero-knowledge ballot.
 pub struct ZkBallotDto {
@@ -345,7 +391,7 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical I105 account id".to_string())?;
+        .map_err(|_| "owner must use canonical I105 account id form".to_string())?;
     if canonical != owner {
         return Err("owner must use canonical I105 account id form".to_string());
     }
@@ -1068,6 +1114,24 @@ fn parse_authority_literal(
     })
 }
 
+fn parse_canonical_authority_literal(
+    state: &iroha_core::state::State,
+    raw: &str,
+    telemetry: &MaybeTelemetry,
+    context: &'static str,
+) -> Result<iroha_data_model::account::AccountId, crate::Error> {
+    let trimmed = raw.trim();
+    let canonical = iroha_data_model::account::AccountId::canonicalize(trimmed).map_err(|_| {
+        crate::routing::conversion_error("authority must use canonical I105 account id form".into())
+    })?;
+    if canonical != trimmed {
+        return Err(crate::routing::conversion_error(
+            "authority must use canonical I105 account id form".into(),
+        ));
+    }
+    parse_authority_literal(state, trimmed, telemetry, context)
+}
+
 fn reject_server_side_signing(endpoint: &'static str) -> crate::Error {
     crate::routing::conversion_error(format!(
         "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
@@ -1122,6 +1186,24 @@ fn instruction_skeleton_for_propose(
 ) -> Vec<TxInstr> {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
     vec![tx_instr_from_box(boxed)]
+}
+
+fn build_signable_transaction_b64(
+    chain_id: &iroha_data_model::ChainId,
+    authority: &iroha_data_model::account::AccountId,
+    instructions: Vec<iroha_data_model::isi::InstructionBox>,
+) -> String {
+    let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+    )
+    .with_instructions(instructions)
+    .sign(
+        iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .private_key(),
+    )
+    .with_authority(authority.clone());
+    base64::engine::general_purpose::STANDARD.encode(tx.payload().encode())
 }
 
 fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate::Error> {
@@ -1180,13 +1262,13 @@ fn compute_proposal_id(
     let contract_address_literal = contract_address.as_ref();
     let contract_address_len = contract_address_literal.len() as u32;
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v2|".len()
+        b"iroha:gov:proposal:v1|".len()
             + core::mem::size_of::<u32>()
             + contract_address_literal.len()
             + code_hash.len()
             + abi_hash.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(b"iroha:gov:proposal:v1|");
     input.extend_from_slice(&contract_address_len.to_le_bytes());
     input.extend_from_slice(contract_address_literal.as_bytes());
     input.extend_from_slice(code_hash);
@@ -1917,6 +1999,83 @@ pub async fn handle_gov_propose_deploy(
         ok: true,
         proposal_id,
         tx_instructions: instruction_skeleton_for_propose(&instr),
+    }))
+}
+
+/// POST /v1/ministry/agenda/proposals/draft — build a detached-signature-ready Ministry submission transaction.
+///
+/// Returns a duplicate summary with HTTP 409 semantics when the proposal id already exists in committed
+/// state; callers must submit the resulting signed transaction through the normal Torii `/transaction`
+/// route.
+pub async fn handle_ministry_agenda_proposal_draft(
+    chain_id: Arc<iroha_data_model::ChainId>,
+    state: Arc<iroha_core::state::State>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(body): NoritoJson<MinistryAgendaProposalDraftDto>,
+) -> Result<MinistryAgendaProposalDraftOutcome, crate::Error> {
+    body.proposal.validate().map_err(|err| {
+        crate::routing::conversion_error(format!("invalid agenda proposal: {err}"))
+    })?;
+    let authority_id = parse_canonical_authority_literal(
+        state.as_ref(),
+        body.authority.as_str(),
+        &telemetry,
+        CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY,
+    )?;
+    if let Some(existing) = state
+        .world_view()
+        .ministry_agenda_proposals()
+        .get(&body.proposal.proposal_id)
+        .cloned()
+    {
+        return Ok(MinistryAgendaProposalDraftOutcome::Duplicate(
+            MinistryAgendaProposalGetResponse {
+                found: true,
+                record: Some(existing),
+            },
+        ));
+    }
+
+    let instr = iroha_data_model::isi::ministry::SubmitAgendaProposal {
+        proposal: body.proposal.clone(),
+    };
+    let tx_instructions = vec![tx_instr_from_box(instr.clone().into())];
+    let signable_transaction_b64 = build_signable_transaction_b64(
+        chain_id.as_ref(),
+        &authority_id,
+        vec![iroha_data_model::isi::InstructionBox::from(instr)],
+    );
+
+    Ok(MinistryAgendaProposalDraftOutcome::Draft(
+        MinistryAgendaProposalDraftResponse {
+            ok: true,
+            agenda_proposal_id: body.proposal.proposal_id,
+            authority: authority_id.to_string(),
+            tx_instructions,
+            signable_transaction_b64,
+        },
+    ))
+}
+
+/// GET /v1/ministry/agenda/proposals/{proposal_id} — fetch a submitted Ministry agenda proposal record.
+pub async fn handle_ministry_agenda_proposal_get(
+    state: Arc<iroha_core::state::State>,
+    proposal_id: axum::extract::Path<String>,
+) -> Result<JsonBody<MinistryAgendaProposalGetResponse>, crate::Error> {
+    let proposal_id = proposal_id.0.trim().to_string();
+    if proposal_id.is_empty() {
+        return Err(crate::routing::conversion_error(
+            "proposal_id must not be empty".into(),
+        ));
+    }
+    let record = state
+        .world_view()
+        .ministry_agenda_proposals()
+        .get(&proposal_id)
+        .cloned();
+    Ok(JsonBody(MinistryAgendaProposalGetResponse {
+        found: record.is_some(),
+        record,
     }))
 }
 
@@ -2868,14 +3027,13 @@ mod tests {
             [],
         );
         if with_permissions {
-            let contract_address =
-                iroha_data_model::smart_contract::ContractAddress::derive(
-                    0,
-                    &authority,
-                    0,
-                    iroha_data_model::nexus::DataSpaceId::GLOBAL,
-                )
-                    .expect("contract address");
+            let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+                0,
+                &authority,
+                0,
+                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            )
+            .expect("contract address");
             let contract_address_literal = contract_address.to_string();
             let propose = Permission::new(
                 "CanProposeContractDeployment".to_string(),
@@ -2959,6 +3117,76 @@ mod tests {
         "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
             .parse()
             .expect("contract address")
+    }
+
+    fn sample_agenda_proposal(proposal_id: &str) -> AgendaProposalV1 {
+        AgendaProposalV1 {
+            version: iroha_data_model::ministry::AGENDA_PROPOSAL_VERSION_V1,
+            proposal_id: proposal_id.to_string(),
+            submitted_at_unix_ms: 1_775_000_000_000,
+            language: "en".to_string(),
+            action: iroha_data_model::ministry::AgendaProposalAction::AddToDenylist,
+            summary: iroha_data_model::ministry::AgendaProposalSummary {
+                title: "Blacklist SoraFS CID bafy-test".to_string(),
+                motivation: "Evidence review recommends blocking the published SoraFS root CID."
+                    .to_string(),
+                expected_impact:
+                    "Participating gateways would deny delivery while the evidence is reviewed."
+                        .to_string(),
+            },
+            tags: vec!["fraud".to_string()],
+            targets: vec![iroha_data_model::ministry::AgendaProposalTarget {
+                label: "bafy-test".to_string(),
+                hash_family: "sorafs-root-cid".to_string(),
+                hash_hex: "11".repeat(32),
+                reason: "Fraud review evidence for the selected SoraFS CID.".to_string(),
+            }],
+            evidence: vec![iroha_data_model::ministry::AgendaEvidenceAttachment {
+                kind: iroha_data_model::ministry::AgendaEvidenceKind::Url,
+                uri: "https://example.org/evidence/case-42".to_string(),
+                digest_blake3_hex: None,
+                description: Some("Public incident report".to_string()),
+            }],
+            submitter: iroha_data_model::ministry::AgendaProposalSubmitter {
+                name: "Review Council".to_string(),
+                contact: "review@example.org".to_string(),
+                organization: Some("SoraFS Moderation".to_string()),
+                pgp_fingerprint: None,
+            },
+            duplicates: Vec::new(),
+        }
+    }
+
+    fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
+        let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
+        iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
+            .expect("instruction payload decode")
+    }
+
+    fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
+        let instructions = tx_instructions
+            .iter()
+            .map(decode_tx_instruction)
+            .collect::<Vec<_>>();
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            (*harness.chain_id).clone(),
+            harness.authority.clone(),
+        )
+        .with_instructions(instructions)
+        .sign(harness.authority_keypair.private_key());
+        let params = harness.state.view().world().parameters().clone();
+        let accepted = iroha_core::tx::AcceptedTransaction::accept(
+            tx,
+            harness.chain_id.as_ref(),
+            params.sumeragi().max_clock_drift(),
+            params.transaction(),
+            harness.state.crypto().as_ref(),
+        )
+        .expect("accepted governance instruction skeleton");
+        harness
+            .queue
+            .push(accepted, harness.state.view())
+            .expect("push governance instruction skeleton");
     }
 
     fn apply_queued_block_allow_errors(
@@ -3155,6 +3383,145 @@ mod tests {
         .await
         .unwrap_err();
         assert!(format!("{err:?}").contains("abi_hash does not match canonical hash"));
+    }
+
+    #[tokio::test]
+    async fn ministry_agenda_draft_returns_instruction_skeleton_and_signable_payload() {
+        let harness = mk_governance_harness(true);
+        let proposal = sample_agenda_proposal("AC-2026-241");
+        let response = handle_ministry_agenda_proposal_draft(
+            harness.chain_id.clone(),
+            harness.state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MinistryAgendaProposalDraftDto {
+                proposal: proposal.clone(),
+                authority: harness.authority.to_string(),
+            }),
+        )
+        .await
+        .expect("draft ok");
+
+        let MinistryAgendaProposalDraftOutcome::Draft(body) = response else {
+            panic!("expected successful draft");
+        };
+        assert!(body.ok);
+        assert_eq!(body.agenda_proposal_id, proposal.proposal_id);
+        assert_eq!(body.authority, harness.authority.to_string());
+        assert_eq!(body.tx_instructions.len(), 1);
+
+        let tx_bytes = base64::engine::general_purpose::STANDARD
+            .decode(body.signable_transaction_b64.as_bytes())
+            .expect("decode signable payload");
+        let payload: iroha_data_model::transaction::signed::TransactionPayload = {
+            let _guard = norito::core::PayloadCtxGuard::enter(&tx_bytes);
+            let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
+            norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        };
+        assert_eq!(payload.authority, harness.authority);
+        assert_eq!(payload.instructions.instruction_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn ministry_agenda_get_returns_missing_then_persisted_record() {
+        let harness = mk_governance_harness(true);
+        let proposal = sample_agenda_proposal("AC-2026-242");
+
+        let missing = handle_ministry_agenda_proposal_get(
+            harness.state.clone(),
+            axum::extract::Path(proposal.proposal_id.clone()),
+        )
+        .await
+        .expect("lookup ok")
+        .0;
+        assert!(!missing.found);
+        assert!(missing.record.is_none());
+
+        let draft = handle_ministry_agenda_proposal_draft(
+            harness.chain_id.clone(),
+            harness.state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MinistryAgendaProposalDraftDto {
+                proposal: proposal.clone(),
+                authority: harness.authority.to_string(),
+            }),
+        )
+        .await
+        .expect("draft ok");
+        let MinistryAgendaProposalDraftOutcome::Draft(body) = draft else {
+            panic!("expected successful draft");
+        };
+        queue_instruction_skeleton(&harness, &body.tx_instructions);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &harness.state,
+            &harness.queue,
+            harness.chain_id.as_ref(),
+            1,
+        );
+        assert_eq!(applied, 1);
+
+        let persisted = handle_ministry_agenda_proposal_get(
+            harness.state.clone(),
+            axum::extract::Path(proposal.proposal_id.clone()),
+        )
+        .await
+        .expect("lookup ok")
+        .0;
+        assert!(persisted.found);
+        let record = persisted.record.expect("record");
+        assert_eq!(record.proposal, proposal);
+        assert_eq!(record.authority, harness.authority);
+        assert!(!record.submitted_tx_hash_hex.is_empty());
+        assert_eq!(record.submitted_height, 1);
+    }
+
+    #[tokio::test]
+    async fn ministry_agenda_draft_preflights_duplicate_proposal_ids() {
+        let harness = mk_governance_harness(true);
+        let proposal = sample_agenda_proposal("AC-2026-243");
+        let draft = handle_ministry_agenda_proposal_draft(
+            harness.chain_id.clone(),
+            harness.state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MinistryAgendaProposalDraftDto {
+                proposal: proposal.clone(),
+                authority: harness.authority.to_string(),
+            }),
+        )
+        .await
+        .expect("draft ok");
+        let MinistryAgendaProposalDraftOutcome::Draft(body) = draft else {
+            panic!("expected successful draft");
+        };
+        queue_instruction_skeleton(&harness, &body.tx_instructions);
+        let applied = crate::test_utils::apply_queued_in_one_block(
+            &harness.state,
+            &harness.queue,
+            harness.chain_id.as_ref(),
+            1,
+        );
+        assert_eq!(applied, 1);
+
+        let duplicate = handle_ministry_agenda_proposal_draft(
+            harness.chain_id.clone(),
+            harness.state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MinistryAgendaProposalDraftDto {
+                proposal,
+                authority: harness.authority.to_string(),
+            }),
+        )
+        .await
+        .expect("duplicate preflight ok");
+        let MinistryAgendaProposalDraftOutcome::Duplicate(body) = duplicate else {
+            panic!("expected duplicate summary");
+        };
+        assert!(body.found);
+        assert_eq!(
+            body.record
+                .as_ref()
+                .map(|record| record.proposal.proposal_id.as_str()),
+            Some("AC-2026-243")
+        );
     }
 
     #[tokio::test]
@@ -3584,8 +3951,6 @@ mod tests {
     async fn gov_flow_submits_and_applies() {
         let harness = mk_governance_harness(true);
         let authority_str = harness.authority.to_string();
-        let private_key =
-            ExposedPrivateKey(harness.authority_keypair.private_key().clone()).to_string();
         let chain_id_str = harness.chain_id.as_str().to_string();
 
         let code_hash_bytes = [0x11u8; 32];
@@ -3604,8 +3969,8 @@ mod tests {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: Some(authority_str.clone()),
-            private_key: Some(private_key.clone()),
+            authority: None,
+            private_key: None,
         };
         let res = handle_gov_propose_deploy(
             harness.chain_id.clone(),
@@ -3616,7 +3981,8 @@ mod tests {
         )
         .await
         .expect("propose ok");
-        let proposal_id = res.0.proposal_id;
+        let proposal_id = res.0.proposal_id.clone();
+        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let mut height = 1_u64;
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
@@ -3659,9 +4025,9 @@ mod tests {
             amount: "100".to_string(),
             duration_blocks: 1,
             direction: "Aye".to_string(),
-            private_key: Some(private_key.clone()),
+            private_key: None,
         };
-        handle_gov_ballot_plain_with_policy(
+        let ballot = handle_gov_ballot_plain_with_policy(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3670,6 +4036,7 @@ mod tests {
         )
         .await
         .expect("ballot ok");
+        queue_instruction_skeleton(&harness, &ballot.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3694,10 +4061,10 @@ mod tests {
         let finalize = FinalizeDto {
             referendum_id: proposal_id.clone(),
             proposal_id: format!("0x{}", proposal_id),
-            authority: Some(authority_str.clone()),
-            private_key: Some(private_key.clone()),
+            authority: None,
+            private_key: None,
         };
-        handle_gov_finalize(
+        let finalize = handle_gov_finalize(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3706,6 +4073,7 @@ mod tests {
         )
         .await
         .expect("finalize ok");
+        queue_instruction_skeleton(&harness, &finalize.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3732,10 +4100,10 @@ mod tests {
             proposal_id: format!("0x{}", proposal_id),
             preimage_hash: None,
             window: None,
-            authority: Some(authority_str),
-            private_key: Some(private_key),
+            authority: None,
+            private_key: None,
         };
-        handle_gov_enact(
+        let enact = handle_gov_enact(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3744,6 +4112,7 @@ mod tests {
         )
         .await
         .expect("enact ok");
+        queue_instruction_skeleton(&harness, &enact.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3774,9 +4143,6 @@ mod tests {
     #[tokio::test]
     async fn propose_deploy_rejected_without_permission() {
         let harness = mk_governance_harness(false);
-        let authority_str = harness.authority.to_string();
-        let private_key =
-            ExposedPrivateKey(harness.authority_keypair.private_key().clone()).to_string();
         let code_hash_bytes = [0x22u8; 32];
         let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest_provenance =
@@ -3791,8 +4157,8 @@ mod tests {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: Some(authority_str),
-            private_key: Some(private_key),
+            authority: None,
+            private_key: None,
         };
         let res = handle_gov_propose_deploy(
             harness.chain_id.clone(),
@@ -3803,7 +4169,8 @@ mod tests {
         )
         .await
         .expect("handler ok");
-        let proposal_id = res.0.proposal_id;
+        let proposal_id = res.0.proposal_id.clone();
+        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let errors = apply_queued_block_allow_errors(&harness.state, &harness.queue, 1);
         assert_eq!(errors, vec![true]);
         let pid_bytes = hex::decode(&proposal_id).expect("proposal id hex");

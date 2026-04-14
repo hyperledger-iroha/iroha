@@ -1460,6 +1460,50 @@ impl TransactionGossiper {
                                 "Transaction already in the queue, ignoring..."
                             )
                         }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                reason,
+                                "Dropping gossiped transaction rejected by Nexus fee admission"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_rejected",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
+                        }) => {
+                            iroha_logger::warn!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                reason,
+                                "Dropping gossiped transaction due to invalid Nexus fee configuration"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_config_invalid",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(
                                 ?err,
@@ -1741,6 +1785,50 @@ impl TransactionGossiper {
                                 tx = %tx.as_ref().as_ref().hash(),
                                 "Transaction already in the queue, ignoring..."
                             )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                reason,
+                                "Dropping gossiped transaction rejected by Nexus fee admission"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_rejected",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
+                        }) => {
+                            iroha_logger::warn!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                reason,
+                                "Dropping gossiped transaction due to invalid Nexus fee configuration"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_config_invalid",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
                             iroha_logger::error!(

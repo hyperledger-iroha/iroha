@@ -19,7 +19,8 @@ use crate::{
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
-        SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1,
+        SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaRuntimeStateV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationKindV1, SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1,
         SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
@@ -488,6 +489,64 @@ pub struct ReconcileSoracloudModelHosts;
 impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
 
 impl PartialOrd for ReconcileSoracloudModelHosts {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Advertise validator-host capabilities for authoritative Inrou placement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AdvertiseSoracloudInrouHost {
+    /// Capability advert being published by the validator.
+    pub capability: SoraInrouHostCapabilityRecordV1,
+    /// Provenance attestation over the advert payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for AdvertiseSoracloudInrouHost {}
+
+impl PartialOrd for AdvertiseSoracloudInrouHost {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Withdraw an advertised validator host from authoritative Inrou placement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct WithdrawSoracloudInrouHost {
+    /// Validator account that owns the host advert.
+    pub validator_account_id: AccountId,
+    /// Provenance attestation over the withdrawal payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for WithdrawSoracloudInrouHost {}
+
+impl PartialOrd for WithdrawSoracloudInrouHost {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Reconcile active hosted Inrou placements against current host adverts and service leases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReconcileSoracloudInrouPlacements;
+
+impl crate::seal::Instruction for ReconcileSoracloudInrouPlacements {}
+
+impl PartialOrd for ReconcileSoracloudInrouPlacements {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
@@ -1291,6 +1350,71 @@ pub struct SetSoracloudRuntimeState {
 impl crate::seal::Instruction for SetSoracloudRuntimeState {}
 
 impl PartialOrd for SetSoracloudRuntimeState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Upsert authoritative runtime state for one placed Inrou replica.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SetSoracloudInrouReplicaRuntimeState {
+    /// Runtime state to persist.
+    pub state: SoraInrouReplicaRuntimeStateV1,
+}
+
+impl crate::seal::Instruction for SetSoracloudInrouReplicaRuntimeState {}
+
+impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Clear authoritative runtime state for one placed Inrou replica.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ClearSoracloudInrouReplicaRuntimeState {
+    /// Service whose replica state should be removed.
+    pub service_name: Name,
+    /// Service revision whose replica state should be removed.
+    pub service_version: String,
+    /// One-based placed replica slot whose state should be removed.
+    pub replica_slot: u16,
+}
+
+impl crate::seal::Instruction for ClearSoracloudInrouReplicaRuntimeState {}
+
+impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Report authoritative leased-service usage observed by the runtime.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReportSoracloudServiceLeaseUsage {
+    /// Service whose hosted-service lease should be updated.
+    pub service_name: Name,
+    /// Active service revision observed by the runtime.
+    pub active_service_version: String,
+    /// Total egress bytes accounted for the active lease so far.
+    pub accounted_egress_bytes: u64,
+}
+
+impl crate::seal::Instruction for ReportSoracloudServiceLeaseUsage {}
+
+impl PartialOrd for ReportSoracloudServiceLeaseUsage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

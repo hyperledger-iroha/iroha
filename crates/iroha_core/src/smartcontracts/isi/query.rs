@@ -439,6 +439,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAccountById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindAccountByAlias(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindAliasesByAccountId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -497,6 +500,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindDataspaceNameOwnerById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindDomainById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
         }
@@ -1842,10 +1848,18 @@ impl ValidQueryRequest {
                             }};
                         }
                         match iter_query.item {
-                            QueryItemKind::Domain => run_payload_or_default!(
-                                iroha_data_model::domain::Domain,
-                                iroha_data_model::query::domain::prelude::FindDomains
-                            ),
+                            QueryItemKind::Domain => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::domain::Domain,
+                                        iroha_data_model::query::domain::prelude::FindDomainsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::domain::Domain,
+                                    iroha_data_model::query::domain::prelude::FindDomains
+                                )
+                            }
                             QueryItemKind::Account => {
                                 // Prefer parameterized query when payload is present; otherwise default.
                                 if !iter_query.query_payload.is_empty() {
@@ -1860,10 +1874,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::account::AccountId,
                                 iroha_data_model::query::account::prelude::FindAccountIds
                             ),
-                            QueryItemKind::Asset => run_payload_or_default!(
-                                iroha_data_model::asset::value::Asset,
-                                iroha_data_model::query::asset::prelude::FindAssets
-                            ),
+                            QueryItemKind::Asset => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::asset::value::Asset,
+                                        iroha_data_model::query::asset::prelude::FindAssetsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::asset::value::Asset,
+                                    iroha_data_model::query::asset::prelude::FindAssets
+                                )
+                            }
                             QueryItemKind::AssetDefinition => run_payload_or_default!(
                                 iroha_data_model::asset::definition::AssetDefinition,
                                 iroha_data_model::query::asset::prelude::FindAssetsDefinitions
@@ -1872,10 +1894,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::repo::RepoAgreement,
                                 iroha_data_model::query::repo::prelude::FindRepoAgreements
                             ),
-                            QueryItemKind::Nft => run_payload_or_default!(
-                                iroha_data_model::nft::Nft,
-                                iroha_data_model::query::nft::prelude::FindNfts
-                            ),
+                            QueryItemKind::Nft => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::nft::Nft,
+                                        iroha_data_model::query::nft::prelude::FindNftsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::nft::Nft,
+                                    iroha_data_model::query::nft::prelude::FindNfts
+                                )
+                            }
                             QueryItemKind::Rwa => run_payload_or_default!(
                                 iroha_data_model::rwa::Rwa,
                                 iroha_data_model::query::rwa::prelude::FindRwas
@@ -2328,6 +2358,26 @@ impl ValidQueryRequest {
                 // attempt decodes in priority order.
                 if let Some(resp) = run_dispatch::<
                     iroha_data_model::domain::Domain,
+                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::domain::Domain,
                     iroha_data_model::query::domain::prelude::FindDomains,
                     _,
                 >(
@@ -2384,6 +2434,26 @@ impl ValidQueryRequest {
                     |e| {
                         try_decode_query::<
                             iroha_data_model::query::account::prelude::FindAccountsWithAsset,
+                        >(e)
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::asset::value::Asset,
+                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
                         >(e)
                     },
                 )? {
@@ -2450,6 +2520,26 @@ impl ValidQueryRequest {
                         .or(Some(
                             iroha_data_model::query::repo::prelude::FindRepoAgreements,
                         ))
+                    },
+                )? {
+                    return Ok(resp);
+                }
+                if let Some(resp) = run_dispatch::<
+                    iroha_data_model::nft::Nft,
+                    iroha_data_model::query::nft::prelude::FindNftsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    state,
+                    live_query_store,
+                    authority,
+                    stored_cursor_budget,
+                    |e| {
+                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNftsByAccountId>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok(resp);
@@ -3204,10 +3294,18 @@ impl ValidQueryRequest {
                             }};
                         }
                         match iter_query.item {
-                            QueryItemKind::Domain => run_payload_or_default!(
-                                iroha_data_model::domain::Domain,
-                                iroha_data_model::query::domain::prelude::FindDomains
-                            ),
+                            QueryItemKind::Domain => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::domain::Domain,
+                                        iroha_data_model::query::domain::prelude::FindDomainsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::domain::Domain,
+                                    iroha_data_model::query::domain::prelude::FindDomains
+                                )
+                            }
                             QueryItemKind::Account => {
                                 if !iter_query.query_payload.is_empty() {
                                     run_payload_or_default!(require_payload iroha_data_model::account::Account, iroha_data_model::query::account::prelude::FindAccountsWithAsset)
@@ -3221,10 +3319,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::account::AccountId,
                                 iroha_data_model::query::account::prelude::FindAccountIds
                             ),
-                            QueryItemKind::Asset => run_payload_or_default!(
-                                iroha_data_model::asset::value::Asset,
-                                iroha_data_model::query::asset::prelude::FindAssets
-                            ),
+                            QueryItemKind::Asset => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::asset::value::Asset,
+                                        iroha_data_model::query::asset::prelude::FindAssetsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::asset::value::Asset,
+                                    iroha_data_model::query::asset::prelude::FindAssets
+                                )
+                            }
                             QueryItemKind::AssetDefinition => run_payload_or_default!(
                                 iroha_data_model::asset::definition::AssetDefinition,
                                 iroha_data_model::query::asset::prelude::FindAssetsDefinitions
@@ -3233,10 +3339,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::repo::RepoAgreement,
                                 iroha_data_model::query::repo::prelude::FindRepoAgreements
                             ),
-                            QueryItemKind::Nft => run_payload_or_default!(
-                                iroha_data_model::nft::Nft,
-                                iroha_data_model::query::nft::prelude::FindNfts
-                            ),
+                            QueryItemKind::Nft => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(
+                                        require_payload iroha_data_model::nft::Nft,
+                                        iroha_data_model::query::nft::prelude::FindNftsByAccountId
+                                    )
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::nft::Nft,
+                                    iroha_data_model::query::nft::prelude::FindNfts
+                                )
+                            }
                             QueryItemKind::Rwa => run_payload_or_default!(
                                 iroha_data_model::rwa::Rwa,
                                 iroha_data_model::query::rwa::prelude::FindRwas
@@ -3330,6 +3444,27 @@ impl ValidQueryRequest {
 
                 if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::domain::Domain,
+                    iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::domain::Domain,
                     iroha_data_model::query::domain::prelude::FindDomains,
                     _,
                 >(
@@ -3395,6 +3530,27 @@ impl ValidQueryRequest {
                 }
                 if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::asset::value::Asset,
+                    iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::asset::prelude::FindAssetsByAccountId,
+                        >(e)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::asset::value::Asset,
                     iroha_data_model::query::asset::prelude::FindAssets,
                     _,
                 >(
@@ -3433,6 +3589,27 @@ impl ValidQueryRequest {
                         .or(Some(
                             iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
                         ))
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::nft::Nft,
+                    iroha_data_model::query::nft::prelude::FindNftsByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNftsByAccountId>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok((resp, processed_items));

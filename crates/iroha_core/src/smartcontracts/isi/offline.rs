@@ -7437,6 +7437,7 @@ mod attestation {
                 &key_identifier,
                 block_timestamp_ms,
                 &attest_cdh,
+                false,
             )
             .inspect_err(|e| {
                 warn!("[AppAttest] FAIL: from_certificate: {e}");
@@ -7500,6 +7501,10 @@ mod attestation {
         pub counter: u64,
         /// Expected challenge hash bound to the reserve operation.
         pub challenge_hash: [u8; 32],
+        /// When `true`, skip attestation certificate nonce verification.
+        /// Set this when reusing a stored binding whose nonce was already
+        /// verified at setup time with a different (setup-specific) challenge.
+        pub skip_attestation_nonce: bool,
     }
 
     /// Validate an App Attest assertion using the same attestation chain,
@@ -7521,6 +7526,7 @@ mod attestation {
             &key_identifier,
             block_timestamp_ms,
             &verification.challenge_hash,
+            verification.skip_attestation_nonce,
         )?;
         let assertion = AppleAssertion::parse(&verification.assertion)?;
         let challenge = ReceiptChallenge {
@@ -8728,6 +8734,7 @@ mod attestation {
             key_identifier: &[u8],
             block_timestamp_ms: u64,
             attest_client_data_hash: &[u8; 32],
+            skip_nonce: bool,
         ) -> Result<Self, InstructionExecutionError> {
             let attestation_object = decode_attestation_object(report).inspect_err(|e| {
                 warn!("[AppAttest] FAIL: decode_attestation_object: {e}");
@@ -8795,14 +8802,18 @@ mod attestation {
                     .inspect_err(|e| {
                         warn!("[AppAttest] FAIL: verify_attestation_chain: {e}");
                     })?;
-            verify_attestation_nonce(
-                &attestation_object.certificates[0],
-                &attestation_object.auth_data,
-                attest_client_data_hash,
-            )
-            .inspect_err(|e| {
-                warn!("[AppAttest] FAIL: verify_attestation_nonce: {e}");
-            })?;
+            if skip_nonce {
+                warn!("[AppAttest] from_certificate: skipping nonce (stored binding reuse)");
+            } else {
+                verify_attestation_nonce(
+                    &attestation_object.certificates[0],
+                    &attestation_object.auth_data,
+                    attest_client_data_hash,
+                )
+                .inspect_err(|e| {
+                    warn!("[AppAttest] FAIL: verify_attestation_nonce: {e}");
+                })?;
+            }
 
             warn!("[AppAttest] from_certificate: OK");
             Ok(Self {

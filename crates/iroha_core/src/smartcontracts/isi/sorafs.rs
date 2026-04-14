@@ -3076,6 +3076,27 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn instruction_box_dispatches_capacity_declaration() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let (provider, declaration) = capacity_record_with_owner(&alice());
+
+        let instruction = InstructionBox::from(RegisterCapacityDeclaration {
+            record: declaration,
+        });
+        instruction
+            .execute(&alice(), &mut stx)
+            .expect("instruction box should dispatch SoraFS declaration");
+
+        assert_eq!(
+            stx.world.provider_owners.get(&provider),
+            Some(&alice()),
+            "instruction box execution should record the provider owner"
+        );
+    }
+
+    #[test]
     fn capacity_declaration_rejects_rebinding_to_new_owner() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
@@ -4144,6 +4165,40 @@ mod sorafs_tests {
         let decoded =
             decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order).expect("decode order");
         assert_eq!(decoded.order_id, *order_id.as_bytes());
+    }
+
+    #[test]
+    fn instruction_box_dispatches_replication_order_issue() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x54; 32]);
+        let providers = vec![
+            ProviderId::new([0x21; 32]),
+            ProviderId::new([0x22; 32]),
+            ProviderId::new([0x23; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
+        let payload = encode_replication_order(&order_struct);
+
+        let instruction = InstructionBox::from(IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 12,
+            deadline_epoch: 32,
+        });
+        instruction
+            .execute(&alice(), &mut stx)
+            .expect("instruction box should dispatch SoraFS replication orders");
+
+        assert!(
+            stx.world.replication_orders.get(&order_id).is_some(),
+            "instruction box execution should store the replication order"
+        );
     }
 
     #[test]

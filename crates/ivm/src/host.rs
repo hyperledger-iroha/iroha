@@ -510,7 +510,7 @@ impl DefaultHost {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("[DefaultHost] decode_any_tlv ptr=0x{ptr:08x} resolved=0x{resolved:08x}");
         }
-        if let Ok(tlv) = vm.memory.validate_tlv(resolved) {
+        if let Ok(tlv) = Self::decode_tlv_from_memory(vm, resolved) {
             return Ok(tlv);
         }
         let code_len = vm.memory.code_len();
@@ -535,6 +535,26 @@ impl DefaultHost {
         let envelope = vm
             .memory
             .load_region(resolved, total as u64)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        pointer_abi::validate_tlv_bytes(envelope)
+    }
+
+    fn decode_tlv_from_memory<'a>(vm: &'a IVM, addr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let hdr = vm
+            .memory
+            .load_region(addr, 7)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        if hdr[2] != 1 {
+            return Err(VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        let envelope = vm
+            .memory
+            .load_region(addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
         pointer_abi::validate_tlv_bytes(envelope)
     }
@@ -757,6 +777,7 @@ impl Default for DefaultHost {
 
 impl IVMHost for DefaultHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        let number = crate::syscalls::canonical_helper_syscall(number);
         match number {
             crate::syscalls::SYSCALL_DEBUG_PRINT => {
                 let value = vm.register(10);

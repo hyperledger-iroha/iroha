@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dcd8de175a7c5172158a03e1a25b254c90a11e62c173f95b8d9e4a387df6ba09
 source_last_modified: "2026-03-26T13:01:47.372931+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - 用其將轉移的資產為合約機構（例如合約帳戶的 `<i105-account-id>`）提供資金，並授予該機構 `CanTransfer` 角色或同等權限。
 - 呼叫 `call_transfer_asset` 入口點，將 5 個單位從合約帳戶轉移給 Bob (`<i105-account-id>`)，鏡像鏈上自動化包裝主機呼叫的方式。
-- 透過 `FindAccountAssets` 或 `iroha_cli ledger asset list --account <i105-account-id>` 驗證餘額並檢查事件以確認元資料防護記錄了傳輸上下文。
+- 透過 `FindAccountAssets` 或 `iroha ledger asset list all --verbose` 驗證餘額並檢查事件以確認元資料防護記錄了傳輸上下文。
 
 ## 相關SDK指南
 

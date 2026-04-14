@@ -46,8 +46,11 @@ fn executor_upgrade_should_work() -> Result<()> {
     let client = network.client();
 
     // Register `admin` domain and account
-    let register_admin_domain = Register::domain(Domain::new(admin_domain.clone()));
-    client.submit_blocking(register_admin_domain)?;
+    submit_register_domain_with_network_lease(
+        &network,
+        &client,
+        Domain::new(admin_domain.clone()),
+    )?;
 
     let admin_account = Account::new(admin_id.clone());
     let register_admin_account = Register::account(admin_account);
@@ -626,12 +629,12 @@ fn define_custom_parameter() -> Result<()> {
     let client = network.client();
 
     let long_domain_name = DomainId::try_new("0".repeat(2_usize.pow(5)), "universal")?;
-    let create_domain = Register::domain(Domain::new(long_domain_name));
-    client.submit_blocking(create_domain)?;
+    submit_register_domain_with_network_lease(&network, &client, Domain::new(long_domain_name))?;
 
     upgrade_executor(&client, "executor_with_custom_parameter")?;
 
     let too_long_domain_name = DomainId::try_new("1".repeat(2_usize.pow(5)), "universal")?;
+    ensure_domain_registration_lease_for_network(&network, &too_long_domain_name)?;
     let create_domain = Register::domain(Domain::new(too_long_domain_name));
     let _err = client.submit_blocking(create_domain.clone()).unwrap_err();
 

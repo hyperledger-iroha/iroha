@@ -1,7 +1,11 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_data_model::prelude::AssetDefinitionId;
+use iroha_data_model::{
+    nexus::DataSpaceId,
+    prelude::{AccountId, AssetDefinitionId, Name},
+    smart_contract::ContractAddress,
+};
 use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
@@ -16,6 +20,14 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     v.extend_from_slice(&h);
     v
+}
+
+fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
+    let addr = vm.memory.alloc(bytes.len() as u64).expect("alloc heap tlv");
+    vm.memory
+        .store_bytes(addr, bytes)
+        .expect("store heap direct tlv");
+    addr
 }
 
 #[test]
@@ -299,4 +311,401 @@ fn json_get_numeric_reads_decimal_strings() {
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
     let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
     assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+}
+
+#[test]
+fn json_get_numeric_direct_accepts_input_heap_and_literal_pointers() {
+    let json_tlv = tlv(PointerType::Json, br#"{"amount":"0.00001"}"#);
+    let key_tlv = tlv(PointerType::Name, b"amount");
+    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT as u8]);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
+    let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode input numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
+    let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode heap numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT as u8],
+        &[json_tlv.as_slice(), key_tlv.as_slice()],
+    );
+    let json_addr = literal_ptrs[0];
+    let key_addr = literal_ptrs[1];
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&literal_prog).unwrap();
+    vm.set_register(10, json_addr);
+    vm.set_register(11, key_addr);
+    vm.run().unwrap();
+    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode literal numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
+}
+
+#[test]
+fn schema_info_direct_accepts_input_heap_and_literal_pointers() {
+    let schema_tlv = tlv(PointerType::Name, b"Order");
+    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8]);
+
+    let decode_schema_info = |vm: &IVM| {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("schema info tlv");
+        assert_eq!(tlv.type_id, PointerType::Json);
+        let json: iroha_primitives::json::Json =
+            norito::decode_from_bytes(tlv.payload).expect("decode schema info json");
+        let value: norito::json::Value =
+            norito::json::from_str(json.get()).expect("parse schema info json");
+        assert!(value.get("current").is_some());
+        assert!(value.get("versions").is_some());
+    };
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_schema = vm.alloc_input_tlv(&schema_tlv).expect("alloc input schema");
+    vm.set_register(10, p_schema);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_schema_info(&vm);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_schema = alloc_heap_tlv(&mut vm, &schema_tlv);
+    vm.set_register(10, p_schema);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_schema_info(&vm);
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8],
+        &[schema_tlv.as_slice()],
+    );
+    let schema_addr = literal_ptrs[0];
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&literal_prog).unwrap();
+    vm.set_register(10, schema_addr);
+    vm.run().unwrap();
+    decode_schema_info(&vm);
+}
+
+#[test]
+fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
+    let json_tlv = tlv(PointerType::Json, br#"{}"#);
+    let key_tlv = tlv(PointerType::Name, b"bucket_id");
+    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64_DIRECT as u8]);
+
+    let decode_bucket_id = |vm: &IVM| {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("json output tlv");
+        assert_eq!(tlv.type_id, PointerType::Json);
+        let value = common::json_from_payload(tlv.payload);
+        let object = value.as_object().expect("json object");
+        assert_eq!(
+            object.get("bucket_id").and_then(|value| value.as_i64()),
+            Some(2)
+        );
+    };
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
+    let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.set_register(12, 2);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_bucket_id(&vm);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
+    let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.set_register(12, 2);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_bucket_id(&vm);
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_JSON_SET_I64_DIRECT as u8],
+        &[json_tlv.as_slice(), key_tlv.as_slice()],
+    );
+    let json_addr = literal_ptrs[0];
+    let key_addr = literal_ptrs[1];
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&literal_prog).unwrap();
+    vm.set_register(10, json_addr);
+    vm.set_register(11, key_addr);
+    vm.set_register(12, 2);
+    vm.run().unwrap();
+    decode_bucket_id(&vm);
+}
+
+#[test]
+fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
+    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let expected_owner = AccountId::parse_encoded(owner_literal)
+        .expect("valid canonical account id")
+        .into_account_id()
+        .to_string();
+    let json_tlv = tlv(PointerType::Json, br#"{}"#);
+    let key_tlv = tlv(PointerType::Name, b"owner");
+    let owner_tlv = tlv(PointerType::AccountId, owner_literal.as_bytes());
+    let direct_prog =
+        common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT as u8]);
+
+    let decode_owner = |vm: &IVM| {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("json output tlv");
+        assert_eq!(tlv.type_id, PointerType::Json);
+        let value = common::json_from_payload(tlv.payload);
+        let object = value.as_object().expect("json object");
+        assert_eq!(
+            object.get("owner").and_then(|value| value.as_str()),
+            Some(expected_owner.as_str())
+        );
+    };
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = vm.alloc_input_tlv(&json_tlv).expect("alloc input json");
+    let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
+    let p_owner = vm.alloc_input_tlv(&owner_tlv).expect("alloc input owner");
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.set_register(12, p_owner);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_owner(&vm);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_json = alloc_heap_tlv(&mut vm, &json_tlv);
+    let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
+    let p_owner = alloc_heap_tlv(&mut vm, &owner_tlv);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.set_register(12, p_owner);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_owner(&vm);
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT as u8],
+        &[
+            json_tlv.as_slice(),
+            key_tlv.as_slice(),
+            owner_tlv.as_slice(),
+        ],
+    );
+    let json_addr = literal_ptrs[0];
+    let key_addr = literal_ptrs[1];
+    let owner_addr = literal_ptrs[2];
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&literal_prog).unwrap();
+    vm.set_register(10, json_addr);
+    vm.set_register(11, key_addr);
+    vm.set_register(12, owner_addr);
+    vm.run().unwrap();
+    decode_owner(&vm);
+}
+
+#[test]
+fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
+    let base_tlv = tlv(PointerType::Name, b"state");
+    let key_payload = norito::to_bytes(&42_u64).expect("encode norito key");
+    let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
+    let direct_prog =
+        common::assemble_syscalls(&[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8]);
+    let expected_path = {
+        let h: [u8; 32] = iroha_crypto::Hash::new(&key_payload).into();
+        let mut path = String::from("state/");
+        for byte in h {
+            use core::fmt::Write as _;
+            write!(&mut path, "{byte:02x}").expect("write path hash");
+        }
+        path
+    };
+
+    let decode_path = |vm: &IVM| {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("name output tlv");
+        assert_eq!(tlv.type_id, PointerType::Name);
+        let path: Name = norito::decode_from_bytes(tlv.payload).expect("decode path name");
+        assert_eq!(path.as_ref(), expected_path);
+    };
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_base = vm.alloc_input_tlv(&base_tlv).expect("alloc input base");
+    let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
+    vm.set_register(10, p_base);
+    vm.set_register(11, p_key);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_path(&vm);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_base = alloc_heap_tlv(&mut vm, &base_tlv);
+    let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
+    vm.set_register(10, p_base);
+    vm.set_register(11, p_key);
+    vm.load_program(&direct_prog).unwrap();
+    vm.run().unwrap();
+    decode_path(&vm);
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8],
+        &[base_tlv.as_slice(), key_tlv.as_slice()],
+    );
+    let base_addr = literal_ptrs[0];
+    let key_addr = literal_ptrs[1];
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    vm.load_program(&literal_prog).unwrap();
+    vm.set_register(10, base_addr);
+    vm.set_register(11, key_addr);
+    vm.run().unwrap();
+    decode_path(&vm);
+}
+
+#[test]
+fn json_object_builders_roundtrip_i64_and_account_id() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let p_bucket_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"bucket_id"))
+        .unwrap();
+    let p_owner_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"owner"))
+        .unwrap();
+    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let p_owner = vm
+        .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
+        .unwrap();
+
+    vm.load_program(&common::assemble_syscalls(&[
+        syscalls::SYSCALL_JSON_OBJECT as u8
+    ]))
+    .unwrap();
+    vm.run().unwrap();
+    let p_payload = vm.register(10);
+
+    vm.set_register(10, p_payload);
+    vm.set_register(11, p_bucket_key);
+    vm.set_register(12, 2);
+    vm.load_program(&common::assemble_syscalls(&[
+        syscalls::SYSCALL_JSON_SET_I64 as u8,
+    ]))
+    .unwrap();
+    vm.run().unwrap();
+    let p_payload = vm.register(10);
+
+    vm.set_register(10, p_payload);
+    vm.set_register(11, p_owner_key);
+    vm.set_register(12, p_owner);
+    vm.load_program(&common::assemble_syscalls(&[
+        syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8,
+    ]))
+    .unwrap();
+    vm.run().unwrap();
+    let p_payload = vm.register(10);
+
+    vm.set_register(10, p_payload);
+    vm.set_register(11, p_bucket_key);
+    vm.load_program(&common::assemble_syscalls(&[
+        syscalls::SYSCALL_JSON_GET_I64 as u8,
+    ]))
+    .unwrap();
+    vm.run().unwrap();
+    assert_eq!(vm.register(10) as i64, 2);
+
+    vm.set_register(10, p_payload);
+    vm.set_register(11, p_owner_key);
+    vm.load_program(&common::assemble_syscalls(&[
+        syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
+    ]))
+    .unwrap();
+    vm.run().unwrap();
+
+    let tlv_out = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    assert_eq!(tlv_out.type_id, PointerType::AccountId);
+    let owner: AccountId = norito::decode_from_bytes(tlv_out.payload).expect("decode account");
+    assert_eq!(
+        owner,
+        AccountId::parse_encoded(owner_literal)
+            .expect("valid canonical account id")
+            .into_account_id()
+    );
+}
+
+#[test]
+fn json_get_account_id_reads_contract_address_subject_literal() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    let contract_address = ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        &authority,
+        3,
+        DataSpaceId::GLOBAL,
+    )
+    .expect("derive contract address");
+    let json = format!(r#"{{"controller":"{}"}}"#, contract_address);
+    let p_json = vm
+        .alloc_input_tlv(&tlv(PointerType::Json, json.as_bytes()))
+        .unwrap();
+    let p_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"controller"))
+        .unwrap();
+
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8]);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+
+    let tlv_out = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    assert_eq!(tlv_out.type_id, PointerType::AccountId);
+    let decoded: AccountId =
+        norito::decode_from_bytes(tlv_out.payload).expect("decode contract subject");
+    assert_eq!(decoded, contract_address.subject_id());
 }

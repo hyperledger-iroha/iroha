@@ -193,6 +193,11 @@ pub enum SingularQueryJson {
         /// Canonical I105 account identifier.
         account_id: String,
     },
+    /// Looks up an account by stable alias.
+    FindAccountByAlias {
+        /// Stable account alias encoded as a structured JSON payload.
+        alias: crate::account::AccountAlias,
+    },
     /// Lists aliases bound to an account subject.
     FindAliasesByAccountId {
         /// Account identifier used to resolve the subject.
@@ -241,6 +246,11 @@ pub enum SingularQueryJson {
         /// Keyed hash identifying the binding.
         binding_hash: crate::oracle::KeyedHash,
     },
+    /// Looks up a domain by identifier.
+    FindDomainById {
+        /// Fully qualified `domain.dataspace` identifier.
+        domain_id: String,
+    },
 }
 
 impl SingularQueryJson {
@@ -248,6 +258,17 @@ impl SingularQueryJson {
         Ok(Self::FindAccountById {
             account_id: payload_required_string(payload, "account_id")?.to_owned(),
         })
+    }
+
+    fn parse_account_by_alias(payload: &Map) -> Result<Self, QueryJsonError> {
+        let alias = payload
+            .get("alias")
+            .ok_or(QueryJsonError::MissingField("payload", "alias"))
+            .and_then(|value| {
+                json::from_value::<crate::account::AccountAlias>(value.clone())
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "alias"))
+            })?;
+        Ok(Self::FindAccountByAlias { alias })
     }
 
     fn parse_aliases(payload: &Map) -> Result<Self, QueryJsonError> {
@@ -315,6 +336,66 @@ impl SingularQueryJson {
         Ok(Self::FindTwitterBindingByHash { binding_hash })
     }
 
+    fn parse_domain_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindDomainById {
+            domain_id: payload_required_string(payload, "domain_id")?.to_owned(),
+        })
+    }
+
+    fn alias_payload(alias: &crate::account::AccountAlias) -> Map {
+        let mut payload = Map::new();
+        payload.insert(
+            "alias".to_owned(),
+            json::to_value(alias).expect("account alias serializes"),
+        );
+        payload
+    }
+
+    fn decode_account_id(account_id: &str) -> Result<crate::account::AccountId, QueryJsonError> {
+        crate::account::AccountId::parse_encoded(account_id)
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))
+    }
+
+    fn decode_asset_definition_id(
+        asset: &str,
+    ) -> Result<crate::asset::AssetDefinitionId, QueryJsonError> {
+        crate::asset::AssetDefinitionId::parse_address_literal(asset)
+            .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))
+    }
+
+    fn decode_asset_scope(
+        scope: Option<Value>,
+    ) -> Result<crate::asset::AssetBalanceScope, QueryJsonError> {
+        scope
+            .map(|value| {
+                json::from_value::<crate::asset::AssetBalanceScope>(value)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "scope"))
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    fn decode_domain_id(domain_id: &str) -> Result<crate::domain::DomainId, QueryJsonError> {
+        crate::domain::DomainId::parse_fully_qualified(domain_id)
+            .map_err(|_| QueryJsonError::InvalidField("payload", "domain_id"))
+    }
+
+    fn decode_contract_hash(code_hash: &str) -> Result<iroha_crypto::Hash, QueryJsonError> {
+        let bytes = hex::decode(code_hash.trim_start_matches("0x"))
+            .map_err(|_| QueryJsonError::InvalidHex("code_hash".to_owned()))?;
+        if bytes.len() != 32 {
+            return Err(QueryJsonError::InvalidLength {
+                field: "code_hash".to_owned(),
+                expected: 32,
+                actual: bytes.len(),
+            });
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Ok(iroha_crypto::Hash::prehashed(arr))
+    }
+
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -326,6 +407,14 @@ impl SingularQueryJson {
                 let mut payload = Map::new();
                 payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindAccountByAlias { alias }
+            | Self::FindAccountRecoveryPolicyByAlias { alias }
+            | Self::FindAccountRecoveryRequestByAlias { alias } => {
+                map.insert(
+                    "payload".to_owned(),
+                    Value::Object(Self::alias_payload(alias)),
+                );
             }
             Self::FindContractManifestByCodeHash { code_hash } => {
                 let mut payload = Map::new();
@@ -370,28 +459,17 @@ impl SingularQueryJson {
                 }
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAccountRecoveryPolicyByAlias { alias } => {
-                let mut payload = Map::new();
-                payload.insert(
-                    "alias".to_owned(),
-                    json::to_value(alias).expect("account alias serializes"),
-                );
-                map.insert("payload".to_owned(), Value::Object(payload));
-            }
-            Self::FindAccountRecoveryRequestByAlias { alias } => {
-                let mut payload = Map::new();
-                payload.insert(
-                    "alias".to_owned(),
-                    json::to_value(alias).expect("account alias serializes"),
-                );
-                map.insert("payload".to_owned(), Value::Object(payload));
-            }
             Self::FindTwitterBindingByHash { binding_hash } => {
                 let mut payload = Map::new();
                 payload.insert(
                     "binding_hash".to_owned(),
                     json::to_value(binding_hash).expect("binding hash serializes"),
                 );
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindDomainById { domain_id } => {
+                let mut payload = Map::new();
+                payload.insert("domain_id".to_owned(), Value::String(domain_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             _ => {}
@@ -412,6 +490,7 @@ impl SingularQueryJson {
             "FindExecutorDataModel" => Ok(SingularQueryJson::FindExecutorDataModel),
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
             "FindAccountById" => Self::parse_account_by_id(singular_payload(map)?),
+            "FindAccountByAlias" => Self::parse_account_by_alias(singular_payload(map)?),
             "FindAliasesByAccountId" => Self::parse_aliases(singular_payload(map)?),
             "FindAccountRecoveryPolicyByAlias" => {
                 Self::parse_recovery_policy(singular_payload(map)?)
@@ -426,6 +505,7 @@ impl SingularQueryJson {
             "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
             "FindTriggerById" => Self::parse_trigger_by_id(singular_payload(map)?),
             "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
+            "FindDomainById" => Self::parse_domain_by_id(singular_payload(map)?),
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
     }
@@ -436,6 +516,7 @@ impl SingularQueryJson {
             SingularQueryJson::FindExecutorDataModel => "FindExecutorDataModel",
             SingularQueryJson::FindParameters => "FindParameters",
             SingularQueryJson::FindAccountById { .. } => "FindAccountById",
+            SingularQueryJson::FindAccountByAlias { .. } => "FindAccountByAlias",
             SingularQueryJson::FindAliasesByAccountId { .. } => "FindAliasesByAccountId",
             SingularQueryJson::FindAccountRecoveryPolicyByAlias { .. } => {
                 "FindAccountRecoveryPolicyByAlias"
@@ -450,6 +531,7 @@ impl SingularQueryJson {
                 "FindContractManifestByCodeHash"
             }
             SingularQueryJson::FindTwitterBindingByHash { .. } => "FindTwitterBindingByHash",
+            SingularQueryJson::FindDomainById { .. } => "FindDomainById",
         }
     }
 
@@ -467,11 +549,14 @@ impl SingularQueryJson {
                 crate::query::executor::prelude::FindParameters,
             )),
             SingularQueryJson::FindAccountById { account_id } => {
-                let id = crate::account::AccountId::parse_encoded(&account_id)
-                    .map(crate::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                let id = Self::decode_account_id(&account_id)?;
                 Ok(SingularQueryBox::FindAccountById(
                     crate::query::account::prelude::FindAccountById::new(id),
+                ))
+            }
+            SingularQueryJson::FindAccountByAlias { alias } => {
+                Ok(SingularQueryBox::FindAccountByAlias(
+                    crate::query::account::prelude::FindAccountByAlias::new(alias),
                 ))
             }
             SingularQueryJson::FindAliasesByAccountId {
@@ -479,9 +564,7 @@ impl SingularQueryJson {
                 dataspace,
                 domain,
             } => {
-                let id = crate::account::AccountId::parse_encoded(&account_id)
-                    .map(crate::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                let id = Self::decode_account_id(&account_id)?;
                 Ok(SingularQueryBox::FindAliasesByAccountId(
                     crate::query::account::prelude::FindAliasesByAccountId::new(
                         id, dataspace, domain,
@@ -503,18 +586,9 @@ impl SingularQueryJson {
                 account_id,
                 scope,
             } => {
-                let definition = crate::asset::AssetDefinitionId::parse_address_literal(&asset)
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))?;
-                let account = crate::account::AccountId::parse_encoded(&account_id)
-                    .map(crate::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
-                let scope = scope
-                    .map(|value| {
-                        json::from_value::<crate::asset::AssetBalanceScope>(value)
-                            .map_err(|_| QueryJsonError::InvalidField("payload", "scope"))
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
+                let definition = Self::decode_asset_definition_id(&asset)?;
+                let account = Self::decode_account_id(&account_id)?;
+                let scope = Self::decode_asset_scope(scope)?;
                 Ok(SingularQueryBox::FindAssetById(
                     crate::query::asset::prelude::FindAssetById::new(
                         crate::asset::AssetId::with_scope(definition, account, scope),
@@ -522,8 +596,7 @@ impl SingularQueryJson {
                 ))
             }
             SingularQueryJson::FindAssetDefinitionById { asset } => {
-                let id = crate::asset::AssetDefinitionId::parse_address_literal(&asset)
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))?;
+                let id = Self::decode_asset_definition_id(&asset)?;
                 Ok(SingularQueryBox::FindAssetDefinitionById(
                     crate::query::asset::prelude::FindAssetDefinitionById::new(id),
                 ))
@@ -537,18 +610,7 @@ impl SingularQueryJson {
                 ))
             }
             SingularQueryJson::FindContractManifestByCodeHash { code_hash } => {
-                let bytes = hex::decode(code_hash.trim_start_matches("0x"))
-                    .map_err(|_| QueryJsonError::InvalidHex("code_hash".to_owned()))?;
-                if bytes.len() != 32 {
-                    return Err(QueryJsonError::InvalidLength {
-                        field: "code_hash".to_owned(),
-                        expected: 32,
-                        actual: bytes.len(),
-                    });
-                }
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                let hash = iroha_crypto::Hash::prehashed(arr);
+                let hash = Self::decode_contract_hash(&code_hash)?;
                 Ok(SingularQueryBox::FindContractManifestByCodeHash(
                     crate::query::smart_contract::prelude::FindContractManifestByCodeHash {
                         code_hash: hash,
@@ -558,6 +620,12 @@ impl SingularQueryJson {
             SingularQueryJson::FindTwitterBindingByHash { binding_hash } => {
                 Ok(SingularQueryBox::FindTwitterBindingByHash(
                     crate::query::oracle::prelude::FindTwitterBindingByHash { binding_hash },
+                ))
+            }
+            SingularQueryJson::FindDomainById { domain_id } => {
+                let id = Self::decode_domain_id(&domain_id)?;
+                Ok(SingularQueryBox::FindDomainById(
+                    crate::query::domain::prelude::FindDomainById::new(id),
                 ))
             }
         }
@@ -1176,6 +1244,28 @@ mod tests {
             other => panic!("unexpected query variant: {other:?}"),
         }
 
+        let alias = crate::account::AccountAlias::domainless(
+            "alice".parse().expect("alias label"),
+            crate::nexus::DataSpaceId::GLOBAL,
+        );
+        let singular = SingularQueryJson::FindAccountByAlias {
+            alias: alias.clone(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindAccountByAlias(q) => {
+                assert_eq!(q.alias(), &alias);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
         let singular = SingularQueryJson::FindAliasesByAccountId {
             account_id: account_id.to_string(),
             dataspace: Some("centralbank".to_owned()),
@@ -1198,10 +1288,6 @@ mod tests {
             other => panic!("unexpected query variant: {other:?}"),
         }
 
-        let alias = crate::account::AccountAlias::domainless(
-            "alice".parse().expect("alias label"),
-            crate::nexus::DataSpaceId::GLOBAL,
-        );
         let singular = SingularQueryJson::FindAccountRecoveryPolicyByAlias {
             alias: alias.clone(),
         };
@@ -1216,6 +1302,26 @@ mod tests {
         match query {
             SingularQueryBox::FindAccountRecoveryPolicyByAlias(q) => {
                 assert_eq!(q.alias(), &alias);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
+        let domain_id =
+            crate::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
+        let singular = SingularQueryJson::FindDomainById {
+            domain_id: domain_id.to_string(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindDomainById(q) => {
+                assert_eq!(q.domain_id(), &domain_id);
             }
             other => panic!("unexpected query variant: {other:?}"),
         }

@@ -509,6 +509,13 @@ pub enum Instr {
         dest: Temp,
         alias: Temp,
     },
+    /// Synchronous deployed-contract call using a contract-address literal, entrypoint name, and Json payload.
+    CallContract {
+        dest: Temp,
+        contract: Temp,
+        entrypoint: Temp,
+        payload: Temp,
+    },
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
         dest: Temp,
@@ -593,6 +600,24 @@ pub enum Instr {
     /// Return the payload length of an arbitrary pointer-ABI TLV.
     TlvLen {
         dest: Temp,
+        value: Temp,
+    },
+    /// Construct an empty Json object.
+    JsonObject {
+        dest: Temp,
+    },
+    /// Insert or replace an integer field in a Json object.
+    JsonSetInt {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+        value: Temp,
+    },
+    /// Insert or replace an AccountId field in a Json object.
+    JsonSetAccountId {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
         value: Temp,
     },
     /// JSON getters: (&Json, &Name key) -> int
@@ -1082,9 +1107,12 @@ fn entrypoint_impl_symbol(name: &str) -> String {
     format!("__entrypoint_impl__{name}")
 }
 
+// Zero-argument entrypoints can jump straight into the implementation body
+// because there is no payload-decoding work for a wrapper to perform.
 fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
-    matches!(func.modifiers.kind, super::ast::FunctionKind::View)
-        || func.modifiers.visibility == super::ast::FunctionVisibility::Public
+    (matches!(func.modifiers.kind, super::ast::FunctionKind::View)
+        || func.modifiers.visibility == super::ast::FunctionVisibility::Public)
+        && !func.param_types.is_empty()
 }
 
 fn lower_function_named(
@@ -1983,6 +2011,37 @@ fn lower_surface_builtin_call(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     match builtin {
+        Builtin::JsonObject => {
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonObject { dest: d });
+            d
+        }
+        Builtin::JsonSetInt => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let v = lower_expr_as_int(ctx, &args[2], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonSetInt {
+                dest: d,
+                json: j,
+                key: k,
+                value: v,
+            });
+            d
+        }
+        Builtin::JsonSetAccountId => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let v = lower_expr(ctx, &args[2], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonSetAccountId {
+                dest: d,
+                json: j,
+                key: k,
+                value: v,
+            });
+            d
+        }
         Builtin::GetInt => {
             let j = lower_expr(ctx, &args[0], vars);
             let k = lower_expr(ctx, &args[1], vars);
@@ -4091,6 +4150,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
                     dest
                 }
+                "call_contract" => {
+                    let contract = lower_expr(ctx, &args[0], vars);
+                    let entrypoint = lower_expr(ctx, &args[1], vars);
+                    let payload = lower_expr(ctx, &args[2], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::CallContract {
+                        dest,
+                        contract,
+                        entrypoint,
+                        payload,
+                    });
+                    dest
+                }
                 "build_submit_ballot_inline" => {
                     let election_id = lower_expr(ctx, &args[0], vars);
                     let ciphertext = lower_expr(ctx, &args[1], vars);
@@ -4761,7 +4833,17 @@ fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Optio
             ctx.current_instr(Instr::NameDecode { dest, blob });
             Some(dest)
         }
-        Type::Blob | Type::Bytes | Type::String => Some(state_get_blob_for_name(ctx, name)),
+        Type::Blob | Type::Bytes => {
+            if let Some(kind) = pointer_kind_for_type(&resolved) {
+                let blob = state_get_blob_for_name(ctx, name);
+                let dest = ctx.new_temp();
+                ctx.current_instr(Instr::PointerFromNorito { dest, blob, kind });
+                Some(dest)
+            } else {
+                Some(state_get_blob_for_name(ctx, name))
+            }
+        }
+        Type::String => Some(state_get_blob_for_name(ctx, name)),
         Type::AccountId
         | Type::AssetDefinitionId
         | Type::AssetId
@@ -5932,6 +6014,7 @@ mod tests {
         let mut saw_bool_ne = false;
         let mut saw_json_decode = false;
         let mut saw_name_decode = false;
+        let mut saw_blob_pointer_decode = false;
         let mut saw_pointer_decode = false;
 
         for bb in &main_fn.blocks {
@@ -5974,6 +6057,9 @@ mod tests {
                     } => saw_bool_ne = true,
                     Instr::JsonDecode { .. } => saw_json_decode = true,
                     Instr::NameDecode { .. } => saw_name_decode = true,
+                    Instr::PointerFromNorito { kind, .. } if *kind == DataRefKind::Blob => {
+                        saw_blob_pointer_decode = true;
+                    }
                     Instr::PointerFromNorito { kind, .. } if *kind == DataRefKind::Account => {
                         saw_pointer_decode = true;
                     }
@@ -5996,6 +6082,10 @@ mod tests {
         assert!(saw_bool_ne, "expected bool normalization via Binary::Ne");
         assert!(saw_json_decode, "expected JsonDecode for persisted Json");
         assert!(saw_name_decode, "expected NameDecode for persisted Name");
+        assert!(
+            saw_blob_pointer_decode,
+            "expected PointerFromNorito for persisted blob field"
+        );
         assert!(
             saw_pointer_decode,
             "expected PointerFromNorito for pointer field"

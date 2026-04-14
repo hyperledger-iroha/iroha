@@ -66,7 +66,7 @@ async function collectVolunteerInputs() {
 
 async function runCargoValidator(inputs) {
   await mkdir(path.dirname(cliReportPath), {recursive: true});
-  const args = [
+  const xtaskArgs = [
     'xtask',
     'ministry-transparency',
     'volunteer-validate',
@@ -74,25 +74,41 @@ async function runCargoValidator(inputs) {
     cliReportPath,
     ...inputs.flatMap((input) => ['--input', input])
   ];
-  await new Promise((resolve, reject) => {
-    const child = spawn('cargo', args, {
-      cwd: repoRoot,
-      stdio: 'inherit',
-      env: process.env
+
+  const runCargo = (args) =>
+    new Promise((resolve, reject) => {
+      const child = spawn('cargo', args, {
+        cwd: repoRoot,
+        stdio: 'inherit',
+        env: process.env
+      });
+      child.on('error', reject);
+      child.on('exit', (code) => resolve(code ?? 1));
     });
-    child.on('error', (err) => {
-      reject(err);
-    });
-    child.on('exit', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(`[volunteer-brief-validator] cargo exited with status ${code ?? 'unknown'}`)
-        );
-      }
-    });
-  });
+
+  const primaryCode = await runCargo(xtaskArgs);
+  if (primaryCode === 0) {
+    return;
+  }
+
+  console.warn(
+    `[volunteer-brief-validator] cargo xtask exited with code ${primaryCode}; falling back to 'cargo run -p xtask --bin xtask -- ministry-transparency volunteer-validate ...'`
+  );
+
+  const fallbackCode = await runCargo([
+    'run',
+    '-p',
+    'xtask',
+    '--bin',
+    'xtask',
+    '--',
+    ...xtaskArgs.slice(1)
+  ]);
+  if (fallbackCode !== 0) {
+    throw new Error(
+      `[volunteer-brief-validator] cargo exited with status ${fallbackCode}`
+    );
+  }
 }
 
 async function writeJson(filePath, data) {

@@ -17,10 +17,24 @@ Options:
   --batch-interval <SEC>  tx_load batch interval seconds (default: 1)
   --drain-timeout <SEC>   seconds to wait for queue drain (default: 120)
   --out-base <DIR>        output directory base (default: /tmp/iroha-10k)
+  --target-dir <DIR>      Set CARGO_TARGET_DIR for builds and binary reuse
+  --fast                  Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug       With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental   With --fast, set CARGO_INCREMENTAL=0
+  --no-skip-build         Do not skip deploy_localnet cargo build when binaries already exist
   --release               use release binaries (default)
   --debug                 use debug binaries
   -h, --help              show this help
 USAGE
+}
+
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +51,11 @@ BATCH_INTERVAL=1
 DRAIN_TIMEOUT=120
 OUT_BASE="/tmp/iroha-10k"
 PROFILE="release"
+TARGET_DIR=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
+AUTO_SKIP_BUILD=true
 
 BASE_API_PORT_PERM=48080
 BASE_P2P_PORT_PERM=48337
@@ -80,8 +99,30 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --out-base)
+      require_option_value "--out-base" "${2-}"
       OUT_BASE="$2"
       shift 2
+      ;;
+    --target-dir)
+      require_option_value "--target-dir" "${2-}"
+      TARGET_DIR="$2"
+      shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
+      ;;
+    --no-skip-build)
+      AUTO_SKIP_BUILD=false
+      shift
       ;;
     --release)
       PROFILE="release"
@@ -125,6 +166,77 @@ if [[ ! -f "${SCRIPT_DIR}/tx_load.py" ]]; then
   exit 1
 fi
 
+resolve_dir() {
+  local path="$1"
+  local candidate
+  if [[ "${path}" = /* ]]; then
+    candidate="${path}"
+  else
+    candidate="${IROHA_DIR}/${path}"
+  fi
+  mkdir -p "${candidate}"
+  (
+    cd "${candidate}"
+    pwd
+  )
+}
+
+bin_name() {
+  local raw="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf '%s.exe\n' "${raw}"
+      ;;
+    *)
+      printf '%s\n' "${raw}"
+      ;;
+  esac
+}
+
+profile_binary_exists() {
+  local root="$1"
+  local profile="$2"
+  local raw="$3"
+  local bin
+  bin="$(bin_name "${raw}")"
+  [[ -x "${root}/${profile}/${bin}" ]]
+}
+
+DEPLOY_ARGS=()
+if [[ "$USE_CARGO_FAST" == true ]]; then
+  cargo_fast_script="${IROHA_DIR}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  DEPLOY_ARGS+=(--fast)
+  if [[ "$FAST_ZERO_DEBUG" == true ]]; then
+    DEPLOY_ARGS+=(--fast-zero-debug)
+  fi
+  if [[ "$FAST_NO_INCREMENTAL" == true ]]; then
+    DEPLOY_ARGS+=(--fast-no-incremental)
+  fi
+elif [[ "$FAST_ZERO_DEBUG" == true || "$FAST_NO_INCREMENTAL" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_DIR}" ]]; then
+  export CARGO_TARGET_DIR="$(resolve_dir "${TARGET_DIR}")"
+fi
+target_root="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
+export CARGO_TARGET_DIR="${target_root}"
+DEPLOY_ARGS+=(--target-dir "${target_root}")
+CLI_BIN="${target_root}/${PROFILE}/$(bin_name "iroha")"
+
+DEPLOY_ENV=()
+if [[ "${AUTO_SKIP_BUILD}" == true ]] \
+  && profile_binary_exists "${target_root}" "${PROFILE}" "kagami" \
+  && profile_binary_exists "${target_root}" "${PROFILE}" "irohad" \
+  && profile_binary_exists "${target_root}" "${PROFILE}" "iroha"; then
+  DEPLOY_ENV+=(SKIP_TOOL_BUILD=true)
+fi
+
 PROFILE_ARGS=()
 if [[ "$PROFILE" == "release" ]]; then
   PROFILE_ARGS+=(--release)
@@ -143,24 +255,36 @@ run_mode() {
 
   echo ""
   echo "=== ${label} 10k TPS localnet ==="
-  "${SCRIPT_DIR}/deploy_localnet.sh" \
-    --iroha-dir "$IROHA_DIR" \
-    --out-dir "$out_dir" \
-    --peers "$PEERS" \
-    --seed "$seed" \
-    --build-line iroha3 \
-    --perf-profile "$perf_profile" \
-    --base-api-port "$base_api_port" \
-    --base-p2p-port "$base_p2p_port" \
-    --force \
-    --skip-asset-register \
-    "${PROFILE_ARGS[@]}"
+  local -a deploy_cmd=(
+    "${SCRIPT_DIR}/deploy_localnet.sh"
+    --iroha-dir "$IROHA_DIR"
+    --out-dir "$out_dir"
+    --peers "$PEERS"
+    --seed "$seed"
+    --build-line iroha3
+    --perf-profile "$perf_profile"
+    --base-api-port "$base_api_port"
+    --base-p2p-port "$base_p2p_port"
+    --force
+    --skip-asset-register
+    "${DEPLOY_ARGS[@]}"
+  )
+  if [[ ${#PROFILE_ARGS[@]} -gt 0 ]]; then
+    deploy_cmd+=("${PROFILE_ARGS[@]}")
+  fi
+  if [[ ${#DEPLOY_ENV[@]} -gt 0 ]]; then
+    env "${DEPLOY_ENV[@]}" "${deploy_cmd[@]}"
+  else
+    "${deploy_cmd[@]}"
+  fi
 
   started=1
 
   TX_LOAD_ARGS=(
+    --iroha-bin "$CLI_BIN"
     --client-config "$out_dir/client.toml"
     --peer-count "$PEERS"
+    --base-api-port "$base_api_port"
     --count "$COUNT"
     --parallel "$PARALLEL"
     --batch-size "$BATCH_SIZE"

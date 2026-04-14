@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - ဦးတည်ရာအကောင့် (ဥပမာ၊ Alice အတွက် `<i105-account-id>`) ရှိနေကြောင်း သေချာစေပြီး SDK တစ်ခုစီတွင် အမြန်စတင်ခြင်း အဆင့်ကို ရောင်ပြန်ဟပ်စေပါသည်။
 - ROSE ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် ဖန်တီးရန် `register_and_mint` ကို တောင်းခံပြီး အရောင်းအ၀ယ်တစ်ခုတွင် Alice သို့ ယူနစ် 250 mintပါ။
-- mint အောင်မြင်ကြောင်း အတည်ပြုရန် `client.request(FindAccountAssets)` သို့မဟုတ် `iroha_cli ledger asset list --account <i105-account-id>` မှတဆင့် လက်ကျန်များကို စစ်ဆေးပါ။
+- mint အောင်မြင်ကြောင်း အတည်ပြုရန် `client.request(FindAccountAssets)` သို့မဟုတ် `iroha ledger asset list all --verbose` မှတဆင့် လက်ကျန်များကို စစ်ဆေးပါ။
 
 ## သက်ဆိုင်ရာ SDK လမ်းညွှန်များ
 

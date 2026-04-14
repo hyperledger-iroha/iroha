@@ -336,8 +336,15 @@ fn reserve_control_transfer_stub(code: &mut Vec<u8>) -> usize {
     start
 }
 
-fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_jump_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned jump offset {off} for control transfer at {start}"
@@ -350,7 +357,7 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, target)?;
+    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, runtime_target)?;
     let jalr = encoding::wide::encode_ri(
         instruction::wide::control::JALR,
         0,
@@ -361,8 +368,15 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
     Ok(())
 }
 
-fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_call_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned call offset {off} for control transfer at {start}"
@@ -377,7 +391,7 @@ fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, 1, target)?;
+    patch_pointer_literal_stub(code, start, 1, runtime_target)?;
     let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0);
     write_word(code, start + POINTER_STUB_LEN * 4, jalr);
     Ok(())
@@ -758,7 +772,7 @@ seiyaku MyC {
     fn far_jump_fixup_uses_literal_stub_and_jalr() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_jump_transfer_stub(&mut code, start, 200_000).expect("patch far jump");
+        super::patch_jump_transfer_stub(&mut code, start, 200_000, 0).expect("patch far jump");
         let final_word_at = start + super::POINTER_STUB_LEN * 4;
         let final_word =
             u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
@@ -777,7 +791,7 @@ seiyaku MyC {
     fn near_call_fixup_skips_stub_padding_on_return() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64)
+        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64, 0)
             .expect("patch near call");
 
         let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
@@ -791,6 +805,31 @@ seiyaku MyC {
             skip_word,
             super::encode_jal(0, ((super::CONTROL_TRANSFER_STUB_WORDS - 1) * 4) as i32)
                 .expect("encode stub skip")
+        );
+    }
+
+    #[test]
+    fn far_call_fixup_includes_runtime_prefix_bias_in_literal_target() {
+        let mut code = Vec::new();
+        let start = super::reserve_control_transfer_stub(&mut code);
+        let target = 200_000u64;
+        let bias = 8_192u64;
+        super::patch_call_transfer_stub(&mut code, start, target, bias).expect("patch far call");
+
+        let mut expected = vec![0u8; super::POINTER_STUB_LEN * 4];
+        super::patch_pointer_literal_stub(&mut expected, 0, 1, target + bias)
+            .expect("patch expected pointer literal");
+        assert_eq!(
+            &code[start..start + super::POINTER_STUB_LEN * 4],
+            expected.as_slice()
+        );
+
+        let final_word_at = start + super::POINTER_STUB_LEN * 4;
+        let final_word =
+            u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
+        assert_eq!(
+            final_word,
+            encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0)
         );
     }
 
@@ -1269,6 +1308,52 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_state_wildcard_for_call_contract() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn relay(target: bytes, payload: Json) -> bytes permission(Admin) {
+    return call_contract(target, "settle", payload);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let relay = entrypoints
+            .iter()
+            .find(|entry| entry.name == "relay")
+            .expect("relay entrypoint");
+        assert!(relay.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(relay.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_eq!(relay.access_hints_complete, Some(true));
+        assert!(relay.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn compile_json_object_builders() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn build(owner: AccountId) -> Json {
+    let payload = json_object();
+    let payload = json_set_int(payload, name("bucket_id"), 1);
+    return json_set_account_id(payload, name("owner"), owner);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        compiler
+            .compile_source_with_manifest(src)
+            .expect("compile json object builders");
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_create_trigger_from_json() {
         let src = r#"
 seiyaku Test {
@@ -1699,6 +1784,53 @@ seiyaku Test {
             "trigger callback entrypoint must be laid out first so VM startup enters `run`"
         );
         assert_eq!(run.name, "run");
+    }
+
+    #[test]
+    fn main_entrypoint_is_compiled_first_before_hajimari() {
+        let src = r#"
+seiyaku Hello {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+
+  kotoage fn main() permission(Admin) {
+    write_detail();
+  }
+
+  kotoage fn write_detail() permission(Admin) {
+    set_account_detail(
+      authority(),
+      name("example"),
+      json("{\"hello\":\"world\"}")
+    );
+  }
+}
+"#;
+        let (bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        assert_eq!(entrypoints.len(), 3);
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.name, "main");
+
+        let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let embedded = parsed
+            .contract_interface
+            .expect("embedded contract interface");
+        let main_embedded = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("embedded main entrypoint");
+        assert_eq!(
+            main_embedded.entry_pc, 0,
+            "public `main` must be laid out first so raw VM startup enters `main` before `hajimari`"
+        );
     }
 
     #[test]
@@ -3086,6 +3218,16 @@ impl Compiler {
                                     .writes
                                     .insert(STATE_WILDCARD_KEY.to_string());
                             }
+                        }
+                        ir::Instr::CallContract { .. } => {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
                         }
                         _ => {}
                     }
@@ -5044,6 +5186,41 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::CallContract {
+                            dest,
+                            contract,
+                            entrypoint,
+                            payload,
+                        } => {
+                            let contract_reg = src_reg(contract, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, contract_reg, 0)?);
+                            let publish_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(13, 10, 0)?);
+
+                            let entrypoint_reg = src_reg(entrypoint, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, entrypoint_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+
+                            let payload_reg = src_reg(payload, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, payload_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 13, 0)?);
+                            push_word(&mut code, encode_addi(11, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_CALL_CONTRACT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::GetTriggerEvent { dest } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -6263,6 +6440,134 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::JsonObject { dest } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_OBJECT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetInt {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let value_reg = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, value_reg, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_I64 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetAccountId {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let mut load_ptr = |temp: &ir::Temp,
+                                                target: u8,
+                                                scratch: u8,
+                                                code: &mut Vec<u8>|
+                             -> Result<(), String> {
+                                if let Some(kind) =
+                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &lit);
+                                    emit_literal_stub(code, &mut fixups, target, key);
+                                } else {
+                                    if string_map.contains_key(&(func_idx, *temp))
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
+                                    {
+                                        return Err(i18n::translate(
+                                            self.lang,
+                                            Message::SemanticError(
+                                                "pointer literal missing ABI metadata during json_set_account_id lowering",
+                                            ),
+                                        ));
+                                    }
+                                    let rs = src_reg(temp, scratch, code)?;
+                                    push_word(code, encode_addi(target, rs, 0)?);
+                                }
+                                Ok(())
+                            };
+                            load_ptr(json, 10, scratch1, &mut code)?;
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            load_ptr(key, 10, scratch1, &mut code)?;
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            load_ptr(value, 12, scratch1, &mut code)?;
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::TlvLen { dest, value } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -7158,7 +7463,7 @@ impl Compiler {
                     )
                 })?;
                 let target_pc = (func_base + target_off) as u64;
-                patch_jump_transfer_stub(&mut code, fix.at, target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.at, target_pc, 0)?;
             }
             for fix in branch_fixups {
                 let else_target = *block_offsets.get(&fix.else_label).ok_or_else(|| {
@@ -7176,8 +7481,8 @@ impl Compiler {
                 let else_target_pc = (func_base + else_target) as u64;
                 let then_target_pc = (func_base + then_target) as u64;
 
-                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc)?;
-                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc, 0)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc, 0)?;
             }
             uses_zk_global |= uses_zk;
         }
@@ -7187,7 +7492,7 @@ impl Compiler {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
                 i18n::translate(self.lang, Message::SemanticError("unknown callee"))
             })? as u64;
-            patch_call_transfer_stub(&mut code, *at, target)?;
+            patch_call_transfer_stub(&mut code, *at, target, 0)?;
         }
 
         uses_vector_global |= detect_vector_usage(&code);
@@ -7566,6 +7871,21 @@ impl Compiler {
             if rem != 0 {
                 post_pad = 4 - rem;
             }
+        }
+        let runtime_code_prefix = contract_section.len() as u64
+            + debug_section.len() as u64
+            + lit_header_size
+            + lit_size
+            + data_bytes.len() as u64
+            + post_pad as u64;
+        // Relative near calls are invariant under the runtime prefix, but far
+        // JALR stubs need the final code-region prefix added to their absolute
+        // targets so they do not jump into the CNTR/DBG1/LTLB prefix bytes.
+        for (at, callee, _caller) in &call_fixups {
+            let target = *func_start_offsets.get(callee).ok_or_else(|| {
+                i18n::translate(self.lang, Message::SemanticError("unknown callee"))
+            })? as u64;
+            patch_call_transfer_stub(&mut code, *at, target, runtime_code_prefix)?;
         }
         if need_literals {
             let data_len = data_bytes.len() as u32;
@@ -8709,6 +9029,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::CallContract { .. }
             | ir::Instr::SubscriptionBill
             | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }

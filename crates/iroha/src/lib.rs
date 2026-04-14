@@ -1,4 +1,8 @@
-//! Crate contains client which talks to Iroha network via http
+//! Rust client library for talking to Iroha over HTTP/WebSocket.
+//!
+//! This crate exposes the reusable SDK surface used by applications and by the
+//! workspace CLI. The `iroha` command-line binary itself is built by the
+//! separate `iroha_cli` crate.
 
 pub mod account_address;
 pub mod client;

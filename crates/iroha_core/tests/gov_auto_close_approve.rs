@@ -78,8 +78,10 @@ fn auto_close_emits_approved() {
     {
         let mut sblock1 = state.block(block1);
         let mut stx1 = sblock1.transaction();
-        let p1: Permission =
-            CanProposeContractDeployment { contract_address: proposal_contract_address() }.into();
+        let p1: Permission = CanProposeContractDeployment {
+            contract_address: proposal_contract_address(),
+        }
+        .into();
         Grant::account_permission(p1, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx1)
             .expect("grant propose");

@@ -1895,6 +1895,33 @@ pub mod query {
         }
     }
 
+    impl ValidQuery for FindAssetsByAccountId {
+        #[metrics(+"find_assets_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Asset>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = Asset>, Error> {
+            fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
+                Asset {
+                    id: entry.id().clone(),
+                    value: entry.value().clone().into_inner(),
+                }
+            }
+
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro
+                .world()
+                .assets_in_account_iter(&account_id)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(entry_to_asset)
+                .filter(move |asset| filter.applies(asset)))
+        }
+    }
+
     impl ValidSingularQuery for FindAssetById {
         #[metrics(+"find_asset_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Asset, Error> {
@@ -2077,6 +2104,51 @@ pub mod query {
             let fetched = &assets[0];
             assert_eq!(fetched.id(), &asset_id);
             assert_eq!(*fetched.value(), Numeric::new(13, 0));
+        }
+
+        #[test]
+        fn find_assets_by_account_id_limits_results_to_requested_owner() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+            let bob_account = build_account_in_domain(&bob_id, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
+            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [alice_asset, bob_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+            let view = state.view();
+
+            let assets: Vec<_> = FindAssetsByAccountId::new(ALICE_ID.clone())
+                .execute(CompoundPredicate::PASS, &view)
+                .expect("query execution succeeds")
+                .collect();
+
+            assert_eq!(assets.len(), 1);
+            assert_eq!(assets[0].id().account(), &*ALICE_ID);
+            assert_eq!(assets[0].id(), &alice_asset_id);
         }
 
         #[test]

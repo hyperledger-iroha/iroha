@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - Вызовите `open_escrow(recipient, escrow_account, asset_definition, target_amount)` один раз, чтобы записать плательщика, получателя, счет условного депонирования, определение актива, точную цель и флаги открытия/выпуска/возврата в состоянии долгосрочного контракта.
 - Звонок `deposit(amount)` от того же плательщика до `funded_amount_value == target_amount_value`; Депозиты должны оставаться положительными, и любые пополнения, которые могут привести к перефинансированию условного депонирования, отклоняются.
 - Позвоните по номеру `release_if_ready()`, чтобы перевести депонированные средства получателю, как только цель будет достигнута, или позвоните по номеру `refund()`, пока депонирование все еще открыто, чтобы вернуть профинансированную сумму плательщику.
-- Проверьте баланс с помощью `FindAssetById` / `iroha_cli ledger asset list` и проверьте состояние контракта с помощью `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- Проверьте баланс с помощью `FindAssetById` / `iroha ledger asset list all --verbose` и проверьте состояние контракта с помощью `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## Сопутствующие руководства по SDK
 

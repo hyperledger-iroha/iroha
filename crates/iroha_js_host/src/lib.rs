@@ -82,6 +82,7 @@ use iroha_data_model::{
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
             VotingMode,
         },
+        ministry::SubmitAgendaProposal,
         rwa::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
@@ -101,6 +102,7 @@ use iroha_data_model::{
         KaigiRelayRegistration, NewKaigi,
     },
     metadata::Metadata,
+    ministry::AgendaProposalV1,
     name::Name,
     nexus::{
         AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
@@ -6343,6 +6345,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(persist).into_instruction_box());
             }
 
+            if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
+                let proposal: AgendaProposalV1 = json::from_value(required_value(
+                    &mut fields,
+                    "proposal",
+                    "SubmitAgendaProposal",
+                )?)
+                .map_err(norito_to_napi)?;
+                let instruction = SubmitAgendaProposal { proposal };
+                return Ok(Box::new(instruction).into_instruction_box());
+            }
+
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
                 let manifest_value =
                     required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
@@ -7116,6 +7129,20 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             norito_json!({
                 "rwa": set_controls.rwa().to_string(),
                 "controls": rwa_control_policy_to_json(set_controls.controls())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(submit) = instruction_ref
+        .as_any()
+        .downcast_ref::<SubmitAgendaProposal>()
+    {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SubmitAgendaProposal".to_owned(),
+            norito_json!({
+                "proposal": submit.proposal,
             }),
         );
         return Ok(json::Value::Object(outer));
@@ -8566,6 +8593,10 @@ mod tests {
             KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, NewKaigi,
         },
         metadata::Metadata,
+        ministry::{
+            AgendaEvidenceAttachment, AgendaEvidenceKind, AgendaProposalAction,
+            AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
+        },
         name::Name,
         nexus::LaneId,
         nft::NftId,
@@ -8674,6 +8705,43 @@ mod tests {
         let domain_id = DomainId::try_new(domain, "universal").expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
         KaigiId::new(domain_id, call)
+    }
+
+    fn sample_agenda_proposal() -> AgendaProposalV1 {
+        AgendaProposalV1 {
+            version: 1,
+            proposal_id: "AC-2026-001".to_owned(),
+            submitted_at_unix_ms: 1_770_000_000_000,
+            language: "en".to_owned(),
+            action: AgendaProposalAction::AddToDenylist,
+            summary: AgendaProposalSummary {
+                title: "Blacklist proposal for bafy-test".to_owned(),
+                motivation: "Evidence review requested for the published CID.".to_owned(),
+                expected_impact:
+                    "Participating gateways would restrict delivery while the case is reviewed."
+                        .to_owned(),
+            },
+            tags: vec!["spam".to_owned()],
+            targets: vec![AgendaProposalTarget {
+                label: "bafy-test".to_owned(),
+                hash_family: "sorafs-root-cid".to_owned(),
+                hash_hex: "11".repeat(32),
+                reason: "spam moderation report".to_owned(),
+            }],
+            evidence: vec![AgendaEvidenceAttachment {
+                kind: AgendaEvidenceKind::Url,
+                uri: "https://example.invalid/case/1".to_owned(),
+                digest_blake3_hex: Some("22".repeat(32)),
+                description: Some("Captured gateway evidence".to_owned()),
+            }],
+            submitter: AgendaProposalSubmitter {
+                name: "Explorer Moderator".to_owned(),
+                contact: "moderation@example.invalid".to_owned(),
+                organization: Some("Sora Ops".to_owned()),
+                pgp_fingerprint: None,
+            },
+            duplicates: vec!["AC-2025-014".to_owned()],
+        }
     }
 
     fn sample_taikai_cache_options() -> JsTaikaiCacheConfig {
@@ -10900,6 +10968,37 @@ mod tests {
             .and_then(|value| value.as_str())
             .expect("member string present");
         assert_eq!(member_json, account_json_literal(&member));
+    }
+
+    #[test]
+    fn governance_submit_agenda_proposal_instruction_json_roundtrip() {
+        let instruction: InstructionBox = Box::new(SubmitAgendaProposal {
+            proposal: sample_agenda_proposal(),
+        })
+        .into_instruction_box();
+
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize SubmitAgendaProposal instruction");
+        assert!(
+            json_value
+                .as_object()
+                .and_then(|map| map.get("SubmitAgendaProposal"))
+                .is_some()
+        );
+
+        let reconstructed =
+            value_to_instruction(json_value.clone()).expect("deserialize SubmitAgendaProposal");
+        assert_eq!(reconstructed, instruction);
+
+        let proposal_id = json_value
+            .as_object()
+            .unwrap()
+            .get("SubmitAgendaProposal")
+            .and_then(|value| value.get("proposal"))
+            .and_then(|value| value.get("proposal_id"))
+            .and_then(|value| value.as_str())
+            .expect("proposal id present");
+        assert_eq!(proposal_id, "AC-2026-001");
     }
 
     #[test]

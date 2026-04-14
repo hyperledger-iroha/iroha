@@ -336,6 +336,32 @@ async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result
         "no participation should list every validator, got {no_participation:?}"
     );
 
+    let status = wait_for_sumeragi_status(&client, |json| {
+        let epoch_reported = json.get("vrf_penalty_epoch")?.as_u64()?;
+        let committed_total = json.get("vrf_committed_no_reveal_total")?.as_u64()?;
+        let no_participation_total = json.get("vrf_no_participation_total")?.as_u64()?;
+        let late_reveals_total = json.get("vrf_late_reveals_total")?.as_u64()?;
+        // The penalties endpoint above already locked the epoch-specific report.
+        // Status only exposes the latest penalty snapshot, so later epochs may
+        // overtake this poll while still preserving the same zero-participation
+        // semantics in this scenario.
+        Some(
+            epoch_reported >= epoch
+                && committed_total == 0
+                && no_participation_total == 4
+                && late_reveals_total == 0,
+        )
+    })
+    .await?;
+    ensure!(
+        status
+            .get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            == 0,
+        "status should report zero late reveals for no-participation epoch"
+    );
+
     let _telemetry = wait_for_telemetry(&http, &telemetry_url, |json| {
         let vrf = json.get("vrf").and_then(Value::as_object)?;
         Some(
@@ -347,21 +373,6 @@ async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result
         )
     })
     .await?;
-
-    let status = wait_for_sumeragi_status(&client, |json| {
-        let epoch_reported = json.get("vrf_penalty_epoch")?.as_u64()?;
-        let no_participation_total = json.get("vrf_no_participation_total")?.as_u64()?;
-        Some(epoch_reported == epoch && no_participation_total == 4)
-    })
-    .await?;
-    ensure!(
-        status
-            .get("vrf_late_reveals_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-            == 0,
-        "status should report zero late reveals for no-participation epoch"
-    );
 
     network.shutdown().await;
     Ok(())

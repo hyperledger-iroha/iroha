@@ -231,6 +231,7 @@ where
     Q: Query
         + HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>
+        + norito::codec::Encode
         + 'static,
     E: QueryExecutor,
     Q::Item: Send + Sync,
@@ -251,94 +252,9 @@ where
         let boxed: QueryBox<QueryOutputBatchBox> = {
             use crate::query::ErasedIterQuery;
             // Preserve the concrete query bytes so the server can reconstruct
-            // variant-specific parameters (e.g., FindAccountsWithAsset).
-            // Use a conservative downcast to known query types to avoid adding
-            // additional trait bounds to `Q`.
-            let any: &dyn core::any::Any = &self.query;
-            let payload: Vec<u8> = if let Some(q) =
-                any.downcast_ref::<crate::query::account::prelude::FindAccountsWithAsset>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::account::prelude::FindAccounts>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::domain::prelude::FindDomains>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::asset::prelude::FindAssets>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::asset::prelude::FindAssetsDefinitions>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::repo::prelude::FindRepoAgreements>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::nft::prelude::FindNfts>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::rwa::prelude::FindRwas>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::peer::prelude::FindPeers>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::trigger::prelude::FindActiveTriggerIds>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::trigger::prelude::FindTriggers>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::role::prelude::FindRolesByAccountId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::permission::prelude::FindPermissionsByAccountId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::transaction::prelude::FindTransactions>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::block::prelude::FindBlocks>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::block::prelude::FindBlockHeaders>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineAllowances>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineAllowanceByCertificateId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineCounterSummaries>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineToOnlineTransfers>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<
-                crate::query::offline::prelude::FindOfflineToOnlineTransfersByPolicy,
-            >() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineToOnlineTransferById>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineVerdictRevocations>()
-            {
-                norito::codec::Encode::encode(q)
-            } else {
-                Vec::new()
-            };
+            // variant-specific parameters and callers can inspect the original
+            // iterable query without maintaining a hand-written allowlist.
+            let payload: Vec<u8> = self.query.dyn_encode();
             let erased = ErasedIterQuery::new(self.filter, self.selector, payload);
             Box::new(erased)
         };
@@ -347,99 +263,8 @@ where
 
         // Capture encoded payload of the concrete query variant when possible, so that
         // fast_dsl builds can reconstruct parameterized queries on the server side.
-        #[allow(unused_mut)]
         #[cfg(feature = "fast_dsl")]
-        let mut query_payload: Vec<u8> = {
-            let any: &dyn core::any::Any = &self.query;
-            if let Some(q) =
-                any.downcast_ref::<crate::query::account::prelude::FindAccountsWithAsset>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::account::prelude::FindAccounts>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::domain::prelude::FindDomains>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::asset::prelude::FindAssets>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::asset::prelude::FindAssetsDefinitions>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::repo::prelude::FindRepoAgreements>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::nft::prelude::FindNfts>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::rwa::prelude::FindRwas>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::peer::prelude::FindPeers>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::trigger::prelude::FindActiveTriggerIds>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::trigger::prelude::FindTriggers>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::transaction::prelude::FindTransactions>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::block::prelude::FindBlocks>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::block::prelude::FindBlockHeaders>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineAllowances>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineAllowanceByCertificateId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineCounterSummaries>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::offline::prelude::FindOfflineToOnlineTransfers>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<
-                crate::query::offline::prelude::FindOfflineToOnlineTransfersByPolicy,
-            >() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineToOnlineTransferById>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any
-                .downcast_ref::<crate::query::offline::prelude::FindOfflineVerdictRevocations>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::role::prelude::FindRolesByAccountId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) =
-                any.downcast_ref::<crate::query::permission::prelude::FindPermissionsByAccountId>()
-            {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::role::prelude::FindRoles>() {
-                norito::codec::Encode::encode(q)
-            } else if let Some(q) = any.downcast_ref::<crate::query::role::prelude::FindRoleIds>() {
-                norito::codec::Encode::encode(q)
-            } else {
-                Vec::new()
-            }
-        };
+        let query_payload: Vec<u8> = self.query.dyn_encode();
 
         let query = QueryWithParams {
             #[cfg(not(feature = "fast_dsl"))]
@@ -480,6 +305,7 @@ where
     Q: Query
         + HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>
+        + norito::codec::Encode
         + 'static,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static,
     QueryBox<QueryOutputBatchBox>: From<QueryWithFilter<Q>>,
@@ -513,6 +339,7 @@ where
     Q: Query
         + HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>
+        + norito::codec::Encode
         + 'static,
     Q::Item: Send + Sync,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static + crate::query::ItemKindTag,

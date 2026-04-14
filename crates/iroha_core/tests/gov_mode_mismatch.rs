@@ -76,8 +76,10 @@ fn plain_ballot_rejected_on_zk_referendum() {
     state.set_gov(cfg);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    let p1: Permission =
-        CanProposeContractDeployment { contract_address: proposal_contract_address() }.into();
+    let p1: Permission = CanProposeContractDeployment {
+        contract_address: proposal_contract_address(),
+    }
+    .into();
     Grant::account_permission(p1, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant propose");

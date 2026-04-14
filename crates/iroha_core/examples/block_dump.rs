@@ -186,6 +186,14 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
                     }
                 }
             }
+            Executable::ContractCall(call) => {
+                if ctx.verbose {
+                    println!(
+                        "    contract call: address={} entrypoint={} payload={:?}",
+                        call.contract_address, call.entrypoint, call.payload
+                    );
+                }
+            }
             Executable::Ivm(bytecode) => {
                 if ctx.verbose {
                     println!("    ivm bytecode: {} bytes", bytecode.size_bytes());

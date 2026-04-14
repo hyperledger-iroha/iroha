@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 41a944c3e016d0dc96a0edb3559700670a7bd57b437751a777df8b35567b34fb
-source_last_modified: "2025-11-23T15:30:33.687691+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propieta
 
 - Asegúrate de que exista la definición del NFT (por ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`<i105-account-id>`, `<i105-account-id>`).
 - Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice a Bob y adjuntar una bandera de metadatos que describa la emisión.
-- Inspecciona el estado del libro mayor de NFT con `iroha_cli ledger nfts list --account <id>` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
+- Inspecciona el estado del libro mayor de NFT con `iroha ledger nft list all --verbose` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
 
 ## Guías de SDK relacionadas
 

@@ -16,7 +16,9 @@ use iroha::{
     },
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
-use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+use iroha_executor_data_model::permission::{
+    asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
+};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in, load_sample_ivm,
@@ -139,17 +141,26 @@ async fn wait_for_tx_terminal_status(
 
 async fn deploy_threshold_escrow(
     client: &Client,
+    http: &reqwest::Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
     let baseline = client.get_status()?.txs_approved;
     let code_b64 = base64::engine::general_purpose::STANDARD
         .encode(load_sample_ivm("threshold_escrow").as_ref());
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "threshold_escrow",
+        None,
+        "universal",
+    )
+    .expect("threshold escrow alias");
     let deploy = tokio::task::spawn_blocking({
         let client = client.clone();
+        let contract_alias = contract_alias.clone();
         move || {
             client.post_contract_deploy_json(
                 &ALICE_ID.clone(),
                 ALICE_KEYPAIR.private_key(),
                 &code_b64,
+                &contract_alias,
                 None,
             )
         }
@@ -157,7 +168,26 @@ async fn deploy_threshold_escrow(
     .await
     .expect("deploy threshold escrow task")?;
 
-    wait_for_approved_txs(client, baseline, TX_TIMEOUT, "deploy threshold escrow").await?;
+    if let Some(tx_hash_hex) = deploy
+        .get("tx_hash_hex")
+        .and_then(norito::json::Value::as_str)
+    {
+        let observed = wait_for_tx_terminal_status(
+            http,
+            &client.torii_url,
+            tx_hash_hex,
+            TX_TIMEOUT,
+            "deploy threshold escrow",
+        )
+        .await?;
+        if observed != "Applied" {
+            return Err(eyre!(
+                "deploy threshold escrow: expected `Applied`, observed `{observed}` for tx `{tx_hash_hex}`"
+            ));
+        }
+    } else {
+        wait_for_approved_txs(client, baseline, TX_TIMEOUT, "deploy threshold escrow").await?;
+    }
 
     deploy
         .get("contract_address")
@@ -225,8 +255,7 @@ async fn contract_state_values(
     let mut url = torii_url.join("v1/contracts/state")?;
     url.query_pairs_mut()
         .append_pair("paths", &paths.join(","))
-        .append_pair("decode", "json")
-        .append_pair("include_value", "false");
+        .append_pair("decode", "json");
     let response = http
         .get(url)
         .header("Accept", "application/json")
@@ -255,13 +284,121 @@ async fn contract_state_values(
             .get("path")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("contract state entry missing path: {entry:?}"))?;
-        let value = entry
-            .get("value_json")
-            .cloned()
-            .ok_or_else(|| eyre!("contract state entry missing value_json: {entry:?}"))?;
+        let value = decode_contract_state_entry_json(entry)?;
         out.insert(path.to_owned(), value);
     }
     Ok(out)
+}
+
+fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norito::json::Value> {
+    if let Some(value_json) = entry.get("value_json").cloned() {
+        return Ok(value_json);
+    }
+
+    let value_b64 = entry
+        .get("value_b64")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("contract state entry missing value_b64: {entry:?}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value_b64)
+        .map_err(|err| eyre!("decode contract state value_b64: {err}"))?;
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(&bytes)
+        .map_err(|err| eyre!("validate contract state TLV: {err}"))?;
+    let path = entry
+        .get("path")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("contract state entry missing path: {entry:?}"))?;
+    let value = match tlv.type_id {
+        ivm::pointer_abi::PointerType::AccountId => {
+            let account: AccountId = norito::decode_from_bytes(tlv.payload)
+                .map_err(|err| eyre!("decode AccountId contract state: {err}"))?;
+            norito::json::Value::from(account.to_string())
+        }
+        ivm::pointer_abi::PointerType::AssetDefinitionId => {
+            let asset_definition: AssetDefinitionId = norito::decode_from_bytes(tlv.payload)
+                .map_err(|err| eyre!("decode AssetDefinitionId contract state: {err}"))?;
+            norito::json::Value::from(asset_definition.to_string())
+        }
+        ivm::pointer_abi::PointerType::NoritoBytes => {
+            decode_contract_state_norito_bytes(path, tlv.payload)?
+        }
+        other => {
+            let decode_error = entry
+                .get("decode_error")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or("unknown decode error");
+            return Err(eyre!(
+                "unsupported contract state fallback decode for TLV type {other:?}: {decode_error}; entry={entry:?}"
+            ));
+        }
+    };
+
+    Ok(value)
+}
+
+fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<norito::json::Value> {
+    match path {
+        "payer_account" | "recipient_account" | "escrow_account_id" => {
+            let account = decode_norito_value_with_optional_inner_tlv::<AccountId>(
+                payload,
+                ivm::pointer_abi::PointerType::AccountId,
+                "AccountId",
+            )?;
+            Ok(norito::json::Value::from(account.to_string()))
+        }
+        "escrow_asset_definition" => {
+            let asset_definition = decode_norito_value_with_optional_inner_tlv::<AssetDefinitionId>(
+                payload,
+                ivm::pointer_abi::PointerType::AssetDefinitionId,
+                "AssetDefinitionId",
+            )?;
+            Ok(norito::json::Value::from(asset_definition.to_string()))
+        }
+        "target_amount_value" | "funded_amount_value" => {
+            let numeric = decode_norito_value_with_optional_inner_tlv::<Numeric>(
+                payload,
+                ivm::pointer_abi::PointerType::NoritoBytes,
+                "Numeric",
+            )?;
+            Ok(norito::json::Value::from(numeric.to_string()))
+        }
+        "is_open" | "is_released" | "is_refunded" => {
+            let flag = decode_norito_value_with_optional_inner_tlv::<i64>(
+                payload,
+                ivm::pointer_abi::PointerType::NoritoBytes,
+                "bool flag",
+            )?;
+            Ok(norito::json::Value::from(flag != 0))
+        }
+        _ => Err(eyre!(
+            "unsupported NoritoBytes contract state fallback for path `{path}`"
+        )),
+    }
+}
+
+fn decode_norito_value_with_optional_inner_tlv<T>(
+    payload: &[u8],
+    expected_inner_type: ivm::pointer_abi::PointerType,
+    label: &str,
+) -> Result<T>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    if let Ok(value) = norito::decode_from_bytes::<T>(payload) {
+        return Ok(value);
+    }
+
+    let inner = ivm::pointer_abi::validate_tlv_bytes(payload)
+        .map_err(|err| eyre!("decode {label} fallback inner TLV: {err}"))?;
+    if inner.type_id != expected_inner_type {
+        return Err(eyre!(
+            "decode {label} fallback expected inner TLV type {expected_inner_type:?}, got {:?}",
+            inner.type_id
+        ));
+    }
+
+    norito::decode_from_bytes(inner.payload)
+        .map_err(|err| eyre!("decode {label} fallback inner payload: {err}"))
 }
 
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Numeric>> {
@@ -277,6 +414,7 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Numeric>> {
 async fn setup_ledger_for_sample(
     client: &Client,
     escrow_id: &AccountId,
+    escrow_keypair: &KeyPair,
     asset_definition_id: &AssetDefinitionId,
     initial_amount: u32,
 ) -> Result<()> {
@@ -299,6 +437,27 @@ async fn setup_ledger_for_sample(
     })
     .await
     .expect("setup ledger task")?;
+
+    let escrow_asset = AssetId::new(asset_definition_id.clone(), escrow_id.clone());
+    tokio::task::spawn_blocking({
+        let client = client.clone();
+        let escrow_id = escrow_id.clone();
+        let escrow_keypair = escrow_keypair.clone();
+        move || {
+            let grant_transfer = Grant::account_permission(
+                CanTransferAsset {
+                    asset: escrow_asset,
+                },
+                ALICE_ID.clone(),
+            );
+            let tx = TransactionBuilder::new(client.chain.clone(), escrow_id)
+                .with_instructions([grant_transfer])
+                .sign(escrow_keypair.private_key());
+            client.submit_transaction_blocking(&tx)
+        }
+    })
+    .await
+    .expect("grant escrow transfer permission task")?;
     Ok(())
 }
 
@@ -335,11 +494,18 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = reqwest::Client::new();
-    let (escrow_id, _escrow_keypair) = gen_account_in("wonderland");
+    let (escrow_id, escrow_keypair) = gen_account_in("wonderland");
     let asset_definition_id = unique_asset_definition_id("release_flow");
-    setup_ledger_for_sample(&client, &escrow_id, &asset_definition_id, 20).await?;
+    setup_ledger_for_sample(
+        &client,
+        &escrow_id,
+        &escrow_keypair,
+        &asset_definition_id,
+        20,
+    )
+    .await?;
 
-    let contract_address = deploy_threshold_escrow(&client).await?;
+    let contract_address = deploy_threshold_escrow(&client, &http).await?;
 
     call_contract_expect_status(
         &client,
@@ -636,11 +802,18 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = reqwest::Client::new();
-    let (escrow_id, _escrow_keypair) = gen_account_in("wonderland");
+    let (escrow_id, escrow_keypair) = gen_account_in("wonderland");
     let asset_definition_id = unique_asset_definition_id("refund_flow");
-    setup_ledger_for_sample(&client, &escrow_id, &asset_definition_id, 20).await?;
+    setup_ledger_for_sample(
+        &client,
+        &escrow_id,
+        &escrow_keypair,
+        &asset_definition_id,
+        20,
+    )
+    .await?;
 
-    let contract_address = deploy_threshold_escrow(&client).await?;
+    let contract_address = deploy_threshold_escrow(&client, &http).await?;
 
     call_contract_expect_status(
         &client,

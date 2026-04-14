@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - `open_escrow(recipient, escrow_account, asset_definition, target_amount)` を 1 回呼び出して、支払人、受取人、エスクロー口座、資産定義、正確なターゲット、および永続的な契約状態のオープン/リリース/返金フラグを記録します。
 - 同じ支払者から `deposit(amount)` を `funded_amount_value == target_amount_value` まで呼び出します。預金はプラスのままである必要があり、エスクローに過剰な資金を供給する可能性のある補充は拒否されます。
 - 目標が達成されたら `release_if_ready()` を呼び出してエスクロー資金を受取人に移動するか、エスクローが開いている間に `refund()` を呼び出して資金を支払者に返します。
-- `FindAssetById` / `iroha_cli ledger asset list` で残高を検査し、`GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` で契約状態を検査します。
+- `FindAssetById` / `iroha ledger asset list all --verbose` で残高を検査し、`GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` で契約状態を検査します。
 
 ## 関連する SDK ガイド
 

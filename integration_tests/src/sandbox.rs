@@ -250,6 +250,9 @@ fn serialize_networks_enabled() -> bool {
     if let Some(value) = test_override_serialization() {
         return value;
     }
+    if current_test_binary_prefers_serialization() {
+        return true;
+    }
     let Ok(raw) = env::var(SERIALIZE_NETWORKS_ENV) else {
         return false;
     };
@@ -257,6 +260,21 @@ fn serialize_networks_enabled() -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn current_test_binary_prefers_serialization() -> bool {
+    env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .is_some_and(|name| test_binary_prefers_serialization(&name))
+}
+
+fn test_binary_prefers_serialization(name: &str) -> bool {
+    let canonical = name.split_once('-').map_or(name, |(prefix, _)| prefix);
+    matches!(canonical, "consensus_and_da")
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1040,6 +1058,13 @@ mod tests {
         assert_eq!(limit, 1);
         assert_eq!(in_use, 1);
         drop(guard);
+    }
+
+    #[test]
+    fn consensus_grouped_binary_prefers_serialization() {
+        assert!(test_binary_prefers_serialization("consensus_and_da"));
+        assert!(test_binary_prefers_serialization("consensus_and_da-abcdef"));
+        assert!(!test_binary_prefers_serialization("network_functional"));
     }
 
     #[test]

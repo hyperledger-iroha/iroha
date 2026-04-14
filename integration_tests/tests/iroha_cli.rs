@@ -2,14 +2,30 @@
 //! Integration tests of the Iroha Client CLI
 
 use std::{
+    collections::BTreeMap,
+    net::{TcpListener, TcpStream},
     num::NonZeroU32,
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
-    sync::Once,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use integration_tests::sandbox;
+use integration_tests::{
+    binary_resolver::{
+        binary_supports_training_job_commands, cli_binary_name,
+        find_existing_binary_path_from_roots, find_existing_cli_binary_path_from_roots,
+        iroha_cli_test_build_profile_override, iroha_program,
+        iroha_program_reuse_existing_or_resolve, irohad_binary_name,
+        matching_irohad_binary_path_from_cli_path, newest_existing_binary_path,
+        prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
+        workspace_root,
+    },
+    sandbox,
+};
 use iroha::{
     client::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
@@ -17,9 +33,9 @@ use iroha::{
     data_model::{
         Encode,
         account::AccountId,
-        asset::{AssetDefinitionId, AssetId, definition::AssetDefinition},
+        asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json, Mint, Register},
+        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -34,197 +50,17 @@ use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, s
 use norito::json::{self, Value};
 use reqwest::Url;
 
+const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
+const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
+const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
+
 fn program() -> PathBuf {
-    prepare_iroha_cli_test_environment();
-    iroha_test_network::Program::Iroha.resolve().unwrap()
+    iroha_program().unwrap()
 }
 
-fn prepare_iroha_cli_test_environment() {
-    enable_reentrant_builds_for_tests();
-    configure_program_overrides_from_existing_binaries();
-}
-
-fn iroha_cli_test_build_profile_override(current: Option<&str>) -> Option<&'static str> {
-    current
-        .is_none_or(|value| value.trim().is_empty())
-        .then_some("debug")
-}
-
-fn enable_reentrant_builds_for_tests() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
-        // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
-        if let Some(profile) = iroha_cli_test_build_profile_override(
-            std::env::var("IROHA_TEST_BUILD_PROFILE").ok().as_deref(),
-        ) {
-            set_env_var("IROHA_TEST_BUILD_PROFILE", profile);
-        }
-    });
-}
-
-fn configure_program_overrides_from_existing_binaries() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        const TEST_NETWORK_BIN_IROHA: &str = "TEST_NETWORK_BIN_IROHA";
-        const TEST_NETWORK_BIN_IROHAD: &str = "TEST_NETWORK_BIN_IROHAD";
-        if !should_reuse_existing_cli_binary_for_tests() {
-            return;
-        }
-
-        let cli_path =
-            if let Some(path) = std::env::var_os(TEST_NETWORK_BIN_IROHA).map(PathBuf::from) {
-                Some(path)
-            } else {
-                find_existing_cli_binary_path()
-            };
-
-        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_none()
-            && let Some(path) = cli_path.as_ref()
-        {
-            let value = path.to_string_lossy().into_owned();
-            set_env_var(TEST_NETWORK_BIN_IROHA, &value);
-        }
-
-        if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
-            && let Some(path) = cli_path
-                .as_deref()
-                .and_then(matching_irohad_binary_path_from_cli_path)
-                .or_else(find_existing_irohad_binary_path)
-        {
-            let value = path.to_string_lossy().into_owned();
-            set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
-        }
-    });
-}
-
-fn should_reuse_existing_cli_binary_for_tests() -> bool {
-    should_reuse_existing_cli_binary_for_tests_from_value(
-        std::env::var("IROHA_TEST_SKIP_BUILD").ok().as_deref(),
-    )
-}
-
-fn should_reuse_existing_cli_binary_for_tests_from_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-}
-
-fn find_existing_cli_binary_path() -> Option<PathBuf> {
-    let mut target_roots = Vec::new();
-    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join("iroha-test-network"));
-        target_roots.push(target_dir);
-    }
-    let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join("iroha-test-network"));
-    target_roots.push(workspace_target);
-
-    let mut profiles = Vec::new();
-    if let Ok(profile) = std::env::var("PROFILE")
-        && !profile.trim().is_empty()
-    {
-        profiles.push(profile);
-    }
-    if !profiles.iter().any(|value| value == "debug") {
-        profiles.push("debug".to_owned());
-    }
-    if !profiles.iter().any(|value| value == "release") {
-        profiles.push("release".to_owned());
-    }
-
-    find_existing_cli_binary_path_from_roots(&target_roots, &profiles)
-        .filter(|path| binary_supports_training_job_commands(path.as_path()))
-}
-
-fn find_existing_cli_binary_path_from_roots(
-    target_roots: &[PathBuf],
-    profiles: &[String],
-) -> Option<PathBuf> {
-    find_existing_binary_path_from_roots(target_roots, profiles, cli_binary_name())
-}
-
-fn find_existing_irohad_binary_path() -> Option<PathBuf> {
-    let mut target_roots = Vec::new();
-    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join("iroha-test-network"));
-        target_roots.push(target_dir);
-    }
-    let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join("iroha-test-network"));
-    target_roots.push(workspace_target);
-
-    let mut profiles = Vec::new();
-    if let Ok(profile) = std::env::var("PROFILE")
-        && !profile.trim().is_empty()
-    {
-        profiles.push(profile);
-    }
-    if !profiles.iter().any(|value| value == "debug") {
-        profiles.push("debug".to_owned());
-    }
-    if !profiles.iter().any(|value| value == "release") {
-        profiles.push("release".to_owned());
-    }
-
-    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
-}
-
-fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
-    let candidate = path.parent()?.join(irohad_binary_name());
-    candidate.is_file().then_some(candidate)
-}
-
-fn find_existing_binary_path_from_roots(
-    target_roots: &[PathBuf],
-    profiles: &[String],
-    binary_name: &str,
-) -> Option<PathBuf> {
-    for target_root in target_roots {
-        for profile in profiles {
-            let candidate = target_root.join(profile).join(binary_name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-const fn cli_binary_name() -> &'static str {
-    if cfg!(windows) { "iroha.exe" } else { "iroha" }
-}
-
-const fn irohad_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "iroha3d.exe"
-    } else {
-        "iroha3d"
-    }
-}
-
-fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
-    let output = ProcessCommand::new(path)
-        .arg("app")
-        .arg("soracloud")
-        .arg("--help")
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.contains("training-job-start") && stdout.contains("hf-deploy")
-}
-
-#[allow(unsafe_code)]
-fn set_env_var(key: &str, value: &str) {
-    unsafe {
-        std::env::set_var(key, value);
-    }
+fn program_reuse_existing_or_build() -> PathBuf {
+    iroha_program_reuse_existing_or_resolve().unwrap()
 }
 
 fn ivm_build_profile_exists() -> bool {
@@ -234,17 +70,11 @@ fn ivm_build_profile_exists() -> bool {
         .exists()
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
 }
 
 const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
-const SORACLOUD_HF_LEASE_ASSET_NAME: &str = "soracloud_hf_lease";
-
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
         .expect("test lease asset definition literal should parse")
@@ -289,19 +119,18 @@ fn assert_soracloud_hf_lease_asset_ready(
         .into_iter()
         .any(|definition| definition.id == asset_definition_id);
     if !asset_definition_exists {
-        client.submit_blocking(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(SORACLOUD_HF_LEASE_ASSET_NAME.to_owned()),
-        ))?;
+        return Err(eyre::eyre!(
+            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
+        ));
     }
     for account_id in accounts {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let observed = numeric_asset_balance_u128(client, &asset_id)?;
         let required = u128::from(minimum_amount);
-        let observed = observed.unwrap_or(0);
-        if observed < required {
-            let top_up = u32::try_from(required - observed).expect("test top-up should fit in u32");
-            client.submit_blocking(Mint::asset_numeric(top_up, asset_id.clone()))?;
+        if observed.is_none_or(|balance| balance < required) {
+            return Err(eyre::eyre!(
+                "soracloud HF lease asset `{asset_id}` is below required bootstrap balance {required}; observed {observed:?}"
+            ));
         }
     }
     Ok(())
@@ -359,6 +188,43 @@ fn find_existing_binary_path_from_roots_returns_daemon_match() {
         irohad_binary_name(),
     );
     assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn find_existing_binary_path_from_roots_prefers_newer_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root_a = temp.path().join("target-a");
+    let root_b = temp.path().join("target-b");
+    let older = root_a.join("debug").join(irohad_binary_name());
+    let newer = root_b.join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(older.parent().expect("older parent")).expect("create older dirs");
+    std::fs::create_dir_all(newer.parent().expect("newer parent")).expect("create newer dirs");
+    std::fs::write(&older, b"older").expect("write older binary");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&newer, b"newer").expect("write newer binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found =
+        find_existing_binary_path_from_roots(&[root_a, root_b], &profiles, irohad_binary_name());
+    assert_eq!(found, Some(newer));
+}
+
+#[test]
+fn newest_existing_binary_path_prefers_fresher_daemon_over_cli_sibling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let stale = temp
+        .path()
+        .join("iroha-test-network/debug")
+        .join(irohad_binary_name());
+    let fresh = temp.path().join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(stale.parent().expect("stale parent")).expect("create stale dirs");
+    std::fs::create_dir_all(fresh.parent().expect("fresh parent")).expect("create fresh dirs");
+    std::fs::write(&stale, b"stale").expect("write stale daemon");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&fresh, b"fresh").expect("write fresh daemon");
+
+    let selected = newest_existing_binary_path([Some(stale), Some(fresh.clone())]);
+    assert_eq!(selected, Some(fresh));
 }
 
 #[test]
@@ -555,14 +421,370 @@ async fn run_soracloud_command(
     config: &ProgramConfig,
     args: &[&str],
 ) -> eyre::Result<std::process::Output> {
+    let effective_args = soracloud_command_args(args);
     Ok(tokio::process::Command::new(program())
         .current_dir(cwd)
         .arg("app")
         .arg("soracloud")
-        .args(args)
+        .args(&effective_args)
         .envs(config.envs())
         .output()
         .await?)
+}
+
+async fn wait_for_soracloud_json_command(
+    cwd: &Path,
+    config: &ProgramConfig,
+    args: &[&str],
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let output = run_soracloud_command(cwd, config, args).await?;
+        let detail = if output.status.success() {
+            match json::from_slice::<Value>(&output.stdout) {
+                Ok(payload) => {
+                    if predicate(&payload) {
+                        return Ok(payload);
+                    }
+                    json::to_string_pretty(&payload).unwrap_or_else(|_| format!("{payload:?}"))
+                }
+                Err(err) => {
+                    format!("failed to decode Soracloud JSON payload: {err}")
+                }
+            }
+        } else {
+            format!(
+                "command `iroha app soracloud {}` exited with {} and stderr: {}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )
+        };
+
+        if Instant::now() >= deadline {
+            return Err(eyre::eyre!(
+                "timed out waiting for soracloud command convergence after {:?}; last detail: {}",
+                timeout,
+                detail
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+async fn wait_for_soracloud_status_payload(
+    cwd: &Path,
+    config: &ProgramConfig,
+    torii_url: &str,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    wait_for_soracloud_json_command(
+        cwd,
+        config,
+        &["status", "--torii-url", torii_url],
+        timeout,
+        predicate,
+    )
+    .await
+}
+
+async fn wait_for_soracloud_hf_status_payload(
+    cwd: &Path,
+    config: &ProgramConfig,
+    repo_id: &str,
+    lease_term_ms: &str,
+    account_id: &str,
+    torii_url: &str,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    wait_for_soracloud_json_command(
+        cwd,
+        config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms,
+            "--account-id",
+            account_id,
+            "--torii-url",
+            torii_url,
+        ],
+        timeout,
+        predicate,
+    )
+    .await
+}
+
+fn soracloud_command_args(args: &[&str]) -> Vec<String> {
+    let mut effective_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    if !args.contains(&"--timeout-secs") {
+        effective_args.push("--timeout-secs".to_owned());
+        effective_args.push(SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned());
+    }
+    effective_args
+}
+
+#[test]
+fn soracloud_command_args_append_timeout_once() {
+    assert_eq!(
+        soracloud_command_args(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        vec![
+            "hf-deploy".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned(),
+        ]
+    );
+    assert_eq!(
+        soracloud_command_args(&[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--timeout-secs",
+            "15",
+        ]),
+        vec![
+            "hf-status".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            "15".to_owned(),
+        ]
+    );
+}
+
+#[derive(Clone)]
+struct MockHttpResponse {
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+struct MockHttpServer {
+    base_url: String,
+    address: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl MockHttpServer {
+    fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
+        listener
+            .set_nonblocking(true)
+            .expect("set mock listener nonblocking");
+        let address = listener
+            .local_addr()
+            .expect("mock listener address")
+            .to_string();
+        let base_url = format!("http://{address}");
+        let routes = Arc::new(routes);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            while !stop_flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let stop_flag = Arc::clone(&stop_flag);
+                        let routes = Arc::clone(&routes);
+                        thread::spawn(move || {
+                            let path = read_mock_http_request_path(&mut stream);
+                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
+                                return;
+                            }
+                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
+                                content_type: "text/plain",
+                                body: b"not found".to_vec(),
+                            });
+                            let status = if routes.contains_key(&path) {
+                                "200 OK"
+                            } else {
+                                "404 Not Found"
+                            };
+                            let headers = format!(
+                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                                response.body.len(),
+                                response.content_type
+                            );
+                            let _ = std::io::Write::write_all(&mut stream, headers.as_bytes());
+                            let _ = std::io::Write::write_all(&mut stream, &response.body);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(error) => {
+                        eprintln!("mock HTTP server accept error: {error}");
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+        });
+        Self {
+            base_url,
+            address,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn api_base_url(&self) -> String {
+        format!("{}/api", self.base_url)
+    }
+}
+
+impl Drop for MockHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(&self.address);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::io::Read::read(stream, &mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("read mock HTTP request failed: {error}"),
+        }
+    }
+
+    let target = String::from_utf8_lossy(&request)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default()
+        .to_owned();
+    if let Ok(url) = Url::parse(&target) {
+        return url.path().to_owned();
+    }
+    target.split('?').next().unwrap_or_default().to_owned()
+}
+
+fn start_mock_hf_source_server() -> MockHttpServer {
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
+    let revision = SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION;
+    let weight_path = format!("/{repo_id}/resolve/{revision}/model.safetensors");
+    let info_path = format!("/api/models/{repo_id}/revision/{revision}");
+    let model_info = norito::json!({
+        "siblings": [
+            { "rfilename": "model.safetensors" }
+        ]
+    });
+    MockHttpServer::start(BTreeMap::from([
+        (
+            info_path,
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&model_info).expect("encode mock HF model info"),
+            },
+        ),
+        (
+            weight_path,
+            MockHttpResponse {
+                content_type: "application/octet-stream",
+                body: vec![7_u8; SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES],
+            },
+        ),
+    ]))
+}
+
+#[tokio::test]
+async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
+    let server = start_mock_hf_source_server();
+    let client = reqwest::Client::new();
+
+    let info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(info.status().is_success());
+    let info_payload: Value = json::from_slice(&info.bytes().await?)?;
+    assert_eq!(
+        info_payload
+            .get("siblings")
+            .and_then(Value::as_array)
+            .and_then(|siblings| siblings.first())
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("rfilename"))
+            .and_then(Value::as_str),
+        Some("model.safetensors")
+    );
+
+    let weights = client
+        .head(format!(
+            "{}/{}/resolve/{}/model.safetensors",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(weights.status().is_success());
+    assert_eq!(
+        weights
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()),
+        Some("4096")
+    );
+
+    let repeated_info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(
+        repeated_info.status().is_success(),
+        "mock HF server should continue serving later profile requests"
+    );
+
+    Ok(())
 }
 
 fn validator_program_config(
@@ -572,47 +794,14 @@ fn validator_program_config(
         .peers()
         .first()
         .ok_or_else(|| eyre::eyre!("test network should expose at least one peer"))?;
-    let validator_account_id = AccountId::new(validator_peer.public_key().clone());
-    let expected_public_key = validator_peer.public_key().to_string();
-
-    for entry in std::fs::read_dir(network.env_dir())? {
-        let candidate = entry?.path().join("config.base.toml");
-        if !candidate.is_file() {
-            continue;
-        }
-
-        let config: toml::Value = toml::from_str(&std::fs::read_to_string(&candidate)?)?;
-        let Some(public_key) = config.get("public_key").and_then(toml::Value::as_str) else {
-            continue;
-        };
-        if public_key != expected_public_key {
-            continue;
-        }
-
-        let private_key = config
-            .get("private_key")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "peer config `{}` is missing `private_key`",
-                    candidate.display()
-                )
-            })?
-            .parse::<ExposedPrivateKey>()?
-            .0;
-        let key_pair = KeyPair::new(validator_peer.public_key().clone(), private_key)
-            .map_err(|err| eyre::eyre!("failed to rebuild validator keypair: {err}"))?;
-        return Ok((
-            program_config_for_account(&network.client(), "wonderland", &key_pair),
-            validator_peer.id().to_string(),
-            validator_account_id,
-        ));
-    }
-
-    Err(eyre::eyre!(
-        "failed to locate config for validator peer `{}` under `{}`",
-        validator_peer.id(),
-        network.env_dir().display()
+    Ok((
+        program_config_for_account(
+            &network.client(),
+            "wonderland",
+            validator_peer.streaming_key_pair(),
+        ),
+        validator_peer.id().to_string(),
+        validator_peer.account_id(),
     ))
 }
 
@@ -620,16 +809,12 @@ async fn advertise_soracloud_model_host(
     cwd: &Path,
     network: &iroha_test_network::Network,
 ) -> eyre::Result<()> {
-    let (validator_config, peer_id, validator_account_id) = validator_program_config(network)?;
+    let (validator_config, peer_id, _validator_account_id) = validator_program_config(network)?;
     let validator_accounts = network
         .peers()
         .iter()
-        .map(|peer| AccountId::new(peer.public_key().clone()))
+        .map(iroha_test_network::NetworkPeer::account_id)
         .collect::<Vec<_>>();
-    network.client().submit_blocking(Grant::account_permission(
-        Permission::new("CanManageSoracloud".into(), Json::new(())),
-        validator_account_id.clone(),
-    ))?;
     assert_soracloud_hf_lease_asset_ready(&network.client(), &validator_accounts, 100_000)?;
 
     let torii_url = network.client().torii_url.to_string();
@@ -786,6 +971,102 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
     Ok(())
 }
 
+#[test]
+fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
+
+    let dir = tempfile::tempdir()?;
+    let config = local_program_config();
+    std::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )?;
+    let program_path = dir.path().join("hello.to");
+    std::fs::write(&program_path, b"fake-ivm-bytecode")?;
+    let binary = program_reuse_existing_or_build();
+
+    let started_at = Instant::now();
+    let output = std::process::Command::new(binary)
+        .current_dir(dir.path())
+        .arg("tx")
+        .arg("ivm")
+        .arg("--path")
+        .arg(&program_path)
+        .output()?;
+    let elapsed = started_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "iroha tx ivm should fail quickly instead of hanging; elapsed {elapsed:?}"
+    );
+
+    assert!(
+        !output.status.success(),
+        "CLI unexpectedly succeeded with stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("IVM transactions require transaction metadata `gas_limit`"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Connection refused"),
+        "CLI should reject missing gas_limit before any network call: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
+
+    let dir = tempfile::tempdir()?;
+    let config = local_program_config();
+    std::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )?;
+    let program_path = dir.path().join("hello.to");
+    std::fs::write(&program_path, b"fake-ivm-bytecode")?;
+    let binary = program_reuse_existing_or_build();
+
+    let started_at = Instant::now();
+    let output = std::process::Command::new(binary)
+        .current_dir(dir.path())
+        .arg("tx")
+        .arg("ivm")
+        .arg("--path")
+        .arg(&program_path)
+        .arg("--gas-limit")
+        .arg("42")
+        .output()?;
+    let elapsed = started_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "iroha tx ivm --gas-limit should complete quickly; elapsed {elapsed:?}"
+    );
+
+    assert!(
+        !output.status.success(),
+        "CLI unexpectedly succeeded with stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("require transaction metadata `gas_limit`"),
+        "CLI should accept --gas-limit and skip local missing-metadata rejection: {stderr}"
+    );
+    assert!(
+        stderr.contains("Failed to submit an IVM transaction"),
+        "unexpected stderr: {stderr}"
+    );
+
+    Ok(())
+}
+
 // Add more CLI tests here!
 
 #[tokio::test]
@@ -918,21 +1199,22 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         norito::json::to_vec_pretty(&service_v2).expect("encode service v2"),
     )
     .await?;
+    let torii_url = network.client().torii_url.to_string();
 
-    let deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("deploy")
-        .arg("--container")
-        .arg(container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(service_v1_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let deploy = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "deploy",
+            "--container",
+            container_path.to_string_lossy().as_ref(),
+            "--service",
+            service_v1_path.to_string_lossy().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         deploy.status.success(),
         "deploy failed with status {} and stderr: {}",
@@ -949,20 +1231,20 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("1.0.0")
     );
 
-    let upgrade = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("upgrade")
-        .arg("--container")
-        .arg(container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(service_v2_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let upgrade = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "upgrade",
+            "--container",
+            container_path.to_string_lossy().as_ref(),
+            "--service",
+            service_v2_path.to_string_lossy().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         upgrade.status.success(),
         "upgrade failed with status {} and stderr: {}",
@@ -991,24 +1273,25 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("Canary")
     );
 
-    let rollout = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("rollout")
-        .arg("--service-name")
-        .arg(service_v1.service_name.to_string())
-        .arg("--rollout-handle")
-        .arg(rollout_handle)
-        .arg("--promote-to-percent")
-        .arg("100")
-        .arg("--governance-tx-hash")
-        .arg(Hash::new(b"cli-live-rollout-promote").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let rollout_governance_hash = Hash::new(b"cli-live-rollout-promote").to_string();
+    let rollout = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "rollout",
+            "--service-name",
+            service_v1.service_name.to_string().as_ref(),
+            "--rollout-handle",
+            rollout_handle,
+            "--promote-to-percent",
+            "100",
+            "--governance-tx-hash",
+            rollout_governance_hash.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         rollout.status.success(),
         "rollout failed with status {} and stderr: {}",
@@ -1039,18 +1322,18 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some(100)
     );
 
-    let rollback = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("rollback")
-        .arg("--service-name")
-        .arg(service_v1.service_name.to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let rollback = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "rollback",
+            "--service-name",
+            service_v1.service_name.to_string().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         rollback.status.success(),
         "rollback failed with status {} and stderr: {}",
@@ -1067,25 +1350,40 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("1.0.0")
     );
 
-    let status = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("status")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
-    assert!(
-        status.status.success(),
-        "status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
-    );
-
-    let status_payload: Value =
-        json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
+    let status_payload = wait_for_soracloud_status_payload(
+        dir.path(),
+        &config,
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            let Some(network_status) = payload.get("network_status").and_then(Value::as_object)
+            else {
+                return false;
+            };
+            let Some(control_plane) = network_status
+                .get("control_plane")
+                .and_then(Value::as_object)
+            else {
+                return false;
+            };
+            if control_plane.get("service_count").and_then(Value::as_u64) != Some(1) {
+                return false;
+            }
+            if control_plane
+                .get("audit_event_count")
+                .and_then(Value::as_u64)
+                != Some(4)
+            {
+                return false;
+            }
+            let Some(services) = control_plane.get("services").and_then(Value::as_array) else {
+                return false;
+            };
+            services.len() == 1
+                && services[0].get("current_version").and_then(Value::as_str) == Some("1.0.0")
+        },
+    )
+    .await?;
     let network_status = status_payload
         .get("network_status")
         .and_then(Value::as_object)
@@ -1876,9 +2174,12 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -1886,7 +2187,15 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2306,9 +2615,12 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2316,7 +2628,15 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2346,7 +2666,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let queued_service_name = "hf_queue_next";
     let promoted_service_name = "hf_queue_promoted";
     let renewed_model_name = "tiny-random-gpt2-renewed";
-    let lease_term_ms_value = 10_000_u64;
+    let lease_term_ms_value = 30_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee_nanos = "10000".to_string();
     let renewed_fee_nanos = "12000".to_string();
@@ -2630,9 +2950,12 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2640,7 +2963,15 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),
@@ -2783,29 +3114,36 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some("Join")
     );
 
-    let bob_status = run_soracloud_command(
+    let bob_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            bob_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        bob_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(2)
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("action"))
+                    .and_then(|value| tagged_enum_label(value, "action"))
+                    == Some("Join")
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("account_id"))
+                    .and_then(Value::as_str)
+                    == Some(bob_account_id.as_str())
+        },
     )
     .await?;
-    assert!(
-        bob_status.status.success(),
-        "bob hf-status failed with status {} and stderr: {}",
-        bob_status.status,
-        String::from_utf8_lossy(&bob_status.stderr)
-    );
-    let bob_status_payload: Value = json::from_slice(&bob_status.stdout).expect("bob status json");
     let bob_pool = bob_status_payload
         .get("pool")
         .and_then(Value::as_object)
@@ -2885,30 +3223,36 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some("Join")
     );
 
-    let carpenter_status = run_soracloud_command(
+    let carpenter_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &carpenter_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            carpenter_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        carpenter_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("action"))
+                    .and_then(|value| tagged_enum_label(value, "action"))
+                    == Some("Join")
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("account_id"))
+                    .and_then(Value::as_str)
+                    == Some(carpenter_account_id.as_str())
+        },
     )
     .await?;
-    assert!(
-        carpenter_status.status.success(),
-        "carpenter hf-status failed with status {} and stderr: {}",
-        carpenter_status.status,
-        String::from_utf8_lossy(&carpenter_status.stderr)
-    );
-    let carpenter_status_payload: Value =
-        json::from_slice(&carpenter_status.stdout).expect("carpenter status json");
     let carpenter_pool = carpenter_status_payload
         .get("pool")
         .and_then(Value::as_object)
@@ -2957,59 +3301,59 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some(carpenter_expected_charge)
     );
 
-    let alice_status = run_soracloud_command(
+    let alice_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &alice_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            alice_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        alice_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("member")
+                    .and_then(Value::as_object)
+                    .and_then(|member| member.get("total_refunded_nanos"))
+                    .and_then(Value::as_u64)
+                    .is_some()
+        },
     )
     .await?;
-    assert!(
-        alice_status.status.success(),
-        "alice hf-status failed with status {} and stderr: {}",
-        alice_status.status,
-        String::from_utf8_lossy(&alice_status.stderr)
-    );
-    let alice_status_payload: Value =
-        json::from_slice(&alice_status.stdout).expect("alice status json");
     let alice_member = alice_status_payload
         .get("member")
         .and_then(Value::as_object)
         .expect("alice member");
 
-    let bob_final_status = run_soracloud_command(
+    let bob_final_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            bob_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        bob_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("member")
+                    .and_then(Value::as_object)
+                    .and_then(|member| member.get("total_refunded_nanos"))
+                    .and_then(Value::as_u64)
+                    .is_some()
+        },
     )
     .await?;
-    assert!(
-        bob_final_status.status.success(),
-        "bob final hf-status failed with status {} and stderr: {}",
-        bob_final_status.status,
-        String::from_utf8_lossy(&bob_final_status.stderr)
-    );
-    let bob_final_status_payload: Value =
-        json::from_slice(&bob_final_status.stdout).expect("bob final status json");
     let bob_member = bob_final_status_payload
         .get("member")
         .and_then(Value::as_object)

@@ -267,8 +267,7 @@ fn ivm_build_profile_exists() -> bool {
         .exists()
 }
 
-fn quiet_network_builder() -> NetworkBuilder {
-    install_quiet_tracing();
+fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
     let mut sumeragi = toml::Table::new();
     let mut collectors = toml::Table::new();
@@ -306,6 +305,11 @@ fn quiet_network_builder() -> NetworkBuilder {
             SumeragiParameter::RedundantSendR(3),
         )))
         .with_ivm_fuel(IvmFuelConfig::Unset)
+}
+
+fn quiet_network_builder() -> NetworkBuilder {
+    install_quiet_tracing();
+    quiet_network_builder_base()
 }
 
 fn submit_or_skip(
@@ -1150,8 +1154,8 @@ mod helper_tests {
 
     #[test]
     fn quiet_network_builder_uses_fast_pipeline_time() {
-        let network = quiet_network_builder().build();
-        assert_eq!(network.pipeline_time(), FAST_PIPELINE_TIME);
+        let builder = quiet_network_builder_base();
+        assert_eq!(builder.configured_pipeline_time(), Some(FAST_PIPELINE_TIME));
     }
 
     #[test]

@@ -833,7 +833,7 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
     };
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -898,7 +898,7 @@ fn stark_open_verify_envelope_poseidon2_variant_verifies() {
     };
 
     let backend = "stark/fri/poseidon2-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -999,7 +999,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     use iroha_primitives::json::Json;
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     // Minimal ZK-mode IVM program: metadata + `HALT`.
     let meta = ivm::ProgramMetadata {
@@ -1074,7 +1074,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     )
     .expect("derive proved payload");
 
-    // Compute the ivm-execution public inputs and package them as STARK wrapper columns.
+    // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
         .summarize_program(proved.bytecode.as_ref())

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: examples/transfer/transfer.ko
 
 - አሊስን በዒላማው ንብረት (ለምሳሌ በ"መመዝገቢያ እና ሚንት" ቅንጣቢ ወይም በኤስዲኬ ፈጣን ማስጀመሪያ ፍሰቶች) ቀድመው ይግዙ።
 - 10 ክፍሎችን ከአሊስ ወደ ቦብ ለማንቀሳቀስ የ`do_transfer` የመግቢያ ነጥቡን ያስፈጽሙ፣ የ`AssetTransferRole` ፍቃድን ያረካሉ።
-- የመጠይቅ ሚዛኖች (`FindAccountAssets`, `iroha_cli ledger asset list`) ወይም የዝውውር ውጤቱን ለመመልከት የቧንቧ መስመር ዝግጅቶችን ይመዝገቡ።
+- የመጠይቅ ሚዛኖች (`FindAccountAssets`, `iroha ledger asset list all --verbose`) ወይም የዝውውር ውጤቱን ለመመልከት የቧንቧ መስመር ዝግጅቶችን ይመዝገቡ።
 
 ## ተዛማጅ የኤስዲኬ መመሪያዎች
 

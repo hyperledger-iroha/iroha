@@ -971,6 +971,171 @@ fn manifest_submit_posts_payload() {
 }
 
 #[test]
+fn storage_pin_posts_directory_payload_and_writes_summary() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_dir = tempdir.path().join("site");
+    fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
+    fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
+    fs::write(
+        payload_dir.join("assets").join("app.js"),
+        "console.log('hayahi');",
+    )
+    .expect("write script");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"manifest_id_hex":"deadbeef"}"#);
+    });
+
+    let summary_path = tempdir.path().join("storage_pin.summary.json");
+    let response_path = tempdir.path().join("storage_pin.response.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("pin")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_dir.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .arg(format!("--response-out={}", response_path.display()))
+        .assert()
+        .success();
+
+    mock.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
+    let summary_file: Value =
+        from_slice(&fs::read(&summary_path).expect("read summary file")).expect("summary json");
+    assert_eq!(summary_stdout, summary_file);
+    assert_eq!(
+        summary_stdout.get("payload_kind").and_then(Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("payload_file_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        summary_stdout.get("status").and_then(Value::as_u64),
+        Some(200)
+    );
+    assert_eq!(
+        summary_stdout
+            .get("already_stored")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let response_bytes = fs::read(&response_path).expect("read response body");
+    assert_eq!(response_bytes, br#"{"manifest_id_hex":"deadbeef"}"#);
+}
+
+#[test]
+fn storage_prepare_writes_canonical_payload_and_files_manifest() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_dir = tempdir.path().join("site");
+    fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
+    fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
+    fs::write(
+        payload_dir.join("assets").join("app.js"),
+        "console.log('hayahi');",
+    )
+    .expect("write script");
+
+    let payload_out = tempdir.path().join("storage.payload.bin");
+    let files_out = tempdir.path().join("storage.files.json");
+    let summary_out = tempdir.path().join("storage.prepare.summary.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("prepare")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_dir.display()))
+        .arg(format!("--payload-out={}", payload_out.display()))
+        .arg(format!("--files-out={}", files_out.display()))
+        .arg(format!("--summary-out={}", summary_out.display()))
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value =
+        norito::json::from_str(stdout.trim()).expect("storage prepare summary");
+    let summary_file: Value =
+        from_slice(&fs::read(&summary_out).expect("read summary")).expect("summary json");
+    assert_eq!(summary_stdout, summary_file);
+    assert_eq!(
+        summary_stdout.get("payload_kind").and_then(Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("payload_file_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+
+    let payload_bytes = fs::read(&payload_out).expect("read payload bytes");
+    assert!(
+        !payload_bytes.is_empty(),
+        "prepared payload should not be empty"
+    );
+
+    let files_value: Value =
+        from_slice(&fs::read(&files_out).expect("read files json")).expect("files json");
+    let files = files_value
+        .as_array()
+        .expect("directory payload files should be an array");
+    assert_eq!(files.len(), 2);
+}
+
+#[test]
+fn storage_pin_treats_already_stored_conflict_as_success() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_path = tempdir.path().join("payload.bin");
+    fs::write(&payload_path, b"hayahi-live").expect("write payload");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(409)
+            .header("Content-Type", "application/json")
+            .body(r#"{"error":"bundle already stored"}"#);
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("pin")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        output.status.success(),
+        "CLI must succeed for already-stored conflicts"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
+    assert_eq!(summary.get("status").and_then(Value::as_u64), Some(409));
+    assert_eq!(
+        summary.get("already_stored").and_then(Value::as_bool),
+        Some(true)
+    );
+    mock.assert_calls(1);
+}
+
+#[test]
 fn manifest_submit_rejects_chunk_digest_mismatch() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();

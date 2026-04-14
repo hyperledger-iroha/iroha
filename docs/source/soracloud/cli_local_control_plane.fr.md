@@ -27,7 +27,7 @@ Soracloud v1 est un runtime faisant autorité, uniquement IVM.
   État mondial faisant autorité et gestionnaire d'exécution Soracloud intégré.
 
 ## Portée d'exécution- Soracloud v1 accepte uniquement `SoraContainerRuntimeV1::Ivm`.
-- `NativeProcess` reste rejeté.
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - Les exécutions ordonnées de boîtes aux lettres admettent directement les gestionnaires IVM.
 - L'hydratation et la matérialisation proviennent plutôt du contenu SoraFS/DA engagé
   que les instantanés locaux synthétiques.

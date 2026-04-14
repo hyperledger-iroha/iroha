@@ -78,8 +78,10 @@ fn approves_when_ratio_and_turnout_met() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     // Grant permissions
-    let p1: Permission =
-        CanProposeContractDeployment { contract_address: proposal_contract_address() }.into();
+    let p1: Permission = CanProposeContractDeployment {
+        contract_address: proposal_contract_address(),
+    }
+    .into();
     Grant::account_permission(p1, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant propose");

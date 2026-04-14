@@ -27,7 +27,7 @@ use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
     name::Name,
     prelude::ExposedPrivateKey,
@@ -127,8 +127,37 @@ fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, St
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("sora") {
+        return Some(753);
+    }
+    if trimmed.starts_with("test") {
+        return Some(369);
+    }
+    if trimmed.starts_with("dev") {
+        return Some(0);
+    }
+    trimmed
+        .strip_prefix('n')
+        .and_then(|digits| digits.parse::<u16>().ok())
+}
+
 fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountId, String> {
-    AccountId::parse_encoded(raw.trim())
+    let trimmed = raw.trim();
+    if let Some(prefix) = infer_i105_network_prefix(trimmed)
+        && let Ok(address) = AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix))
+    {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
+    }
+    if let Ok(address) = AccountAddress::from_i105(trimmed) {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
+    }
+    AccountId::parse_encoded(trimmed)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
@@ -139,16 +168,24 @@ fn parse_account_id_arg_with_prefix(
     context: &str,
     expected_prefix: Option<u16>,
 ) -> Result<AccountId, String> {
-    if let Some(prefix) = expected_prefix {
-        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(prefix);
-        return AccountId::parse_encoded(raw.trim())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| {
-                format!("failed to parse `{flag}` for `{context}` as account id: {err}")
-            });
+    let trimmed = raw.trim();
+    let address = match expected_prefix.or_else(|| infer_i105_network_prefix(trimmed)) {
+        Some(prefix) => AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix)),
+        None => AccountAddress::from_i105(trimmed),
+    };
+    if let Ok(address) = address {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
     }
 
-    parse_account_id_arg(flag, raw, context)
+    if expected_prefix.is_none() {
+        return parse_account_id_arg(flag, trimmed, context);
+    }
+
+    AccountId::parse_encoded(trimmed)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
 
 fn authority_payload_literal(
@@ -498,6 +535,16 @@ fn run() -> Result<(), String> {
             match sub.as_str() {
                 "stream" => proof_stream(args.collect()),
                 "verify" => proof_verify(args.collect()),
+                _ => Err(usage()),
+            }
+        }
+        "storage" => {
+            let Some(sub) = args.next() else {
+                return Err(usage());
+            };
+            match sub.as_str() {
+                "prepare" => storage_prepare(args.collect()),
+                "pin" => storage_pin(args.collect()),
                 _ => Err(usage()),
             }
         }
@@ -1796,6 +1843,8 @@ fn usage() -> String {
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
+  sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
+  sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
@@ -4539,6 +4588,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let authority_str = authority_str.ok_or_else(|| {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
+    authority_network_prefix =
+        authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
 
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
@@ -4823,6 +4874,342 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         return Err(message);
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StorageFileEntryOwned {
+    path: Vec<String>,
+    size: u64,
+}
+
+fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut payload_path: Option<PathBuf> = None;
+    let mut payload_out: Option<PathBuf> = None;
+    let mut files_out: Option<PathBuf> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--payload-out" => payload_out = Some(PathBuf::from(value)),
+            "--files-out" => files_out = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli storage prepare`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli storage prepare`".to_string()
+    })?;
+    let payload_path = payload_path.ok_or_else(|| {
+        "missing required `--payload=PATH` for `sorafs_cli storage prepare`".to_string()
+    })?;
+    let payload_out = payload_out.ok_or_else(|| {
+        "missing required `--payload-out=PATH` for `sorafs_cli storage prepare`".to_string()
+    })?;
+    let files_out = files_out.ok_or_else(|| {
+        "missing required `--files-out=PATH` for `sorafs_cli storage prepare`".to_string()
+    })?;
+
+    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
+        format!(
+            "failed to read manifest `{}`: {err}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
+        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
+    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
+    let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
+
+    let (payload_bytes, files, payload_kind) = load_storage_pin_payload(&payload_path, &manifest)?;
+    let payload_bytes_len = u64::try_from(payload_bytes.len())
+        .map_err(|_| "payload exceeds host limits".to_string())?;
+    let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
+        u64::try_from(entries.len()).unwrap_or(u64::MAX)
+    });
+
+    ensure_parent_dir(&payload_out)?;
+    fs::write(&payload_out, &payload_bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", payload_out.display()))?;
+
+    let files_value = storage_files_to_json_value(files.as_deref());
+    let files_rendered = to_string_pretty(&files_value)
+        .map_err(|err| format!("failed to render storage files JSON: {err}"))?;
+    ensure_parent_dir(&files_out)?;
+    write_text(&files_out, files_rendered.as_bytes())?;
+
+    let mut summary = Map::new();
+    summary.insert(
+        "manifest_path".into(),
+        Value::from(manifest_path.display().to_string()),
+    );
+    summary.insert(
+        "payload_path".into(),
+        Value::from(payload_path.display().to_string()),
+    );
+    summary.insert(
+        "payload_out".into(),
+        Value::from(payload_out.display().to_string()),
+    );
+    summary.insert(
+        "files_out".into(),
+        Value::from(files_out.display().to_string()),
+    );
+    summary.insert("payload_kind".into(), Value::from(payload_kind));
+    summary.insert("payload_bytes".into(), Value::from(payload_bytes_len));
+    summary.insert("payload_file_count".into(), Value::from(payload_file_count));
+    summary.insert(
+        "manifest_digest_hex".into(),
+        Value::from(manifest_digest_hex),
+    );
+    summary.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
+    summary.insert(
+        "chunker_handle".into(),
+        Value::from(format!(
+            "{}.{}@{}",
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        )),
+    );
+
+    let rendered = to_string_pretty(&Value::Object(summary))
+        .map_err(|err| format!("failed to render summary: {err}"))?;
+    println!("{rendered}");
+    if let Some(path) = summary_out {
+        ensure_parent_dir(&path)?;
+        write_text(&path, rendered.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut payload_path: Option<PathBuf> = None;
+    let mut torii_url: Option<String> = None;
+    let mut summary_out: Option<PathBuf> = None;
+    let mut response_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--manifest" => manifest_path = Some(PathBuf::from(value)),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--torii-url" => torii_url = Some(value.to_string()),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            "--response-out" => response_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli storage pin`"
+                ));
+            }
+        }
+    }
+
+    let manifest_path = manifest_path.ok_or_else(|| {
+        "missing required `--manifest=PATH` for `sorafs_cli storage pin`".to_string()
+    })?;
+    let payload_path = payload_path.ok_or_else(|| {
+        "missing required `--payload=PATH` for `sorafs_cli storage pin`".to_string()
+    })?;
+    let torii_url = torii_url.ok_or_else(|| {
+        "missing required `--torii-url=URL` for `sorafs_cli storage pin`".to_string()
+    })?;
+
+    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
+        format!(
+            "failed to read manifest `{}`: {err}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
+        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
+    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
+    let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
+
+    let (payload_bytes, files, payload_kind) = load_storage_pin_payload(&payload_path, &manifest)?;
+    let payload_bytes_len = u64::try_from(payload_bytes.len())
+        .map_err(|_| "payload exceeds host limits".to_string())?;
+    let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
+        u64::try_from(entries.len()).unwrap_or(u64::MAX)
+    });
+
+    let torii_base_url =
+        Url::parse(&torii_url).map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
+    let torii_endpoint = torii_base_url
+        .join("v1/sorafs/storage/pin")
+        .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
+
+    let request_body = norito::json!({
+        "manifest_b64": (BASE64_STANDARD.encode(&manifest_bytes)),
+        "payload_b64": (BASE64_STANDARD.encode(&payload_bytes)),
+        "files": (storage_files_to_json_value(files.as_deref())),
+    });
+    let body_bytes =
+        to_vec(&request_body).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
+
+    let client = HttpClient::builder()
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let response = client
+        .post(torii_endpoint.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body_bytes)
+        .send()
+        .map_err(|err| format!("failed to submit storage pin request to Torii: {err}"))?;
+    let status = response.status();
+    let response_bytes = response
+        .bytes()
+        .map_err(|err| format!("failed to read Torii response: {err}"))?
+        .to_vec();
+
+    if let Some(path) = response_out {
+        ensure_parent_dir(&path)?;
+        fs::write(&path, &response_bytes)
+            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+    }
+
+    let torii_response_value = decode_response_value_or_text(&response_bytes);
+    let response_text = String::from_utf8_lossy(&response_bytes);
+    let already_stored = status == StatusCode::CONFLICT && response_text.contains("already stored");
+    if !status.is_success() && !already_stored {
+        return Err(format!(
+            "Torii returned {status} when pinning bundle into storage: {response_text}"
+        ));
+    }
+
+    let mut summary = Map::new();
+    summary.insert("torii_url".into(), Value::from(torii_url));
+    summary.insert(
+        "torii_endpoint".into(),
+        Value::from(torii_endpoint.as_str().to_string()),
+    );
+    summary.insert("status".into(), Value::from(status.as_u16() as u64));
+    summary.insert(
+        "manifest_path".into(),
+        Value::from(manifest_path.display().to_string()),
+    );
+    summary.insert(
+        "payload_path".into(),
+        Value::from(payload_path.display().to_string()),
+    );
+    summary.insert("payload_kind".into(), Value::from(payload_kind));
+    summary.insert("payload_bytes".into(), Value::from(payload_bytes_len));
+    summary.insert("payload_file_count".into(), Value::from(payload_file_count));
+    summary.insert(
+        "manifest_digest_hex".into(),
+        Value::from(manifest_digest_hex),
+    );
+    summary.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
+    summary.insert(
+        "chunker_handle".into(),
+        Value::from(format!(
+            "{}.{}@{}",
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        )),
+    );
+    summary.insert("already_stored".into(), Value::from(already_stored));
+    summary.insert("torii_response".into(), torii_response_value);
+
+    let rendered = to_string_pretty(&Value::Object(summary))
+        .map_err(|err| format!("failed to render summary: {err}"))?;
+    println!("{rendered}");
+    if let Some(path) = summary_out {
+        ensure_parent_dir(&path)?;
+        write_text(&path, rendered.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
+    if manifest.root_cid.is_empty() {
+        return Err("manifest root_cid is empty".to_string());
+    }
+
+    Ok(hex_encode(&manifest.root_cid))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
+    Ok(ChunkProfile {
+        min_size: usize::try_from(manifest.chunking.min_size)
+            .map_err(|_| "manifest chunking.min_size exceeds host limits".to_string())?,
+        target_size: usize::try_from(manifest.chunking.target_size)
+            .map_err(|_| "manifest chunking.target_size exceeds host limits".to_string())?,
+        max_size: usize::try_from(manifest.chunking.max_size)
+            .map_err(|_| "manifest chunking.max_size exceeds host limits".to_string())?,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    })
+}
+
+type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+
+fn load_storage_pin_payload(
+    input: &Path,
+    manifest: &ManifestV1,
+) -> Result<StoragePinPayload, String> {
+    let metadata = fs::metadata(input)
+        .map_err(|err| format!("failed to access payload `{}`: {err}", input.display()))?;
+
+    if metadata.is_dir() {
+        let profile = chunk_profile_from_manifest(manifest)?;
+        let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
+            .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
+        let files = plan
+            .files
+            .iter()
+            .map(|file| StorageFileEntryOwned {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect();
+        return Ok((payload, Some(files), "directory"));
+    }
+
+    if metadata.is_file() {
+        let payload = fs::read(input)
+            .map_err(|err| format!("failed to read payload `{}`: {err}", input.display()))?;
+        return Ok((payload, None, "file"));
+    }
+
+    Err("payload input must be a file or directory".to_string())
+}
+
+fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value {
+    match files {
+        Some(entries) => Value::Array(
+            entries
+                .iter()
+                .map(|entry| {
+                    Value::Object(Map::from_iter([
+                        (
+                            "path".into(),
+                            Value::Array(entry.path.iter().cloned().map(Value::from).collect()),
+                        ),
+                        ("size".into(), Value::from(entry.size)),
+                    ]))
+                })
+                .collect(),
+        ),
+        None => Value::Null,
+    }
 }
 
 fn should_fallback_manifest_submit_status(status: StatusCode) -> bool {
@@ -7288,6 +7675,42 @@ mod tests {
     }
 
     #[test]
+    fn load_storage_pin_payload_uses_canonical_directory_ordering() {
+        let tempdir = tempdir().expect("tempdir");
+        let payload_dir = tempdir.path().join("site");
+        fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
+        fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
+        fs::write(
+            payload_dir.join("assets").join("app.js"),
+            "console.log('hayahi');",
+        )
+        .expect("write script");
+
+        let manifest = sample_manifest();
+        let profile = chunk_profile_from_manifest(&manifest).expect("chunk profile");
+        let (expected_plan, expected_payload) =
+            CarBuildPlan::from_directory_with_profile(&payload_dir, profile)
+                .expect("build canonical directory payload");
+
+        let (payload, files, payload_kind) =
+            load_storage_pin_payload(&payload_dir, &manifest).expect("load storage payload");
+
+        assert_eq!(payload_kind, "directory");
+        assert_eq!(payload, expected_payload);
+
+        let files = files.expect("directory payload should include file entries");
+        let expected_files = expected_plan
+            .files
+            .iter()
+            .map(|file| StorageFileEntryOwned {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(files, expected_files);
+    }
+
+    #[test]
     fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
         let account = AccountId::new(
             KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519)
@@ -7305,6 +7728,23 @@ mod tests {
             Some(369),
         )
         .expect("parse authority with explicit discriminant");
+
+        assert_eq!(parsed, account);
+    }
+
+    #[test]
+    fn parse_account_id_arg_accepts_taira_i105_without_explicit_prefix() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x59; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let parsed = parse_account_id_arg("--authority", &encoded, "sorafs_cli manifest submit")
+            .expect("parse taira authority without explicit discriminant");
 
         assert_eq!(parsed, account);
     }

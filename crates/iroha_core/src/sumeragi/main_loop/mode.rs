@@ -186,7 +186,9 @@ impl Actor {
         self.slot_tracker.clear();
         self.qc_cache.clear();
         self.vote_log.clear();
+        self.vote_log_identities.clear();
         self.vote_validation_cache.clear();
+        self.vote_validation_cache_identities.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
         self.recovery_pending_baseline_restore.clear();

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ SDK жылдам іске қосулары мен бухгалтерлік кі�
 
 - Алисаны мақсатты активпен алдын ала қаржыландырыңыз (мысалы, «тіркеу және енгізу» үзіндісі немесе SDK жылдам бастау ағындары арқылы).
 - `AssetTransferRole` рұқсатын қанағаттандыра отырып, Алисадан Бобқа 10 бірлік жылжыту үшін `do_transfer` кіру нүктесін орындаңыз.
-- Баланстарды (`FindAccountAssets`, `iroha_cli ledger asset list`) сұраңыз немесе тасымалдау нәтижесін бақылау үшін құбыр оқиғаларына жазылыңыз.
+- Баланстарды (`FindAccountAssets`, `iroha ledger asset list all --verbose`) сұраңыз немесе тасымалдау нәтижесін бақылау үшін құбыр оқиғаларына жазылыңыз.
 
 ## Қатысты SDK нұсқаулықтары
 

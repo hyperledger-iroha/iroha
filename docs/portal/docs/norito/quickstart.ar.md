@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c9a8e27bb8f586eac6bf4925cc69357dfa6d3f94c3dcf9e032b916c27fadf21
-source_last_modified: "2025-11-07T12:25:50.867928+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -17,13 +17,13 @@ slug: /norito/quickstart
 
 يعكس هذا الدليل العملي سير العمل الذي نتوقع ان يتبعه المطورون عند تعلم Norito و Kotodama لاول مرة: تشغيل شبكة حتمية بعقدة واحدة، تجميع عقد، اجراء dry-run محلي، ثم ارساله عبر Torii باستخدام CLI المرجعي.
 
-يكتب عقد المثال زوج مفتاح/قيمة في حساب المستدعي حتى تتمكن من التحقق من الاثر الجانبي مباشرة عبر `iroha_cli`.
+يكتب عقد المثال زوج مفتاح/قيمة في حساب المستدعي حتى تتمكن من التحقق من الاثر الجانبي مباشرة عبر `iroha`.
 
 ## المتطلبات
 
 - [Docker](https://docs.docker.com/engine/install/) مع تفعيل Compose V2 (يستخدم لتشغيل peer العينة المحدد في `defaults/docker-compose.single.yml`).
 - سلسلة ادوات Rust (1.76+) لبناء الثنائيات المساعدة اذا لم تقم بتنزيل المنشورة.
-- الثنائيات `koto_compile` و`ivm_run` و`iroha_cli`. يمكنك بناؤها من checkout الـ workspace كما هو موضح ادناه او تنزيل artifacts الاصدار المطابقة:
+- الثنائيات `koto_compile` و`ivm_run` و`iroha`. يمكنك بناؤها من checkout الـ workspace كما هو موضح ادناه او تنزيل artifacts الاصدار المطابقة:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
@@ -58,8 +58,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

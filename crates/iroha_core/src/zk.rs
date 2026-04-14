@@ -194,22 +194,22 @@ pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
-pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution";
+pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
 
-/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution`.
+/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
 ///
 /// The execution proof instances still carry concrete values in the proof payload;
 /// this descriptor is only used for stable registry binding via
 /// `VerifyingKeyRecord.public_inputs_schema_hash`.
 pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_current","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
 
-/// Returns the canonical schema descriptor bytes for `ivm-execution`.
+/// Returns the canonical schema descriptor bytes for `ivm-execution-v1`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
     IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1
 }
 
-/// Returns the canonical schema hash for `ivm-execution`.
+/// Returns the canonical schema hash for `ivm-execution-v1`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
     iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
@@ -245,7 +245,7 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
 }
 
-/// Returns `true` when `backend` is accepted for `ivm-execution` proofs.
+/// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
 #[inline]
 #[must_use]
 pub fn is_ivm_execution_backend(backend: &str) -> bool {
@@ -292,12 +292,12 @@ fn ivm_execution_public_inputs_columns(
         .collect()
 }
 
-/// Build a Halo2 IPA `ivm-execution` proof envelope for IVM proved execution.
+/// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
 ///
-/// Note: the current `ivm-execution` circuit is a **binding** circuit. It does **not**
+/// Note: the current `ivm-execution-v1` circuit is a **binding** circuit. It does **not**
 /// prove correct IVM execution semantics by itself, so admission still performs deterministic
 /// VM replay to recompute the overlay/commitments and reject mismatches.
 ///
@@ -335,7 +335,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
             })?;
 
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
@@ -404,7 +404,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         OsRng,
         &mut transcript,
     )
-    .map_err(|err| format!("failed to create ivm-execution proof: {err}"))?;
+    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
     let proof_raw = transcript.finalize();
 
     let mut proof_payload = zk1::wrap_start();
@@ -425,7 +425,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
 
-/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution` circuit.
+/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
 ///
 /// The returned bytes are the Halo2 `ProvingKey` serialization using `SerdeFormat::Processed`,
 /// suitable for persistence in the Torii prover key store (`<backend>__<name>.pk`).
@@ -453,7 +453,7 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
             })?;
 
     let pk = keygen_pk(
@@ -608,7 +608,7 @@ pub fn prove_stark_fri_open_verify_envelope(
     Ok(ProofBox::new(backend.to_owned(), encoded))
 }
 
-/// Build a STARK/FRI `ivm-execution` proof envelope for IVM proved execution.
+/// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
@@ -1014,7 +1014,7 @@ pub mod test_utils {
         halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind", code_hash, overlay_hash)
     }
 
-    /// Deterministic Halo2 IPA fixture for `ivm-execution` proof attachments.
+    /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
     ///
     /// The circuit exposes 16 instance columns (1 row each) corresponding to:
     /// - `code_hash` (4 `u64` limbs, little-endian)
@@ -1030,7 +1030,7 @@ pub mod test_utils {
         gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
         halo2_ivm_execution_bind_v1_envelope(
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             code_hash,
             overlay_hash,
             events_commitment,
@@ -4792,7 +4792,7 @@ mod stark_prover_tests {
     #[test]
     fn prove_stark_ivm_execution_envelope_roundtrip() {
         let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:ivm-execution");
+        let circuit_id = format!("{backend}:ivm-execution-v1");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -6155,7 +6155,7 @@ mod pasta_tiny {
 
     /// Circuit binding sixteen single-row instance columns to witness values.
     ///
-    /// This is used by `ivm-execution` fixtures to ensure the proof is bound to
+    /// This is used by `ivm-execution-v1` fixtures to ensure the proof is bound to
     /// all public commitments required by `Executable::IvmProved` admission.
     ///
     /// Note: This circuit does **not** prove correct IVM execution by itself.
@@ -9325,7 +9325,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-execution" => {
+        "halo2/pasta/ivm-execution-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
             if col_refs.len() != 16 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;

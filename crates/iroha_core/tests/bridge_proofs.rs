@@ -10,7 +10,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     prelude::*,
-    proof::{ProofId, ProofStatus},
+    proof::{ProofBox, ProofId, ProofStatus},
 };
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
@@ -244,5 +244,87 @@ fn bridge_overlapping_ranges_are_rejected() {
     assert!(
         format!("{err:?}").contains("overlaps existing proof"),
         "unexpected error for overlap: {err:?}"
+    );
+}
+
+#[test]
+fn re_submitting_identical_bridge_proof_is_idempotent() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+    let exec = Executor::default();
+    let proof = make_ics_proof(0x73, (21, 21), false);
+    let proof_id = bridge_proof_id(&proof);
+
+    let header1 =
+        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block1 = state.block(header1);
+    let mut stx1 = block1.transaction();
+    let submit1: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
+    exec.execute_instruction(&mut stx1, &ALICE_ID.clone(), submit1)
+        .expect("first proof accepted");
+    stx1.apply();
+    block1
+        .commit()
+        .expect("commit first bridge-proof block snapshot");
+
+    let header2 =
+        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block2 = state.block(header2);
+    let mut stx2 = block2.transaction();
+    let submit2: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    exec.execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
+        .expect("identical proof should be a no-op");
+
+    let rec = stx2
+        .world
+        .proofs()
+        .get(&proof_id)
+        .expect("original proof remains recorded");
+    assert_eq!(rec.status, ProofStatus::Verified);
+    let bridge = rec.bridge.as_ref().expect("bridge metadata stored");
+    assert_eq!(bridge.commitment, proof_id.proof_hash);
+    assert_eq!(bridge.proof.range.start_height, 21);
+    assert_eq!(bridge.proof.range.end_height, 21);
+}
+
+#[test]
+fn malformed_sccp_transparent_bridge_proof_is_rejected() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let proof = BridgeProof {
+        range: BridgeProofRange {
+            start_height: 1,
+            end_height: 1,
+        },
+        manifest_hash: [0x44; 32],
+        payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            proof: ProofBox::new("sccp/stark-fri-v1/eth".into(), vec![0xAA]),
+            recursion_depth: None,
+        }),
+        pinned: false,
+    };
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("malformed SCCP artifact must be rejected");
+    assert!(
+        format!("{err:?}").contains("typed message artifacts"),
+        "unexpected error: {err:?}"
     );
 }

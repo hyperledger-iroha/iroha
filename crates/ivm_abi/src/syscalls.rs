@@ -163,6 +163,45 @@ pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
 pub const SYSCALL_JSON_GET_NUMERIC: u32 = 0x7F;
 /// Args: r10 = &Json, r11 = &Name key -> r10 = &AssetDefinitionId (INPUT pointer)
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
+/// Construct an empty JSON object.
+///
+/// Args: none
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_OBJECT: u32 = 0x81;
+/// Insert or replace an integer field in a JSON object.
+///
+/// Args: r10 = &Json object, r11 = &Name key, r12 = value (i64 as u64)
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
+/// Insert or replace an account-id field in a JSON object using canonical string encoding.
+///
+/// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
+/// Direct JSON integer getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_I64_DIRECT: u32 = 0x84;
+/// Direct JSON object getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_JSON_DIRECT: u32 = 0x85;
+/// Direct JSON name getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_NAME_DIRECT: u32 = 0x86;
+/// Direct JSON account-id getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT: u32 = 0x87;
+/// Direct JSON NFT-id getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_NFT_ID_DIRECT: u32 = 0x88;
+/// Direct JSON blob getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_BLOB_HEX_DIRECT: u32 = 0x89;
+/// Direct JSON numeric getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_NUMERIC_DIRECT: u32 = 0x8A;
+/// Direct JSON asset-definition getter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT: u32 = 0x8B;
+/// Direct JSON integer setter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_SET_I64_DIRECT: u32 = 0x8C;
+/// Direct JSON account-id setter that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT: u32 = 0x8D;
+/// Direct path-key hashing helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT: u32 = 0x8E;
+/// Direct schema-info helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_SCHEMA_INFO_DIRECT: u32 = 0x8F;
 
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
@@ -192,6 +231,36 @@ pub const SYSCALL_SCHEMA_ENCODE: u32 = 0x59;
 pub const SYSCALL_SCHEMA_DECODE: u32 = 0x5A;
 /// Schema info: r10 = &Name schema -> r10 = &Json {"id":"<hex>", "version":N}
 pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
+/// Direct schema encode helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_SCHEMA_ENCODE_DIRECT: u32 = 0xD0;
+/// Direct schema decode helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_SCHEMA_DECODE_DIRECT: u32 = 0xD1;
+/// Direct numeric-to-int helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_TO_INT_DIRECT: u32 = 0xD2;
+/// Direct numeric-add helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_ADD_DIRECT: u32 = 0xD3;
+/// Direct numeric-sub helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_SUB_DIRECT: u32 = 0xD4;
+/// Direct numeric-mul helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_MUL_DIRECT: u32 = 0xD5;
+/// Direct numeric-div helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_DIV_DIRECT: u32 = 0xD6;
+/// Direct numeric-rem helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_REM_DIRECT: u32 = 0xD7;
+/// Direct numeric-neg helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_NEG_DIRECT: u32 = 0xD8;
+/// Direct numeric-eq helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_EQ_DIRECT: u32 = 0xD9;
+/// Direct numeric-ne helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_NE_DIRECT: u32 = 0xDA;
+/// Direct numeric-lt helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_LT_DIRECT: u32 = 0xDB;
+/// Direct numeric-le helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_LE_DIRECT: u32 = 0xDC;
+/// Direct numeric-gt helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_GT_DIRECT: u32 = 0xDD;
+/// Direct numeric-ge helper that accepts validated TLVs from any allowed pointer region.
+pub const SYSCALL_NUMERIC_GE_DIRECT: u32 = 0xDE;
 /// Decode a Name from a NoritoBytes TLV (UTF-8) and return a `&Name` TLV pointer in INPUT.
 ///
 /// Args: r10 = &NoritoBytes (UTF-8 string)
@@ -337,14 +406,16 @@ pub const SYSCALL_CREATE_NFTS_FOR_ALL_USERS: u32 = 0xA2;
 pub const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH: u32 = 0xA3;
 /// Get current authority AccountId (writes a Norito-encoded blob to INPUT and returns pointer in x10)
 pub const SYSCALL_GET_AUTHORITY: u32 = 0xA4;
-/// Get the current trusted host time in unix milliseconds.
-pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Execute subscription billing based on trigger metadata and subscription state.
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 /// Record subscription usage from trigger args payload.
 pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
 /// Resolve a canonical alias literal (for example `merchant@centralbank`) to the current AccountId.
 pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
+/// Get the current trusted host time in unix milliseconds.
+pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
+/// Call a deployed ABI v1 contract synchronously by contract-address literal.
+pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;
 /// Declare a DS touch within an active AXT.
@@ -377,6 +448,45 @@ pub const SYSCALL_SORACLOUD_EGRESS_FETCH: u32 = 0xC7;
 pub const SYSCALL_SORACLOUD_READ_CONFIG: u32 = 0xC8;
 /// Read authoritative service secret envelopes exposed through the Soracloud host.
 pub const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE: u32 = 0xC9;
+
+/// Map direct helper syscall aliases onto their canonical helper numbers.
+///
+/// The first-release ABI exposes both canonical helper syscalls and direct
+/// aliases that relax pointer-region placement once the TLV has already been
+/// validated. Hosts execute the canonical implementation for both forms to
+/// keep behavior identical across runtimes.
+pub const fn canonical_helper_syscall(number: u32) -> u32 {
+    match number {
+        SYSCALL_JSON_GET_I64_DIRECT => SYSCALL_JSON_GET_I64,
+        SYSCALL_JSON_GET_JSON_DIRECT => SYSCALL_JSON_GET_JSON,
+        SYSCALL_JSON_GET_NAME_DIRECT => SYSCALL_JSON_GET_NAME,
+        SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_GET_ACCOUNT_ID,
+        SYSCALL_JSON_GET_NFT_ID_DIRECT => SYSCALL_JSON_GET_NFT_ID,
+        SYSCALL_JSON_GET_BLOB_HEX_DIRECT => SYSCALL_JSON_GET_BLOB_HEX,
+        SYSCALL_JSON_GET_NUMERIC_DIRECT => SYSCALL_JSON_GET_NUMERIC,
+        SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+        SYSCALL_JSON_SET_I64_DIRECT => SYSCALL_JSON_SET_I64,
+        SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_SET_ACCOUNT_ID,
+        SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => SYSCALL_BUILD_PATH_KEY_NORITO,
+        SYSCALL_SCHEMA_INFO_DIRECT => SYSCALL_SCHEMA_INFO,
+        SYSCALL_SCHEMA_ENCODE_DIRECT => SYSCALL_SCHEMA_ENCODE,
+        SYSCALL_SCHEMA_DECODE_DIRECT => SYSCALL_SCHEMA_DECODE,
+        SYSCALL_NUMERIC_TO_INT_DIRECT => SYSCALL_NUMERIC_TO_INT,
+        SYSCALL_NUMERIC_ADD_DIRECT => SYSCALL_NUMERIC_ADD,
+        SYSCALL_NUMERIC_SUB_DIRECT => SYSCALL_NUMERIC_SUB,
+        SYSCALL_NUMERIC_MUL_DIRECT => SYSCALL_NUMERIC_MUL,
+        SYSCALL_NUMERIC_DIV_DIRECT => SYSCALL_NUMERIC_DIV,
+        SYSCALL_NUMERIC_REM_DIRECT => SYSCALL_NUMERIC_REM,
+        SYSCALL_NUMERIC_NEG_DIRECT => SYSCALL_NUMERIC_NEG,
+        SYSCALL_NUMERIC_EQ_DIRECT => SYSCALL_NUMERIC_EQ,
+        SYSCALL_NUMERIC_NE_DIRECT => SYSCALL_NUMERIC_NE,
+        SYSCALL_NUMERIC_LT_DIRECT => SYSCALL_NUMERIC_LT,
+        SYSCALL_NUMERIC_LE_DIRECT => SYSCALL_NUMERIC_LE,
+        SYSCALL_NUMERIC_GT_DIRECT => SYSCALL_NUMERIC_GT,
+        SYSCALL_NUMERIC_GE_DIRECT => SYSCALL_NUMERIC_GE,
+        _ => number,
+    }
+}
 
 /// Returns whether a syscall number is allowed for the given ABI policy.
 ///
@@ -446,6 +556,21 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_BLOB_HEX,
             SYSCALL_JSON_GET_NUMERIC,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+            SYSCALL_JSON_OBJECT,
+            SYSCALL_JSON_SET_I64,
+            SYSCALL_JSON_SET_ACCOUNT_ID,
+            SYSCALL_JSON_GET_I64_DIRECT,
+            SYSCALL_JSON_GET_JSON_DIRECT,
+            SYSCALL_JSON_GET_NAME_DIRECT,
+            SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
+            SYSCALL_JSON_GET_NFT_ID_DIRECT,
+            SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
+            SYSCALL_JSON_GET_NUMERIC_DIRECT,
+            SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
+            SYSCALL_JSON_SET_I64_DIRECT,
+            SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
+            SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+            SYSCALL_SCHEMA_INFO_DIRECT,
         ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
@@ -466,6 +591,21 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_NUMERIC_LE,
             SYSCALL_NUMERIC_GT,
             SYSCALL_NUMERIC_GE,
+            SYSCALL_SCHEMA_ENCODE_DIRECT,
+            SYSCALL_SCHEMA_DECODE_DIRECT,
+            SYSCALL_NUMERIC_TO_INT_DIRECT,
+            SYSCALL_NUMERIC_ADD_DIRECT,
+            SYSCALL_NUMERIC_SUB_DIRECT,
+            SYSCALL_NUMERIC_MUL_DIRECT,
+            SYSCALL_NUMERIC_DIV_DIRECT,
+            SYSCALL_NUMERIC_REM_DIRECT,
+            SYSCALL_NUMERIC_NEG_DIRECT,
+            SYSCALL_NUMERIC_EQ_DIRECT,
+            SYSCALL_NUMERIC_NE_DIRECT,
+            SYSCALL_NUMERIC_LT_DIRECT,
+            SYSCALL_NUMERIC_LE_DIRECT,
+            SYSCALL_NUMERIC_GT_DIRECT,
+            SYSCALL_NUMERIC_GE_DIRECT,
         ]);
         // Name decode is part of base ABI in V1
         v.push(SYSCALL_NAME_DECODE);
@@ -548,6 +688,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
             SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
             SYSCALL_GET_AUTHORITY,
+            SYSCALL_CALL_CONTRACT,
             SYSCALL_CURRENT_TIME_MS,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
@@ -707,9 +848,39 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID => "JSON_GET_ASSET_DEFINITION_ID",
         SYSCALL_JSON_GET_NUMERIC => "JSON_GET_NUMERIC",
+        SYSCALL_JSON_OBJECT => "JSON_OBJECT",
+        SYSCALL_JSON_SET_I64 => "JSON_SET_I64",
+        SYSCALL_JSON_SET_ACCOUNT_ID => "JSON_SET_ACCOUNT_ID",
+        SYSCALL_JSON_GET_I64_DIRECT => "JSON_GET_I64_DIRECT",
+        SYSCALL_JSON_GET_JSON_DIRECT => "JSON_GET_JSON_DIRECT",
+        SYSCALL_JSON_GET_NAME_DIRECT => "JSON_GET_NAME_DIRECT",
+        SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => "JSON_GET_ACCOUNT_ID_DIRECT",
+        SYSCALL_JSON_GET_NFT_ID_DIRECT => "JSON_GET_NFT_ID_DIRECT",
+        SYSCALL_JSON_GET_BLOB_HEX_DIRECT => "JSON_GET_BLOB_HEX_DIRECT",
+        SYSCALL_JSON_GET_NUMERIC_DIRECT => "JSON_GET_NUMERIC_DIRECT",
+        SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => "JSON_GET_ASSET_DEFINITION_ID_DIRECT",
+        SYSCALL_JSON_SET_I64_DIRECT => "JSON_SET_I64_DIRECT",
+        SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => "JSON_SET_ACCOUNT_ID_DIRECT",
+        SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => "BUILD_PATH_KEY_NORITO_DIRECT",
+        SYSCALL_SCHEMA_INFO_DIRECT => "SCHEMA_INFO_DIRECT",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",
+        SYSCALL_SCHEMA_ENCODE_DIRECT => "SCHEMA_ENCODE_DIRECT",
+        SYSCALL_SCHEMA_DECODE_DIRECT => "SCHEMA_DECODE_DIRECT",
+        SYSCALL_NUMERIC_TO_INT_DIRECT => "NUMERIC_TO_INT_DIRECT",
+        SYSCALL_NUMERIC_ADD_DIRECT => "NUMERIC_ADD_DIRECT",
+        SYSCALL_NUMERIC_SUB_DIRECT => "NUMERIC_SUB_DIRECT",
+        SYSCALL_NUMERIC_MUL_DIRECT => "NUMERIC_MUL_DIRECT",
+        SYSCALL_NUMERIC_DIV_DIRECT => "NUMERIC_DIV_DIRECT",
+        SYSCALL_NUMERIC_REM_DIRECT => "NUMERIC_REM_DIRECT",
+        SYSCALL_NUMERIC_NEG_DIRECT => "NUMERIC_NEG_DIRECT",
+        SYSCALL_NUMERIC_EQ_DIRECT => "NUMERIC_EQ_DIRECT",
+        SYSCALL_NUMERIC_NE_DIRECT => "NUMERIC_NE_DIRECT",
+        SYSCALL_NUMERIC_LT_DIRECT => "NUMERIC_LT_DIRECT",
+        SYSCALL_NUMERIC_LE_DIRECT => "NUMERIC_LE_DIRECT",
+        SYSCALL_NUMERIC_GT_DIRECT => "NUMERIC_GT_DIRECT",
+        SYSCALL_NUMERIC_GE_DIRECT => "NUMERIC_GE_DIRECT",
         SYSCALL_NAME_DECODE => "NAME_DECODE",
         SYSCALL_POINTER_TO_NORITO => "POINTER_TO_NORITO",
         SYSCALL_POINTER_FROM_NORITO => "POINTER_FROM_NORITO",
@@ -724,6 +895,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_CREATE_NFTS_FOR_ALL_USERS => "CREATE_NFTS_FOR_ALL_USERS",
         SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => "SET_SMARTCONTRACT_EXECUTION_DEPTH",
         SYSCALL_GET_AUTHORITY => "GET_AUTHORITY",
+        SYSCALL_CALL_CONTRACT => "CALL_CONTRACT",
         SYSCALL_CURRENT_TIME_MS => "CURRENT_TIME_MS",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
@@ -858,4 +1030,64 @@ pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
         bytes.extend_from_slice(&n.to_le_bytes());
     }
     *Hash::new(&bytes).as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_helper_syscall_maps_direct_aliases() {
+        let direct_pairs = [
+            (SYSCALL_JSON_GET_I64_DIRECT, SYSCALL_JSON_GET_I64),
+            (SYSCALL_JSON_GET_JSON_DIRECT, SYSCALL_JSON_GET_JSON),
+            (SYSCALL_JSON_GET_NAME_DIRECT, SYSCALL_JSON_GET_NAME),
+            (
+                SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
+                SYSCALL_JSON_GET_ACCOUNT_ID,
+            ),
+            (SYSCALL_JSON_GET_NFT_ID_DIRECT, SYSCALL_JSON_GET_NFT_ID),
+            (SYSCALL_JSON_GET_BLOB_HEX_DIRECT, SYSCALL_JSON_GET_BLOB_HEX),
+            (SYSCALL_JSON_GET_NUMERIC_DIRECT, SYSCALL_JSON_GET_NUMERIC),
+            (
+                SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
+                SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+            ),
+            (SYSCALL_JSON_SET_I64_DIRECT, SYSCALL_JSON_SET_I64),
+            (
+                SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
+                SYSCALL_JSON_SET_ACCOUNT_ID,
+            ),
+            (
+                SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+                SYSCALL_BUILD_PATH_KEY_NORITO,
+            ),
+            (SYSCALL_SCHEMA_INFO_DIRECT, SYSCALL_SCHEMA_INFO),
+            (SYSCALL_SCHEMA_ENCODE_DIRECT, SYSCALL_SCHEMA_ENCODE),
+            (SYSCALL_SCHEMA_DECODE_DIRECT, SYSCALL_SCHEMA_DECODE),
+            (SYSCALL_NUMERIC_TO_INT_DIRECT, SYSCALL_NUMERIC_TO_INT),
+            (SYSCALL_NUMERIC_ADD_DIRECT, SYSCALL_NUMERIC_ADD),
+            (SYSCALL_NUMERIC_SUB_DIRECT, SYSCALL_NUMERIC_SUB),
+            (SYSCALL_NUMERIC_MUL_DIRECT, SYSCALL_NUMERIC_MUL),
+            (SYSCALL_NUMERIC_DIV_DIRECT, SYSCALL_NUMERIC_DIV),
+            (SYSCALL_NUMERIC_REM_DIRECT, SYSCALL_NUMERIC_REM),
+            (SYSCALL_NUMERIC_NEG_DIRECT, SYSCALL_NUMERIC_NEG),
+            (SYSCALL_NUMERIC_EQ_DIRECT, SYSCALL_NUMERIC_EQ),
+            (SYSCALL_NUMERIC_NE_DIRECT, SYSCALL_NUMERIC_NE),
+            (SYSCALL_NUMERIC_LT_DIRECT, SYSCALL_NUMERIC_LT),
+            (SYSCALL_NUMERIC_LE_DIRECT, SYSCALL_NUMERIC_LE),
+            (SYSCALL_NUMERIC_GT_DIRECT, SYSCALL_NUMERIC_GT),
+            (SYSCALL_NUMERIC_GE_DIRECT, SYSCALL_NUMERIC_GE),
+        ];
+
+        for (direct, canonical) in direct_pairs {
+            assert_eq!(canonical_helper_syscall(direct), canonical);
+            assert_eq!(canonical_helper_syscall(canonical), canonical);
+        }
+
+        assert_eq!(
+            canonical_helper_syscall(SYSCALL_STATE_GET),
+            SYSCALL_STATE_GET
+        );
+    }
 }

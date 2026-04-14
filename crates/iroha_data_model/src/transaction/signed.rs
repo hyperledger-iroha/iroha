@@ -474,7 +474,7 @@ impl SignedTransaction {
                 modified.extend(additions);
                 *instructions = modified.into();
             }
-            Executable::Ivm(_) | Executable::IvmProved(_) => {
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
                 Self::apply_fault_injection_overlay(&mut self.payload.metadata, additions);
             }
         }
@@ -1929,12 +1929,11 @@ mod norito_rpc_fixture_tests {
 
     fn optional_u64(map: &json::Map, key: &str, context: &str) -> Option<u64> {
         match map.get(key) {
-            Some(Value::Null) => None,
+            Some(Value::Null) | None => None,
             Some(Value::Number(number)) => number
                 .as_u64()
                 .or_else(|| panic!("{context}: {key} must be an integer or null")),
             Some(_) => panic!("{context}: {key} must be an integer or null"),
-            None => None,
         }
     }
 

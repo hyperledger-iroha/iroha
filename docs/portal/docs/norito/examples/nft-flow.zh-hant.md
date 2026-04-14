@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 09ff44a2df8cbcb9f57017239070a16f5287cbfc59a8289ce54933e84f90a5e8
 source_last_modified: "2026-03-26T13:01:47.374572+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/12_nft_flow.ko
 
 - Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`<i105-account-id>` for Alice, `<i105-account-id>` for Bob).
 - 呼叫 `nft_issue_and_transfer` 入口點來鑄造 NFT，將其從 Alice 轉移到 Bob，並附加描述發行的元資料標誌。
-- Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.
+- Inspect the NFT ledger state with `iroha ledger nft list all --verbose` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.
 
 ## 相關SDK指南
 

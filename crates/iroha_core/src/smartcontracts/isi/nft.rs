@@ -596,10 +596,35 @@ pub mod query {
         }
     }
 
+    impl ValidQuery for FindNftsByAccountId {
+        #[metrics(+"find_nfts_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Nft>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = Nft>, Error> {
+            use iroha_data_model::query::dsl::EvaluatePredicate;
+
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro.world().nfts_iter().filter_map(move |entry| {
+                let details = entry.value().clone().into_inner();
+                let nft = Nft {
+                    id: entry.id().clone(),
+                    content: details.content,
+                    owned_by: details.owned_by,
+                };
+                (nft.owned_by == account_id && filter.applies(&nft)).then_some(nft)
+            }))
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
 
+        use iroha_data_model::IntoKeyValue;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -664,6 +689,68 @@ pub mod query {
             let results: Vec<_> = FindNfts
                 .execute(predicate, &view)
                 .unwrap()
+                .map(|nft| nft.id)
+                .collect();
+            assert_eq!(results, vec![nft1_id]);
+        }
+
+        #[test]
+        fn find_nfts_by_account_id_limits_results_to_requested_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+            let alice_domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+            let users_domain = DomainId::try_new("users", "universal").unwrap();
+            let (user1, _) = iroha_test_samples::gen_account_in("users");
+            let (user2, _) = iroha_test_samples::gen_account_in("users");
+
+            for (domain_id, owner) in [
+                (alice_domain.clone(), ALICE_ID.clone()),
+                (users_domain.clone(), ALICE_ID.clone()),
+            ] {
+                state.world.domains.insert(
+                    domain_id.clone(),
+                    Domain {
+                        id: domain_id,
+                        logo: None,
+                        metadata: Metadata::default(),
+                        owned_by: owner,
+                    },
+                );
+            }
+
+            for account in [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(user1.clone()).build(&user1),
+                Account::new(user2.clone()).build(&user2),
+            ] {
+                let (account_id, account_value) = account.into_key_value();
+                state.world.accounts.insert(account_id, account_value);
+            }
+
+            let nft1_id: NftId = "ticket1$users.universal".parse().expect("nft id");
+            let nft2_id: NftId = "ticket2$users.universal".parse().expect("nft id");
+            for nft in [
+                Nft {
+                    id: nft1_id.clone(),
+                    content: Metadata::default(),
+                    owned_by: user1.clone(),
+                },
+                Nft {
+                    id: nft2_id,
+                    content: Metadata::default(),
+                    owned_by: user2,
+                },
+            ] {
+                let (id, value) = nft.into_key_value();
+                state.world.nfts.insert(id, value);
+            }
+
+            let view = state.view();
+            let results: Vec<_> = FindNftsByAccountId::new(user1.clone())
+                .execute(CompoundPredicate::PASS, &view)
+                .expect("query execution succeeds")
                 .map(|nft| nft.id)
                 .collect();
             assert_eq!(results, vec![nft1_id]);

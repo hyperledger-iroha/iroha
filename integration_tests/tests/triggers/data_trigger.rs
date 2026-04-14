@@ -4,6 +4,21 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
+use iroha_data_model::{
+    account::{
+        AccountAddress,
+        rekey::{AccountAlias, AccountAliasDomain},
+    },
+    nexus::DataSpaceId,
+    sns::{
+        ACCOUNT_ALIAS_SUFFIX_ID, NameControllerV1, NameSelectorV1, NameStatus, PaymentProofV1,
+        RegisterNameRequestV1,
+    },
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
+};
+use iroha_primitives::json::Json;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
@@ -28,6 +43,63 @@ where
         return Ok(());
     }
     Ok(())
+}
+
+fn test_account_alias_name_controller(account: &AccountId) -> Result<NameControllerV1> {
+    let address = AccountAddress::from_account_id(account)?;
+    Ok(NameControllerV1::account(&address))
+}
+
+fn test_account_alias_register_request(
+    alias_literal: &str,
+    owner: &AccountId,
+) -> Result<RegisterNameRequestV1> {
+    Ok(RegisterNameRequestV1 {
+        selector: NameSelectorV1 {
+            version: NameSelectorV1::VERSION,
+            suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+            label: alias_literal.to_owned(),
+        },
+        owner: owner.clone(),
+        controllers: vec![test_account_alias_name_controller(owner)?],
+        term_years: 1,
+        pricing_class_hint: None,
+        payment: PaymentProofV1 {
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
+            gross_amount: 120,
+            net_amount: 120,
+            settlement_tx: Json::from("mock-settlement"),
+            payer: owner.clone(),
+            signature: Json::from("mock-signature"),
+        },
+        governance: None,
+        metadata: Metadata::default(),
+    })
+}
+
+fn ensure_account_alias_registration_lease(
+    client: &client::Client,
+    alias_literal: &str,
+) -> Result<()> {
+    match client
+        .sns()
+        .get_name(iroha::sns::SnsNamespacePath::AccountAlias, alias_literal)
+    {
+        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
+            Ok(())
+        }
+        Ok(record) => Err(eyre::eyre!(
+            "account alias `{alias_literal}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
+            client.account,
+            record.owner,
+            record.status
+        )),
+        Err(_) => {
+            let request = test_account_alias_register_request(alias_literal, &client.account)?;
+            client.sns().register(&request)?;
+            Ok(())
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -66,6 +138,38 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         .await?;
 
         let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let alias_domain = DomainId::try_new("wonderland", "universal")?;
+        let account_alias = AccountAlias::new(
+            "mintrose".parse()?,
+            Some(AccountAliasDomain::new("wonderland".parse()?)),
+            DataSpaceId::GLOBAL,
+        );
+        let account_alias_literal = "mintrose@wonderland.universal";
+        spawn_blocking({
+            let client = test_client.clone();
+            let alias_domain = alias_domain.clone();
+            move || -> Result<()> {
+                client.submit_blocking(Grant::account_permission(
+                    Permission::from(CanManageAccountAlias {
+                        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                    }),
+                    ALICE_ID.clone(),
+                ))?;
+                client.submit_blocking(Grant::account_permission(
+                    Permission::from(CanManageAccountAlias {
+                        scope: AccountAliasPermissionScope::Domain(alias_domain),
+                    }),
+                    ALICE_ID.clone(),
+                ))?;
+                Ok(())
+            }
+        })
+        .await??;
+        spawn_blocking({
+            let client = test_client.clone();
+            move || ensure_account_alias_registration_lease(&client, account_alias_literal)
+        })
+        .await??;
         let register_trigger = Register::trigger(Trigger::new(
             "mint_rose_1".parse()?,
             Action::new(
@@ -98,10 +202,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
 
         spawn_blocking({
             let client = test_client.clone();
+            let account_alias = account_alias.clone();
             move || {
-                client.submit_blocking(Register::account(Account::new(
-                    gen_account_in("wonderland").0.clone(),
-                )))
+                client.submit_blocking(Register::account(
+                    Account::new(gen_account_in("wonderland").0.clone())
+                        .with_label(Some(account_alias)),
+                ))
             }
         })
         .await??;

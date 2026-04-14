@@ -42,6 +42,7 @@ import {
   buildEnactReferendumInstruction,
   buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
+  buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
@@ -1435,6 +1436,50 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {
+  const proposal = {
+    version: 1,
+    proposal_id: "AC-2026-001",
+    submitted_at_unix_ms: 1770000000000,
+    language: "en",
+    action: "add-to-denylist",
+    summary: {
+      title: "Blacklist proposal for bafy-test",
+      motivation: "Evidence review requested for the published CID.",
+      expected_impact: "Participating gateways would restrict delivery during review.",
+    },
+    tags: ["spam"],
+    targets: [
+      {
+        label: "bafy-test",
+        hash_family: "sorafs-root-cid",
+        hash_hex: "11".repeat(32),
+        reason: "spam moderation report",
+      },
+    ],
+    evidence: [
+      {
+        kind: "url",
+        uri: "https://example.invalid/case/1",
+        digest_blake3_hex: "22".repeat(32),
+        description: "Captured gateway evidence",
+      },
+    ],
+    submitter: {
+      name: "Explorer Moderator",
+      contact: "moderation@example.invalid",
+    },
+    duplicates: [],
+  };
+  const instruction = buildSubmitAgendaProposalInstruction({ proposal });
+  assert.deepEqual(instruction, {
+    SubmitAgendaProposal: {
+      proposal,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), instruction);
 });
 
 test("buildClaimTwitterFollowRewardInstruction wraps keyed hash", () => {

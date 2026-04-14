@@ -87,10 +87,74 @@ impl ToolSpec {
             "description".into(),
             Value::String(self.description.clone()),
         );
-        obj.insert("inputSchema".into(), self.input_schema.clone());
+        obj.insert(
+            "inputSchema".into(),
+            sanitize_tool_input_schema(&self.input_schema),
+        );
         obj.insert("outputSchema".into(), default_tool_output_schema());
         Value::Object(obj)
     }
+}
+
+fn sanitize_tool_input_schema(schema: &Value) -> Value {
+    let root = match schema {
+        Value::Object(map) => map,
+        _ => {
+            return norito::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            });
+        }
+    };
+
+    let has_disallowed_top_level_keywords = ["anyOf", "oneOf", "allOf", "enum", "not"]
+        .iter()
+        .any(|key| root.contains_key(*key));
+    let is_object_schema = root.get("type").and_then(Value::as_str) == Some("object");
+    if is_object_schema && !has_disallowed_top_level_keywords {
+        return schema.clone();
+    }
+
+    let mut schema_obj = root.clone();
+    let mut properties = schema_obj
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    for keyword in ["anyOf", "oneOf", "allOf"] {
+        let Some(branches) = root.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        for branch in branches {
+            let Some(branch_obj) = branch.as_object() else {
+                continue;
+            };
+            let Some(branch_properties) = branch_obj.get("properties").and_then(Value::as_object)
+            else {
+                continue;
+            };
+            for (name, value) in branch_properties {
+                properties
+                    .entry(name.clone())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+    }
+
+    schema_obj.remove("anyOf");
+    schema_obj.remove("oneOf");
+    schema_obj.remove("allOf");
+    schema_obj.remove("enum");
+    schema_obj.remove("not");
+    schema_obj.insert("type".into(), Value::String("object".to_owned()));
+    schema_obj.insert("properties".into(), Value::Object(properties));
+    schema_obj
+        .entry("additionalProperties".into())
+        .or_insert(Value::Bool(false));
+
+    Value::Object(schema_obj)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -510,6 +574,7 @@ pub(crate) async fn handle_jsonrpc_request(
             let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
             jsonrpc_result_response(id, capabilities_payload(&visible_tools))
         }
+        "ping" => jsonrpc_result_response(id, Value::Object(Map::new())),
         "tools/list" => handle_tools_list(id, &app, &params),
         "tools/call_batch" => handle_tools_call_batch(id, app, inbound_headers, &params).await,
         "tools/call_async" => handle_tools_call_async(id, app, inbound_headers, &params).await,
@@ -522,6 +587,23 @@ pub(crate) async fn handle_jsonrpc_request(
             Some(norito::json!({ "method": method })),
         ),
     }
+}
+
+/// Return true when the payload is the MCP post-initialize notification.
+pub(crate) fn is_initialized_notification(request: &Value) -> bool {
+    let Some(req_obj) = request.as_object() else {
+        return false;
+    };
+    if req_obj
+        .get("jsonrpc")
+        .and_then(Value::as_str)
+        .is_some_and(|version| version != JSONRPC_VERSION)
+    {
+        return false;
+    }
+
+    req_obj.get("id").is_none()
+        && req_obj.get("method").and_then(Value::as_str) == Some("notifications/initialized")
 }
 
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
@@ -7624,10 +7706,6 @@ fn connect_ws_ticket_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "required": ["role"],
-            "anyOf": [
-                { "required": ["sid"] },
-                { "required": ["session_id"] }
-            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {
@@ -7648,7 +7726,8 @@ fn connect_ws_ticket_tool() -> ToolSpec {
                     "description": "Token alias used when `role=wallet` and `token` is omitted."
                 },
                 "node_url": { "type": "string", "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request." }
-            }
+            },
+            "description": "Provide `role` plus one of `sid` or `session_id`."
         }),
     }
 }
@@ -7754,38 +7833,19 @@ fn connect_session_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["sid"] },
-                { "required": ["session_id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {
                     "type": "string",
                     "description": "Alias for `sid`."
                 },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "anyOf": [
-                        { "required": ["sid"] },
-                        { "required": ["session_id"] }
-                    ],
-                    "properties": {
-                        "sid": { "type": "string" },
-                        "session_id": {
-                            "type": "string",
-                            "description": "Alias for `path.sid`."
-                        }
-                    }
-                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide `sid` or `session_id`. The dispatcher still accepts `path.sid` and `path.session_id` for backward compatibility, but the published tool parameters stay flat for OpenAI-compatible clients."
         }),
     }
 }
@@ -7904,11 +7964,6 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["session_id"] },
-                { "required": ["id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "session_id": { "type": "string" },
                 "id": {
@@ -7935,7 +7990,8 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide one of `session_id`, `id`, `path.session_id`, or `path.id`."
         }),
     }
 }
@@ -7950,11 +8006,6 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["session_id"] },
-                { "required": ["id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "session_id": { "type": "string" },
                 "id": {
@@ -7981,7 +8032,8 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide one of `session_id`, `id`, `path.session_id`, or `path.id`."
         }),
     }
 }
@@ -12551,6 +12603,104 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_tool_input_schema_flattens_top_level_alias_combinators() {
+        let schema = norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "anyOf": [
+                {
+                    "properties": {
+                        "sid": { "type": "string" }
+                    },
+                    "required": ["sid"]
+                },
+                {
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Alias for `sid`."
+                        }
+                    },
+                    "required": ["session_id"]
+                }
+            ],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "properties": {
+                        "sid": { "type": "string" },
+                        "session_id": { "type": "string" }
+                    }
+                }
+            }
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        let sanitized_obj = sanitized.as_object().expect("sanitized object schema");
+        assert_eq!(
+            sanitized_obj.get("type").and_then(Value::as_str),
+            Some("object")
+        );
+        assert!(!sanitized_obj.contains_key("anyOf"));
+        assert!(!sanitized_obj.contains_key("oneOf"));
+        assert!(!sanitized_obj.contains_key("allOf"));
+        assert!(!sanitized_obj.contains_key("enum"));
+        assert!(!sanitized_obj.contains_key("not"));
+
+        let properties = sanitized_obj
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(properties.contains_key("sid"));
+        assert!(properties.contains_key("session_id"));
+        assert!(properties.contains_key("path"));
+    }
+
+    #[test]
+    fn descriptor_publishes_openai_compatible_input_schema() {
+        let tool = ToolSpec {
+            name: "iroha.connect.session.delete".to_owned(),
+            description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
+            method: Method::DELETE,
+            path_template: "/v1/connect/session/{sid}".to_owned(),
+            input_schema: norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "oneOf": [
+                    {
+                        "properties": {
+                            "sid": { "type": "string" }
+                        },
+                        "required": ["sid"]
+                    },
+                    {
+                        "properties": {
+                            "session_id": { "type": "string" }
+                        },
+                        "required": ["session_id"]
+                    }
+                ]
+            }),
+        };
+
+        let descriptor = tool.descriptor();
+        let schema = descriptor
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("inputSchema object");
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+        assert!(!schema.contains_key("oneOf"));
+        assert!(!schema.contains_key("anyOf"));
+
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(properties.contains_key("sid"));
+        assert!(properties.contains_key("session_id"));
+    }
+
+    #[test]
     fn jsonrpc_error_response_adds_stable_error_code() {
         let payload = jsonrpc_error_response(None, JSONRPC_INVALID_PARAMS, "bad input", None);
         let code = payload
@@ -12585,6 +12735,41 @@ mod tests {
         assert!(
             status_tool.description.contains("typed pipeline status"),
             "status tool description should advertise the typed contract"
+        );
+    }
+
+    #[test]
+    fn tool_descriptor_sanitizes_top_level_function_schema_keywords() {
+        let tool = ToolSpec {
+            name: "iroha.test.invalid_schema".to_owned(),
+            description: "sample".to_owned(),
+            method: Method::POST,
+            path_template: "/v1/test".to_owned(),
+            input_schema: norito::json!({
+                "oneOf": [{ "type": "string" }, { "type": "null" }],
+                "enum": ["bad"],
+                "not": { "type": "null" }
+            }),
+        };
+
+        let descriptor = tool.descriptor();
+        let schema = descriptor
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("sanitized input schema object");
+
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+        assert!(
+            !schema.contains_key("anyOf")
+                && !schema.contains_key("oneOf")
+                && !schema.contains_key("allOf")
+                && !schema.contains_key("enum")
+                && !schema.contains_key("not"),
+            "descriptor should strip OpenAI-incompatible top-level schema keywords"
+        );
+        assert!(
+            schema.get("properties").is_some_and(Value::is_object),
+            "descriptor should always emit an object properties map"
         );
     }
 

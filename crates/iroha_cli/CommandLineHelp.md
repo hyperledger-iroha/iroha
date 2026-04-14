@@ -2950,11 +2950,11 @@ List all pending multisig transactions relevant to you
 
 ###### **Options:**
 
-* `--limit <LIMIT>` — Maximum number of role IDs to scan for multisig (server-side limit)
-* `--offset <OFFSET>` — Offset into the role ID set (server-side offset)
+* `--limit <LIMIT>` — Maximum number of proposals to emit after server ordering (client-side cap)
+* `--offset <OFFSET>` — Number of ordered proposals to skip after fetching cursor pages
 
   Default value: `0`
-* `--fetch-size <FETCH_SIZE>` — Batch fetch size for roles query
+* `--fetch-size <FETCH_SIZE>` — Cursor page size for the remote approvals list endpoint
 
 
 
@@ -11616,4 +11616,3 @@ Show versions and git SHA of client and server
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
-

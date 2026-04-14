@@ -100,8 +100,20 @@ fn assert_contract_trigger_metadata(
         metadata.get(&key_address),
         Some(&Json::from(contract_address.to_string().as_str()))
     );
-    assert!(metadata.get(&"contract_namespace".parse::<Name>().expect("legacy namespace key")).is_none());
-    assert!(metadata.get(&"contract_id".parse::<Name>().expect("legacy contract key")).is_none());
+    assert!(
+        metadata
+            .get(
+                &"contract_namespace"
+                    .parse::<Name>()
+                    .expect("legacy namespace key")
+            )
+            .is_none()
+    );
+    assert!(
+        metadata
+            .get(&"contract_id".parse::<Name>().expect("legacy contract key"))
+            .is_none()
+    );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from(entrypoint)));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));
@@ -206,8 +218,20 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         metadata.get(&key_address),
         Some(&Json::from(contract_address.to_string().as_str()))
     );
-    assert!(metadata.get(&"contract_namespace".parse::<Name>().expect("legacy namespace key")).is_none());
-    assert!(metadata.get(&"contract_id".parse::<Name>().expect("legacy contract key")).is_none());
+    assert!(
+        metadata
+            .get(
+                &"contract_namespace"
+                    .parse::<Name>()
+                    .expect("legacy namespace key")
+            )
+            .is_none()
+    );
+    assert!(
+        metadata
+            .get(&"contract_id".parse::<Name>().expect("legacy contract key"))
+            .is_none()
+    );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));

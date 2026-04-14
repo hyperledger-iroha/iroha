@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - Համոզվեք, որ նպատակակետ հաշիվը (օրինակ՝ `<i105-account-id>` Ալիսի համար) գոյություն ունի՝ արտացոլելով տեղադրման փուլը յուրաքանչյուր SDK-ի արագ մեկնարկում:
 - Զանգահարեք `register_and_mint` մուտքի կետը, որպեսզի ստեղծեք ROSE ակտիվի սահմանումը և 250 միավոր կտրեք Ալիսին մեկ գործարքում:
-- Ստուգեք մնացորդները `client.request(FindAccountAssets)` կամ `iroha_cli ledger asset list --account <i105-account-id>` միջոցով՝ հաստատելու համար, որ դրամահատարանը հաջողվել է:
+- Ստուգեք մնացորդները `client.request(FindAccountAssets)` կամ `iroha ledger asset list all --verbose` միջոցով՝ հաստատելու համար, որ դրամահատարանը հաջողվել է:
 
 ## Առնչվող SDK ուղեցույցներ
 

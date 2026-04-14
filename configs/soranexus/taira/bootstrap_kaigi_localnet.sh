@@ -9,10 +9,11 @@ GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
 GENESIS_PRIVATE_KEY="${IROHA_TAIRA_GENESIS_PRIVATE_KEY:-}"
 LOCALNET_BASE_SEED_OVERRIDE="${IROHA_TAIRA_LOCALNET_SEED:-}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
-CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland}"
+CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland.universal}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
 REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
-RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus}"
+RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus.universal}"
+BOOTSTRAP_AUTHORITY_DOMAIN="${IROHA_TAIRA_KAIGI_BOOTSTRAP_AUTHORITY_DOMAIN:-nexus.universal}"
 KAIGI_HELPER_BIN="${IROHA_TAIRA_KAIGI_HELPER_BIN:-}"
 
 RELAY_HPKE_KEYS=(
@@ -213,6 +214,7 @@ setopt null_glob
 
 DIR=\$(cd "\$(dirname "\$0")" && pwd)
 IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
+SITE_BINDINGS_FILE="\${IROHA_SORAFS_SITE_BINDINGS_FILE:-$ROOT_DIR/configs/soranexus/taira/sorafs_sites.json}"
 
 if [[ ! -x "\$IROHAD_BIN" ]]; then
   echo "irohad binary not executable: \$IROHAD_BIN" >&2
@@ -240,7 +242,11 @@ trap cleanup HUP INT TERM EXIT
 for i in 0 1 2 3; do
   snapshot_dir="\$DIR/storage/peer\${i}/snapshot"
   mkdir -p "\$snapshot_dir"
-  env SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}" \\
+  launch_env=(SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}")
+  if [[ -f "\$SITE_BINDINGS_FILE" ]]; then
+    launch_env+=(IROHA_SORAFS_SITE_BINDINGS_FILE="\$SITE_BINDINGS_FILE")
+  fi
+  env "\${launch_env[@]}" \\
     "\$IROHAD_BIN" --sora --config "\$DIR/peer\${i}.toml" >> "\$DIR/peer\${i}.log" 2>&1 &
   pid=\$!
   print -r -- "\$pid" > "\$DIR/peer\${i}.pid"
@@ -346,7 +352,7 @@ helper_args=(
   --call-name "$CALL_NAME"
   --reported-at-ms "$REPORTED_AT_MS"
   --bootstrap-authority-account "$TAIRA_AUTHORITY"
-  --bootstrap-authority-domain "$RELAY_DOMAIN"
+  --bootstrap-authority-domain "$BOOTSTRAP_AUTHORITY_DOMAIN"
   --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
   --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}"
   --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}"

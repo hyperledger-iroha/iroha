@@ -71,7 +71,8 @@ static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
 ));
 static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
     LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
-const OFFLINE_CASH_TX_COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT_EMERGENCY_FALLBACK: Duration = Duration::from_secs(12);
 const OFFLINE_SETTLEMENT_PROOF_BACKEND: &str = "stark/fri/sha256-goldilocks";
 const OFFLINE_SETTLEMENT_CIRCUIT_ID: &str = "offline-bearer-settlement-v1";
 const OFFLINE_REDEEM_REQUEST_CIRCUIT_ID: &str = "offline-bearer-redeem-request-v1";
@@ -512,10 +513,16 @@ pub struct OfflineCashAndroidDeviceBinding {
     pub offline_public_key: String,
     pub attestation_report_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_team_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_bundle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_environment: Option<String>,
 }
 
@@ -3736,22 +3743,24 @@ async fn wait_for_transaction_approval(
     endpoint: &'static str,
     duplicate_submission: bool,
 ) -> Result<(), Error> {
+    let timeout_budget = offline_cash_tx_commit_timeout(app);
     let start = tokio::time::Instant::now();
-    let mut saw_committed = false;
     loop {
-        if !saw_committed && app.state.has_committed_transaction(tx_hash.clone()) {
-            saw_committed = true;
+        // A committed transaction is already authoritative even if the matching
+        // Approved pipeline event was missed or delayed on this subscriber.
+        if app.state.has_committed_transaction(tx_hash.clone()) {
+            return Ok(());
         }
-        let remaining = OFFLINE_CASH_TX_COMMIT_TIMEOUT.saturating_sub(start.elapsed());
+        let remaining = timeout_budget.saturating_sub(start.elapsed());
         if remaining.is_zero() {
-            let timeout_context = if saw_committed || duplicate_submission {
-                "committed without an approved pipeline event"
+            let timeout_context = if duplicate_submission {
+                "did not reach a fresh approved pipeline event or committed state"
             } else {
-                "did not reach an approved pipeline event"
+                "did not reach an approved pipeline event or committed state"
             };
             return Err(conversion_error(format!(
                 "offline cash transaction {timeout_context} within {}ms for {endpoint}: {tx_hash}",
-                OFFLINE_CASH_TX_COMMIT_TIMEOUT.as_millis(),
+                timeout_budget.as_millis(),
             )));
         }
         match tokio::time::timeout(remaining, events_rx.recv()).await {
@@ -3785,6 +3794,65 @@ async fn wait_for_transaction_approval(
             Err(_) => continue,
         }
     }
+}
+
+fn offline_cash_tx_commit_timeout(app: &AppState) -> Duration {
+    let state_view = app.state.view();
+    let params = state_view.world().parameters().sumeragi();
+    let live_commit_quorum_timeout = app
+        .sumeragi
+        .as_ref()
+        .map(|_| iroha_core::sumeragi::status_snapshot().effective_commit_quorum_timeout_ms)
+        .filter(|timeout_ms| *timeout_ms > 0)
+        .map(Duration::from_millis);
+    if let Some(commit_quorum_timeout) = live_commit_quorum_timeout {
+        return offline_cash_tx_commit_timeout_from_params(params, commit_quorum_timeout);
+    }
+    offline_cash_tx_commit_timeout_without_live_signal(params)
+}
+
+fn offline_cash_commit_quorum_timeout_from_params(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+) -> Duration {
+    let block_time = params.effective_block_time();
+    let commit_time = params.effective_commit_time();
+    if commit_time == Duration::ZERO {
+        return block_time.max(Duration::from_millis(1));
+    }
+
+    let base = if params.da_enabled() {
+        block_time.max(commit_time.saturating_mul(2))
+    } else {
+        block_time.max(commit_time)
+    };
+    let scaled = if params.da_enabled() {
+        base.saturating_mul(
+            iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER.max(1),
+        )
+    } else {
+        base
+    };
+    scaled.max(Duration::from_millis(1))
+}
+
+fn offline_cash_tx_commit_timeout_from_params(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+    commit_quorum_timeout: Duration,
+) -> Duration {
+    let proposal_slack = params
+        .effective_block_time()
+        .saturating_add(params.effective_commit_time());
+    commit_quorum_timeout
+        .saturating_add(proposal_slack)
+        .max(OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR)
+}
+
+fn offline_cash_tx_commit_timeout_without_live_signal(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+) -> Duration {
+    let commit_quorum_timeout = offline_cash_commit_quorum_timeout_from_params(params);
+    offline_cash_tx_commit_timeout_from_params(params, commit_quorum_timeout)
+        .max(OFFLINE_CASH_TX_COMMIT_TIMEOUT_EMERGENCY_FALLBACK)
 }
 
 fn issuer_public_key_base64(issuer: &OfflineIssuerSigner) -> String {
@@ -4154,6 +4222,7 @@ fn validate_cash_attestation(
         ));
     }
     let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    let is_stored_binding = request_binding.is_none() && stored_apple_app_attest_binding.is_some();
     if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
         let metadata = metadata_from_apple_binding(binding)?;
         let attestation_report = BASE64_STANDARD
@@ -4179,6 +4248,7 @@ fn validate_cash_attestation(
                 assertion,
                 counter: attestation.counter,
                 challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+                skip_attestation_nonce: is_stored_binding,
             },
             latest_block_timestamp_ms(app),
             settlement_cfg,
@@ -4188,10 +4258,20 @@ fn validate_cash_attestation(
                 "offline cash app attest verification failed: {err}"
             ))
         })?;
-    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
-        return Err(conversion_error(
-            "offline cash attestation counter does not match assertion data".to_owned(),
-        ));
+    } else {
+        let settlement_cfg = &app.state.settlement().offline;
+        if !settlement_cfg.skip_platform_attestation {
+            return Err(conversion_error(
+                "platform attestation is required but no iOS attestation metadata was provided; \
+                 set skip_platform_attestation=true for simulator/development use"
+                    .to_owned(),
+            ));
+        }
+        if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+            return Err(conversion_error(
+                "offline cash attestation counter does not match assertion data".to_owned(),
+            ));
+        }
     }
     validate_counter(attestation, counter_book)?;
     Ok(request_binding)
@@ -4350,6 +4430,7 @@ fn validate_lineage_attestation(
         ));
     }
     let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    let is_stored_binding = request_binding.is_none() && stored_apple_app_attest_binding.is_some();
     if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
         let metadata = metadata_from_apple_binding(binding)?;
         let attestation_report = BASE64_STANDARD
@@ -4375,6 +4456,7 @@ fn validate_lineage_attestation(
                 assertion,
                 counter: attestation.counter,
                 challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+                skip_attestation_nonce: is_stored_binding,
             },
             latest_block_timestamp_ms(app),
             settlement_cfg,
@@ -4384,10 +4466,20 @@ fn validate_lineage_attestation(
                 "offline cash app attest verification failed: {err}"
             ))
         })?;
-    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
-        return Err(conversion_error(
-            "offline cash attestation counter does not match assertion data".to_owned(),
-        ));
+    } else {
+        let settlement_cfg = &app.state.settlement().offline;
+        if !settlement_cfg.skip_platform_attestation {
+            return Err(conversion_error(
+                "platform attestation is required but no iOS attestation metadata was provided; \
+                 set skip_platform_attestation=true for simulator/development use"
+                    .to_owned(),
+            ));
+        }
+        if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+            return Err(conversion_error(
+                "offline cash attestation counter does not match assertion data".to_owned(),
+            ));
+        }
     }
     validate_counter(attestation, counter_book)?;
     Ok(request_binding)
@@ -4864,6 +4956,13 @@ fn operation_key(kind: &str, operation_id: &str) -> String {
 mod tests {
     use super::*;
 
+    use std::{collections::HashSet, num::NonZeroU64, num::NonZeroUsize};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::{Level, Log, TransactionBuilder};
+
+    use crate::tests_runtime_handlers::mk_app_state_for_tests;
+
     const TEST_ACCOUNT_I105: &str =
         "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
@@ -4983,6 +5082,83 @@ mod tests {
     }
 
     #[test]
+    fn cash_receipt_payload_omits_none_device_binding_ios_fields() {
+        // Simulator sends device_binding without ios_team_id/ios_bundle_id/ios_environment.
+        // The canonical JSON must NOT include "null" for these fields,
+        // otherwise the signature computed by iOS (which skips nil) won't match.
+        let receipt = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: "transfer-1".to_owned(),
+            direction: "outgoing".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            pre_balance: "50.00".to_owned(),
+            post_balance: "40.00".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: "pre".to_owned(),
+            post_state_hash: "post".to_owned(),
+            local_revision: 1,
+            counterparty_lineage_id: "lineage-2".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            counterparty_device_id: "device-2".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
+            amount: "10".to_owned(),
+            authorization: Some(OfflineSpendAuthorization {
+                authorization_id: "auth-1".to_owned(),
+                lineage_id: "lineage-1".to_owned(),
+                account_id: TEST_ACCOUNT_I105.to_owned(),
+                device_id: "device-1".to_owned(),
+                offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+                verdict_id: "verdict-1".to_owned(),
+                max_balance: "1000000".to_owned(),
+                max_tx_value: "1000000".to_owned(),
+                issued_at_ms: 1,
+                refresh_at_ms: 2,
+                expires_at_ms: 3,
+                device_binding: Some(OfflineCashAndroidDeviceBinding {
+                    platform: "ios".to_owned(),
+                    attestation_key_id: "key-1".to_owned(),
+                    device_id: "device-1".to_owned(),
+                    offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+                    attestation_report_base64: String::new(),
+                    ios_team_id: None,
+                    ios_bundle_id: None,
+                    ios_environment: None,
+                }),
+                app_attest_key_id: "key-1".to_owned(),
+                issuer_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            }),
+            attestation: OfflineDeviceAttestation {
+                key_id: "key-1".to_owned(),
+                counter: 3,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: "challenge".to_owned(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_payload: None,
+            sender_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            created_at_ms: 1,
+        };
+
+        let payload = cash_transfer_receipt_unsigned_payload(&receipt).expect("cash payload");
+        let payload_str = String::from_utf8(payload).expect("utf8");
+        // None ios fields must be omitted, not serialized as null
+        assert!(
+            !payload_str.contains("null"),
+            "canonical JSON must not contain null for None ios fields: {payload_str}"
+        );
+        assert!(!payload_str.contains("ios_team_id"));
+        assert!(!payload_str.contains("ios_bundle_id"));
+        assert!(!payload_str.contains("ios_environment"));
+    }
+
+    #[test]
     fn cash_local_state_hash_uses_lineage_shape() {
         let hash = cash_next_local_state_hash(
             "lineage-1",
@@ -5033,7 +5209,13 @@ mod tests {
     fn canonical_account_helper_rejects_alias_literals() {
         let err = ensure_canonical_account_id_literal("alice@wallets", "account_id")
             .expect_err("aliases must be rejected");
-        assert!(err.to_string().contains("canonical I105 account id"));
+        let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(message.contains("canonical I105 account id"));
     }
 
     #[test]
@@ -5041,10 +5223,81 @@ mod tests {
         let err =
             ensure_canonical_asset_definition_id_literal("usd#wallets", "asset_definition_id")
                 .expect_err("aliases must be rejected");
-        assert!(
-            err.to_string()
-                .contains("canonical Base58 asset definition id")
+        let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(message.contains("canonical Base58 asset definition id"));
+    }
+
+    #[test]
+    fn offline_cash_wait_timeout_allows_one_proposal_window_after_quorum_timeout() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
         );
+        let quorum_timeout = offline_cash_commit_quorum_timeout_from_params(&params);
+        assert_eq!(quorum_timeout, Duration::from_secs(4));
+        assert_eq!(
+            offline_cash_tx_commit_timeout_from_params(&params, quorum_timeout),
+            Duration::from_secs(6),
+        );
+    }
+
+    #[test]
+    fn offline_cash_wait_timeout_uses_conservative_fallback_without_live_signal() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        assert_eq!(
+            offline_cash_tx_commit_timeout_without_live_signal(&params),
+            Duration::from_secs(12),
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_approval_accepts_committed_state_without_pipeline_event() {
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "offline-cash-commit-regression".to_owned(),
+            )])
+            .sign(keypair.private_key());
+        let tx_hash = tx.hash();
+
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block.transactions.insert_block(
+            HashSet::from([tx_hash.clone()]),
+            NonZeroUsize::new(1).expect("non-zero block count"),
+        );
+        block.commit().expect("commit tx height");
+
+        let mut events_rx = app.events.subscribe();
+        wait_for_transaction_approval(
+            &app,
+            &mut events_rx,
+            tx_hash,
+            "/v1/offline/cash/load",
+            false,
+        )
+        .await
+        .expect("committed transaction should satisfy approval wait");
     }
 }
 
@@ -5098,7 +5351,25 @@ fn normalize_cash_authorization_value(value: &mut json::Value) -> Result<(), Err
             "offline cash authorization payload must be an object".to_owned(),
         ));
     };
-    let _ = map;
+    // Inject device_id, offline_public_key, and app_attest_key_id from
+    // device_binding when they are missing at the top level.  The "cash"
+    // JSON format keeps these inside device_binding, but the lineage
+    // structs expect them as sibling fields.
+    if let Some(binding) = map.get("device_binding").cloned() {
+        if let Some(binding_map) = binding.as_object() {
+            if let Some(v) = binding_map.get("device_id") {
+                map.entry("device_id".to_owned()).or_insert(v.clone());
+            }
+            if let Some(v) = binding_map.get("offline_public_key") {
+                map.entry("offline_public_key".to_owned())
+                    .or_insert(v.clone());
+            }
+            if let Some(v) = binding_map.get("attestation_key_id") {
+                map.entry("app_attest_key_id".to_owned())
+                    .or_insert(v.clone());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -5120,6 +5391,35 @@ fn normalize_cash_receipt_value(value: &mut json::Value) -> Result<(), Error> {
             "offline cash receipt payload must be an object".to_owned(),
         ));
     };
+    // Convert device_proof → attestation (matching translate_cash_receipt_to_lineage_json).
+    if !map.contains_key("attestation") {
+        if let Some(proof) = map.remove("device_proof") {
+            if let Some(proof_map) = proof.as_object() {
+                let key_id = proof_map
+                    .get("attestation_key_id")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let counter = proof_map
+                    .get("counter")
+                    .cloned()
+                    .unwrap_or_else(|| json::to_value(&0u64).unwrap());
+                let assertion = proof_map
+                    .get("assertion_base64")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let challenge = proof_map
+                    .get("challenge_hash_hex")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let mut attestation = json::Map::new();
+                attestation.insert("key_id".to_owned(), key_id);
+                attestation.insert("counter".to_owned(), counter);
+                attestation.insert("assertion_base64".to_owned(), assertion);
+                attestation.insert("challenge_hash_hex".to_owned(), challenge);
+                map.insert("attestation".to_owned(), json::Value::Object(attestation));
+            }
+        }
+    }
     if let Some(authorization) = map.get_mut("authorization") {
         normalize_cash_authorization_value(authorization)?;
     }

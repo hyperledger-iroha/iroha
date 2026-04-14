@@ -39,8 +39,8 @@ pub struct Args {
     /// Output directory for generated client configs (default: <base-config-dir>/clients).
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
-    /// Account domain for generated client configs.
-    #[arg(long, default_value = "acme", value_name = "DOMAIN")]
+    /// Fully qualified account domain for generated client configs.
+    #[arg(long, default_value = "acme.universal", value_name = "DOMAIN")]
     domain: String,
     /// Seed prefix for deterministic key generation (`<prefix>-<name>`).
     #[arg(long, default_value = "demo", value_name = "SEED")]
@@ -259,7 +259,7 @@ web_login = "demo"
             }),
         };
         let key_pair = KeyPair::from_seed(b"demo-admin1".to_vec(), Algorithm::Ed25519);
-        let rendered = render_client_config(&base, "acme", &key_pair);
+        let rendered = render_client_config(&base, "acme.universal", &key_pair);
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
 
         assert_eq!(
@@ -277,7 +277,7 @@ web_login = "demo"
             .expect("account");
         assert_eq!(
             account.get("domain").and_then(toml::Value::as_str),
-            Some("acme")
+            Some("acme.universal")
         );
         let expected_public = key_pair.public_key().to_string();
         let expected_private = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
@@ -338,7 +338,7 @@ web_login = "demo"
         let args = Args {
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
-            domain: "acme".to_owned(),
+            domain: "acme.universal".to_owned(),
             seed_prefix: "demo".to_owned(),
             names: vec!["admin1".to_owned()],
         };

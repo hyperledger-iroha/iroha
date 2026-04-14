@@ -2,6 +2,7 @@
 name = "integration_tests"
 version.workspace = true
 edition = "2024"
+autotests = false
 
 [lints]
 workspace = true
@@ -9,6 +10,30 @@ workspace = true
 [[bin]]
 name = "sorafs-gateway-fixtures"
 path = "src/bin/sorafs_gateway_fixtures.rs"
+
+[[test]]
+name = "core_api"
+path = "tests/core_api.rs"
+
+[[test]]
+name = "events_and_triggers"
+path = "tests/events_and_triggers.rs"
+
+[[test]]
+name = "queries_and_proofs"
+path = "tests/queries_and_proofs.rs"
+
+[[test]]
+name = "network_functional"
+path = "tests/network_functional.rs"
+
+[[test]]
+name = "consensus_and_da"
+path = "tests/consensus_and_da.rs"
+
+[[test]]
+name = "nexus_and_streaming"
+path = "tests/nexus_and_streaming.rs"
 
 [features]
 default = ["telemetry"]

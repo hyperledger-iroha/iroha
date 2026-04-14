@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `<i105-account-id>`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
 - `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن میں Alice کو 250 یونٹس منٹ ہوں۔
-- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
+- `client.request(FindAccountAssets)` یا `iroha ledger asset list all --verbose` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
 
 ## متعلقہ SDK گائیڈز
 

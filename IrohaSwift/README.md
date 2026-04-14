@@ -1117,8 +1117,7 @@ Status:
 `ToriiClient` now wraps the governance REST endpoints so apps can draft contract deployment proposals, submit ballots, and fetch referendum state without reimplementing the HTTP layer. The responses include Norito transaction skeletons (`tx_instructions`) that you can feed into the SDK transaction builders:
 
 ```swift
-let proposal = ToriiGovernanceDeployContractProposalRequest(namespace: "apps",
-                                                            contractId: "demo.contract.v1",
+let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                             codeHashHex: "f0…",
                                                             abiHashHex: "e1…",
                                                             abiVersion: "1")

@@ -52,6 +52,10 @@ async fn submit_with_context(
     let mut client = leader_client_for_submit(network, client).await;
     client.transaction_status_timeout =
         effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
+    client.transaction_ttl = Some(effective_transaction_ttl(
+        client.transaction_ttl,
+        network.sync_timeout(),
+    ));
     let instruction = instruction.into();
     let context = context.to_string();
     spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
@@ -67,6 +71,10 @@ async fn submit_all_with_context(
     let mut client = leader_client_for_submit(network, client).await;
     client.transaction_status_timeout =
         effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
+    client.transaction_ttl = Some(effective_transaction_ttl(
+        client.transaction_ttl,
+        network.sync_timeout(),
+    ));
     let context = context.to_string();
     spawn_blocking(move || client.submit_all_blocking(instructions).wrap_err(context)).await??;
     Ok(())
@@ -121,6 +129,11 @@ fn effective_status_timeout(current: Duration, sync_timeout: Duration) -> Durati
     current.max(sync_timeout)
 }
 
+fn effective_transaction_ttl(current: Option<Duration>, sync_timeout: Duration) -> Duration {
+    let baseline = sync_timeout.checked_mul(4).unwrap_or(sync_timeout);
+    current.unwrap_or(baseline).max(baseline)
+}
+
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
     match peer_count {
         0..=2 => 0,
@@ -158,6 +171,7 @@ async fn time_trigger_scenarios() -> Result<()> {
             msg.contains("tx confirmation timed out")
                 || msg.contains("haven't got tx confirmation within")
                 || msg.contains("transaction queued for too long")
+                || msg.contains("Transaction expired")
                 || msg
                     .contains("Network overall height did not pass given predicate within timeout")
                 || msg.contains("block sync predicate failed")
@@ -628,8 +642,8 @@ async fn submit_sample_isi_on_every_block_commit(
 #[cfg(test)]
 mod timeout_tests {
     use super::{
-        counts_meet_expected, effective_status_timeout, min_connected_peers_for_submit,
-        pick_fallback_submit_peer_index,
+        counts_meet_expected, effective_status_timeout, effective_transaction_ttl,
+        min_connected_peers_for_submit, pick_fallback_submit_peer_index,
     };
     use std::time::Duration;
 
@@ -639,6 +653,24 @@ mod timeout_tests {
         let long = Duration::from_secs(120);
         assert_eq!(effective_status_timeout(short, long), long);
         assert_eq!(effective_status_timeout(long, short), long);
+    }
+
+    #[test]
+    fn transaction_ttl_prefers_sync_timeout_floor() {
+        let short = Some(Duration::from_secs(30));
+        let long = Duration::from_secs(45);
+        assert_eq!(
+            effective_transaction_ttl(short, long),
+            Duration::from_secs(180)
+        );
+        assert_eq!(
+            effective_transaction_ttl(Some(Duration::from_secs(300)), long),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            effective_transaction_ttl(None, long),
+            Duration::from_secs(180)
+        );
     }
 
     #[test]

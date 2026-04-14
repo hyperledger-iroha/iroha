@@ -85,18 +85,24 @@ val headers = CanonicalRequestSigner.buildHeaders(
 
 #### Contract lifecycle (`/v1/contracts/*`) — Covered
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
   `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
+  `handle_post_contract_call_multisig_propose`,
+  `handle_post_contract_call_multisig_approve`,
+  `handle_post_contract_view`,
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTOs: `DeployContractDto`, `ContractCallDto`, `MultisigContractCallProposeDto`,
+  `MultisigContractCallApproveDto`, `ContractViewDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
 - Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
-  `contracts_instances_list_router.rs`.
+- Tests: router/integration suites `contracts_deploy_integration.rs`,
+  `contracts_call_integration.rs`, and related unit coverage for multisig/view handling.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
+- Notes: Public lifecycle is alias-first. `/v1/contracts/deploy` requires
+  `contract_alias`, returns a fresh immutable `contract_address`, and reusing
+  the alias performs an in-place upgrade. Runtime calls are by-reference
+  `ContractCall` executions that accept exactly one of `contract_address` or
+  `contract_alias`; the older `/v1/contracts/instance*` server-side-signing
+  flow is no longer part of the public lifecycle surface.
 
 #### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

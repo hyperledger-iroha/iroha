@@ -295,6 +295,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let sz = json_len(&custom.payload) as u64;
         return BASE_CUSTOM + PER_BYTE_JSON.saturating_mul(sz);
     }
+    if let Some(record) = any.downcast_ref::<dm_isi::bridge::RecordSccpMessage>() {
+        let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
+        return BASE_CUSTOM + sz;
+    }
     if any.downcast_ref::<dm_isi::kaigi::CreateKaigi>().is_some() {
         return BASE_KAIGI_CREATE;
     }

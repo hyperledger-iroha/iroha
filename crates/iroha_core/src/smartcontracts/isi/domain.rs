@@ -137,29 +137,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_active_account_alias_lease(
-        state_transaction: &StateTransaction<'_, '_>,
-        label: &AccountAlias,
-    ) -> Result<(), InstructionExecutionError> {
-        let now_ms = state_transaction.block_unix_timestamp_ms();
-        if crate::sns::active_account_alias_owner(
-            state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
-            label,
-            now_ms,
-        )
-        .is_some()
-        {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "account alias requires an active SNS lease"
-                    .to_owned()
-                    .into(),
-            ))
-        }
-    }
-
     fn refresh_account_alias_lease_if_requested(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -798,7 +775,13 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                ensure_active_account_alias_lease(state_transaction, label)?;
+                crate::sns::ensure_account_alias_lease(
+                    &mut state_transaction.world,
+                    authority,
+                    label,
+                    &state_transaction.nexus.dataspace_catalog,
+                )
+                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -1901,7 +1884,9 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetDefinitionEvent::Created(asset_definition)));
+                .emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::Created(asset_definition),
+                )));
 
             Ok(())
         }
@@ -2305,18 +2290,29 @@ pub mod isi {
                 ))
             })?;
             if state_transaction
-                .world
-                .contract_instances()
-                .get(&contract_address)
+                .nexus
+                .dataspace_catalog
+                .by_id(contract_dataspace_id)
                 .is_none()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("contract {contract_address} is not deployed").into(),
+                    "contract address dataspace is unknown".to_owned().into(),
                 )
                 .into());
             }
-
             if let Some(alias) = alias {
+                if state_transaction
+                    .world
+                    .contract_instances()
+                    .get(&contract_address)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("contract {contract_address} is not deployed").into(),
+                    )
+                    .into());
+                }
+
                 let (_, _, alias_dataspace_id) = alias
                     .resolve_components(&state_transaction.nexus.dataspace_catalog)
                     .map_err(|err| {
@@ -2574,7 +2570,13 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2674,7 +2676,13 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2918,7 +2926,24 @@ pub mod query {
     };
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::StateReadOnly,
+    };
+
+    impl ValidSingularQuery for FindDomainById {
+        #[metrics(+"find_domain_by_id")]
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<Domain, QueryExecutionFail> {
+            state_ro
+                .world()
+                .domain(self.domain_id())
+                .cloned()
+                .map_err(QueryExecutionFail::from)
+        }
+    }
 
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
@@ -2931,6 +2956,24 @@ pub mod query {
                 .world()
                 .domains_iter()
                 .filter(move |&v| filter.applies(v))
+                .cloned())
+        }
+    }
+
+    impl ValidQuery for FindDomainsByAccountId {
+        #[metrics(+"find_domains_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Domain>,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<impl Iterator<Item = Domain>, QueryExecutionFail> {
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro
+                .world()
+                .domains_iter()
+                .filter(move |domain| domain.owned_by() == &account_id && filter.applies(domain))
                 .cloned())
         }
     }
@@ -2986,6 +3029,7 @@ mod tests {
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         prelude::World,
         query::store::LiveQueryStore,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
         state::State,
     };
 
@@ -3016,6 +3060,49 @@ mod tests {
         let _ = domain_id;
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
+    }
+
+    #[test]
+    fn find_domain_by_id_returns_registered_domain() {
+        let mut state = test_state();
+        let domain_id = DomainId::try_new("banka", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &ALICE_ID);
+
+        let view = state.view();
+        let domain = FindDomainById::new(domain_id.clone())
+            .execute(&view)
+            .unwrap();
+        assert_eq!(domain.id(), &domain_id);
+        assert_eq!(domain.owned_by(), &*ALICE_ID);
+    }
+
+    #[test]
+    fn find_domains_by_account_id_returns_owned_domains_only() {
+        use std::collections::BTreeSet;
+
+        let mut state = test_state();
+        let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
+        let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
+        let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        seed_domain(&mut state, &owner_domain, &ALICE_ID);
+        seed_account(&mut state, &ALICE_ID, &owner_domain);
+        seed_account(&mut state, &bob_id, &owner_domain);
+        seed_domain(&mut state, &alice_owned, &ALICE_ID);
+        seed_domain(&mut state, &bob_owned, &bob_id);
+
+        let view = state.view();
+        let domains: Vec<_> = FindDomainsByAccountId::new(ALICE_ID.clone())
+            .execute(CompoundPredicate::PASS, &view)
+            .unwrap()
+            .map(|domain| domain.id().clone())
+            .collect();
+
+        assert_eq!(
+            domains.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([owner_domain, alice_owned])
+        );
     }
 
     fn alias_domain(domain: &DomainId) -> AccountAliasDomain {
@@ -6423,7 +6510,7 @@ mod tests {
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqqyrj5zgey92heas6qafh205258mch2mg6qlfmpzl"
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
@@ -6889,6 +6976,47 @@ mod tests {
         assert_eq!(
             binding.grace_until_ms,
             Some(11_000 + 369u64 * 60 * 60 * 1_000)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_stale_undeployed_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        tx.world
+            .bind_contract_alias(
+                &contract_address,
+                "router::universal".parse().expect("alias"),
+                None,
+                None,
+                10_000,
+            )
+            .expect("seed stale contract alias");
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should tolerate undeployed stale alias");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "binding index should be removed"
+        );
+        assert!(
+            tx.world
+                .contract_aliases
+                .get(&"router::universal".parse::<ContractAlias>().expect("alias"))
+                .is_none(),
+            "alias index should be removed"
         );
     }
 

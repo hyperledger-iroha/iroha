@@ -259,6 +259,8 @@ mod tests {
             chain: ChainId::from("test"),
             key_pair: ALICE_KEYPAIR.clone(),
             account: ALICE_ID.clone(),
+            account_chain_discriminant:
+                iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: "http://127.0.0.1:1".parse().expect("valid url"),
             torii_api_version: default_torii_api_version(),
             torii_api_min_proof_version: DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),

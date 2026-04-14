@@ -136,6 +136,8 @@ private struct AccountAddressNegativeCase: Decodable {
             switch kind {
             case "ChecksumMismatch":
                 return AccountAddressError.checksumMismatch.code
+            case "InvalidI105Char":
+                return AccountAddressError.invalidI105Char("0").code
             case "UnexpectedNetworkPrefix":
                 return AccountAddressError.unexpectedNetworkPrefix(expected: expected ?? 0, found: found ?? 0).code
             case "InvalidHexAddress":
@@ -144,6 +146,8 @@ private struct AccountAddressNegativeCase: Decodable {
                 return AccountAddressError.unexpectedTrailingBytes.code
             case "InvalidLength":
                 return AccountAddressError.invalidLength.code
+            case "UnsupportedAddressFormat":
+                return AccountAddressError.unsupportedAddressFormat.code
             default:
                 return kind
             }

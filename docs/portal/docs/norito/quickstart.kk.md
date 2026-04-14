@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ Norito және Kotodama бірінші рет: детерминирленген
 сілтеме CLI.
 
 Келісім-шарт мысалында қоңырау шалушының тіркелгісіне кілт/мән жұбын жаза аласыз
-жанама әсерді `iroha_cli` арқылы дереу тексеріңіз.
+жанама әсерді `iroha` арқылы дереу тексеріңіз.
 
 ## Алғышарттар
 
@@ -27,7 +27,7 @@ Norito және Kotodama бірінші рет: детерминирленген
   `defaults/docker-compose.single.yml` ішінде анықталған тең үлгіні бастау үшін).
 - Жүктеп алмасаңыз, көмекші екілік файлдарды құруға арналған Rust құралдар тізбегі (1.76+).
   жарияланғандары.
-- `koto_compile`, `ivm_run` және `iroha_cli` екілік файлдары. Сіз оларды мына жерден құрастыра аласыз
+- `koto_compile`, `ivm_run` және `iroha` екілік файлдары. Сіз оларды мына жерден құрастыра аласыз
   төменде көрсетілгендей жұмыс кеңістігін тексеру немесе сәйкес шығарылым артефактілерін жүктеп алыңыз:
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

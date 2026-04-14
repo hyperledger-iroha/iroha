@@ -40,11 +40,14 @@ network through native MCP.
 
 ## Taira preset
 
-The built-in plugin MCP preset points at:
+The built-in plugin MCP preset now uses a direct-node placeholder:
 
-- `https://taira.sora.org/v1/mcp`
+- `https://<taira-node>/v1/mcp`
 
-If that URL returns `404`, the deployment has not enabled Torii MCP yet.
+Replace `<taira-node>` with the public Torii hostname you intend to target.
+`https://taira.sora.org/v1/mcp` is convenience-only and should not be treated
+as the canonical rollout target. If the chosen node URL returns `404`, the
+deployment has not enabled Torii MCP yet.
 
 ## Custom networks
 

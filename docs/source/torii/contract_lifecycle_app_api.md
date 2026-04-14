@@ -1,128 +1,176 @@
 # Torii Contract Lifecycle App API (TORII-APP-4)
 
-Status: Completed 2026-03-24 · refreshed 2025-11-06  
+Status: Completed 2026-04-04 · refreshed 2026-04-04
 Owners: Torii Platform, Smart Contract WG  
 Roadmap reference: TORII-APP-4 — Contract lifecycle app endpoints
 
-This note captures the request/response contracts, validation rules, and
-telemetry surfaced by the Torii contract lifecycle endpoints so SDKs and
-tooling can depend on stable Norito DTOs.
+This note captures the current public contract lifecycle surfaces exposed by
+Torii when the `app_api` feature is enabled.
 
 ## Overview
 
-- Handlers live in `crates/iroha_torii/src/routing.rs` and are wired when Torii
-  is built with the `app_api` feature through
-  `Torii::add_contracts_and_vk_routes`.【crates/iroha_torii/src/routing.rs:3631】【crates/iroha_torii/src/routing.rs:5892】【crates/iroha_torii/src/routing.rs:3809】【crates/iroha_torii/src/lib.rs:6551】
-- Requests are decoded via `NoritoJson<T>`, so callers may send either
-  `Content-Type: application/json` (Norito-backed JSON) or
-  `application/x-norito`. Responses honour the `Accept` header the same way.
-- Each endpoint constructs a signed transaction with the supplied authority and
-  private key, then queues it through `handle_transaction_with_metrics`, which
-  records `torii_lane_admission_latency_seconds{lane_id,endpoint}` when
-  telemetry is enabled.【crates/iroha_torii/src/routing.rs:3293】
-- Contract lifecycle write endpoints prepend a domainless self-registration for
-  the supplied authority before the requested deploy/activate instructions, so
-  public networks can admit a fresh signer without a separate bootstrap step.
-- DTOs embed full Norito types: `AccountId`, `ExposedPrivateKey`, and plain
-  strings for namespace/contract identifiers. The stored manifest schema is
-  defined in `iroha_data_model::smart_contract::manifest::ContractManifest` and
-  includes compiler metadata, verified entrypoints, and access-set hints
-  derived from the uploaded artifact.【crates/iroha_data_model/src/smart_contract.rs:87】
-- Router-level integration tests cover the standalone deploy path, direct
-  activation, and the combined deploy+activate workflow, keeping these schemas
-  regression-tested.【crates/iroha_torii/tests/contracts_deploy_integration.rs:1】【crates/iroha_torii/tests/contracts_instance_activate_integration.rs:1】【crates/iroha_torii/tests/contracts_activate_integration.rs:1】
+- Handlers live in `crates/iroha_torii/src/routing.rs` and are registered
+  through `Torii::add_contracts_and_vk_routes`.
+- Requests are decoded with `NoritoJson<T>`, so callers may use either
+  `application/json` or `application/x-norito`. Responses follow the negotiated
+  `Accept` format.
+- Public deploys are alias-first. `POST /v1/contracts/deploy` requires
+  `contract_alias`, derives the dataspace from that alias, and returns the
+  fresh immutable `contract_address` activated by the deploy.
+- Runtime calls no longer resend full bytecode or manifests. Torii now builds
+  `Executable::ContractCall(ContractInvocation)` and only keeps fee/gas fields
+  in transaction metadata.
+- Contract-call and contract-view target selectors require exactly one of
+  `contract_address` or `contract_alias`.
+- `POST /v1/contracts/call` supports three submission modes:
+  - provide `private_key` and Torii signs/submits immediately;
+  - provide `public_key_hex` + `signature_b64` for detached-submit flows; or
+  - provide neither and Torii returns a scaffold plus `signing_message_b64`.
+- Multisig contract-call propose/approve endpoints are detached-or-scaffold
+  only. Supplying `private_key` fails closed because server-side signing is
+  disabled on those routes.
+- Historical `/v1/contracts/instance*` server-side-signing routes are no
+  longer part of the public lifecycle surface.
 
 ## `POST /v1/contracts/deploy`
 
-Accepts compiled `.to` bytecode, derives the manifest and hashes, and queues a
-transaction containing `RegisterSmartContractCode` + `RegisterSmartContractBytes`
-instructions so the bytecode is stored on-chain. Torii prepends a domainless
-self-registration for the authority before those instructions.【crates/iroha_torii/src/routing.rs:5892】
+Uploads compiled `.to` bytecode, verifies the embedded `CNTR` interface,
+derives the canonical manifest, stores manifest + bytecode on-chain, activates
+the fresh address-backed instance, binds the stable alias, and advances the
+authority's deploy nonce in one transaction.
 
 ### Request (`DeployContractDto`)
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Same canonical form as above. |
-| `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
-| `code_b64` | `String` | Base64 representation of the compiled IVM program (`.to`). |
+| `authority` | `AccountId` | Canonical I105 account id. |
+| `private_key` | `ExposedPrivateKey` | Signing key used to submit the deploy transaction. |
+| `code_b64` | `String` | Base64-encoded compiled IVM artifact (`.to`). |
+| `contract_alias` | `ContractAlias` | Stable public alias (`name::dataspace` or `name::domain.dataspace`). |
+| `lease_expiry_ms` | `Option<u64>` | Optional unix-ms lease expiry for the alias binding. |
 
-`prepare_contract_deployment` enforces:
+Validation and execution rules:
 
-- Base64 decoding must succeed (`ValidationFail::Conversion` on failure).【crates/iroha_torii/src/routing.rs:4898】
-- The uploaded artifact must verify as a self-describing contract artifact: IVM `1.1`, required `CNTR`, valid section ordering, valid entrypoints, valid trigger callback targets, and supported ABI/feature metadata. Invalid artifacts fail closed with `ValidationFail::Conversion`.
-- Torii derives the canonical manifest from the verified `CNTR` payload and signs that manifest with the submitting key. There is no manifest override input on the deploy path.
+- `code_b64` must decode successfully.
+- The artifact must verify as a self-describing IVM contract artifact with a
+  valid `CNTR` section.
+- Torii derives the manifest from the verified artifact; callers do not supply
+  a manifest override on this route.
+- The dataspace is derived from `contract_alias`.
+- `contract_address` is derived from `(chain_discriminant, authority,
+  deploy_nonce, dataspace_id)`.
+- Reusing an existing `contract_alias` is the public upgrade path: Torii
+  clears the prior alias binding, deactivates the retired address, binds the
+  alias to the new address, and reports `previous_contract_address`.
 
-Sample request and response:
-
-```json
-{
-  "authority": "0x020001200000000000000000000000000000000000000000000000000000000000000000",
-  "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
-  "code_b64": "AAECAwQFBgcICQoLDA0ODw=="
-}
-```
-
-```json
-{
-  "ok": true,
-  "code_hash_hex": "f4d0bc7a2fa8c98bf5f5d6a638f3b939e1436a8a567164d72d41308c0ea2db9f",
-  "abi_hash_hex": "59bf03d5f0795884183abdb0297c7c9f6cfdcccd21d8a11a3ccf71027284e9a1"
-}
-```
-
-Applying the queued block persists both the manifest and bytecode in `World`,
-after which `/v1/contracts/code-bytes/{hash}` can retrieve the uploaded program.
-The integration test `contracts_deploy_and_fetch_code_bytes` exercises this
-round-trip and asserts the stored base64 matches the uploaded bytes.【crates/iroha_torii/tests/contracts_deploy_integration.rs:45】
-
-## `POST /v1/contracts/instance/activate`
-
-Registers a logical contract instance within a namespace, binding it to a
-previously deployed code hash via `ActivateContractInstance`. The route expects
-the bytecode to be present on-chain (e.g., via the deploy endpoint above).
-Activation is public for namespaces not listed in `gov_protected_namespaces`;
-Torii prepends a domainless self-registration for the authority before the
-activation instruction.【crates/iroha_torii/src/routing.rs:3806】
-
-### Request (`ActivateInstanceDto`)
+### Response (`DeployContractResponseDto`)
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Canonical I105 account id (domainless encoded literal). Torii strict parser paths accept only canonical I105 and reject non-i105 literals and any `@<domain>` suffix. |
-| `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
-| `namespace` | `String` | Governance namespace hosting the instance (e.g., `apps.market`). |
-| `contract_id` | `String` | Logical identifier under the namespace (e.g., `calc.v1`). |
-| `code_hash` | `String` | 32-byte hex digest; optional `0x` prefix is stripped before validation.【crates/iroha_torii/src/routing.rs:3818】 |
+| `ok` | `bool` | `true` when the deploy transaction was queued. |
+| `contract_alias` | `ContractAlias` | Stable alias bound by the deploy. |
+| `contract_address` | `ContractAddress` | Fresh immutable address activated by this deploy. |
+| `previous_contract_address` | `Option<ContractAddress>` | Retired address when this deploy upgraded an existing alias. |
+| `upgraded` | `bool` | `true` when an existing alias binding was replaced. |
+| `dataspace` | `String` | Resolved dataspace alias. |
+| `deploy_nonce` | `u64` | Nonce consumed for address derivation. |
+| `tx_hash_hex` | `String` | Queued transaction hash. |
+| `code_hash_hex` | `String` | Blake2b-32 hash of the stored bytecode. |
+| `abi_hash_hex` | `String` | Blake2b-32 hash of the enforced ABI surface. |
 
-The handler rejects any value that does not decode to exactly 32 bytes and then
-queues `ActivateContractInstance` with the provided identifiers.【crates/iroha_torii/src/routing.rs:3825】
+## `POST /v1/contracts/call`
 
-Sample interaction:
+Prepares or submits a public contract call against an active deployed contract.
 
-```json
-{
-  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt",
-  "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
-  "namespace": "apps.market",
-  "contract_id": "calc.v1",
-  "code_hash": "0xf4d0bc7a2fa8c98bf5f5d6a638f3b939e1436a8a567164d72d41308c0ea2db9f"
-}
-```
+### Request (`ContractCallDto`)
 
-```json
-{
-  "ok": true
-}
-```
+| Field | Type | Notes |
+|-------|------|-------|
+| `authority` | `AccountId` | Transaction authority. |
+| `private_key` | `Option<ExposedPrivateKey>` | Server-side signing path. |
+| `public_key_hex` | `Option<String>` | Detached Ed25519 submit path. |
+| `signature_b64` | `Option<String>` | Detached Ed25519 signature over `signing_message_b64`. |
+| `contract_address` | `Option<ContractAddress>` | Canonical target address. |
+| `contract_alias` | `Option<ContractAlias>` | Stable alias target. |
+| `entrypoint` | `Option<String>` | Defaults to `main`. Must resolve to a public entrypoint. |
+| `payload` | `Option<IrohaJson>` | Optional Norito JSON payload normalized against the manifest schema. |
+| `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
+| `gas_asset_id` | `Option<String>` | Optional metadata override. |
+| `fee_sponsor` | `Option<AccountId>` | Optional fee sponsor metadata. |
+| `gas_limit` | `u64` | Must be positive. |
 
-Invalid hex or mismatched byte lengths surface as `ValidationFail::Conversion`
-errors (HTTP 400). The standalone activation suite and the deploy+activate flow
-verify the Norito shapes and resulting registry entries.【crates/iroha_torii/tests/contracts_instance_activate_integration.rs:1】【crates/iroha_torii/tests/contracts_activate_integration.rs:1】
+Response (`ContractCallResponseDto`) always includes `ok`, `submitted`,
+`dataspace`, `contract_address`, `code_hash_hex`, `abi_hash_hex`,
+`creation_time_ms`, and `entrypoint`.
 
----
+Submission-mode fields:
 
-For scenarios where deployment and activation must occur in a single request,
-see `POST /v1/contracts/instance` and the shared DTOs
-(`DeployAndActivateInstanceDto`) documented inline with the handler for future
-expansion.【crates/iroha_torii/src/routing.rs:3862】【crates/iroha_torii/src/routing.rs:5085】
+- Immediate submit (`private_key` or detached signature): `submitted = true`
+  and `tx_hash_hex` is populated.
+- Scaffold mode (no signature material): `submitted = false` and Torii returns
+  `transaction_scaffold_b64`, `signed_transaction_b64`, and
+  `signing_message_b64`.
+
+## `POST /v1/contracts/call/simulate`
+
+Executes a public contract entrypoint locally without queueing a transaction.
+
+- Request type: `ContractCallSimulateDto`.
+- Uses the same address-or-alias selector, entrypoint validation, payload
+  normalization, and positive `gas_limit` requirement as `POST /v1/contracts/call`.
+- Success response (`ContractCallSimulateResponseDto`) includes:
+  `ok = true`, `dataspace`, `contract_address`, `code_hash_hex`,
+  `abi_hash_hex`, `entrypoint`, `normalized_payload`, `gas_limit`, `gas_used`,
+  `queued_instructions`, and optional decoded `result`.
+- Failure response uses the same DTO shape with `ok = false`, plus `error` and
+  optional `vm_diagnostic`.
+
+## `POST /v1/contracts/view`
+
+Executes a read-only view entrypoint locally.
+
+- Request type: `ContractViewDto`.
+- The selector rules are the same as call/simulate: exactly one of
+  `contract_address` or `contract_alias`.
+- `entrypoint` defaults to `main` but must resolve to a manifest entrypoint of
+  kind `View`.
+- `gas_limit` must be positive.
+- Success returns `ContractViewResponseDto` with `ok`, `dataspace`,
+  `contract_address`, `code_hash_hex`, `abi_hash_hex`, `entrypoint`, and
+  decoded `result`.
+- VM/view failures return HTTP `422 Unprocessable Entity` with
+  `ContractViewErrorResponseDto`, including the same target metadata plus
+  `error` and optional `vm_diagnostic`.
+
+## Multisig Contract Calls
+
+### `POST /v1/contracts/call/multisig/propose`
+
+- Request type: `MultisigContractCallProposeDto`.
+- The multisig authority is selected by exactly one of
+  `multisig_account_id` or `multisig_account_alias`.
+- The contract target is selected by exactly one of `contract_address` or
+  `contract_alias`.
+- `gas_limit` defaults to `5000` when omitted and must be positive when
+  supplied.
+- The route validates the signer against the live multisig spec, normalizes the
+  contract payload, wraps the call in `MultisigPropose`, and returns
+  `MultisigContractCallResponseDto` with `proposal_id`, `instructions_hash`,
+  `resolved_multisig_account_id`, and either `tx_hash_hex` or
+  `signing_message_b64`.
+
+### `POST /v1/contracts/call/multisig/approve`
+
+- Request type: `MultisigContractCallApproveDto`.
+- Requires exactly one of `proposal_id` or `instructions_hash`.
+- The multisig selector rules match the propose route.
+- Returns `MultisigContractCallResponseDto`, including
+  `executed_tx_hash_hex` when the approval reached quorum and executed the
+  proposal immediately.
+
+## Historical Note
+
+The older public `/v1/contracts/instance` and
+`/v1/contracts/instance/activate` shortcuts are no longer part of the current
+contract lifecycle. Public callers should use the alias-first deploy route plus
+the by-reference call/view routes described above.

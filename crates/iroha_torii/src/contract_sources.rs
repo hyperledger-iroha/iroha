@@ -869,7 +869,16 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         }
     }
 
-    let verified_source_record = load_verified_source_record(&code_hash)?;
+    let verified_source_record = if let Some(record) = load_verified_source_record(&code_hash)? {
+        Some(record)
+    } else if let Some(declared) = declared_code_hash
+        .as_ref()
+        .filter(|declared| declared.as_str() != code_hash.as_str())
+    {
+        load_verified_source_record(declared)?
+    } else {
+        None
+    };
     let verified_source_ref = verified_source_record
         .as_ref()
         .and_then(verified_source_ref_from_record);
@@ -1357,8 +1366,9 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
-        let contract_address = dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::GLOBAL)
-            .expect("contract address");
+        let contract_address =
+            dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::GLOBAL)
+                .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),
             &authority,

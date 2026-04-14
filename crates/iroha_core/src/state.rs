@@ -102,7 +102,9 @@ use iroha_data_model::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
         SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
         SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
         SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
@@ -200,7 +202,8 @@ use crate::{
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
-        SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
+        UaidDataspaceBindings,
     },
     query::store::LiveQueryStoreHandle,
     role::RoleIdWithOwner,
@@ -360,6 +363,7 @@ macro_rules! build_world_block {
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             account_aliases_by_account: $state.account_aliases_by_account.$method(),
+            account_scope_directory: $state.account_scope_directory.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -421,6 +425,7 @@ macro_rules! build_world_block {
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
             soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
             soracloud_decryption_request_records: $state
@@ -453,6 +458,7 @@ macro_rules! build_world_block {
                 .soracloud_private_inference_checkpoints
                 .$method(),
             soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
+            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
             soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
             soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
@@ -463,6 +469,7 @@ macro_rules! build_world_block {
                 .soracloud_model_host_violation_evidence
                 .$method(),
             soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
+            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
@@ -509,6 +516,7 @@ macro_rules! build_world_block {
             zk_assets: $state.zk_assets.$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
             governance_proposals: $state.governance_proposals.$method(),
             governance_referenda: $state.governance_referenda.$method(),
             governance_stage_approvals: $state.governance_stage_approvals.$method(),
@@ -545,6 +553,7 @@ macro_rules! build_world_transaction {
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             account_aliases_by_account: $state.account_aliases_by_account.transaction(),
+            account_scope_directory: $state.account_scope_directory.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -606,6 +615,7 @@ macro_rules! build_world_transaction {
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
             soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
             soracloud_decryption_request_records: $state
@@ -642,6 +652,9 @@ macro_rules! build_world_transaction {
             soracloud_model_host_capabilities: $state
                 .soracloud_model_host_capabilities
                 .transaction(),
+            soracloud_inrou_host_capabilities: $state
+                .soracloud_inrou_host_capabilities
+                .transaction(),
             soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
             soracloud_hf_shared_lease_members: $state
@@ -654,6 +667,9 @@ macro_rules! build_world_transaction {
                 .soracloud_model_host_violation_evidence
                 .transaction(),
             soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
+            soracloud_inrou_service_placements: $state
+                .soracloud_inrou_service_placements
+                .transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
@@ -702,6 +718,7 @@ macro_rules! build_world_transaction {
             zk_assets: $state.zk_assets.transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
             governance_proposals: $state.governance_proposals.transaction(),
             governance_referenda: $state.governance_referenda.transaction(),
             governance_stage_approvals: $state.governance_stage_approvals.transaction(),
@@ -924,7 +941,7 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
-fn parse_permission_account_field(
+pub(crate) fn parse_permission_account_field(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
@@ -942,6 +959,33 @@ fn parse_permission_account_field(
     };
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
         .map(Into::into)
+}
+
+pub(crate) fn fee_sponsor_from_permission(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+) -> Option<iroha_data_model::account::AccountId> {
+    (permission.name() == "CanUseFeeSponsor")
+        .then(|| {
+            parse_permission_account_field(
+                world,
+                dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+        })
+        .flatten()
+}
+
+pub(crate) fn permission_allows_fee_sponsor(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+    sponsor: &iroha_data_model::account::AccountId,
+) -> bool {
+    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 impl AccountPermissionSummary {
@@ -978,12 +1022,9 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "sponsor",
-                ) {
+                if let Some(sponsor) =
+                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+                {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -1425,6 +1466,9 @@ pub struct World {
     /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
     pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    #[norito(skip)]
+    pub(crate) account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1593,7 +1637,7 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances bound to their canonical contract address.
+    /// Active contract instances bound to canonical contract addresses.
     pub(crate) contract_instances:
         Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
@@ -1604,6 +1648,9 @@ pub struct World {
     pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -1647,6 +1694,9 @@ pub struct World {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         Storage<AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -1661,6 +1711,9 @@ pub struct World {
         Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: Storage<Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by deterministic message id.
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
@@ -1784,6 +1837,9 @@ pub struct World {
     pub(crate) elections: Storage<String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: Storage<AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        Storage<String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals keyed by deterministic id.
     pub(crate) governance_proposals: Storage<[u8; 32], GovernanceProposalRecord>,
     /// Governance referenda keyed by referendum id.
@@ -1842,6 +1898,8 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -2000,7 +2058,7 @@ pub struct WorldBlock<'world> {
     >,
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances
+    /// Active contract instances.
     pub(crate) contract_instances:
         StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
@@ -2013,6 +2071,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageBlock<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -2065,6 +2126,9 @@ pub struct WorldBlock<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageBlock<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageBlock<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2080,6 +2144,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageBlock<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageBlock<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -2182,6 +2249,9 @@ pub struct WorldBlock<'world> {
     pub(crate) elections: StorageBlock<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageBlock<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageBlock<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals
     pub(crate) governance_proposals: StorageBlock<'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -2277,6 +2347,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
+        collect_reverts!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_reverts!(self.governance_proposals, GovernanceProposal);
         collect_reverts!(self.governance_referenda, GovernanceReferendum);
         collect_reverts!(self.governance_locks, GovernanceLock);
@@ -2337,6 +2408,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
+        collect_payload!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_payload!(self.governance_proposals, GovernanceProposal);
         collect_payload!(self.governance_referenda, GovernanceReferendum);
         collect_payload!(self.governance_locks, GovernanceLock);
@@ -2399,6 +2471,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account:
         StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory:
+        StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2605,6 +2680,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime:
         StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraInrouReplicaRuntimeStateV1,
+    >,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events:
         StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
@@ -2663,6 +2745,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageTransaction<'block, 'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageTransaction<'block, 'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2680,6 +2765,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements:
         StorageTransaction<'block, 'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageTransaction<'block, 'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages:
         StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
@@ -2796,6 +2884,13 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageTransaction<'block, 'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals: StorageTransaction<
+        'block,
+        'world,
+        String,
+        iroha_data_model::ministry::AgendaProposalRecordV1,
+    >,
     pub(crate) governance_proposals:
         StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -3175,6 +3270,8 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases: StorageView<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageView<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -3359,6 +3456,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageView<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -3411,6 +3511,9 @@ pub struct WorldView<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageView<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageView<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -3426,6 +3529,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageView<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageView<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -3533,6 +3639,9 @@ pub struct WorldView<'world> {
     pub(crate) elections: StorageView<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageView<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageView<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     pub(crate) governance_proposals: StorageView<'world, [u8; 32], GovernanceProposalRecord>,
     pub(crate) governance_referenda: StorageView<'world, String, GovernanceReferendumRecord>,
     pub(crate) governance_stage_approvals: StorageView<'world, String, GovernanceStageApprovals>,
@@ -6404,6 +6513,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Canonical hash of the current signed transaction, when executing a transaction.
+    pub current_tx_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -8187,7 +8299,10 @@ mod state_lock_order_tests {
 
 #[cfg(test)]
 mod storage_migration_tests {
-    use std::sync::Arc;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
@@ -8272,6 +8387,94 @@ mod storage_migration_tests {
             "only one dataspace expected"
         );
         assert!(iter.next().is_none(), "only one UAID entry expected");
+    }
+
+    #[test]
+    fn account_scope_directory_rebuilt_from_aliases_and_uaid_bindings_on_startup() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut world = World::default();
+
+        let uaid = UniversalAccountId::from_hash(Hash::new("account-scope-migration"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
+
+        let global_domain = DomainId::try_new("treasury", "universal").expect("global domain id");
+        let global_alias = alias_in_domain(&global_domain, "public".parse().expect("alias label"));
+        let private_alias = AccountAlias::new(
+            "private".parse().expect("private alias label"),
+            Some(AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("private domain name"),
+            )),
+            dataspace,
+        );
+        world
+            .account_aliases
+            .insert(global_alias.clone(), account_id.clone());
+        world
+            .account_aliases
+            .insert(private_alias.clone(), account_id.clone());
+        world.account_aliases_by_account.insert(
+            account_id.clone(),
+            BTreeSet::from([global_alias.clone(), private_alias.clone()]),
+        );
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world.space_directory_manifests.insert(uaid, set);
+
+        assert!(
+            world.account_scope_directory.view().iter().next().is_none(),
+            "pre-migration world should not contain account scope entries",
+        );
+
+        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let entry = state
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("account scope entry should be rebuilt on startup");
+        let scopes = entry
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            scopes,
+            BTreeMap::from([
+                (
+                    DataSpaceId::GLOBAL,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("global domain name"),
+                    )]),
+                ),
+                (
+                    dataspace,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("private domain name"),
+                    )]),
+                ),
+            ]),
+            "startup rebuild should merge alias domains with UAID-derived dataspace bindings",
+        );
     }
 
     #[test]
@@ -10112,14 +10315,13 @@ impl DetachedStateTransactionDelta {
                 let def = stx.world.asset_definition_mut(ad)?;
                 def.metadata_mut().insert(key.clone(), val.clone());
                 crate::sumeragi::witness::record_write_asset_def_kv(ad, key, val);
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::MetadataInserted(
-                        MetadataChanged {
-                            target: ad.clone(),
-                            key: key.clone(),
-                            value: val.clone(),
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::MetadataInserted(MetadataChanged {
+                        target: ad.clone(),
+                        key: key.clone(),
+                        value: val.clone(),
+                    }),
+                )));
             }
             for (ad, key_id) in &asset_def_kv_dels {
                 let key = self.name_intern.resolve(*key_id);
@@ -10129,14 +10331,13 @@ impl DetachedStateTransactionDelta {
                     })
                 })?;
                 crate::sumeragi::witness::record_delete_asset_def_kv(ad, key, &val);
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::MetadataRemoved(
-                        MetadataChanged {
-                            target: ad.clone(),
-                            key: key.clone(),
-                            value: val,
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
+                        target: ad.clone(),
+                        key: key.clone(),
+                        value: val,
+                    }),
+                )));
             }
 
             // Apply NFT creates/deletes
@@ -10237,13 +10438,12 @@ impl DetachedStateTransactionDelta {
                     )));
                 }
                 def.set_owned_by(to.clone());
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
-                        AssetDefinitionOwnerChanged {
-                            asset_definition: ad,
-                            new_owner: to,
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
+                        asset_definition: ad,
+                        new_owner: to,
+                    }),
+                )));
             }
 
             // Apply peer registrations/removals
@@ -10661,6 +10861,13 @@ impl World {
         &mut self.soracloud_service_runtime
     }
 
+    /// Provides mutable access to placed Inrou replica runtime state for tests and API scaffolding.
+    pub fn soracloud_inrou_replica_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+        &mut self.soracloud_inrou_replica_runtime
+    }
+
     /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
     pub fn soracloud_service_audit_events_mut_for_testing(
         &mut self,
@@ -10794,6 +11001,13 @@ impl World {
         &mut self.soracloud_model_host_capabilities
     }
 
+    /// Provides mutable access to authoritative Inrou host adverts for tests and API scaffolding.
+    pub fn soracloud_inrou_host_capabilities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<AccountId, SoraInrouHostCapabilityRecordV1> {
+        &mut self.soracloud_inrou_host_capabilities
+    }
+
     /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
         &mut self,
@@ -10806,6 +11020,13 @@ impl World {
         &mut self,
     ) -> &mut Storage<Hash, SoraHfPlacementRecordV1> {
         &mut self.soracloud_hf_placements
+    }
+
+    /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
+    pub fn soracloud_inrou_service_placements_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
+        &mut self.soracloud_inrou_service_placements
     }
 
     /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
@@ -10934,6 +11155,7 @@ impl World {
             offline_to_online_transfers: Storage::default(),
             offline_lineages: Storage::default(),
             offline_lineage_operation_results: Storage::default(),
+            ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -10953,6 +11175,9 @@ impl World {
         world
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
+        world
+            .rebuild_account_scope_directory()
+            .expect("invalid account scope directory in world constructor");
         world
             .rebuild_account_rekey_records()
             .expect("invalid account rekey state in world constructor");
@@ -11105,6 +11330,28 @@ impl World {
         }
         self.account_aliases = index.into_iter().collect();
         self.account_aliases_by_account = reverse.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let view = self.view();
+            let account_ids: Vec<_> = view.accounts().iter().map(|(id, _)| id.clone()).collect();
+            let mut rebuilt = BTreeMap::new();
+            for account_id in account_ids {
+                let Some(entry) = derive_account_scope_directory_entry(&view, &account_id)
+                    .map_err(|error| {
+                        format!("failed to derive account scope for {account_id}: {error}")
+                    })?
+                else {
+                    continue;
+                };
+                rebuilt.insert(account_id, entry);
+            }
+            rebuilt
+        };
+
+        self.account_scope_directory = rebuilt.into_iter().collect();
         Ok(())
     }
 
@@ -11451,6 +11698,7 @@ impl World {
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             account_aliases_by_account: self.account_aliases_by_account.view(),
+            account_scope_directory: self.account_scope_directory.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11512,6 +11760,7 @@ impl World {
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
             soracloud_service_runtime: self.soracloud_service_runtime.view(),
+            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
             soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
             soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
             soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
@@ -11536,6 +11785,7 @@ impl World {
                 .soracloud_private_inference_checkpoints
                 .view(),
             soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
+            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
             soracloud_hf_sources: self.soracloud_hf_sources.view(),
             soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
             soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
@@ -11546,6 +11796,7 @@ impl World {
                 .soracloud_model_host_violation_evidence
                 .view(),
             soracloud_hf_placements: self.soracloud_hf_placements.view(),
+            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
@@ -11592,6 +11843,7 @@ impl World {
             zk_assets: self.zk_assets.view(),
             elections: self.elections.view(),
             citizens: self.citizens.view(),
+            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
             governance_proposals: self.governance_proposals.view(),
             governance_referenda: self.governance_referenda.view(),
             governance_stage_approvals: self.governance_stage_approvals.view(),
@@ -11605,6 +11857,47 @@ impl World {
             merge_global_state_root: self.merge_global_state_root.view(),
         }
     }
+}
+
+fn derive_account_scope_directory_entry(
+    world: &(impl WorldReadOnly + ?Sized),
+    account_id: &AccountId,
+) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+    let Some(account) = world.accounts().get(account_id) else {
+        return Ok(None);
+    };
+
+    let mut entry = AccountScopeDirectoryEntry::default();
+    let primary_label_dataspace = account.as_ref().label().map(|label| {
+        entry.ensure_dataspace(label.dataspace);
+        if let Some(domain) = label.domain.clone() {
+            entry.bind_domain(label.dataspace, domain);
+        }
+        label.dataspace
+    });
+
+    if let Some(uaid) = account.as_ref().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        for (dataspace, accounts) in bindings.iter() {
+            if accounts.contains(account_id) {
+                entry.ensure_dataspace(*dataspace);
+            }
+        }
+    }
+
+    for alias in world.bound_account_aliases(account_id) {
+        entry.ensure_dataspace(alias.dataspace);
+        if let Some(domain) = alias.domain.clone() {
+            entry.bind_domain(alias.dataspace, domain);
+        }
+    }
+
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::GLOBAL) {
+        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+    }
+
+    Ok(Some(entry))
 }
 
 /// Read-only view over world-level resources.
@@ -11650,6 +11943,10 @@ pub trait WorldReadOnly {
     fn account_aliases_by_account(
         &self,
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
+    /// Read-side account scope directory (read-only).
+    fn account_scope_directory(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -11884,7 +12181,7 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Contract instances mapping `contract_address` -> `code_hash` (read-only)
+    /// Contract instances mapping `contract_address -> code_hash` (read-only)
     fn contract_instances(
         &self,
     ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
@@ -11900,6 +12197,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
     /// Active Soracloud runtime state keyed by service name (read-only).
     fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
+    fn soracloud_inrou_replica_runtime(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1>;
     /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
     fn soracloud_service_audit_events(&self)
     -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
@@ -11971,6 +12272,10 @@ pub trait WorldReadOnly {
     fn soracloud_model_host_capabilities(
         &self,
     ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1>;
+    /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
+    fn soracloud_inrou_host_capabilities(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1>;
     /// Canonical Hugging Face sources keyed by source identifier (read-only).
     fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
     /// HF shared-lease pools keyed by canonical pool identifier (read-only).
@@ -11991,6 +12296,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
     /// Active HF placement records keyed by shared-lease pool identifier (read-only).
     fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
+    /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_inrou_service_placements(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1>;
     /// Ordered Soracloud mailbox messages keyed by message id (read-only).
     fn soracloud_mailbox_messages(
         &self,
@@ -12110,6 +12419,10 @@ pub trait WorldReadOnly {
     fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
     /// Registered citizens keyed by account id (read-only).
     fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord>;
+    /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
+    fn ministry_agenda_proposals(
+        &self,
+    ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>;
     /// Governance proposals (read-only) keyed by deterministic id.
     fn governance_proposals(&self) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord>;
     /// Parliament approvals recorded per referendum id (read-only).
@@ -12172,37 +12485,34 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
-    /// Collect the account's dataspace -> domain hierarchy from Space Directory bindings and
-    /// bound aliases.
+    /// Collect the account's dataspace -> domain hierarchy from primary label
+    /// materialization, Space Directory bindings, and bound aliases.
     ///
-    /// Every materialized account implicitly belongs to the universal dataspace. Additional
-    /// dataspaces come from UAID bindings and bound aliases. Domains remain optional within each
-    /// dataspace, so a dataspace entry may contain an empty domain set.
+    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
+    /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
+    /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
+    /// empty domain set.
+    fn account_scope_entry(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+        if let Some(entry) = self.account_scope_directory().get(account_id) {
+            return Ok(Some(entry.clone()));
+        }
+        derive_account_scope_directory_entry(self, account_id)
+    }
+
+    /// Collect the account's dataspace -> domain hierarchy from the maintained account-scope
+    /// directory.
     fn account_scope_hierarchy(
         &self,
         account_id: &AccountId,
     ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
-        let mut hierarchy = BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]);
-
-        if let Some(account) = self.accounts().get(account_id)
-            && let Some(uaid) = account.as_ref().uaid().copied()
-            && let Some(bindings) = self.uaid_dataspaces().get(&uaid)
-        {
-            for (dataspace, accounts) in bindings.iter() {
-                if accounts.contains(account_id) {
-                    hierarchy.entry(*dataspace).or_default();
-                }
-            }
+        match self.account_scope_entry(account_id)? {
+            Some(entry) => entry.hierarchy(self.dataspace_catalog()),
+            None => Ok(BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())])),
         }
-
-        for alias in self.bound_account_aliases(account_id) {
-            let domains = hierarchy.entry(alias.dataspace).or_default();
-            if let Some(domain_id) = alias.domain_id(self.dataspace_catalog())? {
-                domains.insert(domain_id);
-            }
-        }
-
-        Ok(hierarchy)
     }
 
     /// Collect the dataspaces linked to the account.
@@ -12712,6 +13022,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
                 &self.account_aliases_by_account
             }
+            fn account_scope_directory(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
+                &self.account_scope_directory
+            }
             fn opaque_uaids(
                 &self,
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
@@ -12994,6 +13309,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
                 &self.soracloud_service_runtime
             }
+            fn soracloud_inrou_replica_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+                &self.soracloud_inrou_replica_runtime
+            }
             fn soracloud_service_audit_events(
                 &self,
             ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
@@ -13085,6 +13405,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1> {
                 &self.soracloud_model_host_capabilities
             }
+            fn soracloud_inrou_host_capabilities(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1> {
+                &self.soracloud_inrou_host_capabilities
+            }
             fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
                 &self.soracloud_hf_sources
             }
@@ -13110,6 +13435,11 @@ macro_rules! impl_world_ro {
             }
             fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
                 &self.soracloud_hf_placements
+            }
+            fn soracloud_inrou_service_placements(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1> {
+                &self.soracloud_inrou_service_placements
             }
             fn soracloud_mailbox_messages(
                 &self,
@@ -13315,6 +13645,12 @@ macro_rules! impl_world_ro {
             fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord> {
                 &self.citizens
             }
+            fn ministry_agenda_proposals(
+                &self,
+            ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>
+            {
+                &self.ministry_agenda_proposals
+            }
             fn governance_proposals(
                 &self,
             ) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord> {
@@ -13476,6 +13812,7 @@ impl<'world> WorldBlock<'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13538,6 +13875,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -13556,12 +13894,14 @@ impl<'world> WorldBlock<'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -13608,6 +13948,7 @@ impl<'world> WorldBlock<'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -13646,6 +13987,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_service_runtime.commit();
+        soracloud_inrou_replica_runtime.commit();
         soracloud_service_audit_events.commit();
         soracloud_service_state_entries.commit();
         soracloud_decryption_request_records.commit();
@@ -13664,12 +14006,14 @@ impl<'world> WorldBlock<'world> {
         soracloud_private_inference_sessions.commit();
         soracloud_private_inference_checkpoints.commit();
         soracloud_model_host_capabilities.commit();
+        soracloud_inrou_host_capabilities.commit();
         soracloud_hf_sources.commit();
         soracloud_hf_shared_lease_pools.commit();
         soracloud_hf_shared_lease_members.commit();
         soracloud_hf_shared_lease_audit_events.commit();
         soracloud_model_host_violation_evidence.commit();
         soracloud_hf_placements.commit();
+        soracloud_inrou_service_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
@@ -13720,6 +14064,7 @@ impl<'world> WorldBlock<'world> {
         zk_assets.commit();
         elections.commit();
         citizens.commit();
+        ministry_agenda_proposals.commit();
         governance_proposals.commit();
         governance_referenda.commit();
         governance_stage_approvals.commit();
@@ -13774,6 +14119,7 @@ impl<'world> WorldBlock<'world> {
         uaid_accounts.commit();
         account_aliases.commit();
         account_aliases_by_account.commit();
+        account_scope_directory.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -13826,6 +14172,25 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
+        match derive_account_scope_directory_entry(self, account_id) {
+            Ok(Some(entry)) => {
+                self.account_scope_directory
+                    .insert(account_id.clone(), entry);
+            }
+            Ok(None) => {
+                self.account_scope_directory.remove(account_id.clone());
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %account_id,
+                    ?error,
+                    "failed to refresh account scope directory entry"
+                );
+            }
+        }
+    }
+
     pub(crate) fn insert_account_alias_binding(
         &mut self,
         label: AccountAlias,
@@ -13836,8 +14201,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .insert(label.clone(), account_id.clone());
         if let Some(previous_account) = previous.as_ref() {
             self.remove_account_alias_from_reverse_index(previous_account, &label);
+            self.refresh_account_scope_directory_entry(previous_account);
         }
         self.add_account_alias_to_reverse_index(&account_id, &label);
+        self.refresh_account_scope_directory_entry(&account_id);
         previous
     }
 
@@ -13848,6 +14215,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.account_aliases.remove(label.clone());
         if let Some(account_id) = removed.as_ref() {
             self.remove_account_alias_from_reverse_index(account_id, label);
+            self.refresh_account_scope_directory_entry(account_id);
         }
         removed
     }
@@ -13863,6 +14231,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         for label in &labels {
             self.account_aliases.remove(label.clone());
         }
+        self.refresh_account_scope_directory_entry(account_id);
         labels
     }
 
@@ -14026,6 +14395,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else {
             self.uaid_dataspaces.insert(uaid, bindings);
         }
+        self.refresh_account_scope_directory_entry(&account_id);
     }
 
     /// Recompute the per-dataspace AXT policy map from Space Directory manifests and bindings.
@@ -14609,6 +14979,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -14670,6 +15041,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -14688,12 +15060,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -14721,6 +15095,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -14764,6 +15139,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_service_runtime.apply();
+        soracloud_inrou_replica_runtime.apply();
         soracloud_service_audit_events.apply();
         soracloud_service_state_entries.apply();
         soracloud_decryption_request_records.apply();
@@ -14782,12 +15158,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_private_inference_sessions.apply();
         soracloud_private_inference_checkpoints.apply();
         soracloud_model_host_capabilities.apply();
+        soracloud_inrou_host_capabilities.apply();
         soracloud_hf_sources.apply();
         soracloud_hf_shared_lease_pools.apply();
         soracloud_hf_shared_lease_members.apply();
         soracloud_hf_shared_lease_audit_events.apply();
         soracloud_model_host_violation_evidence.apply();
         soracloud_hf_placements.apply();
+        soracloud_inrou_service_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
@@ -14831,6 +15209,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         zk_assets.apply();
         elections.apply();
         citizens.apply();
+        ministry_agenda_proposals.apply();
         governance_proposals.apply();
         governance_referenda.apply();
         governance_stage_approvals.apply();
@@ -14883,6 +15262,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         uaid_accounts.apply();
         account_aliases.apply();
         account_aliases_by_account.apply();
+        account_scope_directory.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -15151,12 +15531,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        )));
+        self.emit_events({
+            Some(DomainEvent::AssetDefinition(
+                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
+                    asset_definition: definition_id.clone(),
+                    total_amount: new_total,
+                }),
+            ))
+        });
 
         Ok(())
     }
@@ -15197,12 +15579,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        )));
+        self.emit_events({
+            Some(DomainEvent::AssetDefinition(
+                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
+                    asset_definition: definition_id.clone(),
+                    total_amount: new_total,
+                }),
+            ))
+        });
 
         Ok(())
     }
@@ -15330,6 +15714,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         self.rebuild_space_directory_bindings(*uaid);
                         axt_policy_dirty = true;
                     }
+                    self.refresh_account_scope_directory_entry(account.account.id());
+                }
+                DataEvent::Domain(data_pre::DomainEvent::Account(
+                    data_pre::AccountEvent::Deleted(account_id),
+                )) => {
+                    self.account_scope_directory.remove(account_id.clone());
                 }
                 _ => {}
             }
@@ -16442,6 +16832,9 @@ impl State {
                 "storage migration refreshed UAID dataspace bindings from manifest records"
             );
         }
+        self.world
+            .rebuild_account_scope_directory()
+            .expect("account scope directory should rebuild during storage migration");
         // Defer AXT policy refresh until the runtime lane catalog is applied.
     }
 
@@ -19443,6 +19836,38 @@ impl State {
             tx.commit();
         }
 
+        // Drop account-scope directory entries targeting removed dataspaces so routed
+        // account-read scope cannot retain stale dataspace references after catalog updates.
+        let stale_account_scope_accounts: Vec<AccountId> = self
+            .world
+            .account_scope_directory
+            .view()
+            .iter()
+            .filter_map(|(account_id, entry)| {
+                entry
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(account_id.clone())
+            })
+            .collect();
+        if !stale_account_scope_accounts.is_empty() {
+            let mut tx = self.world.account_scope_directory.block();
+            for account_id in stale_account_scope_accounts {
+                let Some(mut entry) = tx.get(&account_id).cloned() else {
+                    continue;
+                };
+                if !entry.retain_dataspaces(&dataspace_ids) {
+                    continue;
+                }
+                if entry.is_empty() {
+                    tx.remove(account_id);
+                } else {
+                    tx.insert(account_id, entry);
+                }
+            }
+            tx.commit();
+        }
+
         // Drop AXT policy entries targeting removed dataspaces so runtime policy
         // caches cannot retain stale dataspace references across nexus updates.
         let stale_axt_policies: Vec<DataSpaceId> = self
@@ -21457,6 +21882,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            current_tx_hash: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
@@ -26499,6 +26925,130 @@ impl StateTransaction<'_, '_> {
                 self.execute_instructions(instructions.clone(), authority),
                 None,
             ),
+            ExecutableRef::ContractCall(invocation) => {
+                let record = crate::smartcontracts::code::fetch_bound_contract_record(
+                    self,
+                    &invocation.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        invocation.contract_address
+                    ))
+                })?;
+                let bytecode = record.code_bytes.clone();
+                let summary = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .summarize_program(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let meta = summary.metadata.clone();
+                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                let mut eff_cycles = meta.max_cycles;
+                if eff_cycles == 0 {
+                    eff_cycles = u64::MAX;
+                }
+                if pipeline_cap > 0 {
+                    eff_cycles = eff_cycles.min(pipeline_cap);
+                }
+                if eff_cycles == u64::MAX {
+                    eff_cycles = 0;
+                }
+                let gas_cap_cycles = if eff_cycles == 0 {
+                    meta.max_cycles
+                } else {
+                    eff_cycles
+                };
+                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block
+                        .saturating_sub(self.gas_used_in_block_so_far)
+                };
+                let mut gas_limit = gas_cap.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                }
+                let mut cached_runtime = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .take_or_create_cached_runtime(bytecode.as_ref(), gas_limit)
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let mut vm = cached_runtime.vm;
+                let contract_call_context =
+                    crate::executor::parse_contract_invocation_execution_context(
+                        invocation,
+                        bytecode.as_ref(),
+                        record.contract_alias.clone(),
+                    )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                    vm.set_register(1, vm.memory.code_len());
+                    vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .runtime_context()
+                            .map(|runtime| runtime.entrypoint)
+                            .unwrap_or_else(|| "main".to_owned());
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = self.trigger_accounts_snapshot();
+                let mut host =
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                        authority.clone(),
+                        accounts,
+                        contract_call_context.args().clone(),
+                    );
+                let current_block_time_ms =
+                    u64::try_from(self._curr_block.creation_time().as_millis())
+                        .expect("block creation timestamp must fit into u64");
+                host.set_trigger_id(id.clone());
+                host.set_block_time_ms(current_block_time_ms);
+                let default_base = self._curr_block.height().get().saturating_mul(256);
+                host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(self.telemetry.clone());
+                host.set_crypto_config(self.crypto());
+                host.set_halo2_config(&self.zk.halo2);
+                host.set_chain_id(self.chain_id());
+                host.set_durable_state_snapshot_from_world(&self.world);
+                host.set_public_inputs_from_parameters(self.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&self.world);
+                host.set_query_state(self);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                    .map_err(|e| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
+                    })?;
+                if eff_cycles > 0 {
+                    vm.set_max_cycles(eff_cycles);
+                }
+                vm.set_gas_limit(gas_limit);
+                let run_result = vm.run_with_host(&mut host);
+                cached_runtime.vm = vm;
+                {
+                    let mut cache = self.ivm_cache.lock();
+                    cache.put_cached_runtime(&cached_runtime);
+                }
+                if let Err(e) = run_result {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &cached_runtime.vm,
+                            &e,
+                        )
+                        .into(),
+                    );
+                }
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                (Ok(cvs.into()), None)
+            }
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
                     let trigger_args = self.trigger_args_from_event(&event);
@@ -26601,6 +27151,7 @@ impl StateTransaction<'_, '_> {
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
+                    host.set_contract_runtime_context(contract_runtime_context.clone());
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {
                             ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
@@ -26679,7 +27230,9 @@ impl StateTransaction<'_, '_> {
     fn execution_step_from_executable(executable: &ExecutableRef) -> ExecutionStep {
         match executable {
             ExecutableRef::Instructions(instructions) => ExecutionStep(instructions.clone()),
-            ExecutableRef::Ivm(_) => ExecutionStep(ConstVec::new_empty()),
+            ExecutableRef::ContractCall(_) | ExecutableRef::Ivm(_) => {
+                ExecutionStep(ConstVec::new_empty())
+            }
         }
     }
 
@@ -26710,6 +27263,9 @@ impl StateTransaction<'_, '_> {
             Executable::Instructions(instructions) => {
                 self.execute_instructions(instructions.clone(), authority)
                     .expect("should be no errors");
+            }
+            Executable::ContractCall(_) => {
+                panic!("apply_executable does not support Executable::ContractCall")
             }
             Executable::Ivm(bytes) => {
                 let mut vm = IVM::new(0);
@@ -27267,6 +27823,27 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn take_optional_default_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) => {
+                    eprintln!(
+                        "snapshot compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
+            },
+        )
+    }
+
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -27341,6 +27918,7 @@ pub(crate) mod deserialize {
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
+        let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -27398,11 +27976,13 @@ pub(crate) mod deserialize {
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
         let soracloud_service_revisions =
-            take_optional_default(&mut map, "soracloud_service_revisions")?;
+            take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
         let soracloud_service_runtime =
             take_optional_default(&mut map, "soracloud_service_runtime")?;
+        let soracloud_inrou_replica_runtime =
+            take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
         let soracloud_service_audit_events =
             take_optional_default(&mut map, "soracloud_service_audit_events")?;
         let soracloud_service_state_entries =
@@ -27438,6 +28018,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
         let soracloud_model_host_capabilities =
             take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
+        let soracloud_inrou_host_capabilities =
+            take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
         let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
         let soracloud_hf_shared_lease_pools =
             take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
@@ -27448,6 +28030,8 @@ pub(crate) mod deserialize {
         let soracloud_model_host_violation_evidence =
             take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
         let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
+        let soracloud_inrou_service_placements =
+            take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
         let soracloud_mailbox_messages =
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
         let soracloud_runtime_receipts =
@@ -27456,6 +28040,8 @@ pub(crate) mod deserialize {
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
         let citizens = take_optional_default(&mut map, "citizens")?;
+        let ministry_agenda_proposals =
+            take_optional_default(&mut map, "ministry_agenda_proposals")?;
         let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
         let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
         let governance_stage_approvals =
@@ -27500,6 +28086,7 @@ pub(crate) mod deserialize {
             uaid_accounts: Storage::default(),
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
@@ -27562,6 +28149,7 @@ pub(crate) mod deserialize {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -27580,12 +28168,14 @@ pub(crate) mod deserialize {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),
@@ -27636,6 +28226,7 @@ pub(crate) mod deserialize {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -27666,6 +28257,12 @@ pub(crate) mod deserialize {
             .rebuild_account_alias_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_scope_directory()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_scope_directory".into(),
                 message,
             })?;
         world
@@ -28870,6 +29467,277 @@ mod tests {
                 .expect("account domains"),
             BTreeSet::from([universal_domain, retail_domain]),
             "domains should flatten across all bound dataspaces",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_alias_bind_and_unbind() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("domain name"),
+            )),
+            retail_dataspace,
+        );
+
+        let initial_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("initial account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            initial_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "materialized accounts should start in the universal dataspace only",
+        );
+
+        stx.world
+            .insert_account_alias_binding(retail_alias.clone(), account_id.clone());
+        let bound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("bound account scope")
+            .expect("bound account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            bound_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (
+                    retail_dataspace,
+                    BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("domain name"),
+                    )]),
+                ),
+            ]),
+            "alias binds should immediately refresh the account scope directory",
+        );
+
+        stx.world.remove_account_alias_binding(&retail_alias);
+        let unbound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("unbound account scope")
+            .expect("account scope entry should remain after unbind")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            unbound_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "alias unbinds should remove the extra dataspace from the account scope directory",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_uses_primary_label_materialization_for_private_accounts() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let private_domain = DomainId::try_new("treasury", "retail").expect("domain");
+        let private_primary_label = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                private_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+        stx.world.domains.insert(
+            private_domain.clone(),
+            Domain::new(private_domain.clone()).build(&authority),
+        );
+        let (authority_id, authority_value) = Account::new(authority.clone())
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(authority_id, authority_value);
+        let (account_key, account_value) = Account::new(account_id.clone())
+            .with_label(Some(private_primary_label.clone()))
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(account_key, account_value);
+
+        let scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            scopes,
+            BTreeMap::from([(
+                retail_dataspace,
+                BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    "treasury".parse::<Name>().expect("domain name"),
+                )]),
+            )]),
+            "private primary labels should materialize the account scope in that private dataspace without a universal fallback",
+        );
+        assert_eq!(
+            stx.world
+                .account_scope_hierarchy(&account_id)
+                .expect("account hierarchy"),
+            BTreeMap::from([(retail_dataspace, BTreeSet::from([private_domain]))]),
+            "hierarchy should resolve the primary-label dataspace/domain pair",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_manifest_driven_uaid_binding_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let treasury_dataspace = DataSpaceId::new(18);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: treasury_dataspace,
+                alias: "treasury".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::account-scope-refresh"));
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()).with_uaid(Some(uaid)))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let manifest_record = |dataspace| {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::default(),
+                uaid,
+                dataspace,
+                issued_ms: 0,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            record
+        };
+
+        let mut retail_set = SpaceDirectoryManifestSet::default();
+        retail_set.upsert(manifest_record(retail_dataspace));
+        stx.world.space_directory_manifests.insert(uaid, retail_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let retail_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("retail account scope")
+            .expect("account scope entry after retail manifest")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            retail_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (retail_dataspace, BTreeSet::new()),
+            ]),
+            "UAID bindings should surface the manifest dataspace in the account scope directory",
+        );
+
+        let mut treasury_set = SpaceDirectoryManifestSet::default();
+        treasury_set.upsert(manifest_record(treasury_dataspace));
+        stx.world
+            .space_directory_manifests
+            .insert(uaid, treasury_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let treasury_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("treasury account scope")
+            .expect("account scope entry after manifest rotation")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            treasury_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (treasury_dataspace, BTreeSet::new()),
+            ]),
+            "manifest-driven UAID binding changes should refresh the account scope directory",
         );
     }
 
@@ -30707,6 +31575,84 @@ mod tests {
         assert!(
             manifests_view.get(&uaid_stale_only).is_none(),
             "manifest set should be removed when all dataspaces are stale"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_account_scope_directory_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "historical".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut mixed_entry = AccountScopeDirectoryEntry::default();
+        mixed_entry.ensure_dataspace(retained);
+        mixed_entry.ensure_dataspace(removed);
+        let mut stale_only_entry = AccountScopeDirectoryEntry::default();
+        stale_only_entry.ensure_dataspace(removed);
+
+        let mut wb = state.world.block();
+        wb.account_scope_directory
+            .insert(mixed_account.clone(), mixed_entry);
+        wb.account_scope_directory
+            .insert(stale_only_account.clone(), stale_only_entry);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let view = state.world.account_scope_directory.view();
+        let mixed = view
+            .get(&mixed_account)
+            .expect("mixed account scope entry should remain");
+        assert!(
+            mixed
+                .iter()
+                .all(|(dataspace_id, _)| *dataspace_id == retained),
+            "stale dataspaces should be pruned from mixed account scope entries",
+        );
+        assert!(
+            view.get(&stale_only_account).is_none(),
+            "entries should be removed when every dataspace becomes stale",
         );
     }
 
@@ -43928,6 +44874,7 @@ mod tests {
                 entrypoint: "main".to_string(),
                 args: Vec::new(),
                 env: std::collections::BTreeMap::new(),
+                inrou: None,
                 required_config_names: Vec::new(),
                 required_secret_names: Vec::new(),
                 config_exports: Vec::new(),
@@ -43956,6 +44903,8 @@ mod tests {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                 container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
                     manifest_hash: Hash::new(b"container"),
                     expected_schema_version:
@@ -43969,7 +44918,9 @@ mod tests {
                     health_window_secs: std::num::NonZeroU32::new(30).expect("nonzero"),
                     automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("nonzero"),
                 },
+                economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                 state_bindings: Vec::new(),
+                lease_volumes: Vec::new(),
                 handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
                     handler_name: "query".parse().expect("valid name"),
                     class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
@@ -44011,6 +44962,8 @@ mod tests {
                     secret_generation: 0,
                     service_configs: std::collections::BTreeMap::new(),
                     service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world.soracloud_service_runtime_mut_for_testing().insert(

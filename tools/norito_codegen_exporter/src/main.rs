@@ -122,6 +122,7 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::zk::CreateElection);
         $macro!(iroha_data_model::isi::zk::SubmitBallot);
         $macro!(iroha_data_model::isi::zk::FinalizeElection);
+        $macro!(iroha_data_model::isi::ministry::SubmitAgendaProposal);
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);

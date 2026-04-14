@@ -10,7 +10,7 @@ use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
     HasMetadata, Identifiable, ValidationFail,
-    account::{AccountAddress, AccountEntry, AccountId},
+    account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::SignedBlock,
     domain::{Domain, DomainId},
@@ -195,7 +195,6 @@ pub(crate) struct ExplorerPaginationMeta {
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountDto {
     pub id: String,
-    pub i105_address: String,
     pub network_prefix: u16,
     pub metadata: Value,
     pub owned_domains: u32,
@@ -205,15 +204,9 @@ pub(crate) struct ExplorerAccountDto {
 
 impl ExplorerAccountDto {
     pub(crate) fn from_entry(entry: AccountEntry<'_>, counts: AccountCounters) -> Self {
-        let network_prefix = iroha_data_model::account::address::chain_discriminant();
-        let address =
-            AccountAddress::from_account_id(entry.id()).expect("account ids are always valid");
         Self {
             id: entry.id().to_string(),
-            i105_address: address
-                .to_i105_for_discriminant(network_prefix)
-                .unwrap_or_else(|_| entry.id().to_string()),
-            network_prefix,
+            network_prefix: iroha_data_model::account::address::chain_discriminant(),
             metadata: metadata_to_json(entry.value().metadata()),
             owned_domains: counts.domains,
             owned_assets: counts.assets,
@@ -652,6 +645,7 @@ pub(crate) struct ExplorerTransactionDetailDto {
     pub executable: String,
     pub status: String,
     pub rejection_reason: Option<ExplorerTransactionRejectionDto>,
+    pub executable_payload: Value,
     pub metadata: Value,
     pub nonce: Option<u64>,
     pub signature: String,
@@ -1241,8 +1235,57 @@ fn encode_norito_hex_prefixed<T: Encode>(value: &T) -> String {
 fn executable_label(executable: &Executable) -> &'static str {
     match executable {
         Executable::Instructions(_) => "Instructions",
+        Executable::ContractCall(_) => "ContractCall",
         Executable::Ivm(_) => "Ivm",
         Executable::IvmProved(_) => "IvmProved",
+    }
+}
+
+fn usize_to_value(value: usize) -> Value {
+    Value::Number(u64::try_from(value).unwrap_or(u64::MAX).into())
+}
+
+fn executable_payload(executable: &Executable) -> Value {
+    match executable {
+        Executable::Instructions(instructions) => {
+            let mut map = Map::new();
+            map.insert(
+                "instruction_count".to_string(),
+                usize_to_value(instructions.len()),
+            );
+            Value::Object(map)
+        }
+        Executable::ContractCall(invocation) => {
+            norito::json::to_value(invocation).unwrap_or(Value::Null)
+        }
+        Executable::Ivm(bytecode) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(bytecode.size_bytes()),
+            );
+            Value::Object(map)
+        }
+        Executable::IvmProved(proved) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(proved.bytecode.size_bytes()),
+            );
+            map.insert(
+                "overlay_count".to_string(),
+                usize_to_value(proved.overlay.len()),
+            );
+            map.insert(
+                "events_commitment".to_string(),
+                Value::String(proved.events_commitment.to_string()),
+            );
+            map.insert(
+                "gas_policy_commitment".to_string(),
+                Value::String(proved.gas_policy_commitment.to_string()),
+            );
+            Value::Object(map)
+        }
     }
 }
 
@@ -1316,6 +1359,7 @@ pub(crate) fn transaction_detail_dto(
                 json: norito::json::to_value(reason).unwrap_or(Value::Null),
                 message: format_rejection_reason_message(reason),
             }),
+        executable_payload: executable_payload(tx.instructions()),
         metadata: metadata_to_json(tx.metadata()),
         nonce: tx.nonce().map(|nonce| nonce.get().into()),
         signature: hex::encode(tx.signature().payload().payload()),
@@ -1593,10 +1637,13 @@ mod tests {
         domain::DomainId,
         isi::{Register, Transfer},
         metadata::Metadata,
+        nexus::DataSpaceId,
         nft::{NftData, NftId},
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         transaction::{
             error::TransactionRejectionReason,
+            executable::{ContractInvocation, Executable},
             signed::{TransactionBuilder, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
@@ -1667,6 +1714,49 @@ mod tests {
     }
 
     #[test]
+    fn account_dto_omits_redundant_i105_address_field() {
+        let details = Owned::new(AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        ));
+        let account_id = ALICE_ID.clone();
+        let entry = Ref::new(&account_id, &details);
+        let dto = ExplorerAccountDto::from_entry(
+            entry,
+            AccountCounters {
+                domains: 1,
+                assets: 2,
+                nfts: 3,
+            },
+        );
+        let expected_id = account_id.to_string();
+
+        assert_eq!(dto.id, expected_id);
+        assert_eq!(
+            dto.network_prefix,
+            iroha_data_model::account::address::chain_discriminant()
+        );
+        assert_eq!(dto.owned_domains, 1);
+        assert_eq!(dto.owned_assets, 2);
+        assert_eq!(dto.owned_nfts, 3);
+
+        let payload = norito::json::to_value(&dto).expect("dto json");
+        let object = payload
+            .as_object()
+            .expect("dto should serialize as an object");
+        assert_eq!(
+            object.get("id").and_then(Value::as_str),
+            Some(expected_id.as_str())
+        );
+        assert!(
+            !object.contains_key("i105_address"),
+            "explorer account detail should not emit redundant i105_address"
+        );
+    }
+
+    #[test]
     fn asset_definition_dto_contains_metadata() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1714,7 +1804,7 @@ mod tests {
 
     #[test]
     fn nft_dto_includes_metadata() {
-        let nft_id: NftId = "rose$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "rose$wonderland.universal".parse().expect("nft id");
         let mut data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -1896,6 +1986,44 @@ mod tests {
     }
 
     #[test]
+    fn transaction_detail_includes_contract_call_payload() {
+        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::GLOBAL)
+            .expect("contract address");
+        let mut payload = Map::new();
+        payload.insert("amount".to_string(), Value::Number(5_u64.into()));
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: "contribute".to_string(),
+                payload: Some(iroha_primitives::json::Json::new(Value::Object(payload))),
+            }))
+            .sign(ALICE_KEYPAIR.private_key());
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let dto = transaction_detail_dto(&tx, 9, &result);
+
+        assert_eq!(dto.executable, "ContractCall");
+        match dto.executable_payload {
+            Value::Object(map) => {
+                assert_eq!(
+                    map.get("contract_address").and_then(Value::as_str),
+                    Some(contract_address.as_ref())
+                );
+                assert_eq!(
+                    map.get("entrypoint").and_then(Value::as_str),
+                    Some("contribute")
+                );
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .expect("contract call payload should be serialized as object");
+                assert_eq!(payload.get("amount").and_then(Value::as_u64), Some(5));
+            }
+            other => panic!("unexpected executable payload: {other:?}"),
+        }
+    }
+
+    #[test]
     fn accounts_page_filters_by_domain_and_definition() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -2036,8 +2164,10 @@ mod tests {
 
     #[test]
     fn nfts_page_filters_by_owner_and_domain() {
-        let nft_alpha: NftId = "alpha$wonderland".parse().expect("nft id");
-        let nft_beta: NftId = "beta$garden_of_live_flowers".parse().expect("nft id");
+        let nft_alpha: NftId = "alpha$wonderland.universal".parse().expect("nft id");
+        let nft_beta: NftId = "beta$garden_of_live_flowers.universal"
+            .parse()
+            .expect("nft id");
         let mut alpha_data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -2083,19 +2213,19 @@ mod tests {
     #[test]
     fn rwas_page_filters_by_owner_and_domain() {
         let rwa_alpha: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
         )
         .parse()
         .expect("rwa id");
         let rwa_alpha_parent: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([9; iroha_crypto::Hash::LENGTH])
         )
         .parse()
         .expect("rwa parent id");
         let rwa_beta: RwaId = format!(
-            "{}$garden_of_live_flowers",
+            "{}$garden_of_live_flowers.universal",
             iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
         )
         .parse()

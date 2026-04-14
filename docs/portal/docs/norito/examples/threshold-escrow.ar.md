@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - اتصل بـ `open_escrow(recipient, escrow_account, asset_definition, target_amount)` مرة واحدة لتسجيل الدافع والمستلم وحساب الضمان وتعريف الأصول والهدف الدقيق والإشارات المفتوحة/المحررة/المستردة في حالة العقد الدائم.
 - اتصل بـ `deposit(amount)` من نفس الدافع حتى `funded_amount_value == target_amount_value`؛ يجب أن تظل الودائع إيجابية ويتم رفض أي زيادة من شأنها أن تزيد من تمويل الضمان.
 - اتصل بـ `release_if_ready()` لنقل أموال الضمان إلى المستلم بمجرد تحقيق الهدف، أو اتصل بـ `refund()` بينما لا يزال حساب الضمان مفتوحًا لإعادة المبلغ الممول إلى الدافع.
-- فحص الأرصدة باستخدام `FindAssetById` / `iroha_cli ledger asset list` وفحص حالة العقد باستخدام `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- فحص الأرصدة باستخدام `FindAssetById` / `iroha ledger asset list all --verbose` وفحص حالة العقد باستخدام `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## أدلة SDK ذات الصلة
 

@@ -7,7 +7,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -290,10 +293,22 @@ pub fn deploy_request_json(
     private_key: &ExposedPrivateKey,
     code_b64: &str,
 ) -> String {
+    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!(
+            "deploy{}",
+            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
+        None,
+        "universal",
+    )
+    .expect("construct contract alias");
     let value = crate::json_object(vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("code_b64", code_b64),
+        crate::json_entry("contract_alias", alias),
     ]);
     norito::json::to_json(&value).expect("serialize deploy request")
 }
@@ -532,6 +547,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ram_lfe: None,
             faucet: None,
             tx_history: None,
+            webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,

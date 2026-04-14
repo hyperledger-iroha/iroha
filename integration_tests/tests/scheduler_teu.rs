@@ -41,6 +41,13 @@ use tokio::sync::broadcast;
 
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
+fn disable_nexus_fee_admission(nexus: &mut Nexus) {
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+}
+
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
@@ -293,6 +300,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         routing_policy: routing_policy.clone(),
         ..Nexus::default()
     };
+    let mut nexus = nexus;
+    disable_nexus_fee_admission(&mut nexus);
 
     let queue_limits = QueueLimits::from_nexus(&nexus);
 
@@ -528,6 +537,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         routing_policy: routing_policy.clone(),
         ..Nexus::default()
     };
+    let mut nexus = nexus;
+    disable_nexus_fee_admission(&mut nexus);
 
     let queue_limits = QueueLimits::from_nexus(&nexus);
 

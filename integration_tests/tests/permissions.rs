@@ -8,7 +8,7 @@ use std::{
 };
 
 use eyre::Result;
-use integration_tests::{metrics::MetricsReader, sandbox};
+use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -31,6 +31,13 @@ use tokio::{
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
+}
+
+fn start_network_with_builder(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Option<(sandbox::SerializedNetwork, Runtime)> {
+    sandbox::start_network_blocking_or_skip(builder, context).unwrap()
 }
 
 fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
@@ -299,15 +306,32 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     };
     let client = network.client();
     let metrics_url = client.torii_url.join("/metrics")?;
+    let mut status = client.get_status()?;
+    let mut last_non_empty_height = status.blocks_non_empty;
 
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
     client.submit_blocking(Register::account(Account::new(mouse_id.clone())))?;
+    status = sync_after_submission(
+        &network,
+        &rt,
+        &client,
+        last_non_empty_height,
+        "register detached permission target account",
+    )?;
+    last_non_empty_height = status.blocks_non_empty;
 
     let perm: Permission = CanModifyAccountMetadata {
         account: mouse_id.clone(),
     }
     .into();
     client.submit_blocking(Grant::account_permission(perm.clone(), ALICE_ID.clone()))?;
+    let _status = sync_after_submission(
+        &network,
+        &rt,
+        &client,
+        last_non_empty_height,
+        "seed detached account permission",
+    )?;
 
     let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
     let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
@@ -425,18 +449,16 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
         );
         return Ok(());
     }
-    let Some((network, _rt)) = start_network(stringify!(account_can_query_only_its_own_domain))
-    else {
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+    let new_domain_id: DomainId = DomainId::try_new("wonderland2", "universal")?;
+    let Some((network, _rt)) = start_network_with_builder(
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(new_domain_id.clone()))),
+        stringify!(account_can_query_only_its_own_domain),
+    ) else {
         return Ok(());
     };
     let client = network.client();
-
-    // Given
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
-    let new_domain_id: DomainId = DomainId::try_new("wonderland2", "universal")?;
-    let register_domain = Register::domain(Domain::new(new_domain_id.clone()));
-
-    client.submit_blocking(register_domain)?;
 
     // Alice can query the domain in which her account exists.
     assert!(
@@ -463,12 +485,21 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
 #[test]
 fn permissions_differ_not_only_by_names() {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let outfit_domain: DomainId = DomainId::try_new("outfit", "universal").expect("Valid");
 
-    let Some((network, _rt)) = start_network(stringify!(permissions_differ_not_only_by_names))
-    else {
+    let Some((network, _rt)) = start_network_with_builder(
+        NetworkBuilder::new(),
+        stringify!(permissions_differ_not_only_by_names),
+    ) else {
         return;
     };
     let client = network.client();
+    submit_register_domain_with_network_lease(
+        &network,
+        &client,
+        Domain::new(outfit_domain.clone()),
+    )
+    .expect("Failed to register outfit domain");
 
     let submit_with_authority = |isi: InstructionBox,
                                  authority: &AccountId,
@@ -486,21 +517,22 @@ fn permissions_differ_not_only_by_names() {
     let (mouse_id, mouse_keypair) = gen_account_in("outfit");
 
     // Registering mouse
-    let outfit_domain: DomainId = DomainId::try_new("outfit", "universal").unwrap();
-    let create_outfit_domain = Register::domain(Domain::new(outfit_domain.clone()));
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     client
-        .submit_all_blocking::<InstructionBox>([
-            create_outfit_domain.into(),
-            register_mouse_account.into(),
-        ])
+        .submit_all_blocking::<InstructionBox>([register_mouse_account.into()])
         .expect("Failed to register mouse");
 
     // Registering NFT
-    let hat_nft_id: NftId = "hat$outfit".parse().expect("Valid");
+    let hat_nft_id = NftId::new(
+        DomainId::try_new("outfit", "universal").expect("Valid"),
+        "hat".parse().expect("Valid"),
+    );
     let register_hat_nft = Register::nft(Nft::new(hat_nft_id.clone(), Metadata::default()));
     let transfer_shoes_domain = Transfer::domain(alice_id.clone(), outfit_domain, mouse_id.clone());
-    let shoes_nft_id: NftId = "shoes$outfit".parse().expect("Valid");
+    let shoes_nft_id = NftId::new(
+        DomainId::try_new("outfit", "universal").expect("Valid"),
+        "shoes".parse().expect("Valid"),
+    );
     let register_shoes_nft = Register::nft(Nft::new(shoes_nft_id.clone(), Metadata::default()));
     client
         .submit_all_blocking::<InstructionBox>([
@@ -653,19 +685,17 @@ fn permissions_are_unified() {
 
 #[test]
 fn associated_permissions_removed_on_unregister() {
-    let Some((network, _rt)) =
-        start_network(stringify!(associated_permissions_removed_on_unregister))
-    else {
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
+    let Some((network, _rt)) = start_network_with_builder(
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+        stringify!(associated_permissions_removed_on_unregister),
+    ) else {
         return;
     };
     let iroha = network.client();
 
     let bob_id = BOB_ID.clone();
-    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let kingdom = Domain::new(kingdom_id.clone());
-
-    // register kingdom and give bob permissions in this domain
-    let register_domain = Register::domain(kingdom);
     let bob_to_set_kv_in_domain = CanModifyDomainMetadata {
         domain: kingdom_id.clone(),
     };
@@ -673,11 +703,8 @@ fn associated_permissions_removed_on_unregister() {
         Grant::account_permission(bob_to_set_kv_in_domain.clone(), bob_id.clone());
 
     iroha
-        .submit_all_blocking::<InstructionBox>([
-            register_domain.into(),
-            allow_bob_to_set_kv_in_domain.into(),
-        ])
-        .expect("failed to register domain and grant permission");
+        .submit_all_blocking::<InstructionBox>([allow_bob_to_set_kv_in_domain.into()])
+        .expect("failed to grant permission");
 
     // check that bob indeed have granted permission
     assert!(
@@ -713,19 +740,17 @@ fn associated_permissions_removed_on_unregister() {
 
 #[test]
 fn associated_permissions_removed_from_role_on_unregister() {
-    let Some((network, _rt)) = start_network(stringify!(
-        associated_permissions_removed_from_role_on_unregister
-    )) else {
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
+    let Some((network, _rt)) = start_network_with_builder(
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+        stringify!(associated_permissions_removed_from_role_on_unregister),
+    ) else {
         return;
     };
     let iroha = network.client();
 
     let role_id: RoleId = "role".parse().expect("Valid");
-    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let kingdom = Domain::new(kingdom_id.clone());
-
-    // register kingdom and give bob permissions in this domain
-    let register_domain = Register::domain(kingdom);
     let set_kv_in_domain = CanModifyDomainMetadata {
         domain: kingdom_id.clone(),
     };
@@ -734,8 +759,8 @@ fn associated_permissions_removed_from_role_on_unregister() {
     );
 
     iroha
-        .submit_all_blocking::<InstructionBox>([register_domain.into(), register_role.into()])
-        .expect("failed to register domain and grant permission");
+        .submit_all_blocking::<InstructionBox>([register_role.into()])
+        .expect("failed to register role");
 
     // check that role indeed have permission
     assert!(

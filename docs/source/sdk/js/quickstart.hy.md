@@ -2,12 +2,14 @@
 lang: hy
 direction: ltr
 source: docs/source/sdk/js/quickstart.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 137a43a6ef4f6bfba104aba151e73785aab912fe4df34cb52ee59540c47e6fec
-source_last_modified: "2026-01-30T18:06:03.356414+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: ed490b7e796183ba923148179dbbe4b923b6d5e52c203853bd2d1236e760e631
+source_last_modified: "2026-04-04T12:16:49.583988+00:00"
+translation_last_reviewed: 2026-04-05
 ---
+
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 <!--
   SPDX-License-Identifier: Apache-2.0
@@ -191,8 +193,10 @@ for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>",
 ### Auth headers and TLS guardrails
 
 `ToriiClient` and `NoritoRpcClient` refuse to send credentials over insecure `http`/`ws` or to
-absolute URLs outside the configured base. Opt into `allowInsecure: true` only for local testing;
-the telemetry hook fires whenever the escape hatch is used.
+absolute URLs outside the configured base. `ToriiClient` applies the same guard to
+`canonicalAuth` requests and JSON payloads that carry raw `private_key` fields. Opt into
+`allowInsecure: true` only for local testing; the telemetry hook fires whenever the escape hatch is
+used.
 
 ```js
 import { NoritoRpcClient } from "@iroha/iroha-js";
@@ -287,8 +291,9 @@ const torii = new ToriiClient("http://127.0.0.1:8080", {
 
 ### Canonical request headers
 
-App-facing JSON endpoints accept optional `X-Iroha-Account` / `X-Iroha-Signature`
-headers. Provide `canonicalAuth` to sign requests on the fly:
+App-facing JSON endpoints accept optional `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
+Provide `canonicalAuth` to sign requests on the fly:
 
 ```js
 import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
@@ -303,7 +308,8 @@ const { items } = await torii.listAccountAssets("<i105-account-id>", {
 ```
 
 When constructing ad-hoc HTTP calls, reuse `buildCanonicalRequestHeaders` to
-render the two headers from a method/path/query/body tuple.
+render the four headers from a method/path/query/body tuple. The helper also
+includes freshness metadata to prevent replay.
 
 ## Iterable Lists & Pagination
 
@@ -753,28 +759,24 @@ scripts can be dropped into staging rehearals or release workflows without bespo
 
 ### Contract deployment recipe (JS-06)
 
-JS-06 also requires a deterministic way to publish bytecode/manifest payloads without
-rewriting curl invocations. The new `javascript/iroha_js/recipes/contracts.mjs` helper
-reads bytecode from `CONTRACT_CODE_PATH`, optional manifest JSON from either
-`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and runs `/v1/contracts/deploy`
-followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (default:
-`both`). Supply the credentials and namespace context via:
+JS-06 also requires a deterministic way to publish bytecode without rewriting
+curl invocations. The `javascript/iroha_js/recipes/contracts.mjs` helper reads
+bytecode from `CONTRACT_CODE_PATH`, requires a stable `CONTRACT_ALIAS`, and
+runs the alias-first `/v1/contracts/deploy` flow. Supply the credentials and
+alias context via:
 
 ```
 TORII_URL=https://torii.devnet.example \
 AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
-CONTRACT_NAMESPACE=apps \
-CONTRACT_ID=demo.contract \
+CONTRACT_ALIAS=demo_contract::universal \
 node javascript/iroha_js/recipes/contracts.mjs
 ```
 
-Set `CONTRACT_STAGE=register` to upload the manifest/bytecode without activating a
-namespace binding (useful when governance controls activation), or `CONTRACT_STAGE=instance`
-when bytecode already lives on-chain and you only need to bind an `ActivateContractInstance`.
-`TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly to `ToriiClient`, and private keys are
+Set `CONTRACT_LEASE_EXPIRY_MS` when you need a leased alias binding for a
+rehearsal environment. `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly
+to `ToriiClient`, and private keys are
 validated whether you pass `PRIVATE_KEY=ed25519:<hex>` or a raw `PRIVATE_KEY_HEX` string, so
 the script can run inside CI without bespoke wrappers.
 

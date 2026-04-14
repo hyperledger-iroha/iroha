@@ -23,15 +23,18 @@ use iroha_data_model::{
         SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
         SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
-        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
-        SoraServiceManifestV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1,
-        SoraUploadedModelKeyWrapAeadV1,
+        SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
+        SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
+        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
+    sorafs::pin_registry::StorageClass,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -153,6 +156,7 @@ pub fn build_soracloud_hf_generated_service_bundle(
         entrypoint: HF_GENERATED_ENTRYPOINT_INFER.to_owned(),
         args: Vec::new(),
         env,
+        inrou: None,
         required_config_names: Vec::new(),
         required_secret_names: Vec::new(),
         config_exports: Vec::new(),
@@ -183,6 +187,7 @@ pub fn build_soracloud_hf_generated_service_bundle(
         schema_version: SORA_SERVICE_MANIFEST_VERSION_V1,
         service_name,
         service_version: HF_GENERATED_SERVICE_VERSION_V1.to_owned(),
+        execution_plane: SoraServiceExecutionPlaneV1::DeterministicService,
         container: SoraContainerManifestRefV1 {
             manifest_hash: container_manifest_hash,
             expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
@@ -201,7 +206,9 @@ pub fn build_soracloud_hf_generated_service_bundle(
             health_window_secs: NonZeroU32::new(30).expect("non-zero health window"),
             automatic_rollback_failures: NonZeroU32::new(1).expect("non-zero rollback failures"),
         },
+        economics: SoraHttpServiceEconomicsV1::default(),
         state_bindings: Vec::new(),
+        lease_volumes: Vec::new(),
         handlers: vec![
             SoraServiceHandlerV1 {
                 handler_name: "infer".parse().expect("valid literal handler name"),
@@ -276,7 +283,10 @@ pub fn build_soracloud_hf_generated_agent_manifest(
         ],
         spend_limits: Vec::new(),
         state_quota_bytes: NonZeroU64::new(16 * 1024 * 1024).expect("non-zero state quota"),
-        network_egress: SoraNetworkPolicyV1::Allowlist(vec![service_host]),
+        network_egress: SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+            service_host,
+            [443],
+        )]),
         upgrade_policy: AgentUpgradePolicyV1::Governed,
     }
 }
@@ -289,7 +299,8 @@ pub fn soracloud_hf_generated_source_binding(
     if bundle.service.service_version != HF_GENERATED_SERVICE_VERSION_V1 {
         return None;
     }
-    if bundle.container.runtime != SoraContainerRuntimeV1::Ivm
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::DeterministicService
+        || bundle.container.runtime != SoraContainerRuntimeV1::Ivm
         || !bundle.container.capabilities.allow_model_inference
         || bundle.container.capabilities.allow_state_writes
         || bundle.container.capabilities.allow_model_training
@@ -456,18 +467,33 @@ pub struct SoracloudRuntimeServicePlan {
     pub traffic_percent: u8,
     /// Runtime target.
     pub runtime: SoraContainerRuntimeV1,
+    /// Execution plane selected for this revision.
+    pub execution_plane: SoraServiceExecutionPlaneV1,
     /// Bundle digest.
     pub bundle_hash: String,
     /// Bundle path declared by the container manifest.
     pub bundle_path: String,
     /// Entrypoint declared by the container manifest.
     pub entrypoint: String,
+    /// Explicit Inrou VM metadata projected for hosted HTTP microVMs.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub inrou: Option<SoracloudRuntimeInrouPlan>,
     /// Node-local cache path for the executable bundle.
     pub bundle_cache_path: String,
     /// Whether the bundle is already present locally.
     pub bundle_available_locally: bool,
     /// Current deployment process generation when known for this revision.
     pub process_generation: Option<u64>,
+    /// Desired replica count declared by the admitted service manifest.
+    #[norito(default)]
+    pub desired_replica_count: u16,
+    /// Replica slots this runtime host is projecting locally for the revision.
+    #[norito(default)]
+    pub local_replica_slots: Vec<u16>,
+    /// Replica-local runtime topology currently projected on this host for the revision.
+    #[norito(default)]
+    pub local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
     /// Current runtime health projection.
     pub health_status: SoraServiceHealthStatusV1,
     /// Current runtime load projection.
@@ -482,6 +508,22 @@ pub struct SoracloudRuntimeServicePlan {
     pub config_generation: u64,
     /// Monotonic generation of committed service secret updates.
     pub secret_generation: u64,
+    /// Hosted-service quota class when the service uses the HTTP plane.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub quota_class: Option<String>,
+    /// Effective hosted-service lease status at the observed sequence.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub service_lease_status: Option<SoraServiceLeaseStatusV1>,
+    /// Sequence when hosted-service routing/materialization expires.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease_expires_sequence: Option<u64>,
+    /// Remaining prepaid runtime balance estimated at snapshot build time.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub remaining_runtime_balance_nanos: Option<u64>,
     /// Number of committed service config entries projected into runtime materialization.
     pub config_entry_count: u32,
     /// Number of committed service secret entries projected into runtime materialization.
@@ -512,10 +554,89 @@ pub struct SoracloudRuntimeServicePlan {
     pub secret_envelopes_materialization_dir: String,
     /// Local directory containing the legacy raw secret payload tree for this revision.
     pub secret_payload_materialization_dir: String,
+    /// Lease-backed mutable storage materialized for this revision.
+    #[norito(default)]
+    pub lease_volumes: Vec<SoracloudRuntimeLeaseVolumePlan>,
     /// Declared replicated handler mailboxes.
     pub mailboxes: Vec<SoracloudRuntimeMailboxPlan>,
     /// Referenced artifacts that still need local hydration.
     pub artifacts: Vec<SoracloudRuntimeArtifactPlan>,
+}
+
+/// Node-local materialization plan for one Inrou microVM guest.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudRuntimeInrouPlan {
+    /// Guest userspace profile expected by the VM image.
+    pub guest_os: SoraInrouGuestOsV1,
+    /// Runtime backend selected locally for the assigned host.
+    pub selected_backend: SoraInrouRuntimeBackendV1,
+    /// Guest ISA profile selected locally for this replica.
+    pub selected_guest_isa: SoraInrouGuestIsaV1,
+    /// Kernel image path for the selected guest ISA inside the hydrated Soracloud bundle.
+    pub kernel_image_path: String,
+    /// Immutable base root filesystem image path for the selected guest ISA.
+    pub rootfs_image_path: String,
+    /// Optional initrd image path for the selected guest ISA.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub initrd_image_path: Option<String>,
+    /// Optional bootstrap user-data overlay path inside the hydrated Soracloud bundle.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub bootstrap_user_data_path: Option<String>,
+    /// SSH public keys injected into the guest bootstrap seed.
+    #[norito(default)]
+    pub ssh_authorized_keys: Vec<String>,
+    /// Logical volume identifier used as the authoritative mutable root disk.
+    pub root_volume_name: String,
+}
+
+/// Node-local materialization plan for one lease-backed service volume.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudRuntimeLeaseVolumePlan {
+    /// Logical volume identifier.
+    pub volume_name: String,
+    /// Soracloud lease-backed volume kind.
+    pub kind: SoraLeaseVolumeKindV1,
+    /// Requested Sorafs storage class.
+    pub storage_class: StorageClass,
+    /// Declared in-runtime mount path.
+    pub mount_path: String,
+    /// Maximum logical bytes retained for this volume.
+    pub max_total_bytes: u64,
+    /// Sequence when the authoritative volume lease expires.
+    pub lease_expires_sequence: u64,
+    /// Monotonic generation of the authoritative lease binding.
+    pub authoritative_generation: u64,
+    /// Node-local materialization directory used by the current host.
+    ///
+    /// `PersistentRootLeaseVolume` plans use a per-revision/per-replica namespace,
+    /// while non-root service volumes are shared across replicas of the same
+    /// revision by default.
+    pub local_materialization_dir: String,
+}
+
+/// Node-local runtime topology projected for one hosted-HTTP replica slot.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudRuntimeReplicaPlan {
+    /// One-based replica slot within the revision.
+    pub replica_slot: u16,
+    /// Local directory where this replica slot is materialized.
+    pub materialization_dir: String,
+    /// Current runtime health projection for this replica slot.
+    pub health_status: SoraServiceHealthStatusV1,
+    /// Loopback listener currently exposed by this replica, when healthy.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub listen_base_url: Option<String>,
+    /// Local process identifier when the replica is running.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Human-readable startup or healthcheck failure detail for the replica, when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Node-local materialization plan for an active agent apartment.
@@ -547,6 +668,64 @@ pub struct SoracloudRuntimeApartmentPlan {
     pub autonomy_run_count: u32,
     /// Number of revoked policy capabilities.
     pub revoked_policy_capability_count: u32,
+}
+
+/// Schema version for persisted hosted-HTTP runtime state snapshots.
+pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1: u16 = 1;
+
+/// Canonical runtime-state filename written beside hosted-HTTP service materializations.
+pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1: &str = "hosted_http_runtime.json";
+
+/// Node-local state projected for one hosted-HTTP replica materialized by the local runtime manager.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudHostedHttpReplicaRuntimeStateV1 {
+    /// One-based replica slot for the revision-local materialization.
+    pub replica_slot: u16,
+    /// Projected health state of the replica runtime.
+    pub health_status: SoraServiceHealthStatusV1,
+    /// Base URL for the loopback listener exposed by the replica process, when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub listen_base_url: Option<String>,
+    /// Child process identifier while the replica is running.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Human-readable startup or healthcheck failure detail for this replica, when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Timestamp when the replica state was last refreshed.
+    pub updated_at_ms: u64,
+}
+
+/// Node-local state projected for a supervised hosted-HTTP Soracloud service revision.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudHostedHttpRuntimeStateV1 {
+    /// Schema version for this runtime-state document.
+    pub schema_version: u16,
+    /// Service identifier.
+    pub service_name: String,
+    /// Materialized revision/version.
+    pub service_version: String,
+    /// Process generation currently hosted by the local runtime-manager.
+    pub process_generation: u64,
+    /// Projected health state of the child process.
+    pub health_status: SoraServiceHealthStatusV1,
+    /// Base URL for the loopback listener exposed by the child process.
+    pub listen_base_url: Option<String>,
+    /// Child process identifier while the process is running.
+    pub pid: Option<u32>,
+    /// Total authoritative egress bytes accounted by the local supervisor.
+    #[norito(default)]
+    pub accounted_egress_bytes: u64,
+    /// Healthy and unhealthy replica listeners currently materialized on this host for the revision.
+    #[norito(default)]
+    pub replicas: Vec<SoracloudHostedHttpReplicaRuntimeStateV1>,
+    /// Human-readable startup or healthcheck failure detail, when present.
+    pub last_error: Option<String>,
+    /// Timestamp when the state file was last refreshed.
+    pub updated_at_ms: u64,
 }
 
 /// Schema version for [`SoracloudApartmentAutonomyExecutionSummaryV1`].
@@ -722,6 +901,10 @@ pub struct SoracloudRuntimeSnapshot {
     pub observed_height: u64,
     /// Latest committed block hash at snapshot time, when present.
     pub observed_block_hash: Option<String>,
+    /// Peer identity of the runtime host that produced this snapshot, when known.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub local_peer_id: Option<String>,
     /// Materialized active service revisions grouped by service name then version.
     pub services: BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
     /// Materialized active agent apartments keyed by apartment name.
@@ -737,6 +920,7 @@ impl Default for SoracloudRuntimeSnapshot {
             schema_version: 1,
             observed_height: 0,
             observed_block_hash: None,
+            local_peer_id: None,
             services: BTreeMap::new(),
             apartments: BTreeMap::new(),
             hf_sources: BTreeMap::new(),
@@ -1019,6 +1203,10 @@ pub struct SoracloudOrderedMailboxExecutionResult {
     pub state_mutations: Vec<SoracloudDeterministicStateMutation>,
     /// Cross-service messages emitted by the execution.
     pub outbound_mailbox_messages: Vec<SoraServiceMailboxMessageV1>,
+    /// Optional response payload returned by the executed handler.
+    pub response_bytes: Vec<u8>,
+    /// MIME type associated with `response_bytes`, when known.
+    pub content_type: Option<String>,
     /// Runtime-state observation to persist after execution.
     pub runtime_state: Option<SoraServiceRuntimeStateV1>,
     /// Deterministic runtime receipt for the execution.
@@ -1254,6 +1442,8 @@ mod tests {
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
                     service_name: bundle.service.service_name.clone(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world
@@ -1416,15 +1606,16 @@ mod tests {
         );
         assert_eq!(
             manifest.network_egress,
-            SoraNetworkPolicyV1::Allowlist(vec![
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
                 bundle
                     .service
                     .route
                     .as_ref()
                     .expect("generated service route")
                     .host
-                    .clone()
-            ])
+                    .clone(),
+                [443],
+            )])
         );
         assert_eq!(manifest.tool_capabilities.len(), 2);
     }

@@ -27,7 +27,7 @@ Soracloud v1 ስልጣን ያለው IVM-ብቻ የአሂድ ጊዜ ነው።
   ባለስልጣን የዓለም ግዛት እና የተከተተው የሶራክሎድ የአሂድ ጊዜ አስተዳዳሪ።
 
 ## የአሂድ ጊዜ ወሰን- Soracloud v1 `SoraContainerRuntimeV1::Ivm` ብቻ ይቀበላል።
-- `NativeProcess` ውድቅ ተደርጓል።
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - የታዘዘ የመልእክት ሳጥን አፈፃፀም በቀጥታ IVM ተቆጣጣሪዎች ገብተዋል።
 - እርጥበት እና ቁሳቁሳዊነት የሚመጣው ከተወሰነ የSoraFS/DA ይዘት ነው።
   ከተዋሃዱ የአካባቢ ቅጽበታዊ ገጽ እይታዎች ይልቅ።

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 41a944c3e016d0dc96a0edb3559700670a7bd57b437751a777df8b35567b34fb
-source_last_modified: "2025-11-23T15:30:33.687691+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ NFT のライフサイクルを端から端までたどります: オーナー�
 
 - NFT 定義（例: `n0#wonderland`）が存在し、スニペットで使用する所有者/受領者アカウント (`<i105-account-id>`, `<i105-account-id>`) が用意されていることを確認します。
 - `nft_issue_and_transfer` エントリポイントを呼び出して NFT をミントし、Alice から Bob へ移転し、発行内容を示すメタデータフラグを付与します。
-- `iroha_cli ledger nfts list --account <id>` または SDK の同等機能で NFT 台帳の状態を確認して移転を検証し、その後バーン命令が実行されると資産が削除されることを確かめます。
+- `iroha ledger nft list all --verbose` または SDK の同等機能で NFT 台帳の状態を確認して移転を検証し、その後バーン命令が実行されると資産が削除されることを確かめます。
 
 ## 関連 SDK ガイド
 

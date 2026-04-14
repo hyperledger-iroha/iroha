@@ -132,6 +132,7 @@ mv = { workspace = true }
 iroha_schema = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 settlement_router = { path = "../settlement_router" }
+iroha_sccp = { path = "../iroha_sccp" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }

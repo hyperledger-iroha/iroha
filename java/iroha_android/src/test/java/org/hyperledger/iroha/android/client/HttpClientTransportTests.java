@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -92,6 +93,10 @@ public final class HttpClientTransportTests {
     ramLfeExecuteRequestParsesResponse();
     ramLfeExecuteRequestAllowsNotFound();
     ramLfeReceiptVerifyUsesRawReceipt();
+    deployContractRequestParsesResponse();
+    callContractRequestParsesResponse();
+    callContractRejectsAmbiguousTarget();
+    governanceContractRequestParsesResponse();
     identifierNormalizationCanonicalizesInputs();
     identifierResolveRequestBuilderCanonicalizesPolicyInput();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
@@ -105,7 +110,7 @@ public final class HttpClientTransportTests {
     final RecordingObserver observer = new RecordingObserver();
     final ClientConfig config =
         ClientConfig.builder()
-            .setBaseUri(URI.create("http://127.0.0.1:8080"))
+            .setBaseUri(URI.create("https://127.0.0.1:8080"))
             .setRequestTimeout(Duration.ofSeconds(15))
             .putDefaultHeader("Authorization", "Bearer token")
             .addObserver(observer)
@@ -135,7 +140,7 @@ public final class HttpClientTransportTests {
     assert acceptHeaders != null
         && acceptHeaders.contains("application/x-norito, application/json")
         : "Accept header must include Norito";
-    assert request.uri().toString().equals("http://127.0.0.1:8080/transaction")
+    assert request.uri().toString().equals("https://127.0.0.1:8080/transaction")
         : "Submit endpoint must target Torii pipeline route";
     final List<String> authHeaders = request.headers().get("Authorization");
     assert authHeaders != null && authHeaders.contains("Bearer token")
@@ -159,7 +164,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .addObserver(observer)
                 .build());
 
@@ -185,7 +190,7 @@ public final class HttpClientTransportTests {
         new CountingFailingExecutor(new RuntimeException("network down"));
     final ClientConfig config =
         ClientConfig.builder()
-            .setBaseUri(URI.create("http://localhost:8080"))
+            .setBaseUri(URI.create("https://localhost:8080"))
             .setRetryPolicy(
                 RetryPolicy.builder()
                     .setMaxAttempts(3)
@@ -212,7 +217,7 @@ public final class HttpClientTransportTests {
     final RecordingObserver observer = new RecordingObserver();
     final ClientConfig config =
         ClientConfig.builder()
-            .setBaseUri(URI.create("http://localhost:8080"))
+            .setBaseUri(URI.create("https://localhost:8080"))
             .addObserver(observer)
             .setRetryPolicy(
                 RetryPolicy.builder()
@@ -263,7 +268,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new FailingExecutor(new RuntimeException("offline")),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
                 .setPendingQueue(queue)
                 .build());
@@ -295,7 +300,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
                 .setPendingQueue(queue)
                 .build());
@@ -334,7 +339,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new FailingExecutor(new RuntimeException("offline")),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setRetryPolicy(RetryPolicy.none())
                 .setPendingQueue(queue)
                 .setTelemetryOptions(telemetryOptions)
@@ -379,7 +384,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new CapturingExecutor(),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setTelemetryOptions(telemetryOptions)
                 .setTelemetrySink(telemetrySink)
                 .setNetworkContextProvider(provider)
@@ -416,7 +421,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new CapturingExecutor(),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setTelemetryOptions(telemetryOptions)
                 .setTelemetrySink(telemetrySink)
                 .setDeviceProfileProvider(provider)
@@ -450,7 +455,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new SequencedExecutor(),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://retry.test:8080"))
+                .setBaseUri(URI.create("https://retry.test:8080"))
                 .setRetryPolicy(retryPolicy)
                 .setTelemetryOptions(telemetryOptions)
                 .setTelemetrySink(telemetrySink)
@@ -497,7 +502,7 @@ public final class HttpClientTransportTests {
                 new TransportResponse(202, statusPayload("Pending"), "", Map.of()),
                 new TransportResponse(200, statusPayload("Committed"), "", Map.of())),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://status-telemetry.test:8080"))
+                .setBaseUri(URI.create("https://status-telemetry.test:8080"))
                 .setTelemetryOptions(telemetryOptions)
                 .setTelemetrySink(telemetrySink)
                 .build());
@@ -599,7 +604,7 @@ public final class HttpClientTransportTests {
 
     final ClientConfig config =
         ClientConfig.builder()
-            .setBaseUri(URI.create("http://localhost:8080"))
+            .setBaseUri(URI.create("https://localhost:8080"))
             .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
             .setPendingQueue(queue)
             .setExportOptions(
@@ -653,7 +658,7 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new FailingExecutor(new RuntimeException("offline")),
             ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
+                .setBaseUri(URI.create("https://localhost:8080"))
                 .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
                 .setPendingQueue(queue)
                 .setExportOptions(exportOptions)
@@ -678,7 +683,7 @@ public final class HttpClientTransportTests {
     final CapturingExecutor executor = new CapturingExecutor();
     final ClientConfig config =
         ClientConfig.builder()
-            .setBaseUri(URI.create("http://torii.example:8080"))
+            .setBaseUri(URI.create("https://torii.example:8080"))
             .setSorafsGatewayUri(URI.create("https://gateway.example:8443/gateway"))
             .setRequestTimeout(Duration.ofSeconds(12))
             .putDefaultHeader("X-Trace", "android-client")
@@ -1378,10 +1383,15 @@ public final class HttpClientTransportTests {
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Identifier claim request must be captured";
+    final String encodedAccountId =
+        URLEncoder.encode(accountId, StandardCharsets.UTF_8).replace("+", "%20");
     assert request
         .uri()
         .toString()
-        .equals("https://torii.example/api/v1/accounts/alice%40wonderland/identifiers/claim-receipt")
+        .equals(
+            "https://torii.example/api/v1/accounts/"
+                + encodedAccountId
+                + "/identifiers/claim-receipt")
         : "Identifier claim receipt path must encode account id";
     assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
         : "Identifier claim payload mismatch";
@@ -1518,6 +1528,201 @@ public final class HttpClientTransportTests {
         : "Verify request must preserve raw receipt";
   }
 
+  private static void deployContractRequestParsesResponse() {
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            ("{"
+                    + "\"ok\":true,"
+                    + "\"contract_alias\":\"router::universal\","
+                    + "\"contract_address\":\"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7\","
+                    + "\"previous_contract_address\":null,"
+                    + "\"upgraded\":false,"
+                    + "\"dataspace\":\"router\","
+                    + "\"deploy_nonce\":9,"
+                    + "\"tx_hash_hex\":\""
+                    + "11".repeat(32)
+                    + "\","
+                    + "\"code_hash_hex\":\""
+                    + "22".repeat(32)
+                    + "\","
+                    + "\"abi_hash_hex\":\""
+                    + "33".repeat(32)
+                    + "\"}")
+                .getBytes(StandardCharsets.UTF_8),
+            "ok");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final Optional<ContractDeployResponse> response =
+        transport.deployContract("alice", "privkey", "AQID", "router::universal").join();
+
+    assert response.isPresent() : "Deploy response should be present";
+    final ContractDeployResponse parsed = response.get();
+    assert parsed.ok() : "Deploy response should be successful";
+    assert "router::universal".equals(parsed.contractAlias()) : "Contract alias mismatch";
+    assert "router".equals(parsed.dataspace()) : "Dataspace mismatch";
+    assert Long.valueOf(9L).equals(parsed.deployNonce()) : "Deploy nonce mismatch";
+    assert "11".repeat(32).equals(parsed.txHashHex()) : "tx_hash_hex mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Deploy request must be captured";
+    assert request.uri().toString().equals("https://torii.example/api/v1/contracts/deploy")
+        : "Deploy URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payload =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "alice".equals(payload.get("authority")) : "Deploy authority mismatch";
+    assert "privkey".equals(payload.get("private_key")) : "Deploy private key mismatch";
+    assert "AQID".equals(payload.get("code_b64")) : "Deploy code_b64 mismatch";
+    assert "router::universal".equals(payload.get("contract_alias"))
+        : "Deploy contract_alias mismatch";
+    assert !payload.containsKey("lease_expiry_ms") : "lease_expiry_ms should be omitted by default";
+  }
+
+  private static void callContractRequestParsesResponse() {
+    final String contractAddress =
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            ("{"
+                    + "\"ok\":true,"
+                    + "\"submitted\":true,"
+                    + "\"dataspace\":\"router\","
+                    + "\"code_hash_hex\":\""
+                    + "44".repeat(32)
+                    + "\","
+                    + "\"abi_hash_hex\":\""
+                    + "55".repeat(32)
+                    + "\","
+                    + "\"creation_time_ms\":1712345678901,"
+                    + "\"contract_address\":\""
+                    + contractAddress
+                    + "\","
+                    + "\"tx_hash_hex\":\""
+                    + "66".repeat(32)
+                    + "\","
+                    + "\"entrypoint\":\"contribute\","
+                    + "\"transaction_scaffold_b64\":\"AQID\","
+                    + "\"signed_transaction_b64\":\"BAUG\","
+                    + "\"signing_message_b64\":\"BwgJ\"}")
+                .getBytes(StandardCharsets.UTF_8),
+            "ok");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final Map<String, Object> contractPayload = new LinkedHashMap<>();
+    contractPayload.put("buyer", "alice");
+    contractPayload.put("payment_amount", 1L);
+
+    final ContractCallResponse response =
+        transport
+            .callContract(
+                "alice",
+                "privkey",
+                5000L,
+                null,
+                "router::universal",
+                "contribute",
+                contractPayload,
+                "xor#sora")
+            .join();
+
+    assert response.ok() : "Call response should be successful";
+    assert response.submitted() : "Call should be marked submitted";
+    assert "router".equals(response.dataspace()) : "Call dataspace mismatch";
+    assert "contribute".equals(response.entrypoint()) : "Entrypoint mismatch";
+    assert "AQID".equals(response.transactionScaffoldB64())
+        : "transaction_scaffold_b64 mismatch";
+    assert "BAUG".equals(response.signedTransactionB64()) : "signed_transaction_b64 mismatch";
+    assert "BwgJ".equals(response.signingMessageB64()) : "signing_message_b64 mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Contract call request must be captured";
+    assert request.uri().toString().equals("https://torii.example/api/v1/contracts/call")
+        : "Call URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payload =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "alice".equals(payload.get("authority")) : "Call authority mismatch";
+    assert "privkey".equals(payload.get("private_key")) : "Call private key mismatch";
+    assert Long.valueOf(5000L).equals(((Number) payload.get("gas_limit")).longValue())
+        : "gas_limit mismatch";
+    assert "router::universal".equals(payload.get("contract_alias"))
+        : "contract_alias mismatch";
+    assert !payload.containsKey("contract_address") : "contract_address should be absent";
+    assert "contribute".equals(payload.get("entrypoint")) : "Call entrypoint mismatch";
+    assert "xor#sora".equals(payload.get("gas_asset_id")) : "gas_asset_id mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> requestPayload = (Map<String, Object>) payload.get("payload");
+    assert "alice".equals(requestPayload.get("buyer")) : "Nested buyer mismatch";
+    assert Long.valueOf(1L).equals(((Number) requestPayload.get("payment_amount")).longValue())
+        : "Nested payment_amount mismatch";
+  }
+
+  private static void callContractRejectsAmbiguousTarget() {
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            new CapturingExecutor(),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    boolean failed = false;
+    try {
+      transport.callContract(
+          "alice",
+          "privkey",
+          5000L,
+          "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          "router::universal",
+          null,
+          null,
+          null);
+    } catch (final IllegalArgumentException ex) {
+      failed = ex.getMessage().contains("Exactly one");
+    }
+    assert failed : "expected ambiguous contract target rejection";
+  }
+
+  private static void governanceContractRequestParsesResponse() {
+    final String contractAddress =
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            ("{"
+                    + "\"found\":true,"
+                    + "\"contract_address\":\""
+                    + contractAddress
+                    + "\","
+                    + "\"dataspace\":\"router\","
+                    + "\"code_hash_hex\":\""
+                    + "77".repeat(32)
+                    + "\"}")
+                .getBytes(StandardCharsets.UTF_8),
+            "ok");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final GovernanceContractResponse response = transport.getGovernanceContract(contractAddress).join();
+
+    assert response.found() : "Governance binding should be found";
+    assert contractAddress.equals(response.contractAddress()) : "Governance contract address mismatch";
+    assert "router".equals(response.dataspace()) : "Governance dataspace mismatch";
+    assert "77".repeat(32).equals(response.codeHashHex()) : "Governance code hash mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Governance contract request must be captured";
+    assert request.uri().toString().equals("https://torii.example/api/v1/gov/contracts/" + contractAddress)
+        : "Governance contract URI mismatch";
+    assert "GET".equals(request.method()) : "Governance contract must use GET";
+  }
+
   private static void identifierNormalizationCanonicalizesInputs() {
     assert "+15551234567".equals(
             IdentifierNormalization.PHONE_E164.normalize(" +1 (555) 123-4567 ", "phone"))
@@ -1623,7 +1828,7 @@ public final class HttpClientTransportTests {
   private static void invalidateAndCancelDelegatesToExecutor() {
     final InvalidationTrackingExecutor executor = new InvalidationTrackingExecutor();
     final ClientConfig config =
-        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build();
+        ClientConfig.builder().setBaseUri(URI.create("https://localhost:8080")).build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
     transport.invalidateAndCancel();
     assert executor.invalidated : "invalidateAndCancel should reach the executor";

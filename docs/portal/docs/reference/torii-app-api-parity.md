@@ -4,8 +4,8 @@ title: Torii app API parity audit
 description: Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.
 ---
 
-Status: Completed 2026-03-21  
-Owners: Torii Platform, SDK Program Lead  
+Status: Completed 2026-03-21
+Owners: Torii Platform, SDK Program Lead
 Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
 This page mirrors the internal `TORII-APP-1` audit (`docs/source/torii/app_api_parity_audit.md`)
@@ -91,7 +91,7 @@ val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", 
 - Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Public contract lifecycle is address-first: deploy returns the canonical `contract_address`, and call/view flows accept only `contract_address` or `contract_alias`.
+- Notes: Public contract lifecycle is alias-first: deploy requires `contract_alias`, returns a fresh immutable `contract_address`, and call/view flows accept `contract_address` or `contract_alias`.
 
 ### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

@@ -232,6 +232,9 @@ where
                     FaultScenarioKind::WipeStorage,
                     FaultConfig {
                         interval: Duration::from_secs(1)..=Duration::from_secs(1),
+                        crash_restart: false,
+                        wipe_storage: true,
+                        spam_invalid_transactions: false,
                         network_latency: None,
                         network_partition: None,
                         cpu_stress: None,
@@ -478,6 +481,9 @@ where
         FaultScenarioKind::CpuStress,
         FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
             cpu_stress: Some(CpuStressConfig {
@@ -500,6 +506,9 @@ where
         FaultScenarioKind::DiskSaturation,
         FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
             cpu_stress: None,
@@ -567,6 +576,9 @@ fn sleep_with_cancel(duration: Duration, cancel: &AtomicBool) -> Result<(), Chao
 fn fault_config_for_latency(duration: Duration) -> FaultConfig {
     FaultConfig {
         interval: Duration::from_secs(1)..=Duration::from_secs(1),
+        crash_restart: false,
+        wipe_storage: false,
+        spam_invalid_transactions: false,
         network_latency: Some(NetworkLatencyConfig {
             duration: duration..=duration,
             gossip_delay: Duration::from_millis(1_200)..=Duration::from_millis(1_200),
@@ -580,6 +592,9 @@ fn fault_config_for_latency(duration: Duration) -> FaultConfig {
 fn fault_config_for_partition(duration: Duration) -> FaultConfig {
     FaultConfig {
         interval: Duration::from_secs(1)..=Duration::from_secs(1),
+        crash_restart: false,
+        wipe_storage: false,
+        spam_invalid_transactions: false,
         network_latency: None,
         network_partition: Some(NetworkPartitionConfig {
             duration: duration..=duration,

@@ -2671,6 +2671,8 @@ pub(crate) mod valid {
         SoracloudOrderedMailboxExecutionResult {
             state_mutations: Vec::new(),
             outbound_mailbox_messages: Vec::new(),
+            response_bytes: Vec::new(),
+            content_type: None,
             runtime_state: Some(runtime_state),
             runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
                 schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -2819,6 +2821,8 @@ pub(crate) mod valid {
             let SoracloudOrderedMailboxExecutionResult {
                 state_mutations,
                 outbound_mailbox_messages,
+                response_bytes: _response_bytes,
+                content_type: _content_type,
                 runtime_state,
                 runtime_receipt,
             } = result;
@@ -7189,6 +7193,7 @@ pub(crate) mod valid {
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
                                 accounts_snapshot.as_ref(),
+                                state_block,
                                 q_cycle_cap,
                                 q_time_cap,
                                 upper_cycle_cap,
@@ -8660,6 +8665,7 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -8944,6 +8950,7 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -9098,6 +9105,7 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                        state_tx.current_tx_hash = Some(tx.hash());
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,
@@ -9950,6 +9958,8 @@ pub(crate) mod valid {
                 Ok(SoracloudOrderedMailboxExecutionResult {
                     state_mutations: self.state_mutations.clone(),
                     outbound_mailbox_messages: Vec::new(),
+                    response_bytes: Vec::new(),
+                    content_type: None,
                     runtime_state: Some(SoraServiceRuntimeStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
@@ -10033,6 +10043,7 @@ pub(crate) mod valid {
                     entrypoint: "main".to_string(),
                     args: Vec::new(),
                     env: std::collections::BTreeMap::new(),
+                    inrou: None,
                     required_config_names: Vec::new(),
                     required_secret_names: Vec::new(),
                     config_exports: Vec::new(),
@@ -10061,6 +10072,8 @@ pub(crate) mod valid {
                     schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                     service_name: service_name.clone(),
                     service_version: service_version.clone(),
+                    execution_plane:
+                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                     container: SoraContainerManifestRefV1 {
                         manifest_hash: Hash::new(b"container-manifest:portal"),
                         expected_schema_version:
@@ -10074,7 +10087,9 @@ pub(crate) mod valid {
                         health_window_secs: NonZeroU32::new(30).expect("nonzero health window"),
                         automatic_rollback_failures: NonZeroU32::new(1).expect("nonzero rollback"),
                     },
+                    economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                     state_bindings,
+                    lease_volumes: Vec::new(),
                     handlers: vec![SoraServiceHandlerV1 {
                         handler_name: "update".parse().expect("valid handler name"),
                         class: SoraServiceHandlerClassV1::Update,
@@ -10117,6 +10132,8 @@ pub(crate) mod valid {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_service_runtime_mut_for_testing().insert(
@@ -16464,6 +16481,10 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
             let instructions: Vec<_> = batch.iter().cloned().collect();
             crate::gas::meter_instructions(&instructions)
         }
+        Executable::ContractCall(_) => crate::executor::parse_gas_limit(tx.metadata())
+            .ok()
+            .flatten()
+            .unwrap_or(IVM_TEU_FALLBACK),
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {
                 let max_cycles = parsed.metadata.max_cycles;

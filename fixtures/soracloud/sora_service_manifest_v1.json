@@ -2,6 +2,10 @@
   "schema_version": 1,
   "service_name": "web_portal",
   "service_version": "2026.02.0",
+  "execution_plane": {
+    "execution_plane": "DeterministicService",
+    "value": null
+  },
   "container": {
     "manifest_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
     "expected_schema_version": 1
@@ -25,6 +29,16 @@
     "max_unavailable_replicas": 1,
     "health_window_secs": 45,
     "automatic_rollback_failures": 3
+  },
+  "economics": {
+    "schema_version": 1,
+    "quota_class": "taira-open",
+    "deployment_deposit_nanos": 1000000000,
+    "prepaid_runtime_balance_nanos": 50000000000,
+    "lease_duration_sequences": 86400,
+    "runtime_nanos_per_sequence": 250000,
+    "storage_nanos_per_gib_sequence": 25000,
+    "egress_nanos_per_mib": 5000
   },
   "state_bindings": [
     {
@@ -65,6 +79,9 @@
       "max_item_bytes": 16384,
       "max_total_bytes": 16777216
     }
+  ],
+  "lease_volumes": [
+    
   ],
   "handlers": [
     {

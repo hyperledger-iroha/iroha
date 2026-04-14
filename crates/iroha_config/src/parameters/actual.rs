@@ -174,8 +174,8 @@ pub struct SoracloudRuntime {
     pub hydration_concurrency: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
-    /// Deterministic native-process hosting limits.
-    pub native_process: SoracloudRuntimeNativeProcess,
+    /// Inrou microVM hosting limits.
+    pub inrou: SoracloudRuntimeInrou,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
     /// Hugging Face importer and inference bridge settings.
@@ -191,7 +191,7 @@ impl Default for SoracloudRuntime {
             ),
             hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
-            native_process: SoracloudRuntimeNativeProcess::default(),
+            inrou: SoracloudRuntimeInrou::default(),
             egress: SoracloudRuntimeEgress::default(),
             hf: SoracloudRuntimeHuggingFace::default(),
         }
@@ -228,44 +228,26 @@ impl Default for SoracloudRuntimeCacheBudgets {
     }
 }
 
-/// Resource ceilings for deterministic `NativeProcess` Soracloud workloads.
+/// Resource ceilings for mutable Inrou microVM workloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SoracloudRuntimeNativeProcess {
-    /// Maximum number of native-process workloads hosted concurrently.
-    pub max_concurrent_processes: NonZeroUsize,
-    /// CPU budget in millicores per hosted process.
-    pub cpu_millis: NonZeroU32,
-    /// Memory budget in bytes per hosted process.
-    pub memory_bytes: NonZeroU64,
-    /// Ephemeral filesystem budget in bytes per hosted process.
-    pub ephemeral_storage_bytes: NonZeroU64,
-    /// Open-file ceiling per hosted process.
-    pub max_open_files: NonZeroU32,
-    /// Task/thread ceiling per hosted process.
-    pub max_tasks: NonZeroU16,
-    /// Startup grace window before the manager treats the process as failed.
+pub struct SoracloudRuntimeInrou {
+    /// Maximum number of Inrou VMs hosted concurrently.
+    pub max_concurrent_vms: NonZeroUsize,
+    /// Whether the validator should act as a proxy/control-plane node only.
+    pub proxy_only: bool,
+    /// Startup grace window before the manager treats the VM as failed.
     pub start_grace: Duration,
-    /// Shutdown grace window before the manager force-stops the process.
+    /// Shutdown grace window before the manager force-stops the VMM process.
     pub stop_grace: Duration,
 }
 
-impl Default for SoracloudRuntimeNativeProcess {
+impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
-            max_concurrent_processes:
-                defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES,
-            cpu_millis: defaults::soracloud_runtime::NATIVE_PROCESS_CPU_MILLIS,
-            memory_bytes: defaults::soracloud_runtime::NATIVE_PROCESS_MEMORY_BYTES,
-            ephemeral_storage_bytes:
-                defaults::soracloud_runtime::NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES,
-            max_open_files: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_OPEN_FILES,
-            max_tasks: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_TASKS,
-            start_grace: Duration::from_millis(
-                defaults::soracloud_runtime::NATIVE_PROCESS_START_GRACE_MS,
-            ),
-            stop_grace: Duration::from_millis(
-                defaults::soracloud_runtime::NATIVE_PROCESS_STOP_GRACE_MS,
-            ),
+            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
+            stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
     }
 }
@@ -5376,6 +5358,10 @@ pub struct Torii {
     pub events_buffer_capacity: NonZeroUsize,
     /// WebSocket message timeout for Torii event/block streams.
     pub ws_message_timeout: Duration,
+    /// Enable app-facing webhook routes and workers.
+    pub webhooks_enabled: bool,
+    /// Enable app-facing ZK attachment routes and workers.
+    pub zk_attachments_enabled: bool,
     /// ZK attachments TTL (seconds) for app-facing attachments store.
     pub attachments_ttl_secs: u64,
     /// ZK attachments maximum allowed size per item (bytes).
@@ -6852,6 +6838,8 @@ pub struct SorafsGateway {
     pub rollout_phase: SorafsRolloutPhase,
     /// Optional staged anonymity policy override.
     pub anonymity_policy: Option<SorafsAnonymityStage>,
+    /// Per-CID untrusted-host routing configuration.
+    pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// ACME automation configuration.
     pub acme: SorafsGatewayAcme,
     /// Optional direct-mode override configuration.
@@ -6873,6 +6861,7 @@ impl Default for SorafsGateway {
                 SorafsAnonymityStage::parse(defaults::sorafs::gateway::DEFAULT_ANONYMITY_POLICY)
                     .unwrap_or_else(|| SorafsRolloutPhase::default().default_anonymity_policy()),
             ),
+            untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             acme: SorafsGatewayAcme::default(),
             direct_mode: None,
         }
@@ -6885,6 +6874,48 @@ impl SorafsGateway {
     pub fn effective_anonymity_policy(&self) -> SorafsAnonymityStage {
         self.anonymity_policy
             .unwrap_or_else(|| self.rollout_phase.default_anonymity_policy())
+    }
+}
+
+/// Canonical CID-host suffixes for untrusted browser app delivery.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayCidHostSuffixes {
+    /// Live-network CID-host suffix.
+    pub live: String,
+    /// Taira-network CID-host suffix.
+    pub taira: String,
+}
+
+impl Default for SorafsGatewayCidHostSuffixes {
+    fn default() -> Self {
+        Self {
+            live: defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix(),
+            taira: defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix(),
+        }
+    }
+}
+
+/// Configuration for serving untrusted apps on CID-derived origins.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayUntrustedHosting {
+    /// Enable per-CID host routing.
+    pub enabled: bool,
+    /// Canonical live/test host suffixes used for browser delivery.
+    pub cid_host_suffixes: SorafsGatewayCidHostSuffixes,
+    /// Redirect path-gateway requests to the canonical CID host.
+    pub path_gateway_redirect: bool,
+    /// Restrict canonical redirects to browser HTML navigations.
+    pub redirect_html_only: bool,
+}
+
+impl Default for SorafsGatewayUntrustedHosting {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED,
+            cid_host_suffixes: SorafsGatewayCidHostSuffixes::default(),
+            path_gateway_redirect: defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT,
+            redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
+        }
     }
 }
 

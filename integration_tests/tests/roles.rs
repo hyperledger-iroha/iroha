@@ -227,7 +227,6 @@ fn role_permissions_are_deduplicated() {
         AssetDefinitionId::new(wonderland.clone(), "rose".parse().expect("valid rose name"));
     let rose_asset = AssetId::new(rose_definition, ALICE_ID.clone());
     let rose_asset_lower = rose_asset.canonical_literal();
-    let rose_asset_upper = rose_asset_lower.to_ascii_uppercase();
 
     let allow_alice_to_transfer_rose_1 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
@@ -243,13 +242,9 @@ fn role_permissions_are_deduplicated() {
     // Different content, but same meaning
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
-        iroha_primitives::json::Json::new(
-            norito::json::object([(
-                "asset",
-                norito::json::to_value(&rose_asset_upper).expect("serialize asset"),
-            )])
-            .expect("serialize permission payload"),
-        ),
+        iroha_primitives::json::Json::from_string_unchecked(format!(
+            r#"{{ "asset" : "{rose_asset_lower}" }}"#
+        )),
     );
 
     let role_id: RoleId = "role_id".parse().expect("Valid");

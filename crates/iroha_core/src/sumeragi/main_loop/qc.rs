@@ -9,6 +9,7 @@ use super::*;
 #[derive(Debug)]
 struct QcSignerSnapshot {
     signers: BTreeSet<ValidatorIndex>,
+    accepted_votes: BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     voting_signers: usize,
     total_signers: usize,
 }
@@ -39,16 +40,7 @@ enum CommittedQcDecision {
 const QC_VERIFY_INLINE_ROSTER_MAX: usize = 8;
 
 pub(super) fn select_commit_root_signers(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
@@ -61,17 +53,15 @@ pub(super) fn select_commit_root_signers(
     let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
         BTreeMap::new();
     for signer in signers {
-        let key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            height,
-            view,
-            epoch,
-            *signer,
-        );
-        let Some(vote) = vote_log.get(&key) else {
+        let Some(vote) = accepted_votes.get(signer) else {
             continue;
         };
-        if vote.block_hash != block_hash {
+        if vote.phase != crate::sumeragi::consensus::Phase::Commit
+            || vote.block_hash != block_hash
+            || vote.height != height
+            || vote.view != view
+            || vote.epoch != epoch
+        {
             continue;
         }
         groups
@@ -117,7 +107,7 @@ impl Actor {
             return None;
         }
         let signer_peers = signer_peers_for_topology(signers, topology).ok()?;
-        self.vote_log.values().find_map(|vote| {
+        self.stored_votes().find_map(|vote| {
             if vote.phase != phase
                 || vote.height != height
                 || vote.epoch != epoch
@@ -1431,6 +1421,13 @@ impl Actor {
         }
 
         let now = Instant::now();
+        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            block_hash,
+            height,
+            view,
+            self.committed_height_snapshot(),
+            now,
+        );
         let mut targets = super::missing_block_request_targets_without_local(
             &self.common_config.peer.id,
             targets,
@@ -1449,6 +1446,16 @@ impl Actor {
                 requester: None,
             },
         );
+        if self.frontier_block_materialized_locally(block_hash) && !known_block_commit_qc_repair {
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash,
+                    view,
+                    sender: None,
+                },
+            );
+        }
         true
     }
 
@@ -1501,6 +1508,28 @@ impl Actor {
             signature_topology,
         )
         .0
+        .into_keys()
+        .collect()
+    }
+
+    pub(super) fn accepted_votes_for_qc_slot(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        signature_topology: &super::network_topology::Topology,
+    ) -> BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote> {
+        self.qc_signers_for_votes_with_stats(
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            signature_topology,
+        )
+        .0
     }
 
     fn qc_signers_for_votes_with_stats(
@@ -1511,7 +1540,10 @@ impl Actor {
         view: u64,
         epoch: u64,
         signature_topology: &super::network_topology::Topology,
-    ) -> (BTreeSet<ValidatorIndex>, QcSignerFilterStats) {
+    ) -> (
+        BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+        QcSignerFilterStats,
+    ) {
         let chain_id = &self.common_config.chain;
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
@@ -1537,8 +1569,8 @@ impl Actor {
             canonical.into_iter().next()
         };
         let mut stats = QcSignerFilterStats::default();
-        let mut signers = BTreeSet::new();
-        for vote in self.vote_log.values().filter(|stored| {
+        let mut accepted_votes = BTreeMap::new();
+        for vote in self.stored_votes().filter(|stored| {
             stored.phase == phase
                 && stored.block_hash == block_hash
                 && stored.height == height
@@ -1546,18 +1578,18 @@ impl Actor {
                 && stored.epoch == epoch
         }) {
             stats.raw_votes = stats.raw_votes.saturating_add(1);
-            let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
             if self
-                .vote_validation_cache
-                .get(&key)
+                .vote_validation_entry_for_vote(vote)
                 .is_some_and(|entry| entry.membership_hash != membership_hash)
             {
                 stats.roster_mismatch = stats.roster_mismatch.saturating_add(1);
                 continue;
             }
-            let cache_matches = self.vote_validation_cache.get(&key).is_some_and(|entry| {
-                entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
-            });
+            let cache_matches = self
+                .vote_validation_entry_for_vote(vote)
+                .is_some_and(|entry| {
+                    entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
+                });
             if !cache_matches && !vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
             {
                 stats.invalid_signature = stats.invalid_signature.saturating_add(1);
@@ -1567,9 +1599,11 @@ impl Actor {
                 stats.invalid_signature = stats.invalid_signature.saturating_add(1);
                 continue;
             }
-            signers.insert(vote.signer);
+            accepted_votes
+                .entry(vote.signer)
+                .or_insert_with(|| vote.clone());
         }
-        (signers, stats)
+        (accepted_votes, stats)
     }
 
     pub(super) fn defer_qc_if_block_missing(
@@ -3295,7 +3329,7 @@ impl Actor {
         }
 
         let aggregate_signature = match super::aggregate_vote_signatures(
-            &self.vote_log,
+            &snapshot.accepted_votes,
             phase,
             block_hash,
             height,
@@ -3318,7 +3352,7 @@ impl Actor {
         };
         let highest_qc = if phase == crate::sumeragi::consensus::Phase::NewView {
             super::select_new_view_highest_qc_from_votes(
-                &self.vote_log,
+                &snapshot.accepted_votes,
                 &snapshot.signers,
                 height,
                 view,
@@ -3356,15 +3390,13 @@ impl Actor {
         }
 
         let roots = if phase == crate::sumeragi::consensus::Phase::Commit {
-            snapshot.signers.iter().find_map(|signer| {
-                let key = (phase, height, view, epoch, *signer);
-                self.vote_log.get(&key).and_then(|vote| {
-                    if vote.block_hash == block_hash {
-                        Some((vote.parent_state_root, vote.post_state_root))
-                    } else {
-                        None
-                    }
-                })
+            snapshot.accepted_votes.values().find_map(|vote| {
+                (vote.phase == phase
+                    && vote.block_hash == block_hash
+                    && vote.height == height
+                    && vote.view == view
+                    && vote.epoch == epoch)
+                    .then_some((vote.parent_state_root, vote.post_state_root))
             })
         } else {
             None
@@ -3469,7 +3501,7 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
         required: usize,
     ) -> QcSignerSnapshot {
-        let (valid_signers, stats) = self.qc_signers_for_votes_with_stats(
+        let (valid_votes, stats) = self.qc_signers_for_votes_with_stats(
             phase,
             block_hash,
             height,
@@ -3478,11 +3510,12 @@ impl Actor {
             signature_topology,
         );
         let raw_votes = stats.raw_votes;
-        let mut signers = valid_signers.clone();
+        let mut accepted_votes = valid_votes.clone();
+        let mut signers: BTreeSet<_> = accepted_votes.keys().copied().collect();
         let mut root_groups = 0;
         if phase == crate::sumeragi::consensus::Phase::Commit && !signers.is_empty() {
             let (filtered, groups) = select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 block_hash,
                 height,
                 view,
@@ -3490,9 +3523,10 @@ impl Actor {
                 &signers,
             );
             root_groups = groups;
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
-        if valid_signers.is_empty() && raw_votes > 0 {
+        if valid_votes.is_empty() && raw_votes > 0 {
             iroha_logger::warn!(
                 height,
                 view,
@@ -3507,14 +3541,14 @@ impl Actor {
                 topology_len = signature_topology.as_ref().len(),
                 "votes observed but no eligible signers collected for QC"
             );
-        } else if raw_votes > 0 && valid_signers.len() != raw_votes {
+        } else if raw_votes > 0 && valid_votes.len() != raw_votes {
             iroha_logger::warn!(
                 height,
                 view,
                 phase = ?phase,
                 block = ?block_hash,
                 raw_votes,
-                valid_signers = valid_signers.len(),
+                valid_signers = valid_votes.len(),
                 filtered_invalid_signature = stats.invalid_signature,
                 filtered_roster_mismatch = stats.roster_mismatch,
                 filtered_higher_view = stats.higher_view_filtered,
@@ -3526,7 +3560,7 @@ impl Actor {
         }
         if phase == crate::sumeragi::consensus::Phase::Commit
             && root_groups > 1
-            && signers.len() < valid_signers.len()
+            && signers.len() < valid_votes.len()
         {
             warn!(
                 height,
@@ -3534,7 +3568,7 @@ impl Actor {
                 block = ?block_hash,
                 root_groups,
                 selected_signers = signers.len(),
-                valid_signers = valid_signers.len(),
+                valid_signers = valid_votes.len(),
                 required,
                 "commit votes split across execution roots; QC tally may stall"
             );
@@ -3543,6 +3577,7 @@ impl Actor {
         let total_signers = signers.len();
         QcSignerSnapshot {
             signers,
+            accepted_votes,
             voting_signers,
             total_signers,
         }
@@ -3930,7 +3965,7 @@ impl Actor {
         let block_known = move |hash| {
             pending_hashes.contains(&hash) || kura.get_block_height_by_hash(hash).is_some()
         };
-        let vote_log: Vec<_> = self.vote_log.values().cloned().collect();
+        let vote_log: Vec<_> = self.stored_votes().cloned().collect();
         if vote_log.is_empty() {
             return;
         }
@@ -4089,6 +4124,105 @@ impl Actor {
         })
     }
 
+    pub(super) fn request_missing_locked_qc_payload(&mut self, context: &'static str) -> bool {
+        let Some(lock) = self.locked_qc else {
+            return false;
+        };
+        if self.block_known_locally(lock.subject_block_hash) {
+            return false;
+        }
+
+        info!(
+            context,
+            locked_height = lock.height,
+            locked_view = lock.view,
+            locked_hash = %lock.subject_block_hash,
+            "locked QC payload missing locally; requesting payload"
+        );
+
+        let retry_window = self.rebroadcast_cooldown();
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(lock.height);
+        let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
+            lock.subject_block_hash,
+            lock.height,
+            lock.view,
+            consensus_mode,
+            context,
+        );
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
+        if roster.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(roster);
+        let signers = BTreeSet::new();
+        let peer_id = self.common_config.peer.id.clone();
+        let network = self.network.clone();
+        let locked_hash = lock.subject_block_hash;
+        let requester_roster_proof_known =
+            self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
+        match self.missing_block_ingress_fetch_gate(
+            locked_hash,
+            lock.height,
+            lock.view,
+            lock.phase,
+            super::MissingBlockPriority::Consensus,
+            Instant::now(),
+            retry_window,
+            view_change_window,
+        ) {
+            super::MissingBlockIngressFetchGate::Hold => {
+                debug!(
+                    context,
+                    height = lock.height,
+                    view = lock.view,
+                    block = %locked_hash,
+                    grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
+                    "holding locked-QC missing payload recovery within authoritative body ingress grace"
+                );
+            }
+            super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
+                let now = Instant::now();
+                let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+                let _ = super::defer_qc_for_missing_block_with_mode(
+                    false,
+                    retry_window,
+                    view_change_window,
+                    now,
+                    locked_hash,
+                    lock.height,
+                    lock.view,
+                    lock.phase,
+                    &signers,
+                    &topology,
+                    self.recovery_signer_fallback_attempts(),
+                    &mut requests,
+                    self.telemetry_handle(),
+                    super::MissingBlockFetchMode::Default,
+                    force_retry_now,
+                    move |targets| {
+                        send_missing_block_request(
+                            &network,
+                            &peer_id,
+                            locked_hash,
+                            lock.height,
+                            lock.view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            targets,
+                        )
+                    },
+                );
+                self.pending.missing_block_requests = requests;
+            }
+        }
+
+        true
+    }
+
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {
         if let Some(lock) = self.locked_qc {
             if !self.block_known_locally(lock.subject_block_hash) {
@@ -4169,82 +4303,7 @@ impl Actor {
                     incoming_view = qc.view,
                     "locked QC payload missing locally; requesting payload before processing incoming QC"
                 );
-                let retry_window = self.rebroadcast_cooldown();
-                let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
-                let (consensus_mode, _mode_tag, _prf_seed) =
-                    self.consensus_context_for_height(lock.height);
-                let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
-                    locked_hash,
-                    lock.height,
-                    lock.view,
-                    consensus_mode,
-                    "qc_drop_missing_lock",
-                );
-                if roster.is_empty() {
-                    roster = self.effective_commit_topology();
-                }
-                if !roster.is_empty() {
-                    let topology = super::network_topology::Topology::new(roster);
-                    let signers = BTreeSet::new();
-                    let peer_id = self.common_config.peer.id.clone();
-                    let network = self.network.clone();
-                    let requester_roster_proof_known =
-                        self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
-                    match self.missing_block_ingress_fetch_gate(
-                        locked_hash,
-                        lock.height,
-                        lock.view,
-                        lock.phase,
-                        super::MissingBlockPriority::Consensus,
-                        now,
-                        retry_window,
-                        view_change_window,
-                    ) {
-                        super::MissingBlockIngressFetchGate::Hold => {
-                            debug!(
-                                height = lock.height,
-                                view = lock.view,
-                                block = %locked_hash,
-                                grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
-                                "holding locked-QC missing payload recovery within authoritative body ingress grace"
-                            );
-                        }
-                        super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
-                            let mut requests =
-                                core::mem::take(&mut self.pending.missing_block_requests);
-                            let _ = super::defer_qc_for_missing_block_with_mode(
-                                false,
-                                retry_window,
-                                view_change_window,
-                                now,
-                                locked_hash,
-                                lock.height,
-                                lock.view,
-                                lock.phase,
-                                &signers,
-                                &topology,
-                                self.recovery_signer_fallback_attempts(),
-                                &mut requests,
-                                self.telemetry_handle(),
-                                super::MissingBlockFetchMode::Default,
-                                force_retry_now,
-                                move |targets| {
-                                    send_missing_block_request(
-                                        &network,
-                                        &peer_id,
-                                        locked_hash,
-                                        lock.height,
-                                        lock.view,
-                                        super::MissingBlockPriority::Consensus,
-                                        requester_roster_proof_known,
-                                        targets,
-                                    )
-                                },
-                            );
-                            self.pending.missing_block_requests = requests;
-                        }
-                    }
-                }
+                let _ = self.request_missing_locked_qc_payload("qc_drop_missing_lock");
                 return;
             }
         }
@@ -5739,9 +5798,9 @@ mod tests {
         let secondary_parent_root = Hash::prehashed([0x21; Hash::LENGTH]);
         let secondary_post_root = Hash::prehashed([0x22; Hash::LENGTH]);
 
-        let mut vote_log = BTreeMap::new();
-        vote_log.insert(
-            (Phase::Commit, height, view, epoch, 0),
+        let mut accepted_votes = BTreeMap::new();
+        accepted_votes.insert(
+            0,
             vote_with_roots(
                 block_hash,
                 height,
@@ -5752,8 +5811,8 @@ mod tests {
                 primary_post_root,
             ),
         );
-        vote_log.insert(
-            (Phase::Commit, height, view, epoch, 1),
+        accepted_votes.insert(
+            1,
             vote_with_roots(
                 block_hash,
                 height,
@@ -5764,8 +5823,8 @@ mod tests {
                 primary_post_root,
             ),
         );
-        vote_log.insert(
-            (Phase::Commit, height, view, epoch, 2),
+        accepted_votes.insert(
+            2,
             vote_with_roots(
                 block_hash,
                 height,
@@ -5783,7 +5842,7 @@ mod tests {
         signers.insert(2);
 
         let (filtered, groups) =
-            select_commit_root_signers(&vote_log, block_hash, height, view, epoch, &signers);
+            select_commit_root_signers(&accepted_votes, block_hash, height, view, epoch, &signers);
         assert_eq!(groups, 2);
         assert_eq!(filtered.len(), 2);
         assert!(filtered.contains(&0));
@@ -5801,9 +5860,9 @@ mod tests {
         let secondary_parent_root = Hash::prehashed([0x02; Hash::LENGTH]);
         let secondary_post_root = Hash::prehashed([0x03; Hash::LENGTH]);
 
-        let mut vote_log = BTreeMap::new();
-        vote_log.insert(
-            (Phase::Commit, height, view, epoch, 1),
+        let mut accepted_votes = BTreeMap::new();
+        accepted_votes.insert(
+            1,
             vote_with_roots(
                 block_hash,
                 height,
@@ -5814,8 +5873,8 @@ mod tests {
                 primary_post_root,
             ),
         );
-        vote_log.insert(
-            (Phase::Commit, height, view, epoch, 2),
+        accepted_votes.insert(
+            2,
             vote_with_roots(
                 block_hash,
                 height,
@@ -5832,7 +5891,7 @@ mod tests {
         signers.insert(2);
 
         let (filtered, groups) =
-            select_commit_root_signers(&vote_log, block_hash, height, view, epoch, &signers);
+            select_commit_root_signers(&accepted_votes, block_hash, height, view, epoch, &signers);
         assert_eq!(groups, 2);
         assert_eq!(filtered.len(), 1);
         assert!(filtered.contains(&1));

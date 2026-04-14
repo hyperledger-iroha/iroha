@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 41a944c3e016d0dc96a0edb3559700670a7bd57b437751a777df8b35567b34fb
-source_last_modified: "2025-11-23T15:30:33.687691+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/12_nft_flow.ko
 
 - Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`<i105-account-id>`, `<i105-account-id>`).
 - Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
-- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+- Проверьте состояние NFT-реестра через `iroha ledger nft list all --verbose` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
 
 ## Связанные руководства SDK
 

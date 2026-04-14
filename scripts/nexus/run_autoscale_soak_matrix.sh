@@ -14,6 +14,9 @@ Options:
   --seed-prefix <VALUE>      Prefix used when generating seeds (default: autoscale-seed)
   --output-dir <PATH>        Output directory (default: /tmp/iroha_autoscale_soak_matrix)
   --target-dir <PATH>        CARGO_TARGET_DIR (default: /tmp/iroha_target_autoscale_soak_matrix)
+  --fast                     Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug          With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental      With --fast, set CARGO_INCREMENTAL=0
   --cargo-jobs <N>           CARGO_BUILD_JOBS (default: 1)
   --test-threads <N>         --test-threads for cargo test (default: 1)
   --force-fail-cycle <N>     Set IROHA_AUTOSCALE_SOAK_FORCE_FAIL_CYCLE for all runs (default: 0)
@@ -77,6 +80,10 @@ FORCE_FAIL_CYCLE=0
 SKIP_BINDINGS_SYNC=true
 CONTINUE_ON_FAILURE=false
 TEST_FILTER="nexus::autoscale_localnet::nexus_autoscale_soak_expand_contract_cycles_in_localnet"
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
+PERMIT_DIR_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,6 +111,18 @@ while [[ $# -gt 0 ]]; do
       require_option_value "--target-dir" "${2-}"
       TARGET_DIR="$2"
       shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
       ;;
     --cargo-jobs)
       require_option_value "--cargo-jobs" "${2-}"
@@ -146,6 +165,31 @@ require_positive_int "--cargo-jobs" "$CARGO_JOBS"
 require_positive_int "--test-threads" "$TEST_THREADS"
 require_nonnegative_int "--force-fail-cycle" "$FORCE_FAIL_CYCLE"
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cargo_runner=(cargo)
+if [[ "$USE_CARGO_FAST" == true ]]; then
+  cargo_fast_script="${repo_root}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "$FAST_ZERO_DEBUG" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "$FAST_NO_INCREMENTAL" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "[autoscale-soak-matrix] using scripts/cargo_fast.sh for cargo commands"
+elif [[ "$FAST_ZERO_DEBUG" == true || "$FAST_NO_INCREMENTAL" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -z "${IROHA_TEST_NETWORK_PERMIT_DIR+x}" ]]; then
+  PERMIT_DIR_OVERRIDE="$(mktemp -d)"
+fi
+
 mkdir -p "$OUTPUT_DIR"
 
 declare -a SEEDS
@@ -186,6 +230,9 @@ for run in $(seq 1 "$RUNS"); do
   if [[ "$SKIP_BINDINGS_SYNC" == true ]]; then
     env_vars+=("NORITO_SKIP_BINDINGS_SYNC=1")
   fi
+  if [[ -n "$PERMIT_DIR_OVERRIDE" ]]; then
+    env_vars+=("IROHA_TEST_NETWORK_PERMIT_DIR=${PERMIT_DIR_OVERRIDE}")
+  fi
   if [[ "$FORCE_FAIL_CYCLE" -gt 0 ]]; then
     env_vars+=("IROHA_AUTOSCALE_SOAK_FORCE_FAIL_CYCLE=${FORCE_FAIL_CYCLE}")
   fi
@@ -193,7 +240,7 @@ for run in $(seq 1 "$RUNS"); do
   echo "[autoscale-soak-matrix] run ${run}/${RUNS} seed=${seed}"
   set +e
   env "${env_vars[@]}" \
-    cargo test -p integration_tests --test mod "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS" \
+    "${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS" \
     >"$log_path" 2>&1
   exit_code=$?
   set -e

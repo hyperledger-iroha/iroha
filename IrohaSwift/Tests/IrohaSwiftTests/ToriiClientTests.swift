@@ -533,6 +533,21 @@ final class ToriiClientTests: XCTestCase {
         return dictionary
     }
 
+    private func assertDecodedPath(_ request: URLRequest, contains expected: String, line: UInt = #line) {
+        XCTAssertTrue(
+            request.url?.path.contains(expected) == true,
+            "expected decoded path to contain \(expected), got \(request.url?.path ?? "<nil>")",
+            line: line
+        )
+    }
+
+    private func irohaSwiftPackageRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // ToriiClientTests.swift
+            .deletingLastPathComponent() // IrohaSwiftTests
+            .deletingLastPathComponent() // Tests
+    }
+
     private func makeClient(baseURL: URL = URL(string: "https://example.test")!) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -590,8 +605,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsync() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","scope":"global","quantity":"10"}]
@@ -610,7 +624,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsyncDecodesAssetFieldsDirectly() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","scope":"global","quantity":"10"}]
@@ -635,7 +649,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsyncDecodesReadableAssetFields() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{
@@ -667,9 +681,7 @@ final class ToriiClientTests: XCTestCase {
         let baseURL = URL(string: "https://example.test/api")!
         let client = makeClient(baseURL: baseURL)
         StubURLProtocol.handler = { request in
-            // Use absoluteString to verify percent-encoding is preserved.
-            // URL.path always returns decoded path (@ instead of %40) by design.
-            XCTAssertTrue(request.url!.absoluteString.contains("/api/v1/accounts/sorauロ1NfコキリcルヲEムgsKti4Zリ6HKウZCナクシ16fvSイymカサリホ29JNWE/assets"))
+            self.assertDecodedPath(request, contains: "/api/v1/accounts/sorauロ1NfコキリcルヲEムgsKti4Zリ6HKウZCナクシ16fvSイymカサリホ29JNWE/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = "[]".data(using: .utf8)!
             return (response, body)
@@ -1540,7 +1552,8 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector() throws {
-        let fixtureURL = URL(fileURLWithPath: "/tmp/js_email_identifier_request.json")
+        let fixtureURL = irohaSwiftPackageRootURL()
+            .appendingPathComponent("Fixtures/js_email_identifier_request.json")
         let fixtureData = try Data(contentsOf: fixtureURL)
         let fixture = try JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
         let expected = try XCTUnwrap(fixture?["encryptedInput"] as? String)
@@ -2434,8 +2447,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testIrohaSDKGetAssetsAsyncUsesREST() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","scope":"global","quantity":"10"}]
@@ -2459,8 +2471,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsTrimsAndEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","scope":"global","quantity":"10"}]
@@ -2489,7 +2500,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetAssetsEncodesAssetSelectorFilter() async throws {
         let assetId = roseAssetDefinitionId
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let assetFilter = components?.queryItems?.first(where: { $0.name == "asset" })?.value
             XCTAssertEqual(assetFilter, assetId)
@@ -2507,8 +2518,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/transactions"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/transactions")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             {"items":[{"entrypoint_hash":"hash","authority":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","timestamp_ms":1,"result_ok":true}],"total":1}
@@ -2524,9 +2534,9 @@ final class ToriiClientTests: XCTestCase {
     func testGetTransactionsEncodesAssetIdFilter() async throws {
         let assetId = self.encodedRoseAssetID
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/transactions"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/transactions")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset" })?.value
+            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
             XCTAssertEqual(assetFilter, assetId)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -2542,8 +2552,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerAccountQrDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/qr"))
+            self.assertDecodedPath(request, contains: "/v1/explorer/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/qr")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
@@ -2574,11 +2583,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerAccountQrAcceptsAccountAliasPathLiteral() async throws {
         let alias = "operator@banka.universal"
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(
-                request.url!.absoluteString.contains(
-                    "/v1/explorer/accounts/operator%40hbl.universal/qr"
-                )
-            )
+            self.assertDecodedPath(request, contains: "/v1/explorer/accounts/operator@banka.universal/qr")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2604,8 +2609,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerAccountQrDecodesAlternativeLiteral() async throws {
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/qr"))
+            self.assertDecodedPath(request, contains: "/v1/explorer/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/qr")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
@@ -2643,7 +2647,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["transaction_status"], "Committed")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3160,6 +3164,26 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(OfflineNorito.assetDefinitionIdFromLiteral(literal), "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
     }
 
+    func testCanonicalAssetDefinitionLiteralRemainsCanonical() {
+        XCTAssertEqual(
+            OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        )
+    }
+
+    func testMalformedPublicAssetLiteralReturnsNilDefinition() {
+        XCTAssertNil(OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#not-an-account"))
+    }
+
+    func testDecodeAccountIdReadsNoritoStringField() throws {
+        let publicKey = Data(repeating: 0x33, count: 32)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
+        let accountId = try address.toI105(networkPrefix: 0x02F1)
+        let encodedLength = withUnsafeBytes(of: UInt64(accountId.utf8.count).littleEndian) { Data($0) }
+        let encoded = encodedLength + Data(accountId.utf8)
+        XCTAssertEqual(try OfflineNorito.decodeAccountId(encoded), accountId)
+    }
+
     func testExplorerBurnInstructionParsedAsSummary() throws {
         let json = """
         {
@@ -3333,7 +3357,7 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["asset"], assetIdFilter)
+            XCTAssertEqual(query["asset_id"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -3422,7 +3446,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["authority"], "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["status"], "Committed")
-            XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3861,7 +3885,7 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset"], assetIdFilter)
+            XCTAssertEqual(query["asset_id"], assetIdFilter)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -4004,7 +4028,7 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -4076,7 +4100,7 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["asset"], assetIdFilter)
+            XCTAssertEqual(query["asset_id"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -4164,7 +4188,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["page"], "3")
             XCTAssertEqual(query["per_page"], "20")
-            XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -6293,7 +6317,7 @@ data: {"authority":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMN
                 XCTAssertEqual(query["page"], "1")
                 XCTAssertEqual(query["per_page"], "1")
                 XCTAssertEqual(query["kind"], "Transfer")
-                XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -6420,8 +6444,7 @@ data: {"authority":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMN
             .data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets"))
+            self.assertDecodedPath(request, contains: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets")
             XCTAssertEqual(request.url?.query, "limit=2")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -6779,7 +6802,7 @@ data: {"authority":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMN
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
                 let queryItems = components?.queryItems ?? []
                 let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-                XCTAssertEqual(query["asset"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+                XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -8202,7 +8225,8 @@ id: 88
 
     func testDeployContractRejectsRemovedServerSideSigningFlow() async {
         let req = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                                             codeB64: "AQ==")
+                                             codeB64: "AQ==",
+                                             contractAlias: "mint::universal")
         await XCTAssertThrowsErrorAsync(try await makeClient().deployContract(req)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("Expected invalidPayload, got \(error)")
@@ -8214,7 +8238,8 @@ id: 88
 
     func testDeployContractRejectsInvalidBase64() {
         let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                                                 codeB64: "%%%")
+                                                 codeB64: "%%%",
+                                                 contractAlias: "mint::universal")
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
@@ -8222,15 +8247,47 @@ id: 88
         }
     }
 
-    func testDeployContractRejectsUnsupportedFields() {
+    func testDeployContractEncodesAliasFirstPayload() throws {
         let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                                                  codeB64: "AQ==",
-                                                 codeHash: String(repeating: "a", count: 64))
+                                                 contractAlias: "mint::universal",
+                                                 leaseExpiryMs: 42)
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(body["authority"] as? String, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+        XCTAssertEqual(body["code_b64"] as? String, "AQ==")
+        XCTAssertEqual(body["contract_alias"] as? String, "mint::universal")
+        XCTAssertEqual(body["lease_expiry_ms"] as? Int, 42)
+    }
+
+    func testDeployContractRejectsInvalidAlias() {
+        let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                                                 codeB64: "AQ==",
+                                                 contractAlias: "mint@universal")
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
         }
+    }
+
+    func testDeployContractParsesUpgradeResponse() throws {
+        let codeHash = String(repeating: "a", count: 64)
+        let abiHash = String(repeating: "b", count: 64)
+        let txHash = String(repeating: "c", count: 64)
+        let payload = """
+        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
+        """.data(using: .utf8)!
+        let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.contractAlias, "mint::universal")
+        XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
+        XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
+        XCTAssertTrue(response.upgraded)
+        XCTAssertEqual(response.dataspace, "universal")
+        XCTAssertEqual(response.deployNonce, 7)
+        XCTAssertEqual(response.txHashHex, txHash)
+        XCTAssertEqual(response.codeHashHex, codeHash)
+        XCTAssertEqual(response.abiHashHex, abiHash)
     }
 
     func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {
@@ -8282,8 +8339,7 @@ id: 88
             XCTAssertNil(json["private_key"])
             XCTAssertEqual(json["public_key_hex"] as? String, String(repeating: "1", count: 64))
             XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
             XCTAssertEqual(json["gas_limit"] as? Int, 7)
             XCTAssertEqual(json["gas_asset_id"] as? String, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
@@ -8293,7 +8349,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"namespace":"apps","contract_id":"mint","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8302,8 +8358,7 @@ id: 88
             authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             publicKeyHex: String(repeating: "1", count: 64),
             signatureB64: "AQ==",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             entrypoint: "create",
             payload: .object(["amount": .string("10")]),
             creationTimeMs: 321,
@@ -8316,12 +8371,13 @@ id: 88
             case .success(let response):
                 XCTAssertTrue(response.ok)
                 XCTAssertTrue(response.submitted)
-                XCTAssertEqual(response.namespace, "apps")
-                XCTAssertEqual(response.contractId, "mint")
+                XCTAssertEqual(response.dataspace, "universal")
+                XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
                 XCTAssertEqual(response.codeHashHex, codeHash)
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
+                XCTAssertEqual(response.transactionScaffoldB64, "Aw==")
                 XCTAssertEqual(response.signedTransactionB64, "AQ==")
                 XCTAssertEqual(response.signingMessageB64, "Ag==")
                 XCTAssertEqual(response.entrypoint, "create")
@@ -8336,9 +8392,22 @@ id: 88
     func testCallContractRejectsZeroGasLimit() {
         let request = ToriiContractCallRequest(
             authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             gasLimit: 0
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    func testCallContractRejectsAmbiguousContractTarget() {
+        let request = ToriiContractCallRequest(
+            authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAlias: "mint::universal",
+            gasLimit: 7
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -8361,8 +8430,7 @@ id: 88
             XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@banka")
             XCTAssertNil(json["private_key"])
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "execute")
             XCTAssertEqual(json["gas_limit"] as? Int, 5)
             let response = HTTPURLResponse(url: request.url!,
@@ -8378,8 +8446,7 @@ id: 88
         let request = ToriiMultisigContractCallProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             entrypoint: "execute",
             payload: .object(["amount": .string("10")]),
             gasAssetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -8721,7 +8788,7 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceDeployContractProposal() {
+    func testSubmitGovernanceDeployContractProposalEncodesAliasSelector() {
         let expectation = expectation(description: "governance proposal")
         let proposalId = String(repeating: "3", count: 64)
         let codeHash = String(repeating: "4", count: 64)
@@ -8731,8 +8798,13 @@ id: 88
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["namespace"] as? String, "apps")
-            XCTAssertEqual(body["contract_id"] as? String, "demo.contract")
+            XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
+            XCTAssertEqual(body["code_hash"] as? String, codeHash)
+            XCTAssertEqual(body["abi_hash"] as? String, abiHash)
+            XCTAssertEqual(body["abi_version"] as? String, "1")
+            XCTAssertEqual(body["mode"] as? String, "Plain")
+            let limits = body["limits"] as? [String: Any]
+            XCTAssertEqual(limits?["max_gas"] as? Int, 5000)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8743,12 +8815,13 @@ id: 88
             return (response, payload)
         }
 
-        let request = ToriiGovernanceDeployContractProposalRequest(namespace: "apps",
-                                                                   contractId: "demo.contract",
+        let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                                    codeHashHex: codeHash,
                                                                    abiHashHex: abiHash,
                                                                    abiVersion: "1",
-                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20))
+                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20),
+                                                                   mode: .plain,
+                                                                   limits: .object(["max_gas": .number(5000)]))
         makeClient().submitGovernanceDeployContractProposal(request) { result in
             switch result {
             case .success(let response):
@@ -8761,6 +8834,21 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAlias: "demo::universal",
+            codeHashHex: String(repeating: "4", count: 64),
+            abiHashHex: String(repeating: "5", count: 64)
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("exactly one of contract_address or contract_alias"))
+        }
     }
 
     func testFinalizeGovernanceEncodesProposalId() {
@@ -8935,6 +9023,7 @@ id: 88
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)
+        let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
             let response = HTTPURLResponse(url: request.url!,
@@ -8942,7 +9031,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","kind":{"DeployContract":{"namespace":"apps","contract_id":"demo","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
+            {"found":true,"proposal":{"proposer":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","kind":{"DeployContract":{"contract_address":"\(contractAddress)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -8955,7 +9044,7 @@ id: 88
                 guard case .deployContract(let payload) = response.proposal?.kind else {
                     return XCTFail("expected deploy contract kind")
                 }
-                XCTAssertEqual(payload.contractId, "demo")
+                XCTAssertEqual(payload.contractAddress, contractAddress)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }

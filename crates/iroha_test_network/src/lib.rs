@@ -761,11 +761,32 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
+fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
+    let mut dir = current_exe.parent()?;
+    if dir.file_name().is_some_and(|value| value == "deps") {
+        dir = dir.parent()?;
+    }
+    let profile = dir.file_name()?.to_str()?.trim();
+    if profile.is_empty() {
+        None
+    } else {
+        Some(profile.to_owned())
+    }
+}
+
+fn current_exe_profile_hint() -> Option<String> {
+    let current_exe = std::env::current_exe().ok()?;
+    profile_hint_from_exe_path(&current_exe)
+}
+
 fn default_build_profile() -> String {
     if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
         return profile;
     }
-    std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
+    if let Ok(profile) = std::env::var("PROFILE") {
+        return profile;
+    }
+    current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
 }
 
 fn first_existing_candidate<'a>(
@@ -1489,6 +1510,19 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
+fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
+    let cached = cache.get()?;
+    if cached.exists() {
+        return Some(cached.clone());
+    }
+
+    warn!(
+        binary = %cached.display(),
+        "cached program path is missing; resolving again"
+    );
+    None
+}
+
 impl Program {
     /// Resolve program path.
     ///
@@ -1537,13 +1571,13 @@ impl Program {
         // Fast path via cache (only when no override is present)
         match self {
             Program::Irohad => {
-                if let Some(p) = IROHAD_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHAD_BIN) {
+                    return Ok(path);
                 }
             }
             Program::Iroha => {
-                if let Some(p) = IROHA_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
+                    return Ok(path);
                 }
             }
         }
@@ -1812,10 +1846,14 @@ fn network_permit_wait_timeout() -> Option<Duration> {
 }
 
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
+    let dir = permit_dir();
+    try_acquire_file_permit_in(&dir, limit)
+}
+
+fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
     }
-    let dir = permit_dir();
     fs::create_dir_all(&dir).expect("failed to create network permit directory");
     let pid = std::process::id();
     let started = SystemTime::now()
@@ -1999,6 +2037,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
     block_sync_gossip_period: Duration,
+    sync_timeout_override: Option<Duration>,
     peer_startup_timeout_override: Option<Duration>,
     consensus_profile: ConsensusBootstrapProfile,
     genesis_key_pair: KeyPair,
@@ -2586,7 +2625,7 @@ impl Network {
     }
 
     pub fn sync_timeout(&self) -> Duration {
-        sync_timeout_env()
+        self.sync_timeout_override.unwrap_or_else(sync_timeout_env)
     }
 
     pub fn peer_startup_timeout(&self) -> Duration {
@@ -3448,6 +3487,7 @@ pub struct NetworkBuilder {
     n_peers: usize,
     config_layers: Vec<Table>,
     pipeline_time: Option<Duration>,
+    sync_timeout: Option<Duration>,
     peer_startup_timeout: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
     genesis_isi: Vec<Vec<InstructionBox>>,
@@ -4385,6 +4425,7 @@ impl NetworkBuilder {
             n_peers: 1,
             config_layers: vec![],
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
+            sync_timeout: None,
             peer_startup_timeout: None,
             ivm_fuel: IvmFuelConfig::Auto,
             genesis_isi: vec![vec![]],
@@ -4459,6 +4500,16 @@ impl NetworkBuilder {
         self
     }
 
+    /// Override the block-sync / height-convergence timeout for this network instance.
+    ///
+    /// Use this for heavier fixtures whose end-to-end block convergence may exceed the
+    /// environment-level default. The timeout must be strictly positive.
+    pub fn with_sync_timeout(mut self, timeout: Duration) -> Self {
+        assert!(timeout > Duration::ZERO, "sync timeout must be positive");
+        self.sync_timeout = Some(timeout);
+        self
+    }
+
     /// Set the total consensus pipeline time (block production + commit).
     ///
     /// The value is interpreted with millisecond precision. Internally we split it into
@@ -4490,6 +4541,11 @@ impl NetworkBuilder {
         debug_assert!(DEFAULT_PIPELINE_TIME > Duration::from_secs(3));
         self.pipeline_time = None;
         self
+    }
+
+    /// Return the pipeline time that will be injected into genesis, if explicitly configured.
+    pub fn configured_pipeline_time(&self) -> Option<Duration> {
+        self.pipeline_time
     }
 
     /// Override the block gossip period used by block sync and gossip topics.
@@ -4686,11 +4742,34 @@ impl NetworkBuilder {
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
+        self.build_with_permit(permit)
+    }
+
+    /// Build the [`Network`] using permit files rooted under `dir`.
+    ///
+    /// This is useful for tests that need an isolated permit namespace while unrelated
+    /// workspace tests are building other networks concurrently.
+    pub fn build_with_permit_dir(self, dir: impl AsRef<Path>) -> Network {
+        let dir = dir.as_ref();
+        let limit = network_parallelism_limit();
+        let file_permit = try_acquire_file_permit_in(dir, limit).unwrap_or_else(|| {
+            panic!(
+                "failed to acquire network permit in isolated dir {} (limit={limit})",
+                dir.display()
+            )
+        });
+        self.build_with_permit(NetworkPermit {
+            _file_permit: file_permit,
+        })
+    }
+
+    fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             env,
             n_peers,
             mut config_layers,
             pipeline_time,
+            sync_timeout,
             peer_startup_timeout,
             ivm_fuel,
             mut genesis_isi,
@@ -5036,8 +5115,8 @@ impl NetworkBuilder {
                 Register::asset_definition(fee_definition).into(),
             ];
 
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_numeric(
@@ -5071,13 +5150,13 @@ impl NetworkBuilder {
             genesis_post_topology_isi.push(bootstrap_tx);
 
             let mut validator_tx = Vec::new();
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
-                        peer_id: peer.clone(),
+                        peer_id: peer.id(),
                         stake_account: validator_id.clone(),
                         initial_stake: Numeric::from(stake_amount),
                         metadata: Metadata::default(),
@@ -5093,6 +5172,54 @@ impl NetworkBuilder {
                 );
             }
             genesis_post_topology_isi.push(validator_tx);
+        }
+
+        if custom_genesis.is_none() {
+            let agent_wallet_asset_definition =
+                AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+                    .expect("soracloud agent wallet asset definition id");
+            let hf_shared_lease_asset_definition =
+                AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                    .expect("soracloud HF shared lease asset definition id");
+            let mut soracloud_validator_bootstrap = Vec::new();
+            let mut seeded_accounts = BTreeSet::new();
+            let register_validator_accounts = npos_bootstrap.is_none();
+
+            for peer in &peers {
+                let account_id = peer.account_id();
+                if !seeded_accounts.insert(account_id.clone()) {
+                    continue;
+                }
+                if register_validator_accounts {
+                    soracloud_validator_bootstrap
+                        .push(Register::account(Account::new(account_id.clone())).into());
+                }
+                soracloud_validator_bootstrap.push(
+                    Grant::account_permission(
+                        Permission::new("CanManageSoracloud".into(), Json::new(())),
+                        account_id.clone(),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+                    )
+                    .into(),
+                );
+            }
+
+            if !soracloud_validator_bootstrap.is_empty() {
+                genesis_post_topology_isi.push(soracloud_validator_bootstrap);
+            }
         }
 
         replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
@@ -5368,6 +5495,7 @@ impl NetworkBuilder {
             block_time,
             commit_time,
             block_sync_gossip_period,
+            sync_timeout_override: sync_timeout,
             peer_startup_timeout_override: peer_startup_timeout,
             consensus_profile,
             genesis_key_pair,
@@ -5684,23 +5812,44 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = Program::Irohad.resolve_async().await?;
-        let mut cmd = tokio::process::Command::new(irohad);
-        strip_config_env_overrides(&mut cmd);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .arg("--config")
-            .arg(config_path)
-            .arg("--terminal-colors=true");
-        cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
-        if use_sora_profile {
-            cmd.arg("--sora");
-        }
-        if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
-            cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
-        }
-        cmd.current_dir(&self.dir);
-        let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
+        let make_irohad_command = |binary: &Path| {
+            let mut cmd = tokio::process::Command::new(binary);
+            strip_config_env_overrides(&mut cmd);
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .arg("--config")
+                .arg(&config_path)
+                .arg("--terminal-colors=true");
+            cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
+            if use_sora_profile {
+                cmd.arg("--sora");
+            }
+            if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
+                cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
+            }
+            cmd.current_dir(&self.dir);
+            cmd
+        };
+        let mut child = match make_irohad_command(&irohad).spawn() {
+            Ok(child) => child,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                warn!(
+                    binary = %irohad.display(),
+                    "cached `irohad` path vanished before spawn; rebuilding and retrying once"
+                );
+                let refreshed = spawn_blocking(|| Program::Irohad.resolve_force_build())
+                    .await
+                    .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
+                    eyre!(
+                        "failed to spawn `irohad` after refreshing binary path: {}",
+                        refreshed.display()
+                    )
+                })?
+            }
+            Err(err) => return Err(err).wrap_err("failed to spawn `irohad`"),
+        };
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let (fatal_tx, fatal_rx) = watch::channel(false);
@@ -6520,6 +6669,10 @@ impl NetworkPeer {
         self.key_pair.public_key()
     }
 
+    pub fn account_id(&self) -> AccountId {
+        AccountId::new(self.streaming_public_key().clone())
+    }
+
     pub fn streaming_key_pair(&self) -> &KeyPair {
         &self.streaming_key_pair
     }
@@ -6552,7 +6705,7 @@ impl NetworkPeer {
         self.network_peer_id()
     }
 
-    /// [`PeerId`] representing the network identity (Ed25519) used for Torii/P2P.
+    /// [`PeerId`] representing the BLS peer identity used in topology and PoP validation.
     pub fn network_peer_id(&self) -> PeerId {
         PeerId::new(self.key_pair.public_key().clone())
     }
@@ -7796,7 +7949,7 @@ impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
         let status = if *self.fatal_rx.borrow() {
             self.span
-                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                .in_scope(|| debug!("forcing peer shutdown after fatal signal"));
             self.shutdown_or_kill().await?
         } else {
             tokio::select! {
@@ -7804,7 +7957,7 @@ impl PeerExit {
                 _ = shutdown => self.shutdown_or_kill().await?,
                 changed = self.fatal_rx.changed() => {
                     if changed.is_ok() && *self.fatal_rx.borrow() {
-                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                        self.span.in_scope(|| debug!("forcing peer shutdown after fatal signal"));
                     }
                     self.shutdown_or_kill().await?
                 }
@@ -7829,8 +7982,21 @@ impl PeerExit {
 
     async fn wait_log(&self, notify: &Arc<Notify>, label: &'static str) {
         if (timeout(LOG_FLUSH_TIMEOUT, notify.notified()).await).is_err() {
-            self.span
-                .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            let fatal_shutdown = *self.fatal_rx.borrow();
+            let normal_shutdown = self.is_normal_shutdown_started.load(Ordering::Relaxed);
+            if fatal_shutdown || normal_shutdown {
+                self.span.in_scope(|| {
+                    debug!(
+                        log = label,
+                        fatal_shutdown,
+                        normal_shutdown,
+                        "timed out waiting for log flush during shutdown"
+                    )
+                });
+            } else {
+                self.span
+                    .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            }
         }
     }
 
@@ -8404,6 +8570,19 @@ mod tests {
                 .with_peer_startup_timeout(Duration::from_secs(300)),
         );
         assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn sync_timeout_override_is_applied() {
+        if skip_network_tests("sync_timeout_override_is_applied") {
+            return;
+        }
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_min_peers(4)
+                .with_sync_timeout(Duration::from_secs(300)),
+        );
+        assert_eq!(network.sync_timeout(), Duration::from_secs(300));
     }
 
     #[test]
@@ -9405,13 +9584,30 @@ mod tests {
         let _clear_profile = EnvVarGuard::cleared("PROFILE");
         let _clear_override = EnvVarGuard::cleared(IROHA_TEST_BUILD_PROFILE_ENV);
         let default_profile = default_build_profile();
-        assert_eq!(default_profile, "release");
+        assert_eq!(
+            default_profile,
+            current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
+        );
 
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
 
         let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
         assert_eq!(default_build_profile(), "debug");
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_profile_before_deps_dir() {
+        let hint = profile_hint_from_exe_path(Path::new(
+            "/tmp/iroha-target/debug/deps/integration_tests-abcdef",
+        ));
+        assert_eq!(hint.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
+        assert_eq!(hint.as_deref(), Some("ci"));
     }
 
     #[cfg(unix)]
@@ -9988,6 +10184,7 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
             })
@@ -11276,14 +11473,11 @@ exit 0
         let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("default nexus fee asset id");
-        let first_validator_id = AccountId::new(
-            network
-                .peers()
-                .first()
-                .expect("validator peer")
-                .public_key()
-                .clone(),
-        );
+        let first_validator_id = network
+            .peers()
+            .first()
+            .expect("validator peer")
+            .account_id();
         let mut saw_definition = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
@@ -11328,6 +11522,48 @@ exit 0
         assert!(
             saw_validator_mint,
             "npos bootstrap should fund validators with the default nexus fee asset"
+        );
+    }
+
+    #[test]
+    fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .build();
+        let genesis = network.genesis();
+        let validator_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::account_id)
+            .collect::<BTreeSet<_>>();
+        let mut granted = BTreeSet::new();
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    let Some(grant) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::GrantBox>()
+                    else {
+                        continue;
+                    };
+                    let iroha_data_model::isi::GrantBox::Permission(grant) = grant else {
+                        continue;
+                    };
+                    if grant.object.name() == "CanManageSoracloud"
+                        && validator_ids.contains(&grant.destination)
+                    {
+                        granted.insert(grant.destination.clone());
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            granted, validator_ids,
+            "default test-network genesis should grant CanManageSoracloud to validator runtime signers"
         );
     }
 
@@ -11478,6 +11714,16 @@ exit 0
     }
 
     #[test]
+    fn configured_pipeline_time_reports_explicit_override() {
+        let duration = Duration::from_secs(9);
+        let builder = NetworkBuilder::new().with_pipeline_time(duration);
+        assert_eq!(builder.configured_pipeline_time(), Some(duration));
+
+        let default_builder = NetworkBuilder::new().with_default_pipeline_time();
+        assert_eq!(default_builder.configured_pipeline_time(), None);
+    }
+
+    #[test]
     fn data_availability_parameter_is_injected() {
         let network = NetworkBuilder::new()
             .with_peers(2)
@@ -11568,6 +11814,11 @@ exit 0
         let env = Environment::new();
         let peer = NetworkPeerBuilder::new().build(&env);
         assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(
+            peer.account_id(),
+            AccountId::new(peer.streaming_public_key().clone()),
+            "runtime account identity should use the streaming key"
+        );
         assert_eq!(
             peer.streaming_public_key().algorithm(),
             Algorithm::Ed25519,
@@ -11675,6 +11926,27 @@ exit 0
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
+    }
+
+    #[test]
+    fn cached_binary_if_present_returns_existing_path() {
+        let cache = OnceLock::new();
+        let current_exe = env::current_exe().expect("current test binary path");
+        cache
+            .set(current_exe.clone())
+            .expect("cache should be empty for test");
+
+        assert_eq!(cached_binary_if_present(&cache), Some(current_exe));
+    }
+
+    #[test]
+    fn cached_binary_if_present_ignores_missing_path() {
+        let cache = OnceLock::new();
+        let missing = repo_root().join("target/test-bin-dummy/missing-irohad");
+        let _ = fs::remove_file(&missing);
+        cache.set(missing).expect("cache should be empty for test");
+
+        assert!(cached_binary_if_present(&cache).is_none());
     }
 
     #[test]

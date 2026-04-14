@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4a29b96fd90c51ffbfa1de0f7c34d9437cffa80b4caf2965b192abeb56f1c80c
-source_last_modified: "2026-01-22T16:26:46.500837+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 

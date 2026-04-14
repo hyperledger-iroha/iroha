@@ -7,7 +7,10 @@ use std::{
 };
 
 use norito::json::{self, Map, Value};
-use sorafs_car::{CarBuildPlan, chunker_registry, fetch_plan::chunk_fetch_specs_to_json};
+use sorafs_car::{
+    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_json,
+    verifier::CarVerifier,
+};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ManifestV1,
@@ -126,7 +129,7 @@ fn ingest(
     let plan = CarBuildPlan::single_file_with_profile(&payload_bytes, chunk_profile)
         .map_err(|err| format!("failed to build chunk plan: {err}"))?;
 
-    ensure_manifest_plan_alignment(&manifest, &plan)?;
+    ensure_manifest_plan_alignment(&manifest, &plan, &payload_bytes)?;
 
     let config = StorageConfig::builder()
         .enabled(true)
@@ -555,6 +558,7 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
 fn ensure_manifest_plan_alignment(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
+    payload_bytes: &[u8],
 ) -> Result<(), String> {
     if manifest.content_length != plan.content_length {
         return Err(format!(
@@ -562,9 +566,14 @@ fn ensure_manifest_plan_alignment(
             manifest.content_length, plan.content_length
         ));
     }
-    if manifest.car_digest != *plan.payload_digest.as_bytes() {
-        return Err("manifest CAR digest does not match computed payload digest".to_string());
-    }
+    let writer =
+        CarWriter::new(plan, payload_bytes).map_err(|err| format!("failed to build CAR: {err}"))?;
+    let mut car_bytes = Vec::new();
+    writer
+        .write_to(&mut car_bytes)
+        .map_err(|err| format!("failed to materialize CAR: {err}"))?;
+    CarVerifier::verify_full_car_with_plan(manifest, plan, &car_bytes)
+        .map_err(|err| format!("manifest verification failed: {err}"))?;
     Ok(())
 }
 

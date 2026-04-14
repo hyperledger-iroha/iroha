@@ -1052,6 +1052,11 @@ impl Actor {
                     ));
                 }
                 builder = builder.with_previous_roster_evidence(previous_roster_evidence.clone());
+                let sccp_messages =
+                    crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
+                builder = builder.with_sccp_commitment_root(
+                    crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
+                );
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
@@ -2317,11 +2322,16 @@ impl Actor {
             "pacemaker NEW_VIEW snapshot before selection"
         );
 
-        let mut candidate = self.subsystems.propose.new_view_tracker.select_with_quorum(
-            required,
-            local_peer.as_ref(),
-            topology.as_ref(),
-        );
+        let mut candidate = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .select_with_quorum_for_height(
+                tracked_height,
+                required,
+                local_peer.as_ref(),
+                topology.as_ref(),
+            );
         if pending_queue_len > 0 {
             if let Some((forced_height, forced_view)) =
                 self.subsystems.propose.forced_view_after_timeout

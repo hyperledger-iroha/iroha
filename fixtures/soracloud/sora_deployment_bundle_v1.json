@@ -30,8 +30,18 @@
       "network": {
         "mode": "Allowlist",
         "value": [
-          "api.sora.internal",
-          "wallet.sora.internal"
+          {
+            "host": "api.sora.internal",
+            "ports": [
+              443
+            ]
+          },
+          {
+            "host": "wallet.sora.internal",
+            "ports": [
+              443
+            ]
+          }
         ]
       },
       "allow_wallet_signing": true,
@@ -56,8 +66,12 @@
     "schema_version": 1,
     "service_name": "web_portal",
     "service_version": "2026.02.0",
+    "execution_plane": {
+      "execution_plane": "DeterministicService",
+      "value": null
+    },
     "container": {
-      "manifest_hash": "hash:782BA03A4FA3424DE2E4F8FEB29FA212614DAE7B06691CD99DC5E8391ED8E059#DFD6",
+      "manifest_hash": "hash:7F93D5A117F945B9E9A00AA4EC9EBB65D06FF85446B172F151E3A3FCE362169F#BD0C",
       "expected_schema_version": 1
     },
     "replicas": 3,
@@ -79,6 +93,16 @@
       "max_unavailable_replicas": 1,
       "health_window_secs": 45,
       "automatic_rollback_failures": 3
+    },
+    "economics": {
+      "schema_version": 1,
+      "quota_class": "taira-open",
+      "deployment_deposit_nanos": 1000000000,
+      "prepaid_runtime_balance_nanos": 50000000000,
+      "lease_duration_sequences": 86400,
+      "runtime_nanos_per_sequence": 250000,
+      "storage_nanos_per_gib_sequence": 25000,
+      "egress_nanos_per_mib": 5000
     },
     "state_bindings": [
       {
@@ -119,6 +143,9 @@
         "max_item_bytes": 16384,
         "max_total_bytes": 16777216
       }
+    ],
+    "lease_volumes": [
+      
     ],
     "handlers": [
       {

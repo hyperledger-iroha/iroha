@@ -188,22 +188,14 @@ pub mod soracloud_runtime {
     pub const MODEL_ARTIFACT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(1_024_u64 * 1024 * 1024);
     /// Default model-weight cache budget in bytes.
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
-    /// Default concurrent deterministic native processes allowed on one node.
-    pub const NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES: NonZeroUsize = nonzero!(8_usize);
-    /// Default CPU budget in millicores for one deterministic native process.
-    pub const NATIVE_PROCESS_CPU_MILLIS: NonZeroU32 = nonzero!(2_000_u32);
-    /// Default memory budget in bytes for one deterministic native process.
-    pub const NATIVE_PROCESS_MEMORY_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
-    /// Default ephemeral storage budget in bytes for one deterministic native process.
-    pub const NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
-    /// Default open-file ceiling for one deterministic native process.
-    pub const NATIVE_PROCESS_MAX_OPEN_FILES: NonZeroU32 = nonzero!(256_u32);
-    /// Default task/thread ceiling for one deterministic native process.
-    pub const NATIVE_PROCESS_MAX_TASKS: std::num::NonZeroU16 = nonzero!(64_u16);
-    /// Default startup grace window in milliseconds for deterministic native processes.
-    pub const NATIVE_PROCESS_START_GRACE_MS: u64 = 5_000;
-    /// Default shutdown grace window in milliseconds for deterministic native processes.
-    pub const NATIVE_PROCESS_STOP_GRACE_MS: u64 = 5_000;
+    /// Default concurrent Inrou microVMs allowed on one node.
+    pub const INROU_MAX_CONCURRENT_VMS: NonZeroUsize = nonzero!(8_usize);
+    /// Default hosted-runtime posture for Inrou nodes.
+    pub const INROU_PROXY_ONLY: bool = false;
+    /// Default startup grace window in milliseconds for Inrou microVMs.
+    pub const INROU_START_GRACE_MS: u64 = 30_000;
+    /// Default shutdown grace window in milliseconds for Inrou microVMs.
+    pub const INROU_STOP_GRACE_MS: u64 = 10_000;
     /// Default outbound egress posture for the embedded runtime manager.
     pub const EGRESS_DEFAULT_ALLOW: bool = false;
     /// Default outbound request-rate cap per service/minute. `None` means quota is unset.
@@ -1256,6 +1248,12 @@ pub mod sorafs {
         pub const ENFORCE_ADMISSION: bool = true;
         /// Enforce advertised capabilities (e.g., chunk-range fetch) before serving data.
         pub const ENFORCE_CAPABILITIES: bool = false;
+        /// Enable per-CID untrusted host routing.
+        pub const UNTRUSTED_HOSTING_ENABLED: bool = false;
+        /// Redirect browser path-gateway requests to the canonical CID host.
+        pub const PATH_GATEWAY_REDIRECT: bool = true;
+        /// Limit canonical redirects to browser HTML navigations.
+        pub const REDIRECT_HTML_ONLY: bool = true;
 
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
@@ -1305,6 +1303,26 @@ pub mod sorafs {
         #[allow(clippy::unnecessary_wraps)]
         pub fn anonymity_policy() -> Option<String> {
             Some(DEFAULT_ANONYMITY_POLICY.to_string())
+        }
+
+        /// Untrusted-hosting defaults for per-CID browser origins.
+        pub mod untrusted_hosting {
+            /// Canonical live CID-host suffix.
+            pub const LIVE_CID_HOST_SUFFIX: &str = "sorafs.sora.org";
+            /// Canonical Taira CID-host suffix.
+            pub const TAIRA_CID_HOST_SUFFIX: &str = "sorafs.taira.sora.org";
+
+            /// Return the default live CID-host suffix.
+            #[must_use]
+            pub fn live_cid_host_suffix() -> String {
+                LIVE_CID_HOST_SUFFIX.to_string()
+            }
+
+            /// Return the default Taira CID-host suffix.
+            #[must_use]
+            pub fn taira_cid_host_suffix() -> String {
+                TAIRA_CID_HOST_SUFFIX.to_string()
+            }
         }
 
         /// ACME automation defaults.
@@ -1681,6 +1699,10 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_mins(1);
+    /// Enable app-facing webhook routes and workers. Disabled by default.
+    pub const WEBHOOKS_ENABLED: bool = false;
+    /// Enable app-facing ZK attachment routes and workers. Disabled by default.
+    pub const ZK_ATTACHMENTS_ENABLED: bool = false;
     /// Default TTL for app API ZK attachments (seconds)
     pub const ATTACHMENTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Default maximum size per ZK attachment (bytes)
