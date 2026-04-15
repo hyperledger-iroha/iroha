@@ -15763,7 +15763,10 @@ mod multisig_selector_tests {
         )
         .await
         .expect("get execute trigger proposal");
-        assert_eq!(execute_trigger_get_response.operation_type, "EXECUTE_TRIGGER");
+        assert_eq!(
+            execute_trigger_get_response.operation_type,
+            "EXECUTE_TRIGGER"
+        );
         assert!(execute_trigger_get_response.intent.is_none());
     }
 
