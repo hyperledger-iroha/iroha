@@ -6008,6 +6008,23 @@ export interface DeployContractResponse {
   abi_hash_hex: string;
 }
 
+export interface SetContractAliasRequest {
+  authority: string;
+  privateKey: string;
+  contractAddress: string;
+  contractAlias?: string | null;
+  leaseExpiryMs?: number | null;
+}
+
+export interface SetContractAliasResponse {
+  ok: boolean;
+  contract_alias: string | null;
+  contract_address: string;
+  dataspace: string;
+  tx_hash_hex: string | null;
+  status: string;
+}
+
 export interface ContractCallRequest {
   authority: string;
   privateKey: string;
@@ -6837,12 +6854,6 @@ export interface RemoveSmartContractBytesInstructionInput {
   reason?: string | null;
 }
 
-export interface SetContractAliasInstructionInput {
-  contractAddress: string;
-  contractAlias?: string | null;
-  leaseExpiryMs?: NumericLike | null;
-}
-
 export interface CreateKaigiTransactionInput {
   chainId: string;
   authority: string;
@@ -7168,19 +7179,6 @@ export interface RemoveSmartContractBytesTransactionInput {
   authority: string;
   codeHash: HashLike;
   reason?: string | null;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
-export interface SetContractAliasTransactionInput {
-  chainId: string;
-  authority: string;
-  contractAddress: string;
-  contractAlias?: string | null;
-  leaseExpiryMs?: NumericLike | null;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8094,6 +8092,7 @@ export declare class ToriiClient {
   ): RbcSampleRequestOptions;
   registerContractCode(request: RegisterContractCodeRequest): Promise<unknown | null>;
   deployContract(request: DeployContractRequest): Promise<DeployContractResponse | null>;
+  setContractAlias(request: SetContractAliasRequest): Promise<SetContractAliasResponse | null>;
   callContract(
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
@@ -9090,9 +9089,6 @@ export function buildRegisterSmartContractBytesTransaction(
 export function buildRemoveSmartContractBytesTransaction(
   input: RemoveSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
-export function buildSetContractAliasTransaction(
-  input: SetContractAliasTransactionInput,
-): SignedTransactionResult;
 export function buildProposeDeployContractTransaction(
   input: ProposeDeployContractTransactionInput,
 ): SignedTransactionResult;
@@ -9597,10 +9593,6 @@ export function buildRegisterSmartContractBytesInstruction(
 
 export function buildRemoveSmartContractBytesInstruction(
   input: RemoveSmartContractBytesInstructionInput,
-): object;
-
-export function buildSetContractAliasInstruction(
-  input: SetContractAliasInstructionInput,
 ): object;
 
 export function encodeInstruction(instruction: object): Buffer;

@@ -18,7 +18,6 @@ import {
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
   buildRemoveSmartContractBytesTransaction,
-  buildSetContractAliasTransaction,
   buildProposeDeployContractTransaction,
   buildCastZkBallotTransaction,
   buildCastPlainBallotTransaction,
@@ -1075,38 +1074,6 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   );
   const parsed = JSON.parse(captures[0][0]);
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
-});
-
-test("buildSetContractAliasTransaction wraps alias updates", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x05]),
-    hash: Buffer.alloc(32, 0xab),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (...args) => {
-        captures.push(args);
-        return fakeResult;
-      },
-    },
-    () => {
-      buildSetContractAliasTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-        contractAlias: "bisp::sbp",
-        leaseExpiryMs: 60_000,
-        privateKey: PRIVATE_KEY,
-      });
-    },
-  );
-  const parsed = JSON.parse(captures[0][2][0]);
-  assert.deepEqual(parsed.SetContractAlias, {
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-    alias: "bisp::sbp",
-    lease_expiry_ms: 60_000,
-  });
 });
 
 test("confidential transaction builders wrap expected instruction payloads", () => {

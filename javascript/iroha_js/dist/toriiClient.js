@@ -6954,6 +6954,25 @@ export class ToriiClient {
   }
 
   /**
+   * Bind, update, or clear a contract alias (`POST /v1/contracts/aliases`).
+   * @param {SetContractAliasRequest} request
+   * @returns {Promise<SetContractAliasResponse | null>}
+   */
+  async setContractAlias(request = {}) {
+    const payload = normalizeSetContractAliasRequest(request);
+    const response = await this._request("POST", "/v1/contracts/aliases", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    return body ? normalizeSetContractAliasResponse(body) : null;
+  }
+
+  /**
    * Invoke a deployed contract instance (`POST /v1/contracts/call`).
    * @param {ContractCallRequest} request
    * @param {{signal?: AbortSignal}} [options]
@@ -18895,6 +18914,83 @@ function normalizeDeployContractResponse(payload) {
     abi_hash_hex: normalizeHex32String(
       record.abi_hash_hex,
       "deployContract.response.abi_hash_hex",
+    ),
+  };
+}
+
+function normalizeSetContractAliasRequest(input) {
+  const record = ensureRecord(input, "setContractAlias request");
+  const credentials = normalizeAuthorityCredentials(record, "setContractAlias");
+  const contractAddress = record.contract_address ?? record.contractAddress;
+  const payload = {
+    ...credentials,
+    contract_address: requireNonEmptyString(
+      contractAddress,
+      "setContractAlias.contractAddress",
+    ),
+    contract_alias: null,
+  };
+  const contractAlias = record.contract_alias ?? record.contractAlias;
+  if (contractAlias !== undefined && contractAlias !== null) {
+    payload.contract_alias = requireNonEmptyString(
+      contractAlias,
+      "setContractAlias.contractAlias",
+    );
+  }
+  const leaseExpiryValue = record.lease_expiry_ms ?? record.leaseExpiryMs;
+  if (leaseExpiryValue !== undefined && leaseExpiryValue !== null) {
+    if (payload.contract_alias === null) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "setContractAlias.leaseExpiryMs requires contractAlias",
+        "setContractAlias.leaseExpiryMs",
+      );
+    }
+    const leaseExpiryMs = coerceInteger(
+      leaseExpiryValue,
+      "setContractAlias.leaseExpiryMs",
+    );
+    if (leaseExpiryMs < 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        "setContractAlias.leaseExpiryMs must be a non-negative integer",
+        "setContractAlias.leaseExpiryMs",
+      );
+    }
+    payload.lease_expiry_ms = leaseExpiryMs;
+  }
+  return payload;
+}
+
+function normalizeSetContractAliasResponse(payload) {
+  const record = ensureRecord(payload, "setContractAlias response");
+  return {
+    ok: Boolean(record.ok),
+    contract_alias:
+      record.contract_alias === undefined || record.contract_alias === null
+        ? null
+        : requireNonEmptyString(
+            record.contract_alias,
+            "setContractAlias.response.contract_alias",
+          ),
+    contract_address: requireNonEmptyString(
+      record.contract_address,
+      "setContractAlias.response.contract_address",
+    ),
+    dataspace: requireNonEmptyString(
+      record.dataspace,
+      "setContractAlias.response.dataspace",
+    ),
+    tx_hash_hex:
+      record.tx_hash_hex === undefined || record.tx_hash_hex === null
+        ? null
+        : normalizeHex32String(
+            record.tx_hash_hex,
+            "setContractAlias.response.tx_hash_hex",
+          ),
+    status: requireNonEmptyString(
+      record.status,
+      "setContractAlias.response.status",
     ),
   };
 }

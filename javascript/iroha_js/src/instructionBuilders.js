@@ -3530,39 +3530,6 @@ export function buildRemoveSmartContractBytesInstruction(options) {
 }
 
 /**
- * Build a `SetContractAlias` instruction payload.
- * @param {{contractAddress: string, contractAlias?: string | null, leaseExpiryMs?: number | string | bigint | null}} options
- * @returns {{SetContractAlias: {contract_address: string, alias: string | null, lease_expiry_ms?: number}}}
- */
-export function buildSetContractAliasInstruction(options) {
-  const source = assertPlainObject(options, "setContractAlias");
-  const payload = {
-    contract_address: assertString(
-      source.contractAddress ?? source.contract_address,
-      "setContractAlias.contractAddress",
-    ),
-    alias: null,
-  };
-  const contractAlias = source.contractAlias ?? source.contract_alias;
-  if (contractAlias !== undefined && contractAlias !== null) {
-    payload.alias = assertString(
-      contractAlias,
-      "setContractAlias.contractAlias",
-    );
-    const leaseExpiryMs = source.leaseExpiryMs ?? source.lease_expiry_ms;
-    if (leaseExpiryMs !== undefined && leaseExpiryMs !== null) {
-      payload.lease_expiry_ms = asU128JsonNumber(
-        leaseExpiryMs,
-        "setContractAlias.leaseExpiryMs",
-      );
-    }
-  }
-  return {
-    SetContractAlias: payload,
-  };
-}
-
-/**
  * Build a `zk::RegisterZkAsset` instruction payload.
  * @param {object} options
  * @returns {{zk: {RegisterZkAsset: object}}}

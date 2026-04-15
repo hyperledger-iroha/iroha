@@ -2236,6 +2236,17 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/aliases".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Bind or clear a contract alias.",
+            "Bind, update, or clear the on-chain alias for a deployed contract instance.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/state".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
@@ -10595,6 +10606,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
         assert!(paths.contains_key("/v1/aliases/by_account"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
+        assert!(paths.contains_key("/v1/contracts/aliases"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
         assert!(paths.contains_key("/v1/time/status"));
