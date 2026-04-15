@@ -1470,6 +1470,92 @@ def test_contract_helpers_against_mock_server() -> None:
         server.stop()
 
 
+def test_contract_bundle_helpers_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/contracts/config",
+            json={
+                "bundle_response": {
+                    "bundle_digest": "mock-bundle-digest",
+                    "completed_stages": ["plan", "deploy", "init_calls", "assertions"],
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        request_payload = {
+            "bundle_name": "demo",
+            "authority": CANONICAL_OWNER,
+            "private_key": "00" * 32,
+            "contracts": [
+                {
+                    "name": "demo.greeter",
+                    "contract_alias": "greeter::universal",
+                    "code_b64": "AQID",
+                    "depends_on": [],
+                }
+            ],
+            "init_calls": [
+                {
+                    "id": "seed",
+                    "contract_alias": "greeter::universal",
+                    "entrypoint": "init",
+                    "gas_limit": 1000,
+                }
+            ],
+            "assertions": [
+                {
+                    "id": "status",
+                    "contract_alias": "greeter::universal",
+                    "entrypoint": "status",
+                    "gas_limit": 1000,
+                    "expected_result": 7,
+                }
+            ],
+        }
+
+        dry_run = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle?dry_run=true",
+            json=request_payload,
+            timeout=5.0,
+        )
+        dry_run.raise_for_status()
+        dry_run_payload = dry_run.json()
+        assert dry_run_payload["bundle_name"] == "demo"
+        assert dry_run_payload["dry_run"] is True
+        assert dry_run_payload["contracts"][0]["status"] == "planned"
+        assert dry_run_payload["init_calls"][0]["status"] == "pending"
+
+        submit = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle",
+            json=request_payload,
+            timeout=5.0,
+        )
+        submit.raise_for_status()
+        submit_payload = submit.json()
+        assert submit_payload["dry_run"] is False
+        assert submit_payload["contracts"][0]["status"] == "deployed"
+        assert submit_payload["contracts"][0]["tx_hash_hex"] == "01" * 32
+
+        status = requests.get(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundles/mock-bundle-digest",
+            timeout=5.0,
+        )
+        status.raise_for_status()
+        status_payload = status.json()
+        assert status_payload["bundle_digest"] == "mock-bundle-digest"
+        assert status_payload["completed_stages"] == [
+            "plan",
+            "deploy",
+            "init_calls",
+            "assertions",
+        ]
+    finally:
+        server.stop()
+
+
 def test_get_runtime_abi_active_parses_payload() -> None:
     session = RecordingSession()
     session.queue(

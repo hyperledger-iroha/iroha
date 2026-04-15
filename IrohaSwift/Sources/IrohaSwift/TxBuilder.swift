@@ -222,6 +222,7 @@ public struct SetPrimaryAccountAliasRequest {
     public let authority: String
     public let accountId: String
     public let aliasDomain: String?
+    public let aliasDataspaceId: UInt64
     public let alias: String
     public let ttlMs: UInt64?
 
@@ -229,12 +230,14 @@ public struct SetPrimaryAccountAliasRequest {
                 authority: String,
                 accountId: String,
                 aliasDomain: String? = nil,
+                aliasDataspaceId: UInt64,
                 alias: String,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
         self.aliasDomain = aliasDomain
+        self.aliasDataspaceId = aliasDataspaceId
         self.alias = alias
         self.ttlMs = ttlMs
     }
@@ -750,7 +753,7 @@ public struct PipelineSubmitOptions: Sendable {
 }
 
 public struct PipelineStatusPollOptions: Sendable {
-    public static let defaultSuccessStates: Set<PipelineTransactionState> = [.approved, .committed, .applied]
+    public static let defaultSuccessStates: Set<PipelineTransactionState> = [.committed, .applied]
     public static let defaultFailureStates: Set<PipelineTransactionState> = [.rejected, .expired]
     public static let `default` = PipelineStatusPollOptions()
 

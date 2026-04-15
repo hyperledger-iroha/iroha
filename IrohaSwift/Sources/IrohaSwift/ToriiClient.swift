@@ -9520,7 +9520,7 @@ public enum PipelineTransactionState: Hashable, Sendable {
 
     public var isKnownTerminalSuccess: Bool {
         switch self {
-        case .approved, .committed, .applied:
+        case .committed, .applied:
             return true
         default:
             return false

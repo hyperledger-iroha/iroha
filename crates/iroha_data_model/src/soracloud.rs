@@ -341,17 +341,151 @@ pub enum SoraInrouRuntimeBackendV1 {
     FirecrackerKvm,
 }
 
-/// Guest-image asset paths for one admitted Inrou ISA profile.
+/// CDN-like distribution target for Soracloud-published artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "target", content = "value"))]
+pub enum SoraArtifactDistributionTargetV1 {
+    /// Replicate and hydrate from the globally best eligible hosts.
+    #[default]
+    Global,
+    /// Prefer hosts tagged with one of the requested geographies.
+    Geographies(BTreeSet<String>),
+}
+
+impl SoraArtifactDistributionTargetV1 {
+    /// Validate the distribution target labels.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when geography labels are malformed.
+    pub fn validate(&self, field: &'static str) -> Result<(), SoraCloudManifestError> {
+        match self {
+            Self::Global => Ok(()),
+            Self::Geographies(tags) => {
+                if tags.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora artifact distribution policy",
+                        field,
+                        reason: "geography target must include at least one tag".to_string(),
+                    });
+                }
+                for tag in tags {
+                    validate_distribution_geography_tag(
+                        "sora artifact distribution policy",
+                        field,
+                        tag,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Reusable policy for publishing artifacts to Soracloud host storage.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraArtifactDistributionPolicyV1 {
+    /// Operator target: global or a set of geography tags.
+    #[norito(default)]
+    pub target: SoraArtifactDistributionTargetV1,
+    /// Prefer lower observed latency among otherwise eligible hosts.
+    #[norito(default = "default_true")]
+    pub prefer_low_latency: bool,
+    /// Fall back to latency when host geography is missing or unverifiable.
+    #[norito(default = "default_true")]
+    pub fallback_to_low_latency_when_geography_unknown: bool,
+}
+
+impl Default for SoraArtifactDistributionPolicyV1 {
+    fn default() -> Self {
+        Self {
+            target: SoraArtifactDistributionTargetV1::Global,
+            prefer_low_latency: true,
+            fallback_to_low_latency_when_geography_unknown: true,
+        }
+    }
+}
+
+impl SoraArtifactDistributionPolicyV1 {
+    /// Validate the distribution policy.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when target metadata is malformed.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        self.target.validate("target")
+    }
+}
+
+/// Immutable SoraFS artifact reference used to hydrate Inrou guest images.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraPublishedInrouGuestImageArtifactV1 {
+    /// SoraFS manifest digest hex for the uploaded guest-image artifact bundle.
+    pub manifest_digest_hex: String,
+    /// CID rendered for the uploaded guest-image artifact bundle.
+    pub content_cid: String,
+    /// Optional storage manifest identifier returned by the storage pin endpoint.
+    #[norito(default)]
+    pub manifest_id_hex: Option<String>,
+    /// Distribution/hydration policy for host-side replication.
+    #[norito(default)]
+    pub distribution: SoraArtifactDistributionPolicyV1,
+}
+
+impl SoraPublishedInrouGuestImageArtifactV1 {
+    /// Validate the immutable artifact reference.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the artifact reference is malformed.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        validate_nonempty_no_control(
+            "sora published inrou guest image artifact",
+            "manifest_digest_hex",
+            &self.manifest_digest_hex,
+        )?;
+        validate_nonempty_no_control(
+            "sora published inrou guest image artifact",
+            "content_cid",
+            &self.content_cid,
+        )?;
+        if let Some(manifest_id_hex) = self.manifest_id_hex.as_ref() {
+            validate_nonempty_no_control(
+                "sora published inrou guest image artifact",
+                "manifest_id_hex",
+                manifest_id_hex,
+            )?;
+        }
+        self.distribution.validate()
+    }
+}
+
+/// Guest-image member paths for one admitted Inrou ISA profile.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct SoraInrouGuestImageV1 {
-    /// Kernel image path inside the signed Soracloud VM artifact bundle.
+    /// Kernel image member path inside the signed Soracloud VM artifact bundle.
     pub kernel_image_path: String,
-    /// Root filesystem image path inside the signed Soracloud VM artifact bundle.
+    /// Root filesystem image member path inside the signed Soracloud VM artifact bundle.
     pub rootfs_image_path: String,
-    /// Optional initrd image path inside the signed Soracloud VM artifact bundle.
+    /// Optional initrd image member path inside the signed Soracloud VM artifact bundle.
     #[norito(default)]
     pub initrd_image_path: Option<String>,
+    /// Requested distribution policy for the published guest-image artifact.
+    #[norito(default)]
+    pub distribution: SoraArtifactDistributionPolicyV1,
+    /// Immutable SoraFS artifact that carries the guest image members after release.
+    #[norito(default)]
+    pub published_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
 }
 
 #[cfg(feature = "json")]
@@ -399,6 +533,13 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
         let rootfs_image_path = take_required(&mut object, "rootfs_image_path")?;
         let initrd_image_path =
             take_optional::<Option<String>>(&mut object, "initrd_image_path")?.flatten();
+        let distribution =
+            take_optional::<SoraArtifactDistributionPolicyV1>(&mut object, "distribution")?
+                .unwrap_or_default();
+        let published_artifact = take_optional::<SoraPublishedInrouGuestImageArtifactV1>(
+            &mut object,
+            "published_artifact",
+        )?;
 
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
@@ -408,6 +549,8 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
             kernel_image_path,
             rootfs_image_path,
             initrd_image_path,
+            distribution,
+            published_artifact,
         })
     }
 }
@@ -434,6 +577,10 @@ impl SoraInrouGuestImageV1 {
                 "initrd_image_path",
                 initrd_image_path,
             )?;
+        }
+        self.distribution.validate()?;
+        if let Some(published_artifact) = self.published_artifact.as_ref() {
+            published_artifact.validate()?;
         }
         Ok(())
     }
@@ -664,6 +811,8 @@ impl JsonDeserialize for SoraInrouManifestV1 {
                     kernel_image_path,
                     rootfs_image_path,
                     initrd_image_path: legacy_initrd_image_path,
+                    distribution: SoraArtifactDistributionPolicyV1::default(),
+                    published_artifact: None,
                 };
                 BTreeMap::from([
                     (SoraInrouGuestIsaV1::X8664, image.clone()),
@@ -5153,6 +5302,58 @@ fn validate_service_material_name(
     Ok(())
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+fn validate_nonempty_no_control(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoraCloudManifestError> {
+    if value.trim().is_empty() {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    }
+    if value.trim() != value {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not include surrounding whitespace".to_string(),
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not contain control characters".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_distribution_geography_tag(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoraCloudManifestError> {
+    validate_nonempty_no_control(manifest, field, value)?;
+    if value.len() > 128 {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "geography tags must not exceed 128 bytes".to_string(),
+        });
+    }
+    if value.chars().any(char::is_whitespace) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "geography tags must not contain whitespace".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_config_export_env_var_name(value: &str) -> Result<(), SoraCloudManifestError> {
     let manifest = "sora container manifest";
     let field = "config_exports";
@@ -7482,8 +7683,14 @@ pub struct SoraInrouHostCapabilityRecordV1 {
     /// Maximum aggregate hosted writable storage budget in bytes.
     pub max_storage_bytes: u64,
     /// Whether this validator intentionally participates as a proxy/control-plane node only.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub proxy_only: bool,
+    /// Optional geography labels advertised by the host or derived by telemetry.
+    #[norito(default)]
+    pub geography_tags: BTreeSet<String>,
+    /// Optional observed latency hint used when exact geography is unavailable.
+    #[norito(default)]
+    pub observed_latency_ms: Option<u32>,
     /// Timestamp when the advert was last refreshed.
     pub advertised_at_ms: u64,
     /// Timestamp after which the advert is no longer eligible without a refresh.
@@ -7522,6 +7729,20 @@ impl SoraInrouHostCapabilityRecordV1 {
                 manifest: "sora inrou host capability record",
                 field: "supported_guest_isas",
                 reason: "must not be empty".to_string(),
+            });
+        }
+        for tag in &self.geography_tags {
+            validate_distribution_geography_tag(
+                "sora inrou host capability record",
+                "geography_tags",
+                tag,
+            )?;
+        }
+        if self.observed_latency_ms == Some(0) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou host capability record",
+                field: "observed_latency_ms",
+                reason: "must be greater than zero when provided".to_string(),
             });
         }
         if self.advertised_at_ms == 0 || self.heartbeat_expires_at_ms == 0 {
@@ -7605,6 +7826,12 @@ pub struct SoraInrouReplicaPlacementV1 {
     pub selected_backend: SoraInrouRuntimeBackendV1,
     /// Guest ISA selected locally on the assigned host.
     pub selected_guest_isa: SoraInrouGuestIsaV1,
+    /// Geography tag that matched the requested distribution policy, when known.
+    #[norito(default)]
+    pub selected_geography_tag: Option<String>,
+    /// Latency observation used by placement/hydration, when available.
+    #[norito(default)]
+    pub selection_latency_ms: Option<u32>,
 }
 
 impl SoraInrouReplicaPlacementV1 {
@@ -7624,6 +7851,20 @@ impl SoraInrouReplicaPlacementV1 {
             return Err(SoraCloudManifestError::EmptyField {
                 manifest: "sora inrou replica placement",
                 field: "peer_id",
+            });
+        }
+        if let Some(tag) = self.selected_geography_tag.as_ref() {
+            validate_distribution_geography_tag(
+                "sora inrou replica placement",
+                "selected_geography_tag",
+                tag,
+            )?;
+        }
+        if self.selection_latency_ms == Some(0) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou replica placement",
+                field: "selection_latency_ms",
+                reason: "must be greater than zero when provided".to_string(),
             });
         }
         Ok(())
@@ -11538,6 +11779,8 @@ mod tests {
             max_memory_bytes: 16 * 1024 * 1024 * 1024,
             max_storage_bytes: 64 * 1024 * 1024 * 1024,
             proxy_only: false,
+            geography_tags: BTreeSet::from(["global".to_string(), "ae-dxb".to_string()]),
+            observed_latency_ms: Some(24),
             advertised_at_ms: 100_000,
             heartbeat_expires_at_ms: 160_000,
         }
@@ -11557,6 +11800,8 @@ mod tests {
                     peer_id: "12D3KooWInrouPrimary".to_string(),
                     selected_backend: SoraInrouRuntimeBackendV1::FirecrackerKvm,
                     selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                    selected_geography_tag: Some("ae-dxb".to_string()),
+                    selection_latency_ms: Some(24),
                 },
                 SoraInrouReplicaPlacementV1 {
                     replica_slot: 2,
@@ -11564,6 +11809,8 @@ mod tests {
                     peer_id: "12D3KooWInrouReplica".to_string(),
                     selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                     selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+                    selected_geography_tag: None,
+                    selection_latency_ms: Some(48),
                 },
             ],
             reconciled_at_ms: 125_000,
@@ -12533,6 +12780,8 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
                         initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -12541,6 +12790,8 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
                         initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),
@@ -13571,6 +13822,52 @@ mod tests {
     }
 
     #[test]
+    fn inrou_guest_image_validate_accepts_published_artifact_distribution() {
+        let mut image = sample_inrou_manifest()
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::X8664)
+            .cloned()
+            .expect("x86_64 fixture");
+        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "a".repeat(64),
+            content_cid: "bafyguestimage".to_string(),
+            manifest_id_hex: Some("b".repeat(64)),
+            distribution: SoraArtifactDistributionPolicyV1 {
+                target: SoraArtifactDistributionTargetV1::Geographies(BTreeSet::from([
+                    "ae-dxb".to_string(),
+                    "us-east".to_string(),
+                ])),
+                prefer_low_latency: true,
+                fallback_to_low_latency_when_geography_unknown: true,
+            },
+        });
+
+        assert!(
+            image.validate().is_ok(),
+            "published artifact refs with geo targets should validate"
+        );
+    }
+
+    #[test]
+    fn artifact_distribution_policy_rejects_empty_geography_target() {
+        let policy = SoraArtifactDistributionPolicyV1 {
+            target: SoraArtifactDistributionTargetV1::Geographies(BTreeSet::new()),
+            ..SoraArtifactDistributionPolicyV1::default()
+        };
+
+        let error = policy
+            .validate()
+            .expect_err("empty geography target must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "target",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
         let mut manifest = sample_inrou_manifest();
         manifest
@@ -13614,6 +13911,52 @@ mod tests {
             "/inrou/shared/rootfs.ext4"
         );
         assert_eq!(manifest.ssh_authorized_keys.len(), 1);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
+        let json = r#"{
+          "schema_version": 1,
+          "guest_os": "DebianSlim",
+          "guest_images": {
+            "x86_64": {
+              "kernel_image_path": "/inrou/x86_64/vmlinux",
+              "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
+              "initrd_image_path": null,
+              "published_artifact": {
+                "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content_cid": "bafyguestx86",
+                "manifest_id_hex": null
+              }
+            },
+            "aarch64": {
+              "kernel_image_path": "/inrou/aarch64/vmlinux",
+              "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
+              "initrd_image_path": null,
+              "published_artifact": {
+                "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "content_cid": "bafyguestaarch64",
+                "manifest_id_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              }
+            }
+          },
+          "ssh_authorized_keys": ["ssh-ed25519 AAAA real"]
+        }"#;
+
+        let manifest: SoraInrouManifestV1 =
+            norito::json::from_str(json).expect("published guest artifact JSON should parse");
+
+        let artifact = manifest.guest_images[&SoraInrouGuestIsaV1::X8664]
+            .published_artifact
+            .as_ref()
+            .expect("published artifact");
+        assert_eq!(artifact.content_cid, "bafyguestx86");
+        assert_eq!(
+            artifact.distribution,
+            SoraArtifactDistributionPolicyV1::default()
+        );
+        assert!(manifest.validate().is_ok());
     }
 
     #[cfg(feature = "json")]

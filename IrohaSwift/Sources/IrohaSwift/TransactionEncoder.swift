@@ -423,11 +423,13 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
                        ttlMs: UInt64?,
                        accountId: String,
                        aliasDomain: String?,
+                       aliasDataspaceId: UInt64,
                        alias: String,
                        signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let instructionPayload = try encodeInstruction(
             accountId: accountId,
             aliasDomain: aliasDomain,
+            aliasDataspaceId: aliasDataspaceId,
             alias: alias
         )
         let transactionPayload = try encodeTransactionPayload(
@@ -452,9 +454,18 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
         )
     }
 
-    private static func encodeInstruction(accountId: String, aliasDomain: String?, alias: String) throws -> Data {
+    private static func encodeInstruction(
+        accountId: String,
+        aliasDomain: String?,
+        aliasDataspaceId: UInt64,
+        alias: String
+    ) throws -> Data {
         let accountPayload = try OfflineNorito.encodeAccountId(accountId)
-        let accountAliasPayload = try encodeAccountAlias(aliasDomain: aliasDomain, alias: alias)
+        let accountAliasPayload = try encodeAccountAlias(
+            aliasDomain: aliasDomain,
+            aliasDataspaceId: aliasDataspaceId,
+            alias: alias
+        )
 
         var instructionPayload = OfflineNoritoWriter()
         instructionPayload.writeField(accountPayload)
@@ -468,11 +479,11 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
         return wireInstruction.data
     }
 
-    private static func encodeAccountAlias(aliasDomain: String?, alias: String) throws -> Data {
+    private static func encodeAccountAlias(aliasDomain: String?, aliasDataspaceId: UInt64, alias: String) throws -> Data {
         var payload = OfflineNoritoWriter()
         payload.writeField(OfflineNorito.encodeString(alias))
         payload.writeField(try OfflineNorito.encodeOption(aliasDomain, encode: OfflineNorito.encodeString))
-        payload.writeField(OfflineNorito.encodeUInt64(0))
+        payload.writeField(OfflineNorito.encodeUInt64(aliasDataspaceId))
         return payload.data
     }
 
@@ -934,6 +945,7 @@ struct SwiftTransactionEncoder {
             ttlMs: request.ttlMs,
             accountId: accountId,
             aliasDomain: aliasDomain,
+            aliasDataspaceId: request.aliasDataspaceId,
             alias: alias,
             signingKey: signingKey
         )

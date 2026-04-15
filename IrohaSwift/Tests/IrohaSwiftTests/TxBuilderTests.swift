@@ -903,6 +903,65 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(envelope.transactionHash.count, 32)
     }
 
+    func testSetPrimaryAccountAliasUsesDataspaceIdInEncoding() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let globalRequest = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl",
+            aliasDataspaceId: 0,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+        let sbpRequest = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl",
+            aliasDataspaceId: 7,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+
+        let global = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: globalRequest,
+            keypair: keypair,
+            creationTimeMs: Self.fixtureCreationTimeMs
+        )
+        let sbp = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: sbpRequest,
+            keypair: keypair,
+            creationTimeMs: Self.fixtureCreationTimeMs
+        )
+
+        XCTAssertNotEqual(global.transactionHash, sbp.transactionHash)
+        XCTAssertNotEqual(global.signedTransaction, sbp.signedTransaction)
+    }
+
+    func testSetPrimaryAccountAliasRejectsDottedAliasDomain() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl.sbp",
+            aliasDataspaceId: 7,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+                request: request,
+                keypair: keypair,
+                creationTimeMs: Self.fixtureCreationTimeMs
+            )
+        )
+    }
+
     func testVerifyingKeyIdReferenceValidation() {
         XCTAssertThrowsError(try VerifyingKeyIdReference(backend: "", name: "vk")) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .emptyBackend)
@@ -1605,7 +1664,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitAsyncSucceeds() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Queued", "Approved"])
+        PipelineURLProtocol.configure(statuses: ["Queued", "Approved", "Committed"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1616,7 +1675,38 @@ final class TxBuilderTests: XCTestCase {
                                       description: nil,
                                       ttlMs: 60)
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair)
-        XCTAssertEqual(status.content.status.kind, "Approved")
+        XCTAssertEqual(status.content.status.kind, "Committed")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitAndWaitAsyncDoesNotTreatApprovedAsDefaultSuccess() async throws {
+        try requireEd25519Encoder()
+        PipelineURLProtocol.reset()
+        PipelineURLProtocol.configure(statuses: ["Approved"])
+        let sdk = try makePipelineSDK()
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(chainId: Self.fixtureChainId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
+                                      description: nil,
+                                      ttlMs: 60)
+        let options = PipelineStatusPollOptions(pollInterval: 0,
+                                                timeout: 0.1,
+                                                maxAttempts: 2)
+        do {
+            _ = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
+            XCTFail("Expected Approved-only status stream to time out")
+        } catch let error as PipelineStatusError {
+            if case .timeout = error {
+                // expected
+            } else {
+                XCTFail("Unexpected error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1682,7 +1772,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitCompletionDeliversStatus() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Approved"])
+        PipelineURLProtocol.configure(statuses: ["Approved", "Applied"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1696,7 +1786,7 @@ final class TxBuilderTests: XCTestCase {
         let task = sdk.submitAndWait(transfer: request, keypair: keypair) { result in
             switch result {
             case .success(let status):
-                XCTAssertEqual(status.content.status.kind, "Approved")
+                XCTAssertEqual(status.content.status.kind, "Applied")
                 expectation.fulfill()
             case .failure(let error):
                 XCTFail("Unexpected error: \(error)")
@@ -1739,7 +1829,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitCustomSuccessStates() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Queued"])
+        PipelineURLProtocol.configure(statuses: ["Approved"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1749,9 +1839,9 @@ final class TxBuilderTests: XCTestCase {
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
-        let options = PipelineStatusPollOptions(successStates: Set([.queued]), failureStates: Set())
+        let options = PipelineStatusPollOptions(successStates: Set([.approved]), failureStates: Set())
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
-        XCTAssertEqual(status.content.status.kind, "Queued")
+        XCTAssertEqual(status.content.status.kind, "Approved")
     }
 
     @available(iOS 15.0, macOS 12.0, *)

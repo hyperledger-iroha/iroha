@@ -9409,6 +9409,7 @@ id: 88
         XCTAssertEqual(nested.content.hash, "deadbeef")
         XCTAssertEqual(nested.content.status.state, .committed)
         XCTAssertTrue(nested.content.status.state.isKnownTerminalSuccess)
+        XCTAssertFalse(PipelineTransactionState.approved.isKnownTerminalSuccess)
 
         let flatJSON = """
         {"hash":"facefeed","resolved_from":"cache","scope":"auto","status":{"block_height":64,"kind":"Applied"}}
@@ -9640,7 +9641,9 @@ final class ToriiClientIntegrationTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitSuccessAgainstMock() async throws {
         let scenarioHash = "feedfacecafebeefcafedeadbeef0001"
-        try await preparePipelineScenario(.success, hashHex: scenarioHash)
+        try await preparePipelineScenario(.success,
+                                          hashHex: scenarioHash,
+                                          statusKinds: ["Queued", "Approved", "Committed"])
         let mock = try XCTUnwrap(self.mock)
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
@@ -9653,7 +9656,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let status = try await sdk.submitAndWait(envelope: envelope)
         XCTAssertEqual(status.content.hash, scenarioHash)
         XCTAssertTrue(PipelineStatusPollOptions.defaultSuccessStates.contains(status.content.status.state))
-        XCTAssertTrue(status.content.status.state.isKnownTerminalSuccess)
+        XCTAssertTrue(status.content.status.state.isTerminalSuccess)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

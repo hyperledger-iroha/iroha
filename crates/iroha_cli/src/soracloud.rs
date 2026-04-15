@@ -48,16 +48,17 @@ use iroha::{
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
             SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
             SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SecretEnvelopeEncryptionV1,
-            SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
-            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
+            SecretEnvelopeV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
+            SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestV1,
+            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+            SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
             SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
             SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraNetworkAllowlistEntryV1,
             SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
-            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
-            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
-            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
-            SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+            SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+            SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
             SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
             SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
             SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
@@ -1628,6 +1629,15 @@ impl AppDeployArgs {
                 static_site_root_binding.as_ref(),
                 static_site_binding_attached,
             )?;
+            let mut bundle = bundle;
+            let published_inrou_guest_images = publish_inrou_guest_image_artifacts(
+                service_workspace_dir.as_deref(),
+                &mut bundle,
+                &torii_url,
+                authority,
+                key_pair,
+                self.timeout_secs,
+            )?;
             let published_public_discovery = attach_public_service_discovery_config(
                 &bundle,
                 &mut initial_service_configs,
@@ -1667,6 +1677,12 @@ impl AppDeployArgs {
                     "app service deploys onto the deterministic IVM production plane".to_owned(),
                 );
             }
+            if !published_inrou_guest_images.is_empty() {
+                notes.push(
+                    "Inrou guest image members were published to SoraFS and will hydrate from immutable refs using the requested distribution policy"
+                        .to_owned(),
+                );
+            }
             services.push(AppServiceMutationOutput {
                 service_name: service.service_name.clone(),
                 container_manifest: container_manifest.to_string_lossy().into_owned(),
@@ -1679,6 +1695,7 @@ impl AppDeployArgs {
                 route_path_prefix,
                 route_visibility,
                 published_public_discovery,
+                published_inrou_guest_images,
                 response,
                 notes,
             });
@@ -7340,6 +7357,9 @@ struct AppServiceMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
     response: norito::json::Value,
     #[norito(default)]
     notes: Vec<String>,
@@ -7880,6 +7900,29 @@ struct AppStaticSitePublishOutput {
     manifest_digest_hex: String,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct InrouGuestImageArtifactPublishOutput {
+    service_name: String,
+    guest_isa: String,
+    source_dir: String,
+    hydrate_mount_path: String,
+    member_paths: Vec<String>,
+    content_cid: String,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
+    distribution: SoraArtifactDistributionPolicyV1,
+    note: String,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedSorafsDirectoryArtifact {
+    content_cid: String,
+    manifest_digest_hex: String,
     manifest_id_hex: Option<String>,
 }
 
@@ -10152,6 +10195,250 @@ fn publish_app_static_site(
         manifest_digest_hex,
         manifest_id_hex,
     })
+}
+
+fn publish_sorafs_directory_artifact(
+    input_dir: &Path,
+    description: &str,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<PublishedSorafsDirectoryArtifact> {
+    let metadata = fs::metadata(input_dir)
+        .wrap_err_with(|| format!("failed to access {description} `{}`", input_dir.display()))?;
+    if !metadata.is_dir() {
+        return Err(eyre!(
+            "{description} `{}` must be a directory",
+            input_dir.display()
+        ));
+    }
+
+    let descriptor = chunker_registry::default_descriptor();
+    let (plan, payload) =
+        CarBuildPlan::from_directory_with_profile(input_dir, descriptor.profile).map_err(|err| {
+            eyre!(
+                "failed to package {description} `{}`: {err}",
+                input_dir.display()
+            )
+        })?;
+    let writer = CarWriter::new(&plan, &payload)
+        .wrap_err_with(|| format!("failed to prepare {description} CAR writer"))?;
+    let mut sink = io::sink();
+    let car_stats = writer
+        .write_to(&mut sink)
+        .wrap_err_with(|| format!("failed to compute {description} CAR metadata"))?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
+    let mut car_payload_digest = [0u8; 32];
+    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .content_length(plan.content_length)
+        .car_digest(car_payload_digest)
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err_with(|| format!("failed to build {description} manifest"))?;
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
+    let manifest_digest = manifest
+        .digest()
+        .wrap_err_with(|| format!("failed to compute {description} manifest digest"))?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let files = plan
+        .files
+        .iter()
+        .map(|file| OwnedStorageFileEntry {
+            path: file.path.clone(),
+            size: file.size,
+        })
+        .collect::<Vec<_>>();
+
+    let mut client_config = soracloud_submission_config()?;
+    client_config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    client_config.account = authority.clone();
+    client_config.key_pair = key_pair.clone();
+    let client = Client::new(client_config);
+    client
+        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
+            authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            alias: None,
+            successor_of: None,
+        })
+        .wrap_err_with(|| format!("failed to register {description} manifest"))?;
+    let borrowed_files = files
+        .iter()
+        .map(|entry| iroha::client::SorafsStorageFileEntry {
+            path: entry.path.as_slice(),
+            size: entry.size,
+        })
+        .collect::<Vec<_>>();
+    let storage_response = client
+        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
+        .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+    let status = storage_response.status();
+    let body = storage_response.body().to_vec();
+    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
+    if status != iroha::http::StatusCode::OK && !already_stored {
+        return Err(eyre!(
+            "failed to upload {description} bundle into SoraFS storage: {} {}",
+            status,
+            std::str::from_utf8(&body).unwrap_or("")
+        ));
+    }
+    let storage_value: norito::json::Value = if already_stored {
+        norito::json::Value::Null
+    } else {
+        json::from_slice(&body)
+            .wrap_err_with(|| format!("failed to decode {description} storage response"))?
+    };
+    let manifest_id_hex = storage_value
+        .get("manifest_id_hex")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let content_cid = encode_content_cid(&manifest.root_cid);
+
+    Ok(PublishedSorafsDirectoryArtifact {
+        content_cid,
+        manifest_digest_hex,
+        manifest_id_hex,
+    })
+}
+
+fn inrou_member_path(path: &str) -> Result<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("Inrou guest image member path must not be empty"));
+    }
+    trimmed
+        .strip_prefix("/inrou/")
+        .filter(|relative| !relative.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            eyre!(
+                "Inrou guest image path `{path}` must live under `/inrou/` so it can hydrate from the published guest-image artifact"
+            )
+        })
+}
+
+fn validate_local_inrou_member(inrou_dir: &Path, member_path: &str) -> Result<String> {
+    let relative_member = inrou_member_path(member_path)?;
+    let local_path = inrou_dir.join(&relative_member);
+    let metadata = fs::metadata(&local_path).wrap_err_with(|| {
+        format!(
+            "missing Inrou guest image member `{member_path}` at `{}`; stage real guest images before release",
+            local_path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "Inrou guest image member `{member_path}` resolved to `{}` but it is not a file",
+            local_path.display()
+        ));
+    }
+    Ok(relative_member)
+}
+
+fn publish_inrou_guest_image_artifacts(
+    service_workspace_dir: Option<&Path>,
+    bundle: &mut SoraDeploymentBundleV1,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<Vec<InrouGuestImageArtifactPublishOutput>> {
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+        || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+    {
+        return Ok(Vec::new());
+    }
+
+    let Some(inrou) = bundle.container.inrou.as_mut() else {
+        return Ok(Vec::new());
+    };
+    let service_name = bundle.service.service_name.to_string();
+    let workspace_dir = service_workspace_dir.ok_or_else(|| {
+        eyre!(
+            "service `{service_name}` uses Inrou but its container and service manifests are not in a shared workspace directory"
+        )
+    })?;
+    let inrou_dir = workspace_dir.join("inrou");
+
+    let mut member_paths_by_isa = Vec::new();
+    for (guest_isa, image) in &inrou.guest_images {
+        let mut member_paths = vec![
+            validate_local_inrou_member(&inrou_dir, &image.kernel_image_path)?,
+            validate_local_inrou_member(&inrou_dir, &image.rootfs_image_path)?,
+        ];
+        if let Some(initrd_image_path) = image.initrd_image_path.as_deref() {
+            member_paths.push(validate_local_inrou_member(&inrou_dir, initrd_image_path)?);
+        }
+        member_paths_by_isa.push((*guest_isa, member_paths));
+    }
+
+    let published = publish_sorafs_directory_artifact(
+        &inrou_dir,
+        "Inrou guest-image artifact",
+        torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )?;
+
+    let mut outputs = Vec::new();
+    for (guest_isa, member_paths) in member_paths_by_isa {
+        let image = inrou
+            .guest_images
+            .get_mut(&guest_isa)
+            .expect("guest image was validated before publishing");
+        let distribution = image.distribution.clone();
+        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: published.manifest_digest_hex.clone(),
+            content_cid: published.content_cid.clone(),
+            manifest_id_hex: published.manifest_id_hex.clone(),
+            distribution: distribution.clone(),
+        });
+        outputs.push(InrouGuestImageArtifactPublishOutput {
+            service_name: service_name.clone(),
+            guest_isa: guest_isa.as_str().to_owned(),
+            source_dir: inrou_dir.to_string_lossy().into_owned(),
+            hydrate_mount_path: "/inrou".to_owned(),
+            member_paths,
+            content_cid: published.content_cid.clone(),
+            manifest_digest_hex: published.manifest_digest_hex.clone(),
+            manifest_id_hex: published.manifest_id_hex.clone(),
+            distribution,
+            note: "hosts hydrate these members from SoraFS; geography targets are best-effort and fall back to lower observed latency when host geography is unknown".to_owned(),
+        });
+    }
+
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle.validate_for_admission()
+        .wrap_err("published Inrou guest-image artifact refs made the deployment bundle invalid")?;
+
+    Ok(outputs)
 }
 
 fn storage_pin_conflict_is_already_stored(status: iroha::http::StatusCode, body: &[u8]) -> bool {
@@ -15505,6 +15792,8 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
+                    distribution: iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
+                    published_artifact: None,
                 },
             ),
             (
@@ -15513,6 +15802,8 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
+                    distribution: iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
+                    published_artifact: None,
                 },
             ),
         ]),
@@ -19210,10 +19501,6 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/app"
 cp "$SCRIPT_DIR/app/server.mjs" "$STAGING_DIR/app/server.mjs"
 chmod +x "$STAGING_DIR/app/server.mjs"
-if [[ -d "$SCRIPT_DIR/inrou" ]]; then
-  mkdir -p "$STAGING_DIR/inrou"
-  cp -R "$SCRIPT_DIR/inrou/." "$STAGING_DIR/inrou/"
-fi
 tar -czf "$BUNDLE_PATH" -C "$STAGING_DIR" .
 
 echo "built $BUNDLE_PATH"
@@ -19843,12 +20130,13 @@ cd http-service
 ```
 
 The build emits `build/http-service.tgz`, a tarball containing `app/server.mjs`
-with the executable bit preserved. Any files placed under `http-service/inrou/`
-are bundled alongside the app and become available inside the Soracloud bundle
-at `/inrou/*`.
+with the executable bit preserved. Guest images under `http-service/inrou/`
+are not copied into this tarball; `app release` publishes them as immutable
+SoraFS artifacts and records the artifact refs in the Inrou manifest submitted
+to the control plane.
 
 Before deploy, replace the placeholder `ssh_authorized_keys` entry in
-`container_manifest.json` and add dual-ISA guest assets at:
+`container_manifest.json` and stage dual-ISA guest assets at:
 
 - `http-service/inrou/x86_64/vmlinux`
 - `http-service/inrou/x86_64/rootfs.ext4`
@@ -19975,12 +20263,18 @@ Place the boot assets for this hosted HTTP service here before deploy:
 - `aarch64/rootfs.ext4`: Debian slim guest root filesystem image for `aarch64`
 - optional `x86_64/initrd.img` and `aarch64/initrd.img`
 
-The generated container manifest references these bundle paths:
+The generated container manifest references these runtime member paths:
 
 - `/inrou/x86_64/vmlinux`
 - `/inrou/x86_64/rootfs.ext4`
 - `/inrou/aarch64/vmlinux`
 - `/inrou/aarch64/rootfs.ext4`
+
+`app release` packages this directory into an immutable SoraFS artifact,
+records the published artifact ref on each guest-image profile, and lets
+eligible hosts hydrate `/inrou/*` from SoraFS. Distribution defaults to global
+and may target explicit geography tags; unknown host geography falls back to
+lower observed latency.
 
 Replace the placeholder `ssh_authorized_keys` entry in `container_manifest.json`
 with a real public key before admission.
@@ -20771,7 +21065,7 @@ Build:
 
 The build emits `build/live-api.tgz`.
 
-Stage these guest assets under `services/live/inrou/` before build or deploy:
+Stage these guest assets under `services/live/inrou/` before deploy:
 
 - `x86_64/vmlinux`
 - `x86_64/rootfs.ext4`
@@ -20780,12 +21074,17 @@ Stage these guest assets under `services/live/inrou/` before build or deploy:
 
 Optional initrd images live at `x86_64/initrd.img` and `aarch64/initrd.img`.
 
-The live container manifest references these bundle paths:
+The live container manifest references these runtime member paths:
 
 - `/inrou/x86_64/vmlinux`
 - `/inrou/x86_64/rootfs.ext4`
 - `/inrou/aarch64/vmlinux`
 - `/inrou/aarch64/rootfs.ext4`
+
+`app release` publishes the staged guest-image directory into SoraFS, records
+immutable artifact refs in the submitted Inrou manifest, and hydrates hosts
+according to the guest-image distribution policy: global by default, or
+explicit geography tags with latency fallback when geography is unknown.
 
 Replace the placeholder SSH key in `services/live/container_manifest.json`.
 
@@ -25365,6 +25664,8 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -25373,6 +25674,8 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),

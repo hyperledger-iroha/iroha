@@ -1,6 +1,79 @@
 # Status
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
+
+## 2026-04-15 Follow-up: contract-app CLI bundle planning/resume coverage is now wired through the shared Torii mock
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/tests/cli_smoke.rs`
+  now covers the remaining repo-contained contract-app CLI flows against the
+  shared HTTP mock:
+  - `iroha contract app plan` proves the CLI sends the bundle request through
+    the `dry_run=true` path and prints a planned receipt;
+  - `iroha contract app resume` proves the CLI reuses the live deploy-bundle
+    route and surfaces a submitted/deployed receipt with transaction hashes; and
+  - a protected-namespace bundle rejection is preserved through stderr instead
+    of collapsing into a generic CLI failure.
+- The same test file now writes a current-sample `client.toml` for all mock
+  flows, matching the repo defaults (`torii_url` trailing slash, `[basic_auth]`,
+  and `account.domain = "wonderland.universal"`). This unblocks the existing
+  mock-backed CLI smoke tests, which had drifted into an early config-load
+  failure before they could exercise their real command paths.
+- `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/mock.py`
+  now supports the bundle endpoints needed by those CLI flows:
+  `POST /v1/contracts/deploy-bundle`,
+  `GET /v1/contracts/deploy-bundles/{bundle_digest}`, and
+  `POST /__mock__/contracts/config` for scoped success/error fixtures.
+- `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/tests/test_client.py`
+  now locks that shared mock behavior in with a direct bundle-helper regression
+  covering dry-run, live submit, and persisted bundle-status reads.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs`
+  now uses the current Kotodama fixture syntax in
+  `build_contract_app_bundle_compiles_manifest_sources`, matching the parser
+  form that the new CLI smoke tests exercise (`kotoage fn init(...)` instead of
+  the stale `pub fn` form).
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --test cli_smoke gov_protected_namespaces_flow_against_mock -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --test cli_smoke contract_app_`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --bin iroha3 contracts::tests::build_contract_app_bundle_compiles_manifest_sources -- --exact --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'contract_bundle_helpers_against_mock_server or contract_helpers_against_mock_server'`
+
+## 2026-04-15 Follow-up: Torii contract-app batch views and trader rollups are now on the documented/smoke-tested surface
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now keeps
+  `POST /v1/contracts/view/batch` on the same public no-token contract route
+  group as deploy/call/view/state, and the in-tree public-surface regression
+  now asserts that batch-view route explicitly.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/app_api_router_smoke.rs`
+  now smoke-tests the widened contract-app route set: deploy, deploy-bundle,
+  call, view, view-batch, state, bundle-status, and the additive trader rollup
+  GET routes. The smoke keeps the rollups mounted and reachable on the normal
+  app router without accidentally asserting that they bypass API-token policy.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/openapi.rs`,
+  `/Users/takemiyamakoto/dev/iroha/README.md`, and
+  `/Users/takemiyamakoto/dev/iroha/docs/source/torii/contract_lifecycle_app_api.md`
+  now document the new contract-app surfaces:
+  - `POST /v1/contracts/view/batch`
+  - `GET /v1/contracts/rollups/swaps/fills`
+  - `GET /v1/contracts/rollups/swaps/candles`
+  - `GET /v1/contracts/rollups/trader/activity`
+  - `GET /v1/contracts/rollups/trader/account`
+  and the generated OpenAPI spec regression locks those paths in.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs` now has
+  focused unit coverage for the new trader-facing rollup helpers: paginated
+  fill JSON shaping, swap analytics aggregation, and supported-module filtering
+  for trader activity pages.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii --test app_api_router_smoke`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii public_contract_api_token_bypass_matches_declared_surface`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii --lib`
+    still reports 6 unrelated pre-existing reds outside this slice:
+    `routing::deploy_tests::deploy_endpoint_returns_hashes`,
+    `tests_runtime_handlers::bridge_message_submit_derives_settlement_route_from_transfer_bundle`,
+    `tests_runtime_handlers::bridge_message_submit_prepares_ephemeral_settlement_contract_call`,
+    `tests_runtime_handlers::bridge_message_submit_rejects_disabled_inbound_transfer_lane`,
+    `tests_runtime_handlers::contracts_deploy_handler_ok`, and
+    `tests_runtime_handlers::soracloud_hosted_http_topology_section_reports_authoritative_counts`
 
 ## 2026-04-14 Follow-up: exact-frontier restart repair now pulls missing RBC chunks, and Kagami/Taira localnet genesis no longer duplicates offline-escrow grants
 - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

@@ -2468,7 +2468,7 @@ mod tests {
             &contract_path,
             r#"
                 seiyaku Greeter {
-                    pub fn init(value: int) {}
+                    kotoage fn init(value: int) {}
                     view fn status() -> int { return 7; }
                 }
             "#,

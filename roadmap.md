@@ -1,6 +1,69 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
+
+Latest sync (2026-04-15 contract-app CLI bundle plan/resume coverage now runs end-to-end against the shared mock):
+the remaining repo-contained contract-app CLI gap is closed. `crates/iroha_cli`
+now has black-box smoke coverage for `iroha contract app plan` and `resume`,
+the shared Torii mock can answer `POST /v1/contracts/deploy-bundle` plus
+bundle-status reads, and the protected-namespace bundle rejection path is now
+locked in at the CLI stderr layer instead of being left as an untested error
+surface. The same slice also refreshed the mock `client.toml` helper to the
+current config sample so mock-backed CLI tests actually reach command logic
+instead of failing during config bootstrap.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/tests/cli_smoke.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/mock.py`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/tests/test_client.py`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --test cli_smoke gov_protected_namespaces_flow_against_mock -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --test cli_smoke contract_app_`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-contract-app cargo test -p iroha_cli --bin iroha3 contracts::tests::build_contract_app_bundle_compiles_manifest_sources -- --exact --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'contract_bundle_helpers_against_mock_server or contract_helpers_against_mock_server'`
+- open work after this slice:
+  - add real Torii/integration coverage for persisted bundle-receipt resume and
+    status behavior instead of relying only on the shared mock for CLI coverage;
+  - pin the same public-safe defaults plus explicit route/body/rate limits on
+    the shipped public Taira profile rather than leaving that tuning wrapper-local; and
+  - rerun the live Taira rollout smokes against the deployed hosts after the
+    validator build carrying the contract-app route/spec/CLI changes is rolled out.
+
+Latest sync (2026-04-15 contract-app batch-view and trader-rollup routes are now wired through Torii docs/spec/smokes):
+the next contract-platform follow-up is now in tree. `crates/iroha_torii`
+keeps `POST /v1/contracts/view/batch` on the same public contract route group
+as deploy/call/view/state, the router smoke now explicitly covers that batch
+view plus the additive trader rollup GET routes, and the generated OpenAPI
+surface plus the English operator docs now advertise all five new
+contract-app endpoints. Focused routing tests also lock in the trader rollup
+JSON helpers instead of leaving the new app-facing responses untested.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/app_api_router_smoke.rs`
+  - `/Users/takemiyamakoto/dev/iroha/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/torii/contract_lifecycle_app_api.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii --test app_api_router_smoke`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii public_contract_api_token_bypass_matches_declared_surface`
+  - `CARGO_TARGET_DIR=/tmp/iroha-plan-torii cargo test -p iroha_torii --lib`
+    remains red for unrelated pre-existing bridge/deploy/soracloud failures
+    outside this contract-app route slice
+- open work after this slice:
+  - add real Torii/integration coverage for persisted bundle-receipt resume and
+    status behavior instead of relying only on the shared mock for CLI coverage;
+  - pin the same public-safe defaults plus explicit route/body/rate limits on
+    the shipped public Taira profile rather than leaving that tuning wrapper-local; and
+  - rerun the live Taira rollout smokes against the deployed hosts after the
+    validator build carrying these route/spec changes is rolled out.
 
 Latest sync (2026-04-14 stale-view certified frontier recovery stays authoritative during restart catch-up):
 the restarted-peer commit-QC recovery gap is closed on the current tree.
