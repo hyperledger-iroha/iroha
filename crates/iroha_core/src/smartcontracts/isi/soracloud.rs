@@ -14046,6 +14046,8 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -14054,6 +14056,8 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),
