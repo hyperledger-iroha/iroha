@@ -14142,6 +14142,21 @@ impl Actor {
     ) -> FrontierSlotActions {
         let lag_window = self.frontier_slot_lag_window();
         let frontier_height = self.committed_height_snapshot().saturating_add(1);
+        if !matches!(&event, FrontierSlotEvent::OnCommittedHeightAdvanced { .. })
+            && self
+                .frontier_slot
+                .as_ref()
+                .is_some_and(|slot| slot.height != frontier_height)
+        {
+            if let Some(stale_slot) = self.frontier_slot.take() {
+                debug!(
+                    stale_height = stale_slot.height,
+                    stale_view = stale_slot.view,
+                    frontier_height,
+                    "dropping stale frontier slot before applying exact-frontier event"
+                );
+            }
+        }
         match event {
             FrontierSlotEvent::OnCommittedHeightAdvanced { committed_height } => {
                 let Some(mut slot) = self.frontier_slot.take() else {

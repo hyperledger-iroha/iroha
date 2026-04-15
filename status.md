@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: stale prior-height frontier slots no longer hijack exact-frontier recovery, and the reported `consensus_and_da` reds rerun cleanly
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now drops any cached `frontier_slot` whose height no longer matches the live
+  contiguous frontier before applying exact-frontier events. This prevents an
+  old slot from claiming `MissingQc` / timeout ownership for the previous
+  height and discarding the real view-change request as stale.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now locks that regression in with
+  `stale_frontier_slot_does_not_hijack_exact_frontier_view_advance`.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now matches restart recovery against the exact `(block_hash, height, view)`
+  RBC session and waits for persisted session metadata to retain the pre-shutdown
+  chunk count before killing the network, so the cold-restart assertion no
+  longer races a partially flushed store file.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  now requires the restarted network to reconverge exactly at the recovered
+  baseline height before sending the post-restart pacemaker traffic.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  now gives the six-peer full-telemetry baseline 150 seconds instead of 90
+  seconds, which matches the observed bounded quorum-timeout recovery time on
+  slower grouped runs without relaxing the EMA assertions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_frontier_slot_does_not_hijack_exact_frontier_view_advance -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_view_change_lock_convergence -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+  - `cargo test -p integration_tests npos_pacemaker_resumes_after_downtime -- --nocapture`
+  - `cargo test -p integration_tests npos_baseline_1s_k3_captures_metrics -- --nocapture`
+  - `cargo test -p integration_tests npos_late_vrf_reveal_clears_penalty_and_preserves_seed -- --nocapture`
+
 ## 2026-04-15 Follow-up: killed-leader idle view changes now recover after queue timer refreshes
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now evaluates no-proposal idle timeouts against the older of the tracked
