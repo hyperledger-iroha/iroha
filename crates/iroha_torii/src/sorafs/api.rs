@@ -3457,7 +3457,7 @@ fn cache_remote_site_bundle(
         .map_err(node_storage_error_response)
 }
 
-async fn resolve_site_manifest_by_cid_unchecked(
+pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {

@@ -17,6 +17,7 @@ IROHA_RUNNER=()
 SORAFS_MANIFEST_STUB_RUNNER=()
 SORAFS_TX_STDIN_BUILDER_RUNNER=()
 CURL_RESOLVE_RULES=()
+CURL_URL_RESOLVE_ARGS=()
 
 usage() {
   cat <<'EOF'
@@ -216,28 +217,20 @@ http_request() {
   local url="$2"
   local payload="${3:-}"
   local body_file
+  local curl_status
+  local curl_cmd=(curl --silent --show-error)
 
   body_file="$(mktemp)"
   cleanup
   last_body="$body_file"
   build_curl_resolve_args "$url"
+  curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
-    last_status="$(
-      curl \
-        --silent \
-        --show-error \
-        "${CURL_URL_RESOLVE_ARGS[@]}" \
-        --output "$body_file" \
-        --write-out '%{http_code}' \
-        "$url"
-    )"
+    curl_status="$( "${curl_cmd[@]}" --output "$body_file" --write-out '%{http_code}' "$url" )"
   else
-    last_status="$(
-      curl \
-        --silent \
-        --show-error \
-        "${CURL_URL_RESOLVE_ARGS[@]}" \
+    curl_status="$(
+      "${curl_cmd[@]}" \
         --output "$body_file" \
         --write-out '%{http_code}' \
         --header 'content-type: application/json' \
@@ -246,6 +239,8 @@ http_request() {
         "$url"
     )"
   fi
+
+  last_status="$curl_status"
 }
 
 expect_status() {

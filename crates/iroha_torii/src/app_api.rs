@@ -356,39 +356,6 @@ fn binding_to_json(candidate: &ResolvedBinding) -> Value {
     Value::Object(object)
 }
 
-fn find_local_manifest_by_cid(
-    state: &SharedAppState,
-    cid: &str,
-) -> Result<sorafs_node::store::StoredManifest, Response> {
-    if !state.sorafs_node.is_enabled() {
-        return Err(json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "SoraFS storage is disabled on this Torii node",
-        ));
-    }
-
-    let cid_bytes = decode_content_cid(cid)
-        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid app API content CID"))?;
-    let manifests = state.sorafs_node.stored_manifests().map_err(|err| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to list SoraFS manifests: {err}"),
-        )
-    })?;
-    manifests
-        .into_iter()
-        .filter(|manifest| manifest.manifest_cid() == cid_bytes.as_slice())
-        .max_by_key(|manifest| {
-            let has_named_manifest = manifest.files().iter().any(|file| {
-                API_MANIFEST_FILE_NAMES
-                    .iter()
-                    .any(|name| file.path.len() == 1 && file.path[0] == **name)
-            });
-            (has_named_manifest, manifest.files().len())
-        })
-        .ok_or_else(|| StatusCode::NOT_FOUND.into_response())
-}
-
 fn read_api_manifest_payload(
     state: &SharedAppState,
     stored: &sorafs_node::store::StoredManifest,
@@ -436,11 +403,11 @@ fn read_api_manifest_payload(
         })
 }
 
-fn load_api_manifest_by_cid(
+async fn load_api_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<ToriiAppApiManifestV1, Response> {
-    let stored = find_local_manifest_by_cid(state, cid)?;
+    let stored = crate::sorafs::api::resolve_site_manifest_by_cid_unchecked(state, cid).await?;
     let payload = read_api_manifest_payload(state, &stored)?;
     let mut manifest = json::from_slice::<ToriiAppApiManifestV1>(&payload).map_err(|err| {
         json_error(
@@ -715,7 +682,7 @@ pub(crate) async fn handle_get_app_api_cid_manifest(
     State(app): State<SharedAppState>,
     Path(cid): Path<String>,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid) {
+    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -730,7 +697,7 @@ pub(crate) async fn handle_get_app_api_cid_path(
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     Path((cid, raw_path)): Path<(String, String)>,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid) {
+    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -754,7 +721,7 @@ pub(crate) async fn handle_post_app_api_cid_path(
     Path((cid, raw_path)): Path<(String, String)>,
     body: Bytes,
 ) -> Response {
-    let manifest = match load_api_manifest_by_cid(&app, &cid) {
+    let manifest = match load_api_manifest_by_cid(&app, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -799,7 +766,7 @@ pub(crate) async fn handle_get_app_api_active_path(
                 "active app API binding has no routes or content_cid",
             );
         };
-        match load_api_manifest_by_cid(&app, cid) {
+        match load_api_manifest_by_cid(&app, cid).await {
             Ok(value) => value,
             Err(response) => return response,
         }
@@ -840,7 +807,7 @@ pub(crate) async fn handle_post_app_api_active_path(
                 "active app API binding has no routes or content_cid",
             );
         };
-        match load_api_manifest_by_cid(&app, cid) {
+        match load_api_manifest_by_cid(&app, cid).await {
             Ok(value) => value,
             Err(response) => return response,
         }

@@ -26282,6 +26282,14 @@ impl Torii {
 
             let group = group
                 .route(
+                    "/v1/sorafs/capacity/declare",
+                    post(handler_post_sorafs_capacity_declare),
+                )
+                .route(
+                    "/v1/sorafs/capacity/telemetry",
+                    post(handler_post_sorafs_capacity_telemetry),
+                )
+                .route(
                     "/v1/sorafs/capacity/schedule",
                     post(handler_post_sorafs_capacity_schedule),
                 )

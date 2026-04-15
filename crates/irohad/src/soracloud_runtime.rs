@@ -65,9 +65,9 @@ use iroha_data_model::{
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
-        SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1,
+        SoraModelHostViolationKindV1, SoraModelPrivacyModeV1, SoraNetworkPolicyV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
@@ -345,10 +345,11 @@ fn default_portable_vm_accel() -> &'static str {
 }
 
 fn portable_vm_accel() -> eyre::Result<String> {
-    let configured = std::env::var("IROHA_INROU_PORTABLE_ACCEL")
-        .unwrap_or_else(|_| "auto".to_owned())
-        .trim()
-        .to_owned();
+    portable_vm_accel_from(std::env::var("IROHA_INROU_PORTABLE_ACCEL").ok().as_deref())
+}
+
+fn portable_vm_accel_from(configured: Option<&str>) -> eyre::Result<String> {
+    let configured = configured.unwrap_or("auto").trim().to_owned();
     match configured.as_str() {
         "" | "auto" => Ok(default_portable_vm_accel().to_owned()),
         "tcg" | "kvm" | "hvf" | "whpx" => Ok(configured),
@@ -12156,7 +12157,7 @@ fn build_inrou_user_data(
     let mut service_unit = String::new();
     service_unit.push_str("[Unit]\n");
     service_unit.push_str("Description=Soracloud Inrou service\n");
-    service_unit.push_str("After=network-online.target cloud-final.service\n");
+    service_unit.push_str("After=network-online.target\n");
     service_unit.push_str("Wants=network-online.target\n\n");
     service_unit.push_str("[Service]\n");
     service_unit.push_str("PermissionsStartOnly=true\n");
@@ -13028,10 +13029,11 @@ mod tests {
             SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
             SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
             SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-            SoraHfSourceStatusV1, SoraModelHostCapabilityRecordV1, SoraRolloutStageV1,
-            SoraRouteVisibilityV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-            SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
-            SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
+            SoraHfSourceStatusV1, SoraInrouGuestImageV1, SoraModelHostCapabilityRecordV1,
+            SoraRolloutStageV1, SoraRouteVisibilityV1, SoraServiceConfigEntryV1,
+            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+            SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+            SoraServiceSecretEntryV1,
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, ReplicationOrderId,
@@ -13385,6 +13387,8 @@ mod tests {
                         peer_id: local_peer_id.to_owned(),
                         selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     }],
                     reconciled_at_ms: 1,
                     last_error: None,
@@ -13439,6 +13443,86 @@ mod tests {
             ),
         };
         Ok((temp_dir, replica_plan, cache_key))
+    }
+
+    fn wait_for_hosted_http_runtime_state_to_be_healthy(
+        manager: &SoracloudRuntimeManager,
+        service_dir: &Path,
+        healthcheck_path: Option<&str>,
+        timeout: Duration,
+    ) -> Result<SoracloudHostedHttpRuntimeStateV1> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let runtime_state =
+                read_hosted_http_runtime_state(service_dir)?.expect("hosted runtime state");
+            let replica_health_ok = runtime_state.replicas.iter().all(|replica| {
+                replica.health_status == SoraServiceHealthStatusV1::Healthy
+                    && replica.listen_base_url.as_deref().is_some_and(|base_url| {
+                        probe_hosted_http_health(base_url, healthcheck_path).is_ok()
+                    })
+            });
+            if runtime_state.health_status == SoraServiceHealthStatusV1::Healthy
+                && replica_health_ok
+            {
+                return Ok(runtime_state);
+            }
+            if std::time::Instant::now() >= deadline {
+                let replica_errors = runtime_state
+                    .replicas
+                    .iter()
+                    .map(|replica| {
+                        format!(
+                            "slot {}: status={:?}, error={:?}, listen_base_url={:?}",
+                            replica.replica_slot,
+                            replica.health_status,
+                            replica.last_error,
+                            replica.listen_base_url,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let worker_diagnostics = manager
+                    .hosted_http_workers
+                    .lock()
+                    .iter()
+                    .map(|((service_name, service_version, replica_slot), worker)| {
+                        let guard = worker.lock();
+                        format!(
+                            "{service_name}@{service_version} replica {replica_slot}: pid={:?}, url={}, stderr={}",
+                            guard.pid(),
+                            guard.listen_base_url,
+                            stderr_log_excerpt(&guard.stderr_log_path),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let replica_log_diagnostics = runtime_state
+                    .replicas
+                    .iter()
+                    .map(|replica| {
+                        let replica_dir = service_dir.join(format!(
+                            "replicas/replica-{slot:04}",
+                            slot = replica.replica_slot
+                        ));
+                        format!(
+                            "slot {} stderr={} console={}",
+                            replica.replica_slot,
+                            stderr_log_excerpt(&replica_dir.join("inrou.stderr.log")),
+                            stderr_log_excerpt(&replica_dir.join("inrou.console.log")),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                eyre::bail!(
+                    "timed out waiting for hosted HTTP runtime state to become healthy: service_status={:?}, service_error={:?}, replica_statuses=[{}]\nworker diagnostics:\n{worker_diagnostics}\nreplica logs:\n{replica_log_diagnostics}",
+                    runtime_state.health_status,
+                    runtime_state.last_error,
+                    replica_errors,
+                );
+            }
+            thread::sleep(Duration::from_millis(250));
+            manager.reconcile_once()?;
+        }
     }
 
     fn write_inrou_test_bundle_file(path: &Path, contents: &str) -> Result<()> {
@@ -18381,6 +18465,8 @@ mod tests {
                         peer_id: local_peer_id.to_owned(),
                         selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     }],
                     reconciled_at_ms: 1,
                     last_error: None,
@@ -20113,13 +20199,7 @@ mod tests {
     #[test]
     #[serial]
     fn portable_vm_accel_accepts_explicit_override() -> Result<()> {
-        let previous = std::env::var_os("IROHA_INROU_PORTABLE_ACCEL");
-        unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", "tcg") };
-        let result = portable_vm_accel();
-        match previous {
-            Some(value) => unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", value) },
-            None => unsafe { std::env::remove_var("IROHA_INROU_PORTABLE_ACCEL") },
-        }
+        let result = portable_vm_accel_from(Some("tcg"));
         assert_eq!(result?, "tcg");
         Ok(())
     }
@@ -20127,13 +20207,7 @@ mod tests {
     #[test]
     #[serial]
     fn portable_vm_accel_rejects_unknown_override() {
-        let previous = std::env::var_os("IROHA_INROU_PORTABLE_ACCEL");
-        unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", "nope") };
-        let result = portable_vm_accel();
-        match previous {
-            Some(value) => unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", value) },
-            None => unsafe { std::env::remove_var("IROHA_INROU_PORTABLE_ACCEL") },
-        }
+        let result = portable_vm_accel_from(Some("nope"));
         assert!(result.is_err());
     }
 
@@ -20556,6 +20630,8 @@ exec python3 /tmp/inrou-health.py
                         peer_id: local_peer_id.to_owned(),
                         selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     }],
                     reconciled_at_ms: 1,
                     last_error: None,
@@ -20583,18 +20659,16 @@ exec python3 /tmp/inrou-health.py
                 bundle.service.service_name.as_ref(),
             ))
             .join(sanitize_path_component(&bundle.service.service_version));
-        let runtime_state =
-            read_hosted_http_runtime_state(&service_dir)?.expect("hosted runtime state");
+        let runtime_state = wait_for_hosted_http_runtime_state_to_be_healthy(
+            &manager,
+            &service_dir,
+            bundle.container.lifecycle.healthcheck_path.as_deref(),
+            Duration::from_secs(30),
+        )?;
         let replica = runtime_state
             .replicas
             .first()
             .expect("replica runtime state present");
-
-        assert_eq!(
-            runtime_state.health_status,
-            SoraServiceHealthStatusV1::Healthy
-        );
-        assert_eq!(replica.health_status, SoraServiceHealthStatusV1::Healthy);
         assert_eq!(manager.hosted_http_workers.lock().len(), 1);
         assert!(
             service_dir
@@ -20604,13 +20678,13 @@ exec python3 /tmp/inrou-health.py
         assert!(
             temp_dir
                 .path()
-                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.qcow2")
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.ext4")
                 .exists()
         );
         assert!(
             temp_dir
                 .path()
-                .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/boot-marker")
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/lease.raw")
                 .exists()
         );
         probe_hosted_http_health(
