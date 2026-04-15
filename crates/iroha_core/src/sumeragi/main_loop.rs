@@ -14073,7 +14073,7 @@ impl Actor {
 
     fn frontier_slot_passive_catchup_owns_height(&self, height: u64) -> bool {
         self.frontier_slot_passive_catchup_active_at_height(height)
-            && self.frontier_catchup_has_unresolved_dependency(height)
+            && self.frontier_catchup_has_unresolved_dependency_beyond_passive_slot(height)
     }
 
     fn frontier_slot_has_vote_backed_owner_state_in_slot(&self, slot: &FrontierSlot) -> bool {
@@ -22581,7 +22581,11 @@ impl Actor {
         })
     }
 
-    fn has_contiguous_frontier_pressure(&self, local_height: u64) -> bool {
+    fn has_contiguous_frontier_pressure_with_passive_slot_policy(
+        &self,
+        local_height: u64,
+        count_passive_slot_self_dependency: bool,
+    ) -> bool {
         let frontier_height = local_height.saturating_add(1);
         let now = Instant::now();
         let tip_height = self.state.committed_height();
@@ -22614,6 +22618,8 @@ impl Actor {
         let frontier_slot_active = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == frontier_height
                 && !self.authoritative_block_payload_available(slot.block_hash)
+                && (count_passive_slot_self_dependency
+                    || !matches!(slot.mode, FrontierSlotMode::PassiveCatchup))
         });
         frontier_pending_exists
             || frontier_commit_inflight
@@ -22644,6 +22650,10 @@ impl Actor {
             })
             || self.sidecar_quarantined_for_height(local_height)
             || self.sidecar_quarantined_for_height(frontier_height)
+    }
+
+    fn has_contiguous_frontier_pressure(&self, local_height: u64) -> bool {
+        self.has_contiguous_frontier_pressure_with_passive_slot_policy(local_height, true)
     }
 
     fn contiguous_frontier_pressure_active(&self) -> bool {
@@ -22776,6 +22786,46 @@ impl Actor {
                 let local_height = self.committed_height_snapshot();
                 frontier_height == local_height.saturating_add(1)
                     && self.has_contiguous_frontier_pressure(local_height)
+            }
+    }
+
+    fn frontier_catchup_has_unresolved_dependency_beyond_passive_slot(
+        &self,
+        frontier_height: u64,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height >= frontier_height
+                    && !self.authoritative_block_payload_available(*hash)
+                    && !self.missing_block_request_is_non_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.frontier_known_block_commit_qc_pressure(frontier_height, committed_height, now)
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height >= frontier_height
+                    && !self.authoritative_block_payload_available(entry.qc.subject_block_hash)
+                    && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.lock_lag_frontier_has_unresolved_dependency(frontier_height)
+            || {
+                let local_height = self.committed_height_snapshot();
+                frontier_height == local_height.saturating_add(1)
+                    && self.has_contiguous_frontier_pressure_with_passive_slot_policy(
+                        local_height,
+                        false,
+                    )
             }
     }
 
@@ -30731,10 +30781,13 @@ impl Actor {
             self.subsystems.propose.pacemaker.propose_interval,
             da_enabled,
         );
+        let queue_age = now.saturating_duration_since(queue_since.unwrap_or(now));
         let age = if proposal_seen {
             view_age
         } else {
-            now.saturating_duration_since(queue_since.unwrap_or(now))
+            // A refreshed queue marker must not pin a missing-leader round after the
+            // pacemaker has already attempted the slot; the view itself may be old.
+            view_age.max(queue_age)
         };
         let initial_frontier_proposal_grace = if !proposal_seen
             && da_enabled
@@ -31013,11 +31066,12 @@ impl Actor {
         }
         if missing_qc_actionable_dependency_signals && proposal_gap_backlog_grace > Duration::ZERO {
             let backlog_grace_deadline = timeout.saturating_add(proposal_gap_backlog_grace);
-            if age < backlog_grace_deadline {
+            let backlog_age = if proposal_seen { age } else { queue_age };
+            if backlog_age < backlog_grace_deadline {
                 debug!(
                     height,
                     view = current_view,
-                    age_ms = age.as_millis(),
+                    age_ms = backlog_age.as_millis(),
                     timeout_ms = timeout.as_millis(),
                     proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
                     "deferring idle view-change while backlog converges"
@@ -31028,11 +31082,12 @@ impl Actor {
         if missing_qc_actionable_dependency_signals && rbc_backlog && rbc_backlog_progressing {
             let progress_grace_deadline =
                 timeout.saturating_add(rbc_progress_window.max(proposal_gap_backlog_grace));
-            if age < progress_grace_deadline {
+            let progress_age = if proposal_seen { age } else { queue_age };
+            if progress_age < progress_grace_deadline {
                 debug!(
                     height,
                     view = current_view,
-                    age_ms = age.as_millis(),
+                    age_ms = progress_age.as_millis(),
                     timeout_ms = timeout.as_millis(),
                     progress_grace_ms = progress_grace_deadline.as_millis(),
                     "deferring idle view-change while RBC backlog is converging"

@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: killed-leader idle view changes now recover after queue timer refreshes
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now evaluates no-proposal idle timeouts against the older of the tracked
+  round age and the queued-work age once the pacemaker has attempted the slot.
+  Backlog grace still uses queued-work age, so fresh RBC/worker pressure keeps
+  its convergence window while a refreshed queue marker can no longer pin a
+  missing-leader round forever.
+- The same Sumeragi path no longer lets a passive frontier catch-up slot count
+  itself as the only unresolved dependency owning the contiguous frontier; an
+  idle MissingQc rotation proceeds once no external catch-up dependency remains.
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_lock_convergence.rs`
+  now runs the view-change convergence case with explicit permissioned DA
+  timing, resolves the height/view-0 leader deterministically, submits the
+  recovery tick to every surviving peer, and uses a bounded 300-second recovery
+  wait for height and locked-QC convergence.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  had its test fixture updated for the current
+  `SoraInrouGuestImageV1` artifact fields so the focused `iroha_core` tests
+  compile on this tree.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+  - `cargo test -p iroha_core --lib passive_frontier_slot_without_external_dependency_allows_idle_missing_qc_rotation -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_defers_proposal_gap_with -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bounded_commit_skew -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+  - `IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
+
 ## 2026-04-15 Follow-up: near-tip local payloads no longer suppress DELIVER broadcast, and witness-corruption expectations now match the documented RBC gate
 - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now keeps live RBC runtime active for near-tip blocks that are merely

@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 killed-leader lock convergence recovers after idle queue timer refresh):
+the reported `sumeragi_lock_convergence::sumeragi_view_change_lock_convergence`
+hang is fixed on the current tree. The idle view-change path now treats a
+no-proposal round as timed out when the tracked round itself is old enough,
+even if the queued-work marker was refreshed after the pacemaker attempt. RBC
+and worker backlog grace still keys off the queued-work age. Passive
+frontier-catchup slots also no longer self-own the contiguous frontier when no
+external dependency remains, so MissingQc rotation can proceed.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_lock_convergence.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+  - `cargo test -p iroha_core --lib passive_frontier_slot_without_external_dependency_allows_idle_missing_qc_rotation -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_defers_proposal_gap_with -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bounded_commit_skew -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+  - `IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
+- open work after this slice:
+  - run `cargo test --workspace` only when a several-hour validation window is
+    available.
+
 Latest sync (2026-04-15 near-tip RBC runtime stays live until DELIVER is broadcast, and witness-corruption coverage now matches the documented gate):
 the user-reported consensus stall was rooted in early RBC runtime retirement.
 `crates/iroha_core/src/sumeragi/main_loop.rs` no longer retires a live near-tip

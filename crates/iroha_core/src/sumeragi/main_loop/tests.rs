@@ -68766,6 +68766,101 @@ async fn force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacema
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    actor.highest_qc = Some(committed_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let effective_timeout = timeout.saturating_add(initial_frontier_proposal_grace);
+    let round_start = now
+        .checked_sub(effective_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let refreshed_queue_since = now.checked_sub(effective_timeout / 2).unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, round_start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: refreshed_queue_since,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+    actor.frontier_recovery = None;
+
+    let queue_age = now.saturating_duration_since(refreshed_queue_since);
+    let view_age = now.saturating_duration_since(round_start);
+    assert!(
+        !super::idle_round_timed_out(true, queue_age, effective_timeout),
+        "test requires a refreshed queue timer that has not independently timed out"
+    );
+    assert!(
+        super::idle_round_timed_out(true, view_age, effective_timeout),
+        "test requires the tracked round itself to be past the idle timeout"
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "missing-leader recovery should use the aged round after a pacemaker attempt even if the queue marker was refreshed"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "the aged round should advance instead of being pinned by the refreshed queue timer"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "the timeout should count as one MissingQc rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_near_quorum_missing_payload()
  {
     let _worker_guard = super::status::worker_queue_test_guard();
@@ -108596,6 +108691,113 @@ async fn frontier_stall_reset_handoff_enters_passive_catchup_and_suppresses_repe
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn passive_frontier_slot_without_external_dependency_allows_idle_missing_qc_rotation() {
+    use std::borrow::Cow;
+
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.committed_height_snapshot();
+    let frontier_height = committed_height.saturating_add(1);
+    let current_view = 0_u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, current_view));
+
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let stalled_at = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, current_view, stalled_at);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height: frontier_height,
+        view: current_view,
+        since: stalled_at,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+    actor.frontier_recovery = None;
+
+    let passive_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCA; Hash::LENGTH]));
+    let mut passive_slot = super::FrontierSlot::new(
+        frontier_height,
+        current_view,
+        passive_hash,
+        stalled_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    );
+    passive_slot.mark_passive_catchup(stalled_at, "test_passive_without_dependency");
+    passive_slot.sync_compat_fields();
+    actor.frontier_slot = Some(passive_slot);
+
+    assert!(
+        !actor.frontier_slot_passive_catchup_owns_height(frontier_height),
+        "a passive frontier slot must not count itself as the unresolved dependency that owns the frontier"
+    );
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "idle MissingQc rotation should proceed once no external passive-catchup dependency remains"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(frontier_height),
+        Some(current_view.saturating_add(1)),
+        "rotation should advance the view"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        1,
+        "rotation should be recorded as MissingQc"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
 
