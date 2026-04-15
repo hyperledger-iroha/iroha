@@ -15,7 +15,7 @@ use iroha_data_model::{
     fastpq::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
-        TransferTranscript, TransferTranscriptBundle,
+        TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
     },
     role::{Role, RoleId},
 };
@@ -68,8 +68,8 @@ impl FastpqPublicInputsTemplate {
 /// Errors that can occur while mapping transfer transcripts into FASTPQ transition batches.
 #[derive(Debug, Error)]
 pub enum TranscriptBatchError {
-    /// Encountered a Numeric value that cannot be encoded as a 64-bit little-endian integer.
-    #[error("numeric value `{value}` exceeds the supported 64-bit integer range or is fractional")]
+    /// Encountered a Numeric value that cannot be normalized into FASTPQ witness units.
+    #[error("numeric value `{value}` cannot be normalized into 64-bit FASTPQ witness units")]
     NumericEncoding {
         /// Numeric value that fell outside the FASTPQ prover's supported range.
         value: Numeric,
@@ -315,10 +315,11 @@ fn push_transfer_delta(
 ) -> Result<(), TranscriptBatchError> {
     let from_key = balance_key(&delta.asset_definition, &delta.from_account);
     let to_key = balance_key(&delta.asset_definition, &delta.to_account);
-    let from_pre = encode_numeric_le(delta.from_balance_before.clone())?;
-    let from_post = encode_numeric_le(delta.from_balance_after.clone())?;
-    let to_pre = encode_numeric_le(delta.to_balance_before.clone())?;
-    let to_post = encode_numeric_le(delta.to_balance_after.clone())?;
+    let target_scale = delta.normalized_scale();
+    let from_pre = encode_numeric_le(&delta.from_balance_before, target_scale)?;
+    let from_post = encode_numeric_le(&delta.from_balance_after, target_scale)?;
+    let to_pre = encode_numeric_le(&delta.to_balance_before, target_scale)?;
+    let to_post = encode_numeric_le(&delta.to_balance_after, target_scale)?;
 
     batch.push(StateTransition::new(
         from_key,
@@ -339,11 +340,12 @@ fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
     format!("asset/{asset}/{account}").into_bytes()
 }
 
-fn encode_numeric_le(value: Numeric) -> Result<Vec<u8>, TranscriptBatchError> {
-    let integer: u64 = match value.clone().try_into() {
-        Ok(v) => v,
-        Err(_) => return Err(TranscriptBatchError::NumericEncoding { value }),
-    };
+fn encode_numeric_le(value: &Numeric, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
+    let integer = normalized_numeric_to_u64(value, target_scale).ok_or_else(|| {
+        TranscriptBatchError::NumericEncoding {
+            value: value.clone(),
+        }
+    })?;
     Ok(integer.to_le_bytes().to_vec())
 }
 
@@ -768,16 +770,46 @@ mod tests {
     }
 
     #[test]
-    fn batch_from_transcripts_rejects_fractional_values() {
+    fn batch_from_transcripts_normalizes_mixed_scale_values() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].from_balance_before = Numeric::try_new(15, 1).unwrap();
-        let err = batch_from_transcripts(
+        transcript.deltas[0].amount = Numeric::new(5, 1);
+        transcript.deltas[0].from_balance_before = Numeric::new(1, 0);
+        transcript.deltas[0].from_balance_after = Numeric::new(5, 1);
+        transcript.deltas[0].to_balance_before = Numeric::new(0, 0);
+        transcript.deltas[0].to_balance_after = Numeric::new(5, 1);
+        let batch = batch_from_transcripts(
             "fastpq-lane-balanced",
             sample_public_inputs(),
             [&transcript],
         )
-        .unwrap_err();
-        assert!(matches!(err, TranscriptBatchError::NumericEncoding { .. }));
+        .expect("batch");
+        let sender_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].from_account,
+                    )
+            })
+            .expect("sender row");
+        let receiver_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].to_account,
+                    )
+            })
+            .expect("receiver row");
+
+        assert_eq!(decode_le(&sender_row.pre_value), 10);
+        assert_eq!(decode_le(&sender_row.post_value), 5);
+        assert_eq!(decode_le(&receiver_row.pre_value), 0);
+        assert_eq!(decode_le(&receiver_row.post_value), 5);
     }
 
     #[test]

@@ -460,6 +460,24 @@ fn locate_blocks_dir(store_dir: &Path) -> Result<PathBuf> {
     Err(eyre!("no blocks.index found under {blocks_root:?}"))
 }
 
+fn best_persisted_rbc_summary_for_height(
+    persisted: &[rbc_status::Summary],
+    expected_height: u64,
+) -> Option<&rbc_status::Summary> {
+    persisted
+        .iter()
+        .filter(|summary| summary.height == expected_height && !summary.invalid)
+        .max_by_key(|summary| {
+            (
+                summary.delivered,
+                summary.ready_count,
+                u64::from(summary.received_chunks),
+                u64::from(summary.total_chunks),
+                summary.view,
+            )
+        })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
     let result = run_sumeragi_da_scenario_with(
@@ -2597,6 +2615,7 @@ where
     G: Fn(&[(usize, PeerMetrics)]) -> Result<()>,
 {
     let heavy_message = generate_incompressible_payload(scenario_name, payload_bytes);
+    let log_level = std::env::var("IROHA_TEST_LOG_LEVEL").unwrap_or_else(|_| "WARN".to_string());
     let tx_limit =
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
@@ -2609,7 +2628,7 @@ where
         writer
             .write("telemetry_enabled", true)
             .write("telemetry_profile", "full")
-            .write(["logger", "level"], "WARN")
+            .write(["logger", "level"], log_level)
             .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
             .write(
                 ["network", "max_frame_bytes_consensus"],
@@ -2891,9 +2910,8 @@ where
         if ready_total < 1.0 || deliver_total < 1.0 {
             let store_dir = network.peers()[idx].kura_store_dir().join("rbc_sessions");
             let persisted = rbc_status::read_persisted_snapshot(&store_dir);
-            if let Some(summary) = persisted
-                .iter()
-                .find(|summary| summary.height == expected_height)
+            if let Some(summary) =
+                best_persisted_rbc_summary_for_height(&persisted, expected_height)
             {
                 #[allow(clippy::cast_precision_loss)]
                 {
@@ -3036,9 +3054,48 @@ where
 
     let deliver_ms_u64 = u64::try_from(deliver_ms).unwrap_or(u64::MAX);
     let commit_ms_u64 = u64::try_from(commit_ms).unwrap_or(u64::MAX);
+    let deliver_budget_context = if deliver_ms_u64 > deliver_budget_ms {
+        let metrics_context = match collect_rbc_metric_context(
+            &http,
+            network.peers(),
+            expected_height,
+            &rbc_observation.block_hash,
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(err) => format!("failed to collect RBC metric context: {err:#}"),
+        };
+        let failure_context = match collect_rbc_failure_context(
+            &http,
+            network.peers(),
+            expected_height,
+            &rbc_observation.block_hash,
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(err) => format!("failed to collect RBC failure context: {err:#}"),
+        };
+        Some((metrics_context, failure_context))
+    } else {
+        None
+    };
     assert!(
         deliver_ms_u64 <= deliver_budget_ms,
-        "RBC delivery {deliver_ms_u64} ms exceeded budget {deliver_budget_ms} ms"
+        "RBC delivery {deliver_ms_u64} ms exceeded budget {deliver_budget_ms} ms (commit_ms={commit_ms_u64}, height={}, view={}, ready_count={}, total_chunks={}, received_chunks={}, block_hash={})\npeer metrics:\n{table_formatted}\n{}\n{}",
+        rbc_observation.height,
+        rbc_observation.view,
+        rbc_observation.ready_count,
+        rbc_observation.total_chunks,
+        rbc_observation.received_chunks,
+        rbc_observation.block_hash,
+        deliver_budget_context
+            .as_ref()
+            .map_or("", |(metrics_context, _)| metrics_context.as_str()),
+        deliver_budget_context
+            .as_ref()
+            .map_or("", |(_, failure_context)| failure_context.as_str()),
     );
     assert!(
         commit_ms_u64 <= commit_budget_ms,
@@ -3399,6 +3456,43 @@ fn runtime_da_configuration_required_only_when_da_is_disabled() {
         runtime_da_configuration_required(&disabled_parameters),
         "runtime DA reconfiguration should only be required when DA is disabled"
     );
+}
+
+#[test]
+fn persisted_rbc_summary_selector_prefers_delivered_same_height_view() {
+    let hash = HashOf::<iroha::data_model::block::BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0x21; iroha_crypto::Hash::LENGTH]),
+    );
+    let undelivered = rbc_status::Summary {
+        block_hash: hash,
+        height: 2,
+        view: 0,
+        total_chunks: 7,
+        encoding: iroha::data_model::block::consensus::RbcEncoding::Plain,
+        data_shards: 0,
+        parity_shards: 0,
+        received_chunks: 7,
+        ready_count: 0,
+        delivered: false,
+        payload_hash: None,
+        recovered_from_disk: false,
+        invalid: false,
+        reconstructed_stripes: 0,
+        reconstructable_stripes: 0,
+        lane_backlog: Vec::new(),
+        dataspace_backlog: Vec::new(),
+    };
+    let delivered = rbc_status::Summary {
+        view: 1,
+        delivered: true,
+        ..undelivered.clone()
+    };
+
+    let summaries = [undelivered, delivered];
+    let selected = best_persisted_rbc_summary_for_height(&summaries, 2)
+        .expect("same-height RBC summary should be selected");
+    assert_eq!(selected.view, 1);
+    assert!(selected.delivered);
 }
 
 fn da_commit_wait_timeout() -> Duration {

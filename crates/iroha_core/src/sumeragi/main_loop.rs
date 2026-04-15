@@ -4804,8 +4804,8 @@ fn consensus_block_wire_len_owned(origin: &PeerId, msg: BlockMessage) -> usize {
 }
 
 fn rbc_chunk_payload_cap(origin: &PeerId, payload_frame_cap: usize) -> usize {
-    // Use max values for varint fields so the cap holds for any height/view/index.
-    let mut chunk = crate::sumeragi::consensus::RbcChunk {
+    // Use max values for scalar fields so the cap remains valid after height/view growth.
+    let chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
         height: u64::MAX,
         view: u64::MAX,
@@ -4817,21 +4817,10 @@ fn rbc_chunk_payload_cap(origin: &PeerId, payload_frame_cap: usize) -> usize {
     if base_len >= payload_frame_cap {
         return 0;
     }
-    // TODO: cache a serialized BlockMessage header for chunk sizing to avoid re-encoding per step.
-    let mut low = 0usize;
-    let mut high = payload_frame_cap - base_len;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        chunk.bytes.resize(mid, 0);
-        let encoded_len =
-            consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
-        if encoded_len <= payload_frame_cap {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    low
+    // `RbcChunk.bytes` is encoded as a raw byte tail, so each additional byte increases the
+    // final P2P frame length by exactly one byte. Avoid repeated full-frame re-encoding here;
+    // debug builds were spending tens of seconds per peer binary-searching a 16 MiB cap.
+    payload_frame_cap - base_len
 }
 
 fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> bool {
@@ -7341,6 +7330,26 @@ impl Actor {
         !self.has_local_pending_candidate_for_rbc_key(key)
     }
 
+    fn allow_exact_frontier_recovered_rbc_chunk_repair(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> bool {
+        if !session.recovered_from_disk() || !session.allows_payload_recovery() {
+            return false;
+        }
+        if key.1 != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == key.1
+                && slot.view == key.2
+                && slot.block_hash == key.0
+                && slot.exact_fetch_armed
+                && !slot.body_present
+        })
+    }
+
     fn rbc_payload_backpressure_exempt_with_tip(
         &self,
         key: super::rbc_store::SessionKey,
@@ -8004,11 +8013,9 @@ impl Actor {
         let unresolved_rbc_backlog = rbc_backlog_summary.has_backlog();
         let near_quorum_rbc_backlog_raw = self.has_near_quorum_rbc_backlog(rbc_backlog_summary);
 
-        let consensus_queue_backlog =
-            existing_worker_backlog || queue_active_backlog || residual_round_backlog;
+        let consensus_queue_backlog = existing_worker_backlog || residual_round_backlog;
         let rbc_backlog = unresolved_rbc_backlog || residual_round_backlog;
-        let near_quorum_queue_backlog =
-            near_quorum_queue_backlog_raw || queue_active_backlog || residual_round_backlog;
+        let near_quorum_queue_backlog = near_quorum_queue_backlog_raw || residual_round_backlog;
         let near_quorum_rbc_backlog = near_quorum_rbc_backlog_raw || residual_round_backlog;
 
         IdleBacklogSignals {
@@ -15591,6 +15598,7 @@ impl Actor {
             wake_tx,
             block_payload_dedup,
             Arc::new(super::FrontierBlockSyncHint::default()),
+            None,
             rbc_status_handle,
         )
     }
@@ -15618,8 +15626,14 @@ impl Actor {
         wake_tx: Option<mpsc::SyncSender<()>>,
         block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
         frontier_block_sync_hint: Arc<super::FrontierBlockSyncHint>,
+        initial_state_view: Option<&StateView<'_>>,
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
+        let startup_trace_started_at = Instant::now();
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.constructor.enter",
+            startup_trace_started_at,
+        );
         let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
         let mut consensus_payload_frame_cap = frame_plaintext_cap(consensus_payload_frame_cap);
         if consensus_payload_frame_cap < consensus_frame_cap {
@@ -15662,31 +15676,67 @@ impl Actor {
             pacemaker_timeouts,
             pacemaker_block_time,
         ) = {
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+            let owned_world;
+            let world = if let Some(initial_view) = initial_state_view {
+                initial_view.world()
+            } else {
+                owned_world = state.world_view();
+                &owned_world
+            };
+            let height = initial_state_view.map_or_else(
+                || u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
+                |view| u64::try_from(view.height()).unwrap_or(u64::MAX),
+            );
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.context_snapshot.ready",
+                startup_trace_started_at,
+            );
             let mode = super::effective_consensus_mode_for_height_from_world(
-                &world,
+                world,
                 height,
                 config.consensus_mode,
             );
-            let commit_topology_snapshot = state.commit_topology_snapshot();
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.mode_resolved",
+                startup_trace_started_at,
+            );
+            let commit_topology_snapshot = initial_state_view.map_or_else(
+                || state.commit_topology_snapshot(),
+                |view| view.commit_topology().iter().cloned().collect(),
+            );
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.commit_topology_snapshot.ready",
+                startup_trace_started_at,
+            );
             let mut commit_topology = if commit_topology_snapshot.is_empty() {
                 world.peers().iter().cloned().collect()
             } else {
                 commit_topology_snapshot
             };
             commit_topology = roster::filter_roster_with_live_consensus_keys_at_height_world(
-                &world,
+                world,
                 commit_topology,
                 height.saturating_add(1),
             );
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.commit_topology.live_keys_filtered",
+                startup_trace_started_at,
+            );
             commit_topology = roster::canonicalize_roster_for_mode(commit_topology, mode);
-            let pacemaker_block_time = super::resolve_npos_block_time_from_world(&world);
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.commit_topology.canonicalized",
+                startup_trace_started_at,
+            );
+            let pacemaker_block_time = super::resolve_npos_block_time_from_world(world);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
-                super::resolve_npos_timeouts_from_world(&world, &config.npos)
+                super::resolve_npos_timeouts_from_world(world, &config.npos)
             } else {
                 SumeragiNposTimeouts::from_block_time(pacemaker_block_time)
             };
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.pacemaker_timing.ready",
+                startup_trace_started_at,
+            );
             if !WARNED_IGNORED_CONFIG_OVERRIDES.load(Ordering::Relaxed) {
                 let mut ignored = Vec::new();
                 if config.collectors.k != iroha_config::parameters::defaults::sumeragi::COLLECTORS_K
@@ -15756,29 +15806,57 @@ impl Actor {
                     );
                 }
             }
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.config_override_scan.ready",
+                startup_trace_started_at,
+            );
             let mut collectors = if matches!(mode, ConsensusMode::Npos) {
-                super::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+                super::load_npos_collector_config_from_world(world, &chain_id)
             } else {
                 None
             };
-            let epoch_params = super::load_npos_epoch_params_from_world(&world, &config.npos);
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.collector_cfg.ready",
+                startup_trace_started_at,
+            );
+            let epoch_params = super::load_npos_epoch_params_from_world(world, &config.npos);
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.epoch_params.ready",
+                startup_trace_started_at,
+            );
             let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
-                &world,
+                world,
                 epoch_params.epoch_length_blocks,
+            );
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.epoch_schedule.ready",
+                startup_trace_started_at,
             );
             let target_epoch = schedule.epoch_for_height(height);
             let epoch_seed_for_height =
-                super::prf_seed_for_height_from_world(&world, state.chain_id_ref(), height);
+                super::prf_seed_for_height_from_world(world, &chain_id, height);
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.epoch_seed.ready",
+                startup_trace_started_at,
+            );
             let record_for_target_epoch = world.vrf_epochs().get(&target_epoch).cloned();
             let last_epoch_record = world
                 .vrf_epochs()
                 .iter()
                 .last()
                 .map(|(_, record)| record.clone());
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.vrf_records.ready",
+                startup_trace_started_at,
+            );
             let roster_len = commit_topology.len();
             let initial_indices = compute_roster_indices_from_topology(
                 &commit_topology,
                 epoch_roster_provider.as_ref(),
+            );
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.roster_indices.ready",
+                startup_trace_started_at,
             );
             let mut em = EpochManager::new_from_chain(&common_config.chain);
             em.set_params(
@@ -15793,6 +15871,10 @@ impl Actor {
                 em.set_epoch(target_epoch);
             }
             apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
+            super::log_sumeragi_startup_trace(
+                "sumeragi.actor_init.epoch_manager.ready",
+                startup_trace_started_at,
+            );
             let seed = em.seed();
             if matches!(mode, ConsensusMode::Npos) {
                 if let Some(record) = last_epoch_record.as_ref() {
@@ -15806,6 +15888,10 @@ impl Actor {
                         }
                     }
                 }
+                super::log_sumeragi_startup_trace(
+                    "sumeragi.actor_init.activation_plan.ready",
+                    startup_trace_started_at,
+                );
                 if let Some(cfg) = collectors.as_mut() {
                     cfg.seed = seed;
                 } else {
@@ -15815,6 +15901,10 @@ impl Actor {
                         redundant_send_r: config.collectors.redundant_send_r,
                     });
                 }
+                super::log_sumeragi_startup_trace(
+                    "sumeragi.actor_init.collector_seed.ready",
+                    startup_trace_started_at,
+                );
             }
             let manager = Some(em);
             (
@@ -15826,6 +15916,10 @@ impl Actor {
                 pacemaker_block_time,
             )
         };
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.consensus_context.ready",
+            startup_trace_started_at,
+        );
         let qc_rebuild_cooldown = pacemaker_block_time.max(REBROADCAST_COOLDOWN_FLOOR);
         let initial_qc_rebuild = now.checked_sub(qc_rebuild_cooldown).unwrap_or(now);
         let commit_pipeline_cooldown = qc_rebuild_cooldown;
@@ -15854,8 +15948,13 @@ impl Actor {
             telemetry.set_prf_context(Some(cfg.seed), block_count.0 as u64, 0);
         }
         let (staged_mode_tag, staged_mode_activation_height) = {
-            let world = state.world_view();
-            let params = world.parameters().sumeragi();
+            let owned_world;
+            let params = if let Some(initial_view) = initial_state_view {
+                initial_view.world().parameters().sumeragi()
+            } else {
+                owned_world = state.world_view();
+                owned_world.parameters().sumeragi()
+            };
             staged_mode_info(params)
         };
         let mode_tag = match consensus_mode {
@@ -15865,6 +15964,10 @@ impl Actor {
         super::status::set_mode_tags(mode_tag, staged_mode_tag, staged_mode_activation_height);
         #[cfg(feature = "telemetry")]
         telemetry.set_mode_tags(mode_tag, staged_mode_tag, staged_mode_activation_height);
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.mode_status.ready",
+            startup_trace_started_at,
+        );
 
         let chunk_store = if let Some(cfg) = rbc_store.as_ref() {
             if cfg.max_sessions == 0 || cfg.max_bytes == 0 {
@@ -15892,6 +15995,10 @@ impl Actor {
             rbc_status_handle.configure(None);
             None
         };
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.chunk_store.ready",
+            startup_trace_started_at,
+        );
 
         let mut rbc_sessions = BTreeMap::new();
         let mut persisted_rbc_sessions = BTreeSet::new();
@@ -15971,6 +16078,10 @@ impl Actor {
                 }
             }
         }
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.rbc_sessions.loaded",
+            startup_trace_started_at,
+        );
 
         #[cfg(feature = "telemetry")]
         let telemetry_option = Some(&telemetry);
@@ -15995,10 +16106,18 @@ impl Actor {
             config.rbc.pending_session_limit,
             telemetry_option,
         );
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.rbc_backlog_snapshot.ready",
+            startup_trace_started_at,
+        );
 
         debug!(chain=?common_config.chain, mode=?consensus_mode, "initialising Sumeragi actor");
 
         let genesis_account = Self::determine_genesis_account(state.as_ref())?;
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.genesis_account.ready",
+            startup_trace_started_at,
+        );
         let lane_relay = LaneRelayBroadcaster::new(network.clone());
         let pacemaker_base_interval = pacemaker_base_interval_with_propose_timeout(
             pacemaker_block_time,
@@ -16007,7 +16126,13 @@ impl Actor {
         );
         let collector_redundant_limit = match consensus_mode {
             ConsensusMode::Permissioned => {
-                let world = state.world_view();
+                let owned_world;
+                let world = if let Some(initial_view) = initial_state_view {
+                    initial_view.world()
+                } else {
+                    owned_world = state.world_view();
+                    &owned_world
+                };
                 let redundant = world.parameters().sumeragi().collectors_redundant_send_r;
                 redundant.max(1)
             }
@@ -16016,8 +16141,14 @@ impl Actor {
                     .as_ref()
                     .map(|cfg| cfg.redundant_send_r)
                     .or_else(|| {
-                        let world = state.world_view();
-                        super::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+                        let owned_world;
+                        let world = if let Some(initial_view) = initial_state_view {
+                            initial_view.world()
+                        } else {
+                            owned_world = state.world_view();
+                            &owned_world
+                        };
+                        super::load_npos_collector_config_from_world(world, &chain_id)
                             .map(|cfg| cfg.redundant_send_r)
                     })
                     .unwrap_or(config.collectors.redundant_send_r);
@@ -16030,6 +16161,10 @@ impl Actor {
             pacemaker_base_interval,
             collector_redundant_limit,
             super::status::da_gate_missing_local_data_total(),
+        );
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.adaptive_state.ready",
+            startup_trace_started_at,
         );
 
         #[cfg(feature = "telemetry")]
@@ -16125,23 +16260,42 @@ impl Actor {
                 committee: MergeCommitteeState::new(),
             },
         };
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.subsystems.ready",
+            startup_trace_started_at,
+        );
         let roster_validation_cache = {
-            let world = state.world.view();
             let trusted_pops = &common_config.trusted_peers.value().pops;
-            let cache = RosterValidationCache::from_world(
-                &world,
-                config.npos.epoch_length_blocks,
-                Some(trusted_pops),
-            );
-            drop(world);
-            cache
+            if let Some(initial_view) = initial_state_view {
+                RosterValidationCache::from_world(
+                    initial_view.world(),
+                    config.npos.epoch_length_blocks,
+                    Some(trusted_pops),
+                )
+            } else {
+                let world = state.world.view();
+                let cache = RosterValidationCache::from_world(
+                    &world,
+                    config.npos.epoch_length_blocks,
+                    Some(trusted_pops),
+                );
+                drop(world);
+                cache
+            }
         };
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.roster_validation_cache.ready",
+            startup_trace_started_at,
+        );
         let invalid_sig_penalty = InvalidSigPenalty::new(&config);
-        let local_peer_seen_in_world = {
+        let local_peer_seen_in_world = if let Some(initial_view) = initial_state_view {
+            initial_view.world().peers().contains(local_peer_id)
+        } else {
             let world = state.world_view();
             world.peers().contains(local_peer_id)
         };
-        let initial_committed_height = state.committed_height();
+        let initial_committed_height =
+            initial_state_view.map_or_else(|| state.committed_height(), StateView::height);
         let initial_queue_len = queue.active_len();
 
         let mut actor = Self {
@@ -16283,8 +16437,16 @@ impl Actor {
             #[cfg(test)]
             background_request_log: None,
         };
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.struct_built",
+            startup_trace_started_at,
+        );
         actor.seed_phase_ema_metrics();
         actor.refresh_p2p_topology();
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.topology_refreshed",
+            startup_trace_started_at,
+        );
         if let Some(roster) = roster_to_install_now {
             if let Err(err) = actor.install_elected_roster(&roster) {
                 iroha_logger::warn!(?err, "failed to install elected roster on startup");
@@ -16294,6 +16456,10 @@ impl Actor {
         }
         actor.refresh_commit_topology_state(&actor.effective_commit_topology());
         actor.ensure_genesis_commit_roster();
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.genesis_roster.ready",
+            startup_trace_started_at,
+        );
         if let Some(committed_qc) = actor.latest_committed_qc() {
             actor.highest_qc = Some(committed_qc);
             actor.locked_qc = Some(committed_qc);
@@ -16323,6 +16489,10 @@ impl Actor {
                 actor.telemetry.set_locked_qc_view(0);
             }
         }
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.qc_state.ready",
+            startup_trace_started_at,
+        );
         // Publish initial status so operator endpoints are populated even before the
         // first tick, and to make stalled actor detection easier in tests.
         super::status::set_tx_queue_backpressure(
@@ -16351,6 +16521,10 @@ impl Actor {
                 bytes: 0,
             });
         }
+        super::log_sumeragi_startup_trace(
+            "sumeragi.actor_init.constructor.complete",
+            startup_trace_started_at,
+        );
         Ok(actor)
     }
 
@@ -18731,6 +18905,7 @@ impl Actor {
             BackgroundRequest::Post { msg, .. } => matches!(
                 msg.as_ref(),
                 BlockMessage::Proposal(_)
+                    | BlockMessage::ProposalHint(_)
                     | BlockMessage::BlockCreated(_)
                     | BlockMessage::FetchBlockBody(_)
                     | BlockMessage::BlockBodyResponse(_)
@@ -18747,6 +18922,7 @@ impl Actor {
             BackgroundRequest::Broadcast { msg } => matches!(
                 msg.as_ref(),
                 BlockMessage::Proposal(_)
+                    | BlockMessage::ProposalHint(_)
                     | BlockMessage::BlockCreated(_)
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::RbcInit(_)
@@ -21041,6 +21217,8 @@ impl Actor {
             let authoritative_known_payload =
                 self.rbc_session_has_authoritative_payload_for_progress(key, &session);
             let hot_repair_allowed = !self.suppress_rbc_hot_repair(key);
+            let chunk_repair_allowed = hot_repair_allowed
+                || self.allow_exact_frontier_recovered_rbc_chunk_repair(key, &session);
             if session.progress_stage() == RbcProgressStage::Delivered {
                 if hot_repair_allowed
                     && self.rescue_rbc_missing_ready_peers(
@@ -21094,16 +21272,17 @@ impl Actor {
             if authoritative_known_payload && !missing_chunks && ready_count == 0 {
                 continue;
             }
-            let should_rebroadcast_payload = hot_repair_allowed
+            let should_attempt_payload_repair = chunk_repair_allowed
                 && session.allows_payload_recovery()
                 && !authoritative_known_payload;
-            let payload_repair_attempt = if should_rebroadcast_payload {
+            let payload_repair_attempt = if should_attempt_payload_repair {
                 self.maybe_request_missing_rbc_chunks(key, &session, &roster, now, payload_cooldown)
             } else {
                 self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
                 RbcRepairAttempt::NotNeeded
             };
-            let payload_bundle = if should_rebroadcast_payload
+            let payload_bundle = if hot_repair_allowed
+                && should_attempt_payload_repair
                 && matches!(
                     payload_repair_attempt,
                     RbcRepairAttempt::NotNeeded | RbcRepairAttempt::Fallback
@@ -24387,6 +24566,7 @@ impl Actor {
                 | "lock_lag_future_prune"
                 | "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
@@ -24402,6 +24582,7 @@ impl Actor {
             reason,
             "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
@@ -24439,6 +24620,7 @@ impl Actor {
             reason,
             "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "lock_lag_highest_qc_defer"
                 | "lock_lag_future_prune"
@@ -24488,6 +24670,7 @@ impl Actor {
         let local_height = self.committed_height_snapshot();
         if height == local_height.saturating_add(1)
             && reason != "lock_lag_highest_qc_defer"
+            && reason != "frontier_stall_reset_fallback"
             && self.exact_frontier_body_repair_active_at_height(height)
             && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
@@ -31071,7 +31254,6 @@ impl Actor {
 
         let storm_backlog_signals = missing_qc_actionable_dependency_signals
             || residual_round_backlog
-            || queue_active_backlog
             || consensus_queue_backlog
             || rbc_backlog;
         if !proposal_seen {

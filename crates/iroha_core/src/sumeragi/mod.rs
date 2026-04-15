@@ -54,6 +54,20 @@ fn direct_block_sync_response_permit_ttl() -> Duration {
     Duration::from_secs(DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_TTL_SECS)
 }
 
+fn sumeragi_startup_trace_enabled() -> bool {
+    std::env::var_os("IROHA_STARTUP_TRACE").is_some()
+}
+
+fn log_sumeragi_startup_trace(stage: &'static str, started_at: Instant) {
+    if sumeragi_startup_trace_enabled() {
+        iroha_logger::info!(
+            stage,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "sumeragi startup trace"
+        );
+    }
+}
+
 fn sumeragi_stack_size_bytes() -> usize {
     std::env::var(SUMERAGI_STACK_SIZE_ENV)
         .ok()
@@ -13312,6 +13326,8 @@ mod worker_iteration_warn_tests {
 impl SumeragiWorker {
     #[allow(clippy::too_many_lines)]
     fn run(self) {
+        let startup_trace_started_at = Instant::now();
+        log_sumeragi_startup_trace("sumeragi.worker.run.enter", startup_trace_started_at);
         let Self {
             background_post_tx,
             block_rx,
@@ -13358,15 +13374,24 @@ impl SumeragiWorker {
         let vote_burst_cap_with_payload_backlog =
             config.worker.vote_burst_cap_with_payload_backlog.max(1);
         let max_urgent_before_da_critical = config.worker.max_urgent_before_da_critical.max(1);
+        let initial_view_started_at = Instant::now();
+        let initial_view = state.view();
+        if sumeragi_startup_trace_enabled() {
+            iroha_logger::info!(
+                stage = "sumeragi.worker.initial_state_view.ready",
+                elapsed_ms = startup_trace_started_at.elapsed().as_millis(),
+                view_wait_ms = initial_view_started_at.elapsed().as_millis(),
+                "sumeragi startup trace"
+            );
+        }
         let (block_time, commit_time, da_enabled) = {
-            let view = state.view();
-            let params = view.world.parameters().sumeragi();
-            let mode = effective_consensus_mode(&view, config.consensus_mode);
+            let params = initial_view.world.parameters().sumeragi();
+            let mode = effective_consensus_mode(&initial_view, config.consensus_mode);
             let (block_time, commit_time) = match mode {
                 ConsensusMode::Permissioned => resolve_sumeragi_timeouts(params, &fallback_params),
                 ConsensusMode::Npos => {
-                    let block_time = resolve_npos_block_time(&view);
-                    let stage_commit = resolve_npos_timeouts(&view, &config.npos).commit;
+                    let block_time = resolve_npos_block_time(&initial_view);
+                    let stage_commit = resolve_npos_timeouts(&initial_view, &config.npos).commit;
                     // Keep worker/quorum budgets aligned with canonical Sumeragi commit timing.
                     let commit_time = stage_commit.max(params.effective_commit_time());
                     (block_time, commit_time)
@@ -13375,6 +13400,16 @@ impl SumeragiWorker {
             let da_enabled = params.da_enabled();
             (block_time, commit_time, da_enabled)
         };
+        if sumeragi_startup_trace_enabled() {
+            iroha_logger::info!(
+                stage = "sumeragi.worker.initial_timing.resolved",
+                elapsed_ms = startup_trace_started_at.elapsed().as_millis(),
+                block_time_ms = block_time.as_millis(),
+                commit_time_ms = commit_time.as_millis(),
+                da_enabled,
+                "sumeragi startup trace"
+            );
+        }
         let da_quorum_timeout_multiplier = config.da.quorum_timeout_multiplier;
         let time_budget = worker_time_budget(
             block_time,
@@ -13384,13 +13419,18 @@ impl SumeragiWorker {
             worker_iteration_budget_cap,
         );
         let parallel_ingress = config.worker.parallel_ingress;
+        log_sumeragi_startup_trace(
+            "sumeragi.worker.actor_init.starting",
+            startup_trace_started_at,
+        );
+        let actor_state = Arc::clone(&state);
         let mut actor = match crate::sumeragi::main_loop::Actor::new_with_block_sync_hint(
             config,
             common_config,
             consensus_frame_cap,
             consensus_payload_frame_cap,
             events_sender,
-            state,
+            actor_state,
             queue,
             kura,
             network,
@@ -13407,6 +13447,7 @@ impl SumeragiWorker {
             Some(wake_tx.clone()),
             block_payload_dedup,
             frontier_block_sync_hint,
+            Some(&initial_view),
             rbc_status_handle,
         ) {
             Ok(actor) => Box::new(actor),
@@ -13415,6 +13456,11 @@ impl SumeragiWorker {
                 return;
             }
         };
+        drop(initial_view);
+        log_sumeragi_startup_trace(
+            "sumeragi.worker.actor_init.finished",
+            startup_trace_started_at,
+        );
         let validation_worker_joins = actor.attach_validation_worker();
         let commit_worker_join = actor.attach_commit_worker();
         let qc_verify_worker_joins = actor.attach_qc_verify_worker();

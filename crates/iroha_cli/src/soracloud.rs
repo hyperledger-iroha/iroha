@@ -3233,6 +3233,8 @@ fn build_service_workspace_plan(
         workspace_scripts: ServiceWorkspaceScriptsOutput {
             local_dev: workspace_script_path_if_exists(&container_dir, "local-dev.sh"),
             build_and_sync: workspace_script_path_if_exists(&container_dir, "build-and-sync.sh"),
+            doctor: workspace_script_path_if_exists(&container_dir, "doctor.sh"),
+            release: workspace_script_path_if_exists(&container_dir, "release.sh"),
             deploy: workspace_script_path_if_exists(&container_dir, "deploy.sh"),
             upgrade: workspace_script_path_if_exists(&container_dir, "upgrade.sh"),
         },
@@ -7484,6 +7486,12 @@ struct ServiceWorkspaceScriptsOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     build_and_sync: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    doctor: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     deploy: Option<String>,
@@ -16587,6 +16595,8 @@ fn scaffold_http_service_template(
             output_dir.join("build-and-sync.sh"),
             http_service_build_and_sync_sh("http-service.tgz"),
         ),
+        (output_dir.join("doctor.sh"), http_service_doctor_sh()),
+        (output_dir.join("release.sh"), http_service_release_sh()),
         (output_dir.join("deploy.sh"), http_service_deploy_sh()),
         (output_dir.join("upgrade.sh"), http_service_upgrade_sh()),
     ];
@@ -19298,6 +19308,51 @@ SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
     )
 }
 
+fn http_service_doctor_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+{prelude}
+
+"$SCRIPT_DIR/build-and-sync.sh"
+exec "${IROHA_CMD[@]}" app soracloud local-plan \
+  --container "$SCRIPT_DIR/container_manifest.json" \
+  --service "$SCRIPT_DIR/service_manifest.json" \
+  "$@"
+"#
+    .replace("{prelude}", prelude)
+}
+
+fn http_service_release_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+{prelude}
+
+: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
+
+"$SCRIPT_DIR/doctor.sh"
+
+args=(
+  app soracloud deploy
+  --container "$SCRIPT_DIR/container_manifest.json"
+  --service "$SCRIPT_DIR/service_manifest.json"
+  --torii-url "$TORII_URL"
+)
+
+if [[ -n "${API_TOKEN:-}" ]]; then
+  args+=(--api-token "$API_TOKEN")
+fi
+
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
+"#
+    .replace("{prelude}", prelude)
+}
+
 fn http_service_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
@@ -19758,6 +19813,8 @@ It targets the Soracloud hosted HTTP plane directly:
 - root scripts:
   - `./local-dev.sh`
   - `./build-and-sync.sh`
+  - `./doctor.sh`
+  - `./release.sh`
   - `./deploy.sh`
   - `./upgrade.sh`
 
@@ -19820,6 +19877,16 @@ globally installed wrapper. If you are driving the fallback through
 `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
 keep Cargo package and artifact state isolated from other local builds.
 
+## Doctor the service workspace
+
+```bash
+./doctor.sh
+```
+
+`doctor.sh` rebuilds the hosted service bundle, refreshes the manifest hashes,
+and then runs `iroha app soracloud local-plan` against the adjacent
+`container_manifest.json` and `service_manifest.json`.
+
 ## Lease volume contract
 
 The generated service expects these runtime environment variables:
@@ -19837,11 +19904,15 @@ Inrou guest keeps its mutable root disk on lease-backed storage.
 ## Deploy
 
 ```bash
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
 iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 iroha app soracloud deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
+
+`release.sh` runs `doctor.sh` first and then submits the deploy mutation using
+the same manifest pair.
 
 The direct `iroha app soracloud deploy` and `upgrade` commands also keep the
 same local route and workspace-script projection in their output while
@@ -22080,6 +22151,8 @@ mod tests {
 
     #[test]
     fn decode_soracloud_tx_instructions_can_preserve_raw_wire_payloads() {
+        use iroha::data_model::isi::Instruction;
+
         let wire_id = "soracloud::UpgradeSoracloudService";
         let framed = norito::core::frame_bare_with_header_flags::<
             iroha::data_model::isi::soracloud::UpgradeSoracloudService,
@@ -22096,7 +22169,7 @@ mod tests {
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
-        assert_eq!(IrohaInstruction::id(&**decoded_instruction), wire_id);
+        assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
         assert_eq!(
             norito::to_bytes(decoded_instruction).expect("encode preserved"),
             norito::to_bytes(&(wire_id.to_owned(), framed)).expect("encode expected raw pair"),
@@ -27286,6 +27359,22 @@ mod tests {
                 0o111
             );
             assert_eq!(
+                fs::metadata(dir.join("doctor.sh"))
+                    .expect("http-service doctor.sh metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0o111
+            );
+            assert_eq!(
+                fs::metadata(dir.join("release.sh"))
+                    .expect("http-service release.sh metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0o111
+            );
+            assert_eq!(
                 fs::metadata(dir.join("deploy.sh"))
                     .expect("http-service deploy.sh metadata")
                     .permissions()
@@ -27393,6 +27482,20 @@ mod tests {
         assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
         assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
         assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
+        let doctor_sh =
+            fs::read_to_string(dir.join("doctor.sh")).expect("read http-service doctor.sh");
+        assert!(doctor_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
+        assert!(doctor_sh.contains("app soracloud local-plan"));
+        assert!(doctor_sh.contains("IROHA_CLI_BIN"));
+        assert!(doctor_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(doctor_sh.contains("exec \"${IROHA_CMD[@]}\""));
+        let release_sh =
+            fs::read_to_string(dir.join("release.sh")).expect("read http-service release.sh");
+        assert!(release_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
+        assert!(release_sh.contains("app soracloud deploy"));
+        assert!(release_sh.contains("IROHA_CLI_BIN"));
+        assert!(release_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(release_sh.contains("exec \"${IROHA_CMD[@]}\""));
         let upgrade_sh =
             fs::read_to_string(dir.join("upgrade.sh")).expect("read http-service upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud upgrade"));
@@ -27405,6 +27508,8 @@ mod tests {
         if bash_available() {
             run_bash_syntax_check(&dir.join("local-dev.sh"));
             run_bash_syntax_check(&dir.join("build-and-sync.sh"));
+            run_bash_syntax_check(&dir.join("doctor.sh"));
+            run_bash_syntax_check(&dir.join("release.sh"));
             run_bash_syntax_check(&dir.join("deploy.sh"));
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }

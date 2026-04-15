@@ -398,11 +398,33 @@ fn detect_gpu_backend() -> Option<GpuBackend> {
     let opencl = opencl_available();
     let norito = norito_gpu_available();
     let availability = BackendAvailability::empty()
-        .with(GpuBackend::Cuda, cuda)
-        .with(GpuBackend::OpenCl, opencl)
-        .with(GpuBackend::Metal, metal)
-        .with(GpuBackend::Norito, norito);
+        .with(
+            GpuBackend::Cuda,
+            cuda && gpu_backend_supported_in_build(GpuBackend::Cuda),
+        )
+        .with(
+            GpuBackend::OpenCl,
+            opencl && gpu_backend_supported_in_build(GpuBackend::OpenCl),
+        )
+        .with(
+            GpuBackend::Metal,
+            metal && gpu_backend_supported_in_build(GpuBackend::Metal),
+        )
+        .with(
+            GpuBackend::Norito,
+            norito && gpu_backend_supported_in_build(GpuBackend::Norito),
+        );
     resolve_backend(availability)
+}
+
+fn gpu_backend_supported_in_build(backend: GpuBackend) -> bool {
+    match backend {
+        GpuBackend::Cuda => cfg!(all(feature = "fastpq-gpu", not(fastpq_cuda_unavailable))),
+        GpuBackend::Metal => cfg!(all(feature = "fastpq-gpu", target_os = "macos")),
+        // FASTPQ currently has no OpenCL or Norito FFT/LDE execution backend, so probing host
+        // support must not opt the prover into those modes.
+        GpuBackend::OpenCl | GpuBackend::Norito => false,
+    }
 }
 
 fn parse_gpu_override(raw: &str) -> Option<GpuOverride> {
@@ -609,6 +631,18 @@ mod detection_tests {
     #[test]
     fn resolve_backend_returns_none_when_unavailable() {
         assert_eq!(resolve_backend(availability(&[])), None);
+    }
+
+    #[test]
+    fn backend_support_map_excludes_unimplemented_backends() {
+        assert!(!gpu_backend_supported_in_build(GpuBackend::OpenCl));
+        assert!(!gpu_backend_supported_in_build(GpuBackend::Norito));
+    }
+
+    #[cfg(any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable))]
+    #[test]
+    fn cuda_backend_support_is_disabled_without_compiled_runtime() {
+        assert!(!gpu_backend_supported_in_build(GpuBackend::Cuda));
     }
 
     #[test]

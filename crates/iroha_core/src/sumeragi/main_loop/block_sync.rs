@@ -18,8 +18,7 @@ fn allow_uncertified_block_sync_roster(
     local_height: u64,
     requested_missing_block: bool,
 ) -> bool {
-    let _ = (block_height, local_height);
-    requested_missing_block
+    requested_missing_block || block_height == local_height.saturating_add(1)
 }
 
 impl Actor {
@@ -5081,8 +5080,12 @@ mod allow_uncertified_block_sync_roster_tests {
     use super::allow_uncertified_block_sync_roster;
 
     #[test]
-    fn rejects_next_height_without_explicit_request() {
-        assert!(!allow_uncertified_block_sync_roster(11, 10, false));
+    fn allows_next_height_without_explicit_request() {
+        assert!(allow_uncertified_block_sync_roster(11, 10, false));
+    }
+
+    #[test]
+    fn rejects_farther_height_without_explicit_request() {
         assert!(!allow_uncertified_block_sync_roster(12, 10, false));
     }
 

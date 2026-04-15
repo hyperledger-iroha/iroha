@@ -427,6 +427,7 @@ const LOCALNET_TELEMETRY_ENABLED: bool = true;
 const LOCALNET_TELEMETRY_PROFILE: &str = "extended";
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
+const LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV: &str = "IROHA_LOCALNET_ALLOW_UNSAFE_SORA_SINGLE_PEER";
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
 /// Keep this at 1 so aggregators do not time out before quorum on fast pipelines.
 /// Default max transactions per block for localnet (targets 10k TPS).
@@ -730,11 +731,14 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             "`--mode-activation-height` must be greater than zero"
         ));
     }
+    let allow_single_peer_sora = std::env::var_os(LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV).is_some();
     if opts.sora_profile.is_some() {
         if !opts.build_line.is_iroha3() {
             return Err(eyre!("`--sora-profile` requires `--build-line iroha3`"));
         }
-        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS {
+        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS
+            && !(allow_single_peer_sora && opts.peers.get() == 1)
+        {
             return Err(eyre!(
                 "`--sora-profile` requires at least {LOCALNET_SORA_MIN_PEERS} peers"
             ));
@@ -2283,10 +2287,11 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
     };
 
     push_unique(enact_governance, ALICE_ID.clone());
-    push_unique(manage_offline_escrow.clone(), ALICE_ID.clone());
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
-    push_unique(manage_offline_escrow, client_account_id);
+    if client_account_id != *ALICE_ID {
+        push_unique(manage_offline_escrow, client_account_id);
+    }
 
     let mut builder = genesis.into_builder();
     for (permission, destination) in grants {
@@ -3064,6 +3069,8 @@ mod tests {
             .parse::<AssetDefinitionAlias>()
             .expect("offline cash alias");
         let client_account_id = localnet_client_account_id();
+        let expected_explicit_manage_offline_escrow_grants =
+            usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
             AssetId::new(offline_asset_id.clone(), client_account_id.clone());
 
@@ -3134,6 +3141,7 @@ mod tests {
         let mut has_alias_manage = false;
         let mut has_manifest_publish = false;
         let mut manage_offline_escrow_grants = 0usize;
+        let mut total_manage_offline_escrow_grants = 0usize;
         for instruction in manifest.instructions() {
             let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
                 continue;
@@ -3141,10 +3149,15 @@ mod tests {
             let GrantBox::Permission(grant_permission) = grant else {
                 continue;
             };
+            let permission_name: &str = grant_permission.object().name().as_ref();
+            if permission_name == "CanManageOfflineEscrow" {
+                total_manage_offline_escrow_grants =
+                    total_manage_offline_escrow_grants.saturating_add(1);
+            }
             if grant_permission.destination() != &client_account_id {
                 continue;
             }
-            match grant_permission.object().name().as_ref() {
+            match permission_name {
                 "CanManageAccountAlias" => has_alias_manage = true,
                 "CanManageOfflineEscrow" => {
                     manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
@@ -3162,8 +3175,12 @@ mod tests {
             "localnet client signer must be able to publish onboarding manifests"
         );
         assert_eq!(
-            manage_offline_escrow_grants, 1,
-            "localnet client signer must receive CanManageOfflineEscrow exactly once"
+            manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
+            "localnet must only emit an explicit CanManageOfflineEscrow grant when the client signer is not Alice"
+        );
+        assert_eq!(
+            total_manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
+            "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
         );
     }
 
@@ -3192,6 +3209,8 @@ mod tests {
 
         let manifest = localnet_genesis_for_opts(&opts);
         let client_account_id = localnet_client_account_id();
+        let expected_explicit_manage_offline_escrow_grants =
+            usize::from(client_account_id != *ALICE_ID);
         let offline_escrow_grants = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
@@ -3204,8 +3223,8 @@ mod tests {
             .count();
 
         assert_eq!(
-            offline_escrow_grants, 1,
-            "permissioned localnet genesis must not duplicate the offline escrow manager grant for the client signer"
+            offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
+            "permissioned localnet genesis must not duplicate the offline escrow manager grant and must skip the redundant Alice bootstrap grant"
         );
     }
 
