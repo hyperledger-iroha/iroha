@@ -9978,7 +9978,13 @@ pub async fn handle_get_contract_state(
                 }
                 _ => (None, None),
             };
-            entries.push(encode_entry(path, stored.as_ref(), found, value_json, decode_error));
+            entries.push(encode_entry(
+                path,
+                stored.as_ref(),
+                found,
+                value_json,
+                decode_error,
+            ));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
@@ -31878,12 +31884,6 @@ mod tx_query_integration_smoke {
         dm::Log::new(dm::Level::INFO, "test".to_string()).into()
     }
 
-    fn account_with_key() -> (dm::AccountId, KeyPair) {
-        let kp = KeyPair::random();
-        let account = dm::AccountId::new(kp.public_key().clone());
-        (account, kp)
-    }
-
     #[tokio::test]
     async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
         // Minimal in-memory state: no blocks yet
@@ -32360,9 +32360,10 @@ mod tx_query_integration_smoke {
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
         let signed = tx_builder
             .with_metadata(metadata)
-            .with_executable(dm::Executable::Instructions(ConstVec::from(
-                Vec::<dm::InstructionBox>::new(),
-            )))
+            .with_executable(dm::Executable::Instructions(ConstVec::from(Vec::<
+                dm::InstructionBox,
+            >::new(
+            ))))
             .sign(keypair.private_key());
         let entry_hash = format!("{}", signed.hash_as_entrypoint());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
