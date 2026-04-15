@@ -22151,6 +22151,8 @@ mod tests {
 
     #[test]
     fn decode_soracloud_tx_instructions_can_preserve_raw_wire_payloads() {
+        use iroha::data_model::isi::Instruction;
+
         let wire_id = "soracloud::UpgradeSoracloudService";
         let framed = norito::core::frame_bare_with_header_flags::<
             iroha::data_model::isi::soracloud::UpgradeSoracloudService,
@@ -22167,7 +22169,7 @@ mod tests {
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
-        assert_eq!(IrohaInstruction::id(&**decoded_instruction), wire_id);
+        assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
         assert_eq!(
             norito::to_bytes(decoded_instruction).expect("encode preserved"),
             norito::to_bytes(&(wire_id.to_owned(), framed)).expect("encode expected raw pair"),
