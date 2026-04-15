@@ -6837,6 +6837,12 @@ export interface RemoveSmartContractBytesInstructionInput {
   reason?: string | null;
 }
 
+export interface SetContractAliasInstructionInput {
+  contractAddress: string;
+  contractAlias?: string | null;
+  leaseExpiryMs?: NumericLike | null;
+}
+
 export interface CreateKaigiTransactionInput {
   chainId: string;
   authority: string;
@@ -7162,6 +7168,19 @@ export interface RemoveSmartContractBytesTransactionInput {
   authority: string;
   codeHash: HashLike;
   reason?: string | null;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface SetContractAliasTransactionInput {
+  chainId: string;
+  authority: string;
+  contractAddress: string;
+  contractAlias?: string | null;
+  leaseExpiryMs?: NumericLike | null;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -9071,6 +9090,9 @@ export function buildRegisterSmartContractBytesTransaction(
 export function buildRemoveSmartContractBytesTransaction(
   input: RemoveSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
+export function buildSetContractAliasTransaction(
+  input: SetContractAliasTransactionInput,
+): SignedTransactionResult;
 export function buildProposeDeployContractTransaction(
   input: ProposeDeployContractTransactionInput,
 ): SignedTransactionResult;
@@ -9575,6 +9597,10 @@ export function buildRegisterSmartContractBytesInstruction(
 
 export function buildRemoveSmartContractBytesInstruction(
   input: RemoveSmartContractBytesInstructionInput,
+): object;
+
+export function buildSetContractAliasInstruction(
+  input: SetContractAliasInstructionInput,
 ): object;
 
 export function encodeInstruction(instruction: object): Buffer;

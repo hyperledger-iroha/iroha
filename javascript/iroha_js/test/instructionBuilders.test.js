@@ -36,6 +36,7 @@ import {
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
+  buildSetContractAliasInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
@@ -1186,6 +1187,36 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
     codeHash: Buffer.alloc(32, 0x22),
   });
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
+});
+
+test("buildSetContractAliasInstruction supports bind and clear forms", () => {
+  const bound = buildSetContractAliasInstruction({
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAlias: "bisp::sbp",
+    leaseExpiryMs: 86_400_000,
+  });
+  const expectedBound = {
+    SetContractAlias: {
+      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      alias: "bisp::sbp",
+      lease_expiry_ms: 86_400_000,
+    },
+  };
+  assert.deepEqual(bound, expectedBound);
+  assert.deepEqual(encodeAndDecode(bound), expectedBound);
+
+  const cleared = buildSetContractAliasInstruction({
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAlias: null,
+  });
+  const expectedClear = {
+    SetContractAlias: {
+      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+      alias: null,
+    },
+  };
+  assert.deepEqual(cleared, expectedClear);
+  assert.deepEqual(encodeAndDecode(cleared), expectedClear);
 });
 
 test("buildProposeDeployContractInstruction normalizes hashes and window", () => {

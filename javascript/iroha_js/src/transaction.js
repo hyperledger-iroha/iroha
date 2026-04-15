@@ -2328,6 +2328,38 @@ export function buildRemoveSmartContractBytesTransaction({
 }
 
 /**
+ * Build a transaction containing a `SetContractAlias` instruction.
+ */
+export function buildSetContractAliasTransaction({
+  chainId,
+  authority,
+  contractAddress,
+  contractAlias = null,
+  leaseExpiryMs = null,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetContractAliasInstruction({
+    contractAddress,
+    contractAlias,
+    leaseExpiryMs,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
  * Submit a signed transaction and optionally wait for a terminal status.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction

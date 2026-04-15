@@ -34,6 +34,7 @@ import {
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
+  buildSetContractAliasInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
@@ -2313,6 +2314,38 @@ export function buildRemoveSmartContractBytesTransaction({
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash,
     reason,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetContractAlias` instruction.
+ */
+export function buildSetContractAliasTransaction({
+  chainId,
+  authority,
+  contractAddress,
+  contractAlias = null,
+  leaseExpiryMs = null,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetContractAliasInstruction({
+    contractAddress,
+    contractAlias,
+    leaseExpiryMs,
   });
   return buildTransaction({
     chainId,
