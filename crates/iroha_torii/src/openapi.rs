@@ -1103,6 +1103,57 @@ fn contract_activity_list_query_parameters() -> Vec<Value> {
     params
 }
 
+fn contract_event_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "authority",
+        "Filter by canonical I105 authority.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Filter by contract address.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Filter by deployed contract alias.",
+    ));
+    params.push(string_query_param(
+        "module",
+        "Filter by derived module identifier.",
+    ));
+    params.push(string_query_param(
+        "event_kind",
+        "Filter by generic contract event kind.",
+    ));
+    params.push(string_query_param(
+        "participant",
+        "Filter by participant account/account-alias-like references.",
+    ));
+    params.push(string_query_param(
+        "asset_id",
+        "Filter by referenced asset identifier.",
+    ));
+    params.push(string_query_param(
+        "provenance",
+        "Filter by event provenance (`emitted` or `derived`).",
+    ));
+    params.push(integer_query_param(
+        "since_timestamp_ms",
+        "Filter items whose timestamp is greater than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(integer_query_param(
+        "until_timestamp_ms",
+        "Filter items whose timestamp is less than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(bool_query_param(
+        "result_ok",
+        "Filter by execution outcome.",
+    ));
+    params
+}
+
 fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
@@ -1701,6 +1752,16 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/events".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List generic contract events.",
+            "Return the indexed generic contract-event envelope derived from committed contract-call metadata, with pagination and contract-specific filtering.",
+            "#/components/schemas/JsonValue",
+            contract_event_list_query_parameters(),
+        )),
+    );
+    paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
         Value::Object(json_post_operation(
             "ISO20022",
@@ -1757,6 +1818,14 @@ fn stream_paths() -> Map {
             "Streams",
             "Subscribe to event stream.",
             "Stream pipeline events via Server-Sent Events.",
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/events/sse".to_owned(),
+        Value::Object(event_stream_get_operation(
+            "Streams",
+            "Subscribe to contract event stream.",
+            "Stream generic contract events via Server-Sent Events.",
         )),
     );
     paths.insert(
@@ -10491,6 +10560,8 @@ mod tests {
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/transactions/history"));
         assert!(paths.contains_key("/v1/contracts/activity"));
+        assert!(paths.contains_key("/v1/contracts/events"));
+        assert!(paths.contains_key("/v1/contracts/events/sse"));
         assert!(paths.contains_key("/v1/offline/policy"));
         assert!(paths.contains_key("/v1/offline/cash/readiness"));
         assert!(paths.contains_key("/v1/offline/cash/setup"));
@@ -10713,6 +10784,15 @@ mod tests {
         assert!(contract_activity.contains(&"contract_alias".to_owned()));
         assert!(contract_activity.contains(&"contract_entrypoint".to_owned()));
         assert!(contract_activity.contains(&"result_ok".to_owned()));
+
+        let contract_events = params_for(&doc, "/v1/contracts/events");
+        assert!(contract_events.contains(&"limit".to_owned()));
+        assert!(contract_events.contains(&"offset".to_owned()));
+        assert!(contract_events.contains(&"module".to_owned()));
+        assert!(contract_events.contains(&"event_kind".to_owned()));
+        assert!(contract_events.contains(&"participant".to_owned()));
+        assert!(contract_events.contains(&"asset_id".to_owned()));
+        assert!(contract_events.contains(&"provenance".to_owned()));
 
         let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
         assert!(asset_holders.contains(&"limit".to_owned()));

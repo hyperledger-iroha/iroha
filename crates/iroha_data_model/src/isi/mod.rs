@@ -100,6 +100,63 @@ impl PartialEq for InstructionBox {
 
 impl Eq for InstructionBox {}
 
+/// Client-side wrapper preserving an instruction wire-id plus already encoded
+/// bare payload bytes.
+///
+/// This is intended for compatibility flows where a remote node returns a draft
+/// instruction in framed wire form and the local client needs to resubmit that
+/// exact payload without understanding its full semantic schema.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OpaqueInstruction {
+    wire_id: &'static str,
+    bare_payload: Vec<u8>,
+}
+
+impl OpaqueInstruction {
+    /// Build an opaque instruction from a framed wire payload returned by Torii.
+    ///
+    /// # Errors
+    /// Returns [`norito::core::Error`] when the framed payload is malformed.
+    pub fn from_framed(
+        wire_id: impl Into<String>,
+        framed_payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        let view = norito::core::from_bytes_view(framed_payload)?;
+        Ok(Self {
+            wire_id: Box::leak(wire_id.into().into_boxed_str()),
+            bare_payload: view.as_bytes().to_vec(),
+        })
+    }
+
+    /// Return the stable wire identifier carried by this opaque instruction.
+    #[must_use]
+    pub const fn wire_id(&self) -> &'static str {
+        self.wire_id
+    }
+}
+
+impl crate::seal::Instruction for OpaqueInstruction {}
+
+impl Instruction for OpaqueInstruction {
+    fn dyn_encode(&self) -> Vec<u8> {
+        self.bare_payload.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn id(&self) -> &'static str {
+        self.wire_id
+    }
+}
+
+impl From<OpaqueInstruction> for InstructionBox {
+    fn from(i: OpaqueInstruction) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl PartialOrd for InstructionBox {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))

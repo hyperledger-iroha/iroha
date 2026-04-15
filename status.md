@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: Soracloud service scripts and Torii routing tests compile cleanly
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/soracloud.rs`
+  now keeps service-scoped workspace script projections aligned with the
+  generated HTTP-service root scripts by reporting `doctor.sh` and
+  `release.sh` alongside `local-dev.sh`, `build-and-sync.sh`, `deploy.sh`, and
+  `upgrade.sh`.
+- The HTTP-service scaffold now writes `doctor.sh` and `release.sh`: the
+  doctor entrypoint rebuilds and refreshes the service manifests before
+  running `local-plan`, while release runs doctor first and then submits the
+  manifest-backed deploy mutation.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  no longer defines the `tx_query_integration_smoke::account_with_key` test
+  helper twice.
+- Focused validation for this unblocker:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_cli --bin iroha --tests`
+  - `cargo check -p iroha_torii --tests`
+  - `cargo test -p iroha_cli --bin iroha init_http_service_template_scaffolds_inrou_service -- --nocapture`
+  - `cargo test -p iroha_cli --bin iroha local_plan_http_service_reports_workspace_scripts_and_hosted_runtime -- --nocapture`
+
 ## 2026-04-14 Follow-up: Sumeragi block-sync recovery accepts stale exact-frontier repairs
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/mod.rs`,
   `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`,
