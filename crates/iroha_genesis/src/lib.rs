@@ -27,6 +27,7 @@ use std::{
     time::Duration,
 };
 
+use base64::Engine as _;
 use derive_more::Constructor;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::{
@@ -614,10 +615,7 @@ pub mod genesis_instructions_json {
                 "genesis instructions must be structured objects; byte arrays are unsupported"
                     .to_string(),
             )),
-            Value::String(_) => Err(json::Error::Message(
-                "genesis instructions must be structured objects; base64 strings are unsupported"
-                    .to_string(),
-            )),
+            Value::String(encoded) => decode_base64_instruction(&encoded),
             Value::Object(map) => {
                 if map.len() == 1 {
                     if let Some((kind, inner)) = map.iter().next() {
@@ -655,6 +653,20 @@ pub mod genesis_instructions_json {
                 "genesis instructions must be objects; found {other:?}"
             ))),
         }
+    }
+
+    fn decode_base64_instruction(encoded: &str) -> Result<InstructionBox, json::Error> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|err| {
+                json::Error::Message(format!("invalid base64 genesis instruction: {err}"))
+            })?;
+        let archived = norito::from_bytes::<InstructionBox>(&bytes).map_err(|err| {
+            json::Error::Message(format!("failed to decode base64 genesis instruction: {err}"))
+        })?;
+        norito::core::NoritoDeserialize::try_deserialize(archived).map_err(|err| {
+            json::Error::Message(format!("failed to deserialize base64 genesis instruction: {err}"))
+        })
     }
 
     fn try_decode_register(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
@@ -1335,10 +1347,37 @@ pub mod genesis_instructions_json {
         }
 
         #[test]
-        fn value_to_instruction_rejects_base64_string() {
-            let value = Value::String("deadbeef".to_string());
-            let err = value_to_instruction(value).expect_err("strings should be rejected");
-            assert!(err.to_string().contains("base64 strings"));
+        fn value_to_instruction_rejects_invalid_base64_string() {
+            let value = Value::String("***".to_string());
+            let err = value_to_instruction(value).expect_err("invalid base64 should fail");
+            assert!(err.to_string().contains("invalid base64"));
+        }
+
+        #[test]
+        fn value_to_instruction_accepts_base64_string_for_custom_instruction() {
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("zk", "universal").expect("domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let instruction = InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
+                asset_definition_id,
+                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                true,
+                true,
+                None,
+                None,
+                None,
+            ));
+
+            let value = instruction_value(&instruction);
+            assert!(value.is_string(), "custom instruction should fall back to base64");
+
+            let decoded =
+                value_to_instruction(value).expect("base64-encoded instruction should decode");
+            assert_eq!(
+                norito::codec::encode_adaptive(&decoded),
+                norito::codec::encode_adaptive(&instruction)
+            );
         }
 
         #[test]
