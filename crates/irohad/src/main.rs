@@ -116,6 +116,20 @@ use tokio::{
     task,
 };
 
+fn startup_trace_enabled() -> bool {
+    env::var_os("IROHA_STARTUP_TRACE").is_some()
+}
+
+fn log_startup_trace(stage: &'static str, started_at: Instant) {
+    if startup_trace_enabled() {
+        iroha_logger::info!(
+            stage,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "startup trace"
+        );
+    }
+}
+
 fn torii_receipt_signer_or_ephemeral(receipt_signer: Option<KeyPair>) -> KeyPair {
     receipt_signer.unwrap_or_else(|| {
         let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
@@ -3618,6 +3632,8 @@ impl Iroha {
         StartError,
     > {
         let mut supervisor = Supervisor::new();
+        let startup_trace_started_at = Instant::now();
+        log_startup_trace("irohad.start.enter", startup_trace_started_at);
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -4428,6 +4444,7 @@ impl Iroha {
         if let Err(err) = streaming.load_snapshots() {
             iroha_logger::warn!(?err, "Failed to load streaming session snapshots");
         }
+        log_startup_trace("irohad.streaming.ready", startup_trace_started_at);
 
         iroha_core::streaming::set_global_handle(streaming.clone());
 
@@ -4439,6 +4456,8 @@ impl Iroha {
 
         #[cfg(feature = "telemetry")]
         start_telemetry(&logger, &config, &mut supervisor).await?;
+        #[cfg(feature = "telemetry")]
+        log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
 
         // Thread tiered state, pipeline, and ZK (Halo2) preferences from config into runtime state.
         // Use cloned config values to keep `config` borrowable later.
@@ -4463,6 +4482,7 @@ impl Iroha {
         state.set_settlement(settlement_cfg);
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
+        log_startup_trace("irohad.state.runtime_config_applied", startup_trace_started_at);
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
         {
@@ -4641,6 +4661,7 @@ impl Iroha {
             supervisor.shutdown_signal(),
         );
         supervisor.monitor(child);
+        log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
 
         // Background poster worker for Sumeragi frames; overflow falls back to inline posts.
         let background_post_tx = if config.sumeragi.debug.disable_background_worker {
@@ -4773,6 +4794,7 @@ impl Iroha {
             genesis
         };
         let sumeragi_cfg = config.sumeragi.clone();
+        log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
         let (sumeragi, child) = SumeragiStartArgs {
             config: sumeragi_cfg.clone(),
             common_config: config.common.clone(),
@@ -4825,6 +4847,7 @@ impl Iroha {
         }
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
+        log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
 
         let block_sync_frame_cap = {
             let global_plaintext = iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);

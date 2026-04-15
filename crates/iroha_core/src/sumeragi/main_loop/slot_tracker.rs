@@ -445,6 +445,12 @@ impl FrontierSlot {
                         actions.request_commit_pipeline_for = Some(block_hash);
                     }
                 } else if same_candidate {
+                    let fresh_block_created_metadata = !self.candidate.block_created_seen
+                        || (frontier_info.is_some() && self.candidate.frontier_info.is_none())
+                        || (leader.is_some() && self.candidate.leader.is_none())
+                        || voters
+                            .iter()
+                            .any(|voter| !self.candidate.voters.contains(voter));
                     self.owner_kind = SlotOwnerKind::BlockCreatedLed;
                     self.candidate.block_created_seen = true;
                     self.candidate.exact_fetch_armed = true;
@@ -459,7 +465,11 @@ impl FrontierSlot {
                         self.candidate.body_state = FrontierBodyState::Available;
                         self.candidate.validation_state = FrontierValidationState::Pending;
                         self.phase = FrontierSlotPhase::ValidateBody;
-                        self.record_progress(now);
+                        if previous_body_missing || fresh_block_created_metadata {
+                            self.record_progress(now);
+                        } else {
+                            self.timers.last_updated_at = now;
+                        }
                         if previous_body_missing {
                             actions.request_commit_pipeline_for = Some(block_hash);
                         }
@@ -504,7 +514,11 @@ impl FrontierSlot {
                     self.mode = FrontierSlotMode::Normal;
                 }
                 self.phase = FrontierSlotPhase::ValidateBody;
-                self.record_progress(now);
+                if previous_body_missing {
+                    self.record_progress(now);
+                } else {
+                    self.timers.last_updated_at = now;
+                }
                 if previous_body_missing {
                     actions.request_commit_pipeline_for = Some(block_hash);
                 }
@@ -709,7 +723,21 @@ impl FrontierSlot {
                     if lag_expired {
                         self.mark_deep_catchup(now, "frontier_stall_reset");
                         actions.enter_deep_catchup = Some("frontier_stall_reset");
+                    } else if self.repair_state.quorum_timeout_rebroadcasted {
+                        self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                        self.active_view = self
+                            .current_view_for_timeout(requested_view)
+                            .saturating_add(1);
+                        self.timers.last_view_advance_at = Some(now);
+                        self.timers.last_updated_at = now;
+                        self.repair_state.quorum_timeout_rebroadcasted = false;
+                        actions.request_view_change = Some((
+                            self.height,
+                            self.current_view_for_timeout(requested_view),
+                            cause,
+                        ));
                     } else {
+                        self.repair_state.quorum_timeout_rebroadcasted = true;
                         actions.fetch_block_body = true;
                     }
                 } else if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {

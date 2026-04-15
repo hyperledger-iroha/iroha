@@ -191,8 +191,8 @@ pub enum Error {
         /// Version identifier contained in the proof payload.
         version: u16,
     },
-    /// Numeric value referenced by the transfer gadget exceeds the supported width.
-    #[error("transfer gadget numeric `{field}` exceeds 64-bit bounds")]
+    /// Numeric value referenced by the transfer gadget cannot be normalized into witness units.
+    #[error("transfer gadget numeric `{field}` cannot be normalized into 64-bit witness units")]
     TransferNumericBounds {
         /// Field reporting the overflow.
         field: &'static str,

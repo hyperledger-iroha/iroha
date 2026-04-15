@@ -2085,7 +2085,11 @@ impl Actor {
                 pending.commit_qc_observed(),
             )
         });
-        let stale_payload_only = stale_view.is_some() || passive_conflicting_same_height;
+        // Certified same-height recovery must stay authoritative even if the incoming block's
+        // view is older than the locally stalled branch. Demoting it to a passive retained
+        // branch would keep the stale owner live and strand the commit QC on an inactive payload.
+        let stale_payload_only = (stale_view.is_some() && !authoritative_frontier_owner_supersede)
+            || passive_conflicting_same_height;
         let revive_aborted = !stale_payload_only
             && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {
                 aborted

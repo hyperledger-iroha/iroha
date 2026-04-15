@@ -1459,9 +1459,18 @@ impl Actor {
                 .propose
                 .proposal_cache
                 .insert_proposal(proposal);
-            let mut rbc_plan = if frontier_block_created_ready {
-                None
-            } else {
+            let frontier_rbc_transport_needed = frontier_block_created_ready
+                && rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes) > 1;
+            let inline_frontier_block_created_transport =
+                frontier_block_created_ready && !frontier_rbc_transport_needed;
+            let seed_frontier_backup_transport =
+                da_enabled && inline_frontier_block_created_transport;
+            let mut rbc_plan = if da_enabled {
+                // Keep the inline BlockCreated fast path for exact frontier payloads, but still
+                // seed Proposal + RBC transport under DA so a missed BlockCreated frame does not
+                // force peers onto the slower exact-body recovery path. Multi-chunk frontiers and
+                // non-frontier recovery continue to rely on Proposal + RBC as their primary body
+                // transport.
                 self.prepare_rbc_plan(rbc::RbcPlanInputs {
                     signed_block: &signed_block,
                     transactions: &transactions_for_plan,
@@ -1473,12 +1482,15 @@ impl Actor {
                     epoch: proposal_epoch,
                     local_validator_index,
                 })?
+            } else {
+                None
             };
             drop(payload_bytes);
 
             if let Some(plan) = rbc_plan.as_ref() {
-                // Non-frontier recovery still uses RBC transport, but exact frontier proposals
-                // are owned entirely by BlockCreated plus exact body fetch.
+                // Non-frontier recovery always uses RBC transport. Frontier proposals keep the
+                // inline fast path for single-chunk payloads, but multi-chunk payloads use the
+                // classic Proposal + RBC path instead of relying on a large BlockCreated frame.
                 self.install_rbc_session_plan(&plan.primary)?;
                 if let Some(dup) = plan.duplicate.as_ref() {
                     self.install_rbc_session_plan(dup)?;
@@ -1492,13 +1504,13 @@ impl Actor {
             ));
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
-                if frontier_block_created_ready {
+                if inline_frontier_block_created_transport {
                     // Exact frontier proposals can skip handle_proposal(), so record the locally
                     // assembled view as observed here to avoid immediate no-proposal churn.
                     self.note_proposal_seen(proposal_height, view, payload_hash);
                 }
             }
-            if !frontier_block_created_ready {
+            if !inline_frontier_block_created_transport {
                 self.handle_proposal(proposal)?;
                 // Local handling can consume cache entries while validating or finalizing the slot.
                 // Reinsert the advisory metadata so same-view rebroadcast and recovery remain intact.
@@ -1514,19 +1526,55 @@ impl Actor {
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
+            if !inline_frontier_block_created_transport {
+                let proposal_hint_msg = Arc::new(BlockMessage::ProposalHint(proposal_hint));
+                let proposal_hint_encoded =
+                    Arc::new(BlockMessageWire::encode_message(proposal_hint_msg.as_ref()));
+                for peer in topology_peers {
+                    if peer == &local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(&proposal_hint_msg),
+                            Arc::clone(&proposal_hint_encoded),
+                        ),
+                    });
                 }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&block_created_wire),
-                        Arc::clone(&block_created_encoded),
-                    ),
-                });
             }
-            if !frontier_block_created_ready {
+            if inline_frontier_block_created_transport || !frontier_block_created_ready {
+                for peer in topology_peers {
+                    if peer == &local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(&block_created_wire),
+                            Arc::clone(&block_created_encoded),
+                        ),
+                    });
+                }
+            }
+            if seed_frontier_backup_transport {
+                let proposal_hint_msg = Arc::new(BlockMessage::ProposalHint(proposal_hint));
+                let proposal_hint_encoded =
+                    Arc::new(BlockMessageWire::encode_message(proposal_hint_msg.as_ref()));
+                for peer in topology_peers {
+                    if peer == &local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(&proposal_hint_msg),
+                            Arc::clone(&proposal_hint_encoded),
+                        ),
+                    });
+                }
+            }
+            if !inline_frontier_block_created_transport || seed_frontier_backup_transport {
                 let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
                 let proposal_encoded =
                     Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));

@@ -2228,6 +2228,7 @@ impl Actor {
             self.vote_log
                 .retain(|(_, height, _, _, _), _| *height >= retention_floor);
             self.try_replay_deferred_votes();
+            let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
         committed
     }
@@ -3625,6 +3626,120 @@ impl Actor {
         targets
     }
 
+    fn tip_extending_local_payload_known_at_height(&self, height: u64) -> bool {
+        let state_height = self.state.committed_height();
+        let state_tip_hash = self.state.latest_block_hash_fast();
+        self.pending.pending_blocks.values().any(|pending| {
+            !pending.is_retry_aborted()
+                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                && pending.height == height
+                && super::pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    state_height,
+                    state_tip_hash,
+                )
+        }) || self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                !inflight.pending.aborted
+                    && !matches!(
+                        inflight.pending.validation_status,
+                        ValidationStatus::Invalid
+                    )
+                    && inflight.pending.height == height
+                    && super::pending_extends_tip(
+                        inflight.pending.height,
+                        inflight.pending.block.header().prev_block_hash(),
+                        state_height,
+                        state_tip_hash,
+                    )
+            })
+            || self.deferred_block_sync_updates.values().any(|entry| {
+                let block = &entry.update.block;
+                block.header().height().get() == height
+                    && super::pending_extends_tip(
+                        height,
+                        block.header().prev_block_hash(),
+                        state_height,
+                        state_tip_hash,
+                    )
+            })
+    }
+
+    fn highest_future_frontier_recovery_evidence_height(
+        &self,
+        frontier_height: u64,
+    ) -> Option<u64> {
+        let observed_head = self.observed_recovery_qc_head().map(|qc| qc.height);
+        let highest_qc = self.highest_qc.map(|qc| qc.height);
+        let cached_qc = self
+            .qc_cache
+            .keys()
+            .filter(|(_, _, height, _, _)| *height > frontier_height)
+            .map(|(_, _, height, _, _)| *height)
+            .max();
+        let deferred_qc = self
+            .deferred_missing_payload_qcs
+            .values()
+            .filter(|entry| entry.qc.height > frontier_height)
+            .map(|entry| entry.qc.height)
+            .max();
+        let deferred_block_sync = self
+            .deferred_block_sync_updates
+            .keys()
+            .filter(|(height, _, _)| *height > frontier_height)
+            .map(|(height, _, _)| *height)
+            .max();
+
+        [
+            observed_head,
+            highest_qc,
+            cached_qc,
+            deferred_qc,
+            deferred_block_sync,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+
+    pub(super) fn maybe_request_frontier_gap_realign_after_commit(&mut self, now: Instant) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        let Some(future_evidence_height) =
+            self.highest_future_frontier_recovery_evidence_height(frontier_height)
+        else {
+            return false;
+        };
+        if future_evidence_height <= frontier_height {
+            return false;
+        }
+        if self.tip_extending_local_payload_known_at_height(frontier_height) {
+            trace!(
+                committed_height,
+                frontier_height,
+                future_evidence_height,
+                "skipping post-commit frontier reanchor because a tip-extending frontier payload is already local"
+            );
+            return false;
+        }
+
+        let requested =
+            self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+        debug!(
+            committed_height,
+            frontier_height,
+            future_evidence_height,
+            requested,
+            "evaluated post-commit canonical frontier reanchor"
+        );
+        requested
+    }
+
     pub(super) fn maybe_request_known_block_commit_qc_recovery(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -3637,11 +3752,20 @@ impl Actor {
         let local_round_known = pending_override
             .map(|pending| pending.height == height && pending.view == view)
             .unwrap_or_else(|| {
-                self.local_signed_block_for_hash(block_hash)
-                    .is_some_and(|block| {
-                        let header = block.header();
-                        header.height().get() == height && header.view_change_index() == view
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .is_some_and(|pending| {
+                        pending.height == height
+                            && pending.view == view
+                            && !matches!(pending.validation_status, ValidationStatus::Invalid)
                     })
+                    || self
+                        .local_signed_block_for_hash(block_hash)
+                        .is_some_and(|block| {
+                            let header = block.header();
+                            header.height().get() == height && header.view_change_index() == view
+                        })
             });
         if !local_round_known {
             debug!(
@@ -3676,10 +3800,16 @@ impl Actor {
         }
 
         let now = Instant::now();
+        let payload_materialized_locally = self.frontier_block_materialized_locally(block_hash);
+        let recovery_tracked_before_decision = self
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash);
+        let mut request_stalled = false;
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
             let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
-            let request_stalled = self
+            request_stalled = self
                 .pending
                 .missing_commit_qc_requests
                 .get(&block_hash)
@@ -3687,24 +3817,26 @@ impl Actor {
                     now.saturating_duration_since(stats.last_dependency_progress) >= stall_window
                         || now.saturating_duration_since(stats.first_seen) >= dwell_window
                 });
-            if request_stalled || self.frontier_slot_lag_window_expired(height, now) {
-                let _ = self.handle_frontier_slot_event(
-                    now,
-                    super::FrontierSlotEvent::OnLagWindowExpired {
-                        reason: "frontier_stall_reset",
-                    },
-                );
-            }
-            if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset") {
-                info!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    request_stalled,
-                    trigger,
-                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
-                );
-                return true;
+            if !payload_materialized_locally {
+                if request_stalled || self.frontier_slot_lag_window_expired(height, now) {
+                    let _ = self.handle_frontier_slot_event(
+                        now,
+                        super::FrontierSlotEvent::OnLagWindowExpired {
+                            reason: "frontier_stall_reset",
+                        },
+                    );
+                }
+                if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset") {
+                    info!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        request_stalled,
+                        trigger,
+                        "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                    );
+                    return true;
+                }
             }
         }
 
@@ -3755,6 +3887,8 @@ impl Actor {
                 target_kind,
             } => {
                 if height == self.committed_height_snapshot().saturating_add(1)
+                    && (!payload_materialized_locally || !recovery_tracked_before_decision)
+                    && !request_stalled
                     && self.try_route_missing_block_through_exact_frontier_slot(
                         block_hash, height, view, &targets,
                     )

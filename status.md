@@ -2,6 +2,65 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: exact-frontier restart repair now pulls missing RBC chunks, and Kagami/Taira localnet genesis no longer duplicates offline-escrow grants
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now allows a recovered exact-frontier RBC session at `committed + 1` to send
+  direct `RbcChunkRequest` repair traffic once exact body fetch is armed, while
+  still keeping the broad near-tip RBC hot loop suppressed. This unblocks
+  restart catch-up when a persisted session comes back missing only a few
+  chunks and generic `BlockCreated` fetch alone is not enough to finish the
+  payload.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now covers the recovered exact-frontier missing-chunk repair path and
+  preserves the existing hot-loop suppression guard for contiguous-frontier
+  rescue traffic.
+- `/home/mtakemiya/dev/iroha/crates/iroha_kagami/src/localnet.rs`
+  no longer emits an explicit `CanManageOfflineEscrow` grant for Alice during
+  generated localnet bootstrap. The generated client signer is Alice in this
+  profile, and Alice already has that permission inherently in base genesis, so
+  the old extra `Grant` made Kagami/Taira localnet genesis invalid before the
+  network could start.
+- Focused validation for these follow-ups:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_requests_chunks_for_recovered_exact_frontier_session -- --nocapture`
+  - `cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers_skips_contiguous_frontier_hot_loop -- --nocapture`
+  - `cargo test -p iroha_kagami generated_localnet_bootstraps_builtin_offline_cash_asset_and_permissions -- --nocapture`
+  - `cargo build -p irohad --bin iroha3d`
+  - `cargo build -p iroha_kagami --bin kagami`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_peer_restart' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'taira_public_localnet::taira_localnet_bootstrap_validators' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet' -- --exact --nocapture --test-threads=1`
+
+## 2026-04-14 Follow-up: stale-view certified frontier recovery no longer strands restarted peers on passive same-height branches
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  now keeps certified same-height stale-view recovery authoritative when a
+  contiguous-frontier `BlockSyncUpdate` carries commit evidence for an older
+  view than the locally stalled branch. The stale-view payload is no longer
+  demoted to `retired_same_height`, so the old owner is dropped and the
+  recovered block can proceed through commit-QC handling instead of leaving the
+  QC cached on an inactive payload.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  now reissues exact-frontier known-block commit-QC recovery as a real peer
+  fetch when the payload is already local, and still reanchors the contiguous
+  frontier after commit when future recovery evidence survives beyond the
+  committed tip.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  now accepts uncertified block-sync roster recovery for the contiguous
+  next-height frontier without requiring an explicit missing-block request,
+  keeping the exact-frontier owner path alive during restart catch-up.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now covers the authoritative stale-view same-height supersede path plus the
+  post-commit frontier reanchor / exact-frontier known-block retry helpers.
+- Focused validation for this restart recovery unblocker:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_through_block_created_owner -- --nocapture`
+  - `cargo test -p iroha_core known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload -- --nocapture`
+  - `cargo build -p irohad --bin iroha3d`
+  - `cargo test -p integration_tests --test consensus_and_da --no-run`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d /home/mtakemiya/dev/iroha/target/debug/deps/consensus_and_da-d532485e5e14e4a4 'sumeragi_da::sumeragi_rbc_recovers_after_peer_restart' --exact --nocapture --test-threads=1`
+
 ## 2026-04-14 Follow-up: localnet bootstrap and Sumeragi lock-lag catch-up regressions are green
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_kagami/src/localnet.rs`
   now avoids emitting a duplicate `CanManageOfflineEscrow` grant when the

@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-14
 
+Latest sync (2026-04-14 stale-view certified frontier recovery stays authoritative during restart catch-up):
+the restarted-peer commit-QC recovery gap is closed on the current tree.
+`crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` no longer
+demotes a certified same-height stale-view `BlockSyncUpdate` to a passive
+retired branch just because the local peer has already advanced to a higher
+view, while `crates/iroha_core/src/sumeragi/main_loop/commit.rs` and
+`crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` keep exact-frontier
+known-block recovery on the live peer-fetch / contiguous-frontier handoff path.
+The new regression test locks in the authoritative stale-view supersede, and
+the rebuilt `sumeragi_da::sumeragi_rbc_recovers_after_peer_restart` integration
+test is green again on the patched binary.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_through_block_created_owner -- --nocapture`
+  - `cargo test -p iroha_core known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload -- --nocapture`
+  - `cargo build -p irohad --bin iroha3d`
+  - `cargo test -p integration_tests --test consensus_and_da --no-run`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d /home/mtakemiya/dev/iroha/target/debug/deps/consensus_and_da-d532485e5e14e4a4 'sumeragi_da::sumeragi_rbc_recovers_after_peer_restart' --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - rerun the remaining user-listed `consensus_and_da` reds to confirm which
+    failures collapse with the same stale-view frontier-owner fix versus which
+    still need separate work; and
+  - only after that, decide whether the broader grouped `consensus_and_da`
+    harness needs another full sweep for signoff.
+
 Latest sync (2026-04-14 SCCP destination rollout JSON derive unblocker):
 the temporary SCCP JSON derive regression is closed on the current tree.
 `crates/iroha_sccp/src/lib.rs` now exposes
