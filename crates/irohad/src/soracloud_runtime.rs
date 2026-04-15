@@ -3648,6 +3648,7 @@ impl SoracloudRuntimeManager {
             .get();
         let stdout_log_path = materialization_dir.join("inrou.stdout.log");
         let stderr_log_path = materialization_dir.join("inrou.stderr.log");
+        let console_log_path = materialization_dir.join("inrou.console.log");
         let stdout = fs::OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -3736,7 +3737,7 @@ impl SoracloudRuntimeManager {
             .arg("-monitor")
             .arg("none")
             .arg("-serial")
-            .arg("stdio")
+            .arg(format!("file:{}", console_log_path.display()))
             .arg("-netdev")
             .arg(&network_plan.netdev)
             .arg("-device")
@@ -3781,14 +3782,20 @@ impl SoracloudRuntimeManager {
                 .wrap_err("poll Inrou PortableVm process during startup")?
             {
                 let stderr = stderr_log_excerpt(&stderr_log_path);
+                let console = stderr_log_excerpt(&console_log_path);
                 portable_attachment.cleanup();
                 eyre::bail!(
-                    "Inrou PortableVm process exited during startup with status {status}{}",
+                    "Inrou PortableVm process exited during startup with status {status}{}{}",
                     if stderr.is_empty() {
                         String::new()
                     } else {
                         format!(": {stderr}")
-                    }
+                    },
+                    if console.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\nserial console:\n{console}")
+                    },
                 );
             }
             match probe_hosted_http_health(
