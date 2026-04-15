@@ -19405,6 +19405,57 @@ pub struct DeployContractDto {
 }
 
 #[cfg(feature = "app_api")]
+#[allow(missing_copy_implementations)]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request for binding, updating, or clearing a contract alias.
+pub struct SetContractAliasDto {
+    /// Transaction authority
+    pub authority: iroha_data_model::account::AccountId,
+    /// Signing key for submitting the transaction
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Canonical contract address whose alias binding should be updated.
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Optional alias literal. `None` clears the current binding.
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional lease expiry timestamp (unix ms) for the alias binding.
+    #[norito(default)]
+    pub lease_expiry_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Response returned after submitting a contract alias update transaction.
+pub struct SetContractAliasResponseDto {
+    /// Whether the alias update request was accepted for submission.
+    pub ok: bool,
+    /// Resolved alias bound to the contract, when present.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Canonical Bech32m contract address that was updated.
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Dataspace alias hosting the contract instance.
+    pub dataspace: String,
+    /// Hex-encoded transaction hash, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    /// Submission status.
+    pub status: String,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 /// Query parameters for bundle deployment.
 pub struct DeployBundleQuery {
@@ -19860,6 +19911,26 @@ fn resolve_public_contract_deploy_alias(
         ))
     })?;
     Ok((dataspace.alias.clone(), dataspace.id))
+}
+
+#[cfg(feature = "app_api")]
+fn dataspace_alias_for_contract_address(
+    state: &CoreState,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> core::result::Result<String, Error> {
+    let dataspace_id = contract_address
+        .dataspace_id()
+        .map_err(|err| conversion_error(err.to_string()))?;
+    state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -22851,6 +22922,80 @@ pub async fn handle_post_contract_deploy(
     )
     .await?;
     let body = norito::json::to_json_pretty(&receipt).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/aliases — bind, update, or clear the on-chain alias for
+/// an existing public contract instance.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_alias_set(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<SetContractAliasDto>,
+) -> Result<impl IntoResponse> {
+    use iroha_data_model::{isi::contract_alias::SetContractAlias, prelude as dm};
+
+    let SetContractAliasDto {
+        authority,
+        private_key,
+        contract_address,
+        contract_alias,
+        lease_expiry_ms,
+    } = req;
+
+    if contract_alias.is_none() && lease_expiry_ms.is_some() {
+        return Err(conversion_error(
+            "lease_expiry_ms requires contract_alias".to_owned(),
+        ));
+    }
+
+    let dataspace = dataspace_alias_for_contract_address(state.as_ref(), &contract_address)?;
+    let instruction = match contract_alias.clone() {
+        Some(contract_alias) => dm::InstructionBox::from(SetContractAlias::bind(
+            contract_address.clone(),
+            contract_alias,
+            lease_expiry_ms,
+        )),
+        None => dm::InstructionBox::from(SetContractAlias::clear(contract_address.clone())),
+    };
+    let metadata = metadata_with_default_gas_asset(&state);
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
+        .with_metadata(metadata)
+        .with_instructions(std::iter::once(instruction))
+        .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        chain_id,
+        queue,
+        state.clone(),
+        tx,
+        telemetry,
+        "/v1/contracts/aliases",
+    )
+    .await?;
+
+    if let Some(contract_alias) = contract_alias.as_ref() {
+        wait_for_contract_alias_target(state, contract_alias, &contract_address).await?;
+    }
+
+    let body = norito::json::to_json_pretty(&SetContractAliasResponseDto {
+        ok: true,
+        contract_alias,
+        contract_address,
+        dataspace,
+        tx_hash_hex: Some(tx_hash_hex),
+        status: "submitted".to_owned(),
+    })
+    .unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,

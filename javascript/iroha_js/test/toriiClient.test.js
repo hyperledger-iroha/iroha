@@ -16295,6 +16295,88 @@ test("deployContract rejects manifest and dataspace shortcuts", async () => {
   );
 });
 
+test("setContractAlias posts payload and returns response", async () => {
+  let captured;
+  const responsePayload = {
+    ok: true,
+    contract_alias: "router::universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    dataspace: "universal",
+    tx_hash_hex: "d".repeat(64),
+    status: "submitted",
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.setContractAlias({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAlias: "router::universal",
+    leaseExpiryMs: 1234,
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/aliases`);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body, {
+    authority: FIXTURE_ALICE_ID,
+    private_key: "ed25519:deadbeef",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_alias: "router::universal",
+    lease_expiry_ms: 1234,
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("setContractAlias supports clear requests and rejects lease expiry without an alias", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        contract_alias: null,
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        dataspace: "universal",
+        tx_hash_hex: "e".repeat(64),
+        status: "submitted",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.setContractAlias({
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/aliases`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    authority: FIXTURE_ALICE_ID,
+    private_key: "ed25519:deadbeef",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contract_alias: null,
+  });
+  assert.equal(result.contract_alias, null);
+
+  await assert.rejects(
+    () =>
+      client.setContractAlias({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        leaseExpiryMs: 1234,
+      }),
+    /setContractAlias\.leaseExpiryMs requires contractAlias/,
+  );
+});
+
 test("callContract posts payload metadata and normalizes response", async () => {
   let captured;
   const responsePayload = {

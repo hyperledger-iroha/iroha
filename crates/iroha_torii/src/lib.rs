@@ -390,18 +390,19 @@ pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery}
 pub use routing::{
     ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
     ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
-    ContractViewDto, ContractViewResponseDto, DeployContractBundleDto,
-    DeployContractBundleReceiptDto, DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto,
-    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
-    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
+    ContractViewDto, ContractViewResponseDto, DeployContractBundleDto, DeployContractBundleReceiptDto,
+    DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
+    KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
     MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
     PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
     ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
-    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
-    ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
-    handle_count_proofs, handle_get_contract_code_bytes, handle_get_contract_deploy_bundle_status,
-    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_deploy,
+    SetContractAliasDto, SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto,
+    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
+    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs,
+    handle_get_contract_code_bytes, handle_get_contract_deploy_bundle_status, handle_get_proof,
+    handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_alias_set,
+    handle_post_contract_call, handle_post_contract_call_simulate, handle_post_contract_deploy,
     handle_post_contract_deploy_bundle, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
@@ -2325,6 +2326,7 @@ fn is_public_contract_api_token_bypass(method: &axum::http::Method, path: &str) 
         path,
         "/v1/contracts/deploy"
             | "/v1/contracts/deploy-bundle"
+            | "/v1/contracts/aliases"
             | "/v1/contracts/call"
             | "/v1/contracts/call/simulate"
             | "/v1/contracts/view"
@@ -2540,7 +2542,9 @@ async fn enforce_json_utf8_charset(
 
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
-        "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" => CONTRACT_DEPLOY_ROUTE_TIMEOUT,
+        "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
+            CONTRACT_DEPLOY_ROUTE_TIMEOUT
+        }
         _ => DEFAULT_ROUTE_TIMEOUT,
     }
 }
@@ -19930,6 +19934,39 @@ async fn handler_post_contract_deploy(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_alias_set(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::SetContractAliasDto>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/contracts/aliases",
+        "alias_set",
+    )
+    .await?;
+    match crate::routing::handle_post_contract_alias_set(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("alias_set"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -26163,6 +26200,7 @@ impl Torii {
                     "/v1/contracts/deploy-bundle",
                     post(handler_post_contract_deploy_bundle),
                 )
+                .route("/v1/contracts/aliases", post(handler_post_contract_alias_set))
                 .route(
                     "/v1/contracts/deploy-bundles/{bundle_digest}",
                     get(handler_get_contract_deploy_bundle_status),
@@ -42650,6 +42688,69 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn contracts_aliases_route_is_mounted_in_api_router() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("contracts-aliases-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/contracts/aliases")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = torii
+            .api_router_for_tests()
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
@@ -47888,6 +47989,10 @@ mod tests {
         assert!(is_public_contract_api_token_bypass(
             &Method::POST,
             "/v1/contracts/deploy-bundle"
+        ));
+        assert!(is_public_contract_api_token_bypass(
+            &Method::POST,
+            "/v1/contracts/aliases"
         ));
         assert!(is_public_contract_api_token_bypass(
             &Method::POST,

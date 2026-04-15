@@ -64,8 +64,8 @@ use iroha_data_model::{
         SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
-        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
-        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
+        SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
+        SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1,
         SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
         SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
@@ -310,6 +310,7 @@ fn portable_vm_guest_machine_profile(
             emulator_candidates: &["qemu-system-x86_64"],
             machine_type: "q35",
             serial_console: "ttyS0",
+            root_label: "rootfs-x86_64",
             block_device: "virtio-blk-pci",
             net_device: "virtio-net-pci",
         },
@@ -317,6 +318,7 @@ fn portable_vm_guest_machine_profile(
             emulator_candidates: &["qemu-system-aarch64"],
             machine_type: "virt",
             serial_console: "ttyAMA0",
+            root_label: "rootfs-aarch64",
             block_device: "virtio-blk-device",
             net_device: "virtio-net-device",
         },
@@ -324,21 +326,22 @@ fn portable_vm_guest_machine_profile(
 }
 
 fn default_portable_vm_accel() -> &'static str {
-    #[cfg(target_os = "linux")]
-    {
-        if Path::new("/dev/kvm").exists() {
-            return "kvm";
-        }
-    }
     #[cfg(target_os = "macos")]
     {
-        return "hvf";
+        "hvf"
     }
     #[cfg(target_os = "windows")]
     {
-        return "whpx";
+        "whpx"
     }
-    "tcg"
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        #[cfg(target_os = "linux")]
+        if Path::new("/dev/kvm").exists() {
+            return "kvm";
+        }
+        "tcg"
+    }
 }
 
 fn portable_vm_accel() -> eyre::Result<String> {
@@ -2974,6 +2977,8 @@ impl SoracloudRuntimeManager {
                 max_memory_bytes: if proxy_only { 0 } else { u64::MAX },
                 max_storage_bytes: if proxy_only { 0 } else { u64::MAX },
                 proxy_only,
+                geography_tags: Default::default(),
+                observed_latency_ms: None,
                 advertised_at_ms: now_ms,
                 heartbeat_expires_at_ms: desired_expiry_ms,
             },
@@ -3662,15 +3667,16 @@ impl SoracloudRuntimeManager {
             .open(&stderr_log_path)
             .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
 
-        let root_disk_path = match plan
+        let (root_disk_path, root_disk_format) = match plan
             .lease_volumes
             .iter()
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
         {
-            Some(root_volume) => {
-                ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, root_volume)
-                    .wrap_err("prepare Inrou mutable PortableVm root disk")?
-            }
+            Some(root_volume) => (
+                ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
+                    .wrap_err("prepare Inrou mutable PortableVm root disk")?,
+                "raw",
+            ),
             None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
         };
         let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, plan)
@@ -3750,7 +3756,7 @@ impl SoracloudRuntimeManager {
             profile,
             "rootfs",
             &root_disk_path,
-            "qcow2",
+            root_disk_format,
             false,
             true,
         );
@@ -10837,6 +10843,7 @@ struct PortableVmGuestMachineProfile {
     emulator_candidates: &'static [&'static str],
     machine_type: &'static str,
     serial_console: &'static str,
+    root_label: &'static str,
     block_device: &'static str,
     net_device: &'static str,
 }
@@ -11412,8 +11419,8 @@ fn portable_vm_kernel_cmdline(
     datasource_base_url: &str,
 ) -> String {
     format!(
-        "console={} root=/dev/vda rw rootdelay=5 rootfstype=ext4 panic=1 ds=nocloud-net;s={}",
-        profile.serial_console, datasource_base_url
+        "console={} root=LABEL={} rw rootwait rootfstype=ext4 panic=1 ds=nocloud-net;s={}",
+        profile.serial_console, profile.root_label, datasource_base_url
     )
 }
 
