@@ -57,7 +57,7 @@ use iroha_data_model::{
     ChainId,
     account::{
         Account, AccountId, NewAccount,
-        address::{AccountAddress, AccountAddressError},
+        address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
         definition::{AssetDefinition, NewAssetDefinition},
@@ -515,11 +515,36 @@ pub fn account_address_render(
 }
 
 fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
-    AccountId::parse_encoded(input)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
-        })
+    let raw = input.trim();
+    let parsed = match i105_discriminant_hint(raw) {
+        Some(discriminant) => AccountAddress::parse_encoded(raw, Some(discriminant))
+            .and_then(|address| address.to_account_id())
+            .map_err(|err| err.to_string()),
+        None => AccountId::parse_encoded(raw)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| err.to_string()),
+    };
+    parsed.map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
+    })
+}
+
+fn i105_discriminant_hint(input: &str) -> Option<u16> {
+    let raw = input.trim();
+    if raw.starts_with("sora") {
+        return Some(753);
+    }
+    if raw.starts_with("test") {
+        return Some(369);
+    }
+    if raw.starts_with("dev") {
+        return Some(0);
+    }
+    raw.strip_prefix('n')?.parse::<u16>().ok()
+}
+
+fn scoped_chain_discriminant_for_literal(input: &str) -> Option<ChainDiscriminantGuard> {
+    i105_discriminant_hint(input).map(ChainDiscriminantGuard::enter)
 }
 
 /// Build a canonical public `AssetId` literal from definition/account parts.
@@ -8248,6 +8273,7 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
 
     build_transaction_from_instructions_json(
@@ -8492,6 +8518,7 @@ pub fn build_time_trigger_action(
         None
     };
 
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -8531,6 +8558,7 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -11292,6 +11320,91 @@ mod tests {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn parse_account_id_accepts_taira_i105_literals() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(369)
+            .expect("taira i105");
+
+        let parsed = parse_account_id(&authority_i105, "authority account id")
+            .expect("parse Taira I105 account id");
+
+        assert_eq!(parsed, authority);
+    }
+
+    #[test]
+    fn build_transaction_accepts_taira_i105_shield_fields() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(369)
+            .expect("taira i105");
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let instruction = Shield::new(
+            asset_definition,
+            authority.clone(),
+            7,
+            [0x11; 32],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                [0x22; 32],
+                [0x33; 24],
+                b"ciphertext".to_vec(),
+            ),
+        );
+        let instruction_box: InstructionBox = instruction.into();
+        let mut instruction_json =
+            instruction_to_json_value(&instruction_box).expect("instruction json");
+        instruction_json
+            .get_mut("zk")
+            .and_then(json::Value::as_object_mut)
+            .and_then(|zk| zk.get_mut("Shield"))
+            .and_then(json::Value::as_object_mut)
+            .expect("shield payload")
+            .insert(
+                "from".to_owned(),
+                json::Value::String(authority_i105.clone()),
+            );
+        let instruction_json =
+            json::to_json(&instruction_json).expect("serialized instruction json");
+        let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let result = build_transaction(
+            chain_id.to_string(),
+            authority_i105,
+            vec![instruction_json],
+            None,
+            None,
+            None,
+            None,
+            Uint8Array::from(secret_bytes.to_vec()),
+        )
+        .expect("transaction built");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(tx.authority(), &authority);
+        match tx.instructions() {
+            Executable::Instructions(batch) => {
+                assert_eq!(batch.len(), 1);
+                let first = batch.iter().next().expect("shield instruction");
+                let shield = first
+                    .as_any()
+                    .downcast_ref::<Shield>()
+                    .expect("shield instruction");
+                assert_eq!(shield.from, authority);
+            }
+            other => panic!("expected instruction batch, got {other:?}"),
+        }
     }
 
     #[test]

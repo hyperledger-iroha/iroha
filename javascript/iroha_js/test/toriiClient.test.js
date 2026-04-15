@@ -5740,6 +5740,85 @@ test("submitTransaction retries transient failures via pipeline profile", async 
   assert.equal(attempts, 2);
 });
 
+test("submitTransaction falls back to /transaction when pipeline submit is unavailable", async () => {
+  const payload = new Uint8Array([0xab, 0xcd]);
+  const encodedPayload = Buffer.from([0xfa, 0xce, 0x01]);
+  const seenUrls = [];
+  const fetchImpl = async (url, init) => {
+    seenUrls.push(url);
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url === `${BASE_URL}/v1/pipeline/transactions`) {
+      assert.equal(init.method, "POST");
+      return createResponse({ status: 405 });
+    }
+    if (url === `${BASE_URL}/transaction`) {
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["Content-Type"], "application/x-norito");
+      assert.ok(Buffer.isBuffer(init.body));
+      assert.deepEqual([...init.body.values()], [...encodedPayload.values()]);
+      return createResponse({
+        status: 200,
+        jsonData: { ok: true, route: "fallback" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    ...(originalBinding ?? {}),
+    encodeSignedTransactionNorito: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
+      return encodedPayload;
+    },
+  };
+  try {
+    const response = await client.submitTransaction(payload);
+    assert.deepEqual(response, { ok: true, route: "fallback" });
+    assert.deepEqual(seenUrls, [
+      `${BASE_URL}/v1/node/capabilities`,
+      `${BASE_URL}/v1/pipeline/transactions`,
+      `${BASE_URL}/transaction`,
+    ]);
+  } finally {
+    if (originalBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+    }
+  }
+});
+
 test("submitTransaction tolerates missing node capabilities advert", async () => {
   const payload = new Uint8Array([0xde, 0xad]);
   const calls = [];
@@ -5839,6 +5918,54 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
       content: { hash: txHash, status: { kind: "Committed", content: null } },
     });
   });
+
+test("getTransactionStatus normalizes typed pipeline status responses", async () => {
+  const hashHex = "ef".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(
+      url,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
+    );
+    return createResponse({
+      status: 200,
+      jsonData: {
+        hash: hashHex,
+        resolved_from: "state",
+        scope: "auto",
+        status: {
+          kind: "Applied",
+          block_height: 7,
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getTransactionStatus(hashHex);
+  assert.deepEqual(result, {
+    hash: hashHex,
+    resolved_from: "state",
+    scope: "auto",
+    status: {
+      kind: "Applied",
+      block_height: 7,
+      content: {
+        block_height: 7,
+      },
+    },
+    kind: "Transaction",
+    content: {
+      hash: hashHex,
+      status: {
+        kind: "Applied",
+        block_height: 7,
+        content: {
+          block_height: 7,
+        },
+      },
+    },
+  });
+});
 
 test("getTransactionStatus fans out to alternate endpoints in auto scope", async () => {
   const hashHex = "ef".repeat(32);
@@ -6206,6 +6333,39 @@ test("getTransactionStatusTyped normalises pipeline payload", async () => {
   assert.equal(result?.status?.kind, "Committed");
   assert.deepEqual(result?.status?.content, { receipt: "ok" });
   assert.deepEqual(result?.raw.kind, "Transaction");
+});
+
+test("getTransactionStatusTyped normalises typed pipeline status responses", async () => {
+  const hashHex = "98".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        hash: hashHex,
+        resolved_from: "state",
+        scope: "auto",
+        status: {
+          kind: "Applied",
+          block_height: 11,
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getTransactionStatusTyped(hashHex);
+  assert.ok(result, "typed payload should be returned");
+  assert.equal(result?.kind, "Transaction");
+  assert.equal(result?.hashHex, hashHex);
+  assert.equal(result?.authority, null);
+  assert.equal(result?.status?.kind, "Applied");
+  assert.deepEqual(result?.status?.content, { block_height: 11 });
+  assert.deepEqual(result?.raw.status, {
+    kind: "Applied",
+    block_height: 11,
+    content: {
+      block_height: 11,
+    },
+  });
 });
 
 test("getTransactionStatusTyped returns null for empty payload", async () => {

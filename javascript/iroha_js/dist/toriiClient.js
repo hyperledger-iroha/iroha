@@ -3703,14 +3703,30 @@ export class ToriiClient {
    */
   async submitTransaction(payload) {
     await this._ensureDataModelCompatibility();
-    const response = await this._request("POST", "/v1/pipeline/transactions", {
+    const rawPayload = toBuffer(payload);
+    const requestOptions = {
       headers: {
         "Content-Type": "application/x-norito",
         Accept: "application/x-norito, application/json",
       },
-      body: toBuffer(payload),
+      body: rawPayload,
       retryProfile: "pipeline",
-    });
+    };
+    let response = await this._request(
+      "POST",
+      "/v1/pipeline/transactions",
+      requestOptions,
+    );
+    if (response.status === 404 || response.status === 405) {
+      const native = resolveNativeBinding();
+      if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
+        throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
+      }
+      response = await this._request("POST", "/transaction", {
+        ...requestOptions,
+        body: Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
+      });
+    }
     await this._expectStatus(response, [200, 201, 202, 204]);
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
@@ -21940,10 +21956,46 @@ function normalizePipelineTransactionStatus(
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const record = ensureRecord(payload ?? {}, context);
+  if (!("content" in record) && isPlainObject(record.status)) {
+    const hash = normalizeHex32String(record.hash ?? "", `${context}.hash`);
+    const statusRecord = ensureRecord(record.status, `${context}.status`);
+    const statusKindValue = statusRecord.kind;
+    const statusKind =
+      statusKindValue == null ? "Unknown" : String(statusKindValue);
+    const statusCompatContent = {};
+    if ("block_height" in statusRecord) {
+      statusCompatContent.block_height = statusRecord.block_height ?? null;
+    }
+    if ("rejection_reason" in statusRecord) {
+      statusCompatContent.rejection_reason = statusRecord.rejection_reason ?? null;
+    }
+    const normalizedStatus = {
+      ...statusRecord,
+      kind: statusKind,
+      content:
+        statusRecord.content === undefined
+          ? Object.keys(statusCompatContent).length > 0
+            ? statusCompatContent
+            : null
+          : statusRecord.content,
+    };
+    return {
+      ...record,
+      kind: record.kind == null ? "Transaction" : String(record.kind),
+      status: normalizedStatus,
+      content: {
+        hash,
+        ...(typeof record.authority === "string" && record.authority
+          ? { authority: record.authority }
+          : {}),
+        status: normalizedStatus,
+      },
+    };
+  }
   if (!("content" in payload) && typeof payload.status === "string") {
     return { status: String(payload.status) };
   }
-  const record = ensureRecord(payload ?? {}, context);
   const kindValue = record.kind;
   const kind = kindValue == null ? "Unknown" : String(kindValue);
   const contentRecord = ensureRecord(record.content, `${context}.content`);

@@ -13,13 +13,16 @@ use std::{
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
+use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
+    confidential::ConfidentialStatus,
     isi::{
         RegisterBox, SetAssetDefinitionAlias,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+        verifying_keys,
     },
     nexus::DataSpaceId,
     parameter::system::{
@@ -27,6 +30,8 @@ use iroha_data_model::{
     },
     peer::PeerId,
     prelude::*,
+    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
@@ -499,6 +504,57 @@ fn localnet_fee_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
 
+const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
+const LOCALNET_FEE_ZK_VK_CIRCUIT_ID: &str = "halo2/ipa:tiny-add";
+const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
+const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
+
+fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
+    VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
+}
+
+fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
+    VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
+}
+
+fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
+    let fixture = halo2_fixture_envelope(LOCALNET_FEE_ZK_VK_CIRCUIT_ID, [0u8; 32]);
+    let vk_box = fixture
+        .vk_box(LOCALNET_FEE_ZK_VK_BACKEND)
+        .ok_or_else(|| eyre!("built-in Halo2 fixture must expose verifying key bytes"))?;
+    let mut record = VerifyingKeyRecord::new(
+        version,
+        LOCALNET_FEE_ZK_VK_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        hash_vk(&vk_box),
+    );
+    record.vk_len =
+        u32::try_from(vk_box.bytes.len()).wrap_err("fixture verifying key length overflowed u32")?;
+    record.max_proof_bytes = u32::try_from(fixture.proof_bytes.len())
+        .wrap_err("fixture proof length overflowed u32")?
+        .max(4_096);
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = name.to_owned();
+    Ok(record)
+}
+
+fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]> {
+    Ok([
+        (
+            localnet_fee_vk_transfer_id(),
+            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_TRANSFER_NAME, 1)?,
+        ),
+        (
+            localnet_fee_vk_unshield_id(),
+            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
+        ),
+    ])
+}
+
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
@@ -957,7 +1013,7 @@ fn generate_localnet_with_line<T: Write>(
         opts.consensus_mode,
         opts.next_consensus_mode,
     );
-    genesis = append_localnet_contract_permissions(genesis);
+    genesis = append_localnet_contract_permissions(genesis, &genesis_account_id);
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -2266,9 +2322,14 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
         .build_raw()
 }
 
-fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
+fn append_localnet_contract_permissions(
+    genesis: RawGenesisTransaction,
+    genesis_account_id: &AccountId,
+) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
+    let manage_verifying_keys =
+        Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let client_account_id = localnet_client_account_id();
     let manage_account_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
@@ -2287,6 +2348,7 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
     };
 
     push_unique(enact_governance, ALICE_ID.clone());
+    push_unique(manage_verifying_keys, genesis_account_id.clone());
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
     if client_account_id != *ALICE_ID {
@@ -2304,6 +2366,8 @@ struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
     accounts: BTreeSet<AccountId>,
     asset_defs: BTreeSet<AssetDefinitionId>,
+    zk_assets: BTreeSet<AssetDefinitionId>,
+    verifying_keys: BTreeSet<VerifyingKeyId>,
 }
 
 impl BootstrapRegistrations {
@@ -2311,7 +2375,23 @@ impl BootstrapRegistrations {
         let mut domains = BTreeSet::new();
         let mut accounts = BTreeSet::new();
         let mut asset_defs = BTreeSet::new();
+        let mut zk_assets = BTreeSet::new();
+        let mut verifying_keys = BTreeSet::new();
         for instruction in manifest.instructions() {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::zk::RegisterZkAsset>()
+            {
+                zk_assets.insert(register.asset().clone());
+                continue;
+            }
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+            {
+                verifying_keys.insert(register.id.clone());
+                continue;
+            }
             let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
                 continue;
             };
@@ -2332,6 +2412,8 @@ impl BootstrapRegistrations {
             domains,
             accounts,
             asset_defs,
+            zk_assets,
+            verifying_keys,
         }
     }
 }
@@ -2386,6 +2468,26 @@ fn append_localnet_npos_bootstrap(
             );
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
+    }
+    let fee_vk_transfer_id = localnet_fee_vk_transfer_id();
+    let fee_vk_unshield_id = localnet_fee_vk_unshield_id();
+    for (id, record) in localnet_confidential_fee_vk_registrations()? {
+        if registrations.verifying_keys.insert(id.clone()) {
+            builder =
+                builder.append_instruction(verifying_keys::RegisterVerifyingKey { id, record });
+        }
+    }
+    if !registrations.zk_assets.contains(&fee_asset_id) {
+        builder = builder.append_instruction(iroha_data_model::isi::zk::RegisterZkAsset::new(
+            fee_asset_id.clone(),
+            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+            true,
+            true,
+            Some(fee_vk_transfer_id),
+            Some(fee_vk_unshield_id),
+            None,
+        ));
+        registrations.zk_assets.insert(fee_asset_id.clone());
     }
 
     for peer in peers {
@@ -2935,7 +3037,7 @@ mod tests {
             opts.consensus_mode,
             opts.next_consensus_mode,
         );
-        genesis = append_localnet_contract_permissions(genesis);
+        genesis = append_localnet_contract_permissions(genesis, &genesis_account_id);
         genesis = append_peer_pop(genesis, &peers);
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key);
@@ -3072,6 +3174,9 @@ mod tests {
             .parse::<AssetDefinitionAlias>()
             .expect("offline cash alias");
         let client_account_id = localnet_client_account_id();
+        let (genesis_public_key, _) =
+            generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED);
+        let genesis_account_id = AccountId::new(genesis_public_key);
         let expected_explicit_manage_offline_escrow_grants =
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
@@ -3145,6 +3250,7 @@ mod tests {
         let mut has_manifest_publish = false;
         let mut manage_offline_escrow_grants = 0usize;
         let mut total_manage_offline_escrow_grants = 0usize;
+        let mut manage_verifying_keys_grants = 0usize;
         for instruction in manifest.instructions() {
             let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
                 continue;
@@ -3156,6 +3262,11 @@ mod tests {
             if permission_name == "CanManageOfflineEscrow" {
                 total_manage_offline_escrow_grants =
                     total_manage_offline_escrow_grants.saturating_add(1);
+            }
+            if permission_name == "CanManageVerifyingKeys"
+                && grant_permission.destination() == &genesis_account_id
+            {
+                manage_verifying_keys_grants = manage_verifying_keys_grants.saturating_add(1);
             }
             if grant_permission.destination() != &client_account_id {
                 continue;
@@ -3184,6 +3295,10 @@ mod tests {
         assert_eq!(
             total_manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
             "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
+        );
+        assert_eq!(
+            manage_verifying_keys_grants, 1,
+            "localnet genesis must grant CanManageVerifyingKeys to the genesis signer exactly once"
         );
     }
 
@@ -4978,6 +5093,8 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
 
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+        let raw_genesis =
+            RawGenesisTransaction::from_path(temp.path().join("genesis.json")).expect("parse genesis");
         let fee_asset_id = localnet_fee_asset_literal();
         let fee_asset = manifest
             .get("transactions")
@@ -5007,6 +5124,61 @@ mod tests {
                 .and_then(json::Value::as_str),
             Some("Convertible"),
             "generated fee asset must stay shield-capable for TAIRA wallet flows"
+        );
+
+        let transfer_vk_id = localnet_fee_vk_transfer_id();
+        let unshield_vk_id = localnet_fee_vk_unshield_id();
+        let zk_registration = raw_genesis
+            .instructions()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::zk::RegisterZkAsset>()
+            })
+            .expect("generated fee asset must emit a RegisterZkAsset instruction");
+
+        assert!(
+            zk_registration.asset() == &localnet_fee_asset_definition_id(),
+            "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
+        );
+        assert_eq!(
+            zk_registration.vk_transfer(),
+            &Some(transfer_vk_id.clone()),
+            "generated fee asset must advertise a transfer verifier for shielded sends"
+        );
+        assert_eq!(
+            zk_registration.vk_unshield(),
+            &Some(unshield_vk_id.clone()),
+            "generated fee asset must advertise an unshield verifier for withdrawals"
+        );
+
+        let vk_registrations = raw_genesis
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            vk_registrations.iter().any(|register| {
+                register.id == transfer_vk_id
+                    && register.record.is_active()
+                    && register.record.key.is_some()
+                    && register.record.max_proof_bytes > 0
+                    && register.record.circuit_id == LOCALNET_FEE_ZK_VK_CIRCUIT_ID
+            }),
+            "generated fee asset must register an active transfer verifier fixture"
+        );
+        assert!(
+            vk_registrations.iter().any(|register| {
+                register.id == unshield_vk_id
+                    && register.record.is_active()
+                    && register.record.key.is_some()
+                    && register.record.max_proof_bytes > 0
+                    && register.record.circuit_id == LOCALNET_FEE_ZK_VK_CIRCUIT_ID
+            }),
+            "generated fee asset must register an active unshield verifier fixture"
         );
     }
 
