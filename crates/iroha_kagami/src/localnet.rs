@@ -2379,8 +2379,11 @@ fn append_localnet_npos_bootstrap(
     }
     if !registrations.asset_defs.contains(&fee_asset_id) {
         let definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
-            .with_name("Localnet Fee".to_owned())
-            .with_metadata(Metadata::default());
+            .with_name("XOR".to_owned())
+            .with_metadata(Metadata::default())
+            .confidential_policy(
+                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+            );
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
@@ -4945,6 +4948,66 @@ mod tests {
         assert!(
             contents.contains(&expected_mint),
             "generated genesis should fund the client signer fee asset"
+        );
+    }
+
+    #[test]
+    fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-fee-asset-convertible".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+        let fee_asset_id = localnet_fee_asset_literal();
+        let fee_asset = manifest
+            .get("transactions")
+            .and_then(json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|tx| tx.get("instructions").and_then(json::Value::as_array))
+            .flatten()
+            .find_map(|instruction| {
+                let asset = instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))?;
+                (asset.get("id").and_then(json::Value::as_str)
+                    == Some(fee_asset_id.as_str()))
+                .then_some(asset)
+            })
+            .expect("fee asset definition registration");
+
+        assert_eq!(
+            fee_asset.get("name").and_then(json::Value::as_str),
+            Some("XOR"),
+            "generated fee asset should surface as XOR in TAIRA UIs"
+        );
+        assert_eq!(
+            fee_asset
+                .get("confidential_policy")
+                .and_then(|policy| policy.get("mode"))
+                .and_then(json::Value::as_str),
+            Some("Convertible"),
+            "generated fee asset must stay shield-capable for TAIRA wallet flows"
         );
     }
 
