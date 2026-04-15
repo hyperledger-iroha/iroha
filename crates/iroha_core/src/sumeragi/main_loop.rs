@@ -14580,11 +14580,6 @@ impl Actor {
             && self.block_payload_available_locally(key.0)
     }
 
-    fn near_tip_rbc_runtime_unneeded(&self, key: super::rbc_store::SessionKey) -> bool {
-        let committed_height = self.committed_height_snapshot();
-        key.1 <= committed_height.saturating_add(2) && self.block_known_locally(key.0)
-    }
-
     fn retire_exact_frontier_rbc_runtime(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -14593,9 +14588,7 @@ impl Actor {
         let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
             return false;
         };
-        if !self.exact_frontier_block_created_owner_active(key)
-            && !self.near_tip_rbc_runtime_unneeded(key)
-        {
+        if !self.exact_frontier_block_created_owner_active(key) {
             return false;
         }
         if !session.delivered && !session.is_invalid() {
@@ -14607,7 +14600,7 @@ impl Actor {
             block = %key.0,
             committed_height = self.committed_height_snapshot(),
             reason,
-            "retiring near-tip RBC runtime after local BlockCreated ownership or local materialization"
+            "retiring exact-frontier RBC runtime after local BlockCreated ownership"
         );
         self.update_rbc_status_entry(key, &session, false);
         self.clear_rbc_runtime_state_preserving_snapshot(key, false);
