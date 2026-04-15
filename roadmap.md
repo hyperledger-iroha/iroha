@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 collector endpoint and lock-convergence regressions are green):
+the two reported `consensus_and_da` failures are addressed on the current tree.
+`crates/iroha_torii/src/routing.rs` now clamps `/v1/sumeragi/collectors`
+planning to at least the committed chain height when PRF telemetry lags, so
+the endpoint cannot keep advertising a stale height after the chain advances.
+`integration_tests/tests/sumeragi_lock_convergence.rs` no longer waits on the
+600-second transaction confirmation path after stopping the leader; it submits
+the tick transaction, waits explicitly for height progress, then waits
+boundedly for locked-QC telemetry across the remaining peers to converge before
+asserting equality.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing/consensus.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_lock_convergence.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii collector_plan_context_ -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_prf_collectors::npos_prf_collectors_track_endpoint' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_lock_convergence::sumeragi_view_change_lock_convergence' -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - run the full `cargo test --workspace` only when a several-hour validation
+    window is available.
+
 Latest sync (2026-04-15 contract-app CLI bundle plan/resume coverage now runs end-to-end against the shared mock):
 the remaining repo-contained contract-app CLI gap is closed. `crates/iroha_cli`
 now has black-box smoke coverage for `iroha contract app plan` and `resume`,

@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: collector plans clamp stale PRF height and lock-convergence waits for QC telemetry catch-up
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  now derives `/v1/sumeragi/collectors` plan context from the fresher of the
+  Sumeragi PRF snapshot and the committed chain height. When the PRF telemetry
+  lags behind committed height, the endpoint advertises the committed height
+  with view 0 and prefers the current on-chain NPoS seed before falling back to
+  the stale snapshot seed. This prevents endpoint polling from staying pinned
+  to an already-committed height.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing/consensus.rs`
+  is kept in sync with the same collector plan-context selection logic.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_lock_convergence.rs`
+  now submits the post-leader-stop and post-restart tick transactions without
+  waiting on the 600-second transaction confirmation path, then uses explicit
+  height/QC waits. The view-change case now waits boundedly for all running
+  peers' locked-QC telemetry to converge at or above the target height before
+  asserting equality.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii collector_plan_context_ -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_prf_collectors::npos_prf_collectors_track_endpoint' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_lock_convergence::sumeragi_view_change_lock_convergence' -- --exact --nocapture --test-threads=1`
+
 ## 2026-04-15 Follow-up: contract-app CLI bundle planning/resume coverage is now wired through the shared Torii mock
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/tests/cli_smoke.rs`
   now covers the remaining repo-contained contract-app CLI flows against the

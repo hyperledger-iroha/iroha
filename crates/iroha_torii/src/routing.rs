@@ -7063,18 +7063,19 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
+    let prefer_snapshot_seed = snap.prf_height >= current_height;
+    let mut epoch_seed = if prefer_snapshot_seed {
+        snap.prf_epoch_seed.or(seed_from_mode)
+    } else {
+        seed_from_mode.or(snap.prf_epoch_seed)
+    };
     if epoch_seed.is_none() {
         epoch_seed = world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed());
     }
-    let plan_height = if snap.prf_height > 0 {
-        snap.prf_height
-    } else {
-        current_height
-    };
-    let plan_view = snap.prf_view;
+    let (plan_height, plan_view) =
+        collector_plan_context(snap.prf_height, snap.prf_view, current_height);
     let collectors = sumeragi::collectors::deterministic_collectors(
         &topology,
         mode,
@@ -7124,6 +7125,34 @@ pub async fn handle_v1_sumeragi_collectors(
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+fn collector_plan_context(
+    snapshot_height: u64,
+    snapshot_view: u64,
+    chain_height: u64,
+) -> (u64, u64) {
+    if snapshot_height >= chain_height {
+        (snapshot_height, snapshot_view)
+    } else {
+        (chain_height, 0)
+    }
+}
+
+#[cfg(test)]
+mod collector_plan_tests {
+    use super::collector_plan_context;
+
+    #[test]
+    fn collector_plan_context_uses_committed_height_when_snapshot_lags() {
+        assert_eq!(collector_plan_context(6, 3, 7), (7, 0));
+    }
+
+    #[test]
+    fn collector_plan_context_preserves_current_or_future_snapshot() {
+        assert_eq!(collector_plan_context(7, 2, 7), (7, 2));
+        assert_eq!(collector_plan_context(8, 1, 7), (8, 1));
+    }
 }
 /// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
 #[iroha_futures::telemetry_future]

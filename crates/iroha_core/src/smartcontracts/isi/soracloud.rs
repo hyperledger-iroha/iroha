@@ -3100,6 +3100,8 @@ fn select_inrou_replica_placement(
         peer_id: capability.peer_id,
         selected_backend,
         selected_guest_isa,
+        selected_geography_tag: None,
+        selection_latency_ms: None,
     }))
 }
 

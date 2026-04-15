@@ -106,10 +106,12 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         .first()
         .ok_or_else(|| eyre!("no running peers available"))?
         .client();
-    wait_client.submit_blocking(Log::new(
-        Level::INFO,
-        "lock convergence view-change tick".to_string(),
-    ))?;
+    wait_client
+        .submit_all([Log::new(
+            Level::INFO,
+            "lock convergence view-change tick".to_string(),
+        )])
+        .wrap_err("submit lock convergence view-change tick")?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
 
     let view_change_deadline = Instant::now() + Duration::from_secs(60);
@@ -147,16 +149,33 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         );
     }
 
-    let mut locked_entries = Vec::new();
-    for peer in network.peers() {
-        if !peer.is_running() {
-            continue;
+    let locked_convergence_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut locked_entries = Vec::new();
+        for peer in network.peers() {
+            if !peer.is_running() {
+                continue;
+            }
+            let snapshot = fetch_qc_snapshot(&peer.client()).await?;
+            locked_entries.push(snapshot.locked);
         }
-        let snapshot = fetch_qc_snapshot(&peer.client()).await?;
-        locked_entries.push(snapshot.locked);
-    }
 
-    assert_qc_entries_match(&locked_entries, "locked QC divergence after view change")?;
+        let locked_converged =
+            assert_qc_entries_match(&locked_entries, "locked QC divergence after view change")
+                .is_ok();
+        let locked_height_ok = locked_entries
+            .first()
+            .is_some_and(|entry| entry.height >= target_height);
+        if locked_converged && locked_height_ok {
+            break;
+        }
+        if Instant::now() >= locked_convergence_deadline {
+            return Err(eyre!(
+                "timed out waiting for locked QC convergence after view change; locked={locked_entries:?}, target_height={target_height}"
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
 
     network.shutdown().await;
     Ok(())
@@ -285,10 +304,12 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         .first()
         .ok_or_else(|| eyre!("no running peers after restart"))?
         .client();
-    wait_client.submit_blocking(Log::new(
-        Level::INFO,
-        "lock convergence restart tick".to_string(),
-    ))?;
+    wait_client
+        .submit_all([Log::new(
+            Level::INFO,
+            "lock convergence restart tick".to_string(),
+        )])
+        .wrap_err("submit lock convergence restart tick")?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
     let final_deadline = Instant::now() + Duration::from_secs(60);
     loop {
