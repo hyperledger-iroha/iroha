@@ -36390,7 +36390,7 @@ async fn maybe_emit_rbc_deliver_accepts_derived_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn maybe_emit_rbc_deliver_retires_near_tip_runtime_when_local_payload_is_authoritative() {
+async fn maybe_emit_rbc_deliver_keeps_near_tip_runtime_until_deliver_broadcasts() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = actor.state.view().height() as u64 + 1;
@@ -36435,14 +36435,24 @@ async fn maybe_emit_rbc_deliver_retires_near_tip_runtime_when_local_payload_is_a
     actor
         .maybe_emit_rbc_deliver(key)
         .expect("maybe emit deliver");
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained after DELIVER");
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "near-tip locally known blocks should retire RBC delivery runtime instead of emitting DELIVER",
+        stored.delivered,
+        "near-tip locally known blocks should keep the live RBC session long enough to emit DELIVER",
     );
     let entries = take_background_log(&background_log);
     assert!(
-        entries.is_empty(),
-        "retiring near-tip RBC delivery runtime should not emit READY/DELIVER traffic",
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        }),
+        "near-tip locally known blocks should still broadcast DELIVER before cleanup",
     );
 
     harness.shutdown.send();

@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: near-tip local payloads no longer suppress DELIVER broadcast, and witness-corruption expectations now match the documented RBC gate
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now keeps live RBC runtime active for near-tip blocks that are merely
+  materialized locally. Exact-frontier runtime retirement remains limited to
+  the authoritative frontier-owner case, so a leader that already knows the
+  block locally still emits DELIVER and READY-repair traffic instead of
+  retiring the session before other peers can commit.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now locks that behavior in by asserting that near-tip locally known blocks
+  keep the live session long enough to broadcast DELIVER.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  now matches the documented witness-corruption semantics: corrupted witness
+  acks may let RBC payload delivery complete, but commit height must remain
+  blocked. The scenario now asserts unchanged block height plus completed/retired
+  RBC telemetry instead of treating delivered-without-commit as a failure.
+- Focused validation for this slice:
+  - `cargo build -p irohad --bin iroha3d`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_da_large_payload_four_peers' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_session_recovers_after_cold_restart' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_election_filters_stake_and_applies_after_margin' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_idle_view_change_recovers_after_leader_shutdown' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_witness_corruption' -- --exact --nocapture --test-threads=1`
+  - `cargo fmt --all`
+
 ## 2026-04-15 Follow-up: review fixes aligned the local Taira bootstrap signer model and removed the last stale flattened deploy-response docs
 - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/bootstrap_kaigi_localnet.sh`,
   `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/config.toml`, and

@@ -313,17 +313,17 @@ async fn run_witness_corruption_scenario() -> Result<()> {
         .and_then(|value| get_bool(value, "delivered"))
         .unwrap_or(false)
         || any_delivered_session_for_height(&sessions_after, session_height);
-    if delivered || status_after.blocks >= expected_height {
-        ensure!(
-            status_after.blocks >= expected_height,
-            "witness corruption scenario recovered via local payload availability; expected commit height to advance"
-        );
-    } else {
-        ensure!(
-            status_after.blocks == status_before.blocks,
-            "witness corruption should gate commit height when RBC delivery stays incomplete"
-        );
-    }
+    let complete = any_complete_session_for_height(&sessions_after, session_height);
+    ensure!(
+        status_after.blocks == status_before.blocks,
+        "witness corruption should gate commit height even when the RBC session completes"
+    );
+    ensure!(
+        delivered
+            || complete
+            || extract_sessions_for_height(&sessions_after, session_height).is_empty(),
+        "witness corruption should still complete RBC delivery telemetry or retire the session after completion"
+    );
     let mut summary_map = Map::new();
     summary_map.insert("scenario".into(), Value::from("witness_corruption"));
     summary_map.insert("expected_height".into(), Value::from(expected_height));

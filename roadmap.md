@@ -2,6 +2,35 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 near-tip RBC runtime stays live until DELIVER is broadcast, and witness-corruption coverage now matches the documented gate):
+the user-reported consensus stall was rooted in early RBC runtime retirement.
+`crates/iroha_core/src/sumeragi/main_loop.rs` no longer retires a live near-tip
+RBC session just because the block is already local; only the exact-frontier
+authoritative owner path can do that now. This keeps DELIVER plus targeted
+READY repair traffic flowing long enough for the committee to commit. The
+adversarial witness-corruption integration expectation is also aligned with the
+current docs: the RBC session may complete while commit height remains blocked.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo build -p irohad --bin iroha3d`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_da_large_payload_four_peers' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_session_recovers_after_cold_restart' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_election_filters_stake_and_applies_after_margin' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_idle_view_change_recovers_after_leader_shutdown' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_witness_corruption' -- --exact --nocapture --test-threads=1`
+  - `cargo fmt --all`
+- open work after this slice:
+  - rerun the remaining user-listed `consensus_and_da` reds as a grouped sweep if
+    broader signoff is needed beyond the focused cases above; and
+  - run `cargo test --workspace` only when a several-hour validation window is
+    available.
+
 Latest sync (2026-04-15 canonical contract deploy receipts landed across Torii/CLI/SDKs, and the shipped Taira validator profile is now template-only):
 the remaining repo-contained contract-app receipt gap is closed. Torii now
 returns the canonical `DeployContractBundleReceiptDto` for both
