@@ -365,6 +365,16 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             .ensure_blocks(baseline_height)
             .await
             .wrap_err("baseline height did not recover after restart")?;
+        let recovered_heights =
+            wait_for_converged_heights_with_skew(&network, baseline_height, sync_timeout, 0)
+                .await
+                .wrap_err("baseline heights did not reconverge after restart")?;
+        ensure!(
+            recovered_heights
+                .iter()
+                .all(|height| *height == baseline_height),
+            "post-restart peers should settle on baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
+        );
         let resumed_client = primary_peer.client();
         for i in 0..3 {
             let message = format!("npos pacemaker resume seed {i}");

@@ -31,7 +31,11 @@ const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
 const SAMPLE_BLOCKS: u64 = 12;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const SAMPLE_TIMEOUT: Duration = Duration::from_secs(90);
+// Six-peer NPoS baseline runs under full telemetry can absorb multiple bounded
+// quorum-timeout recoveries while still producing useful samples. Keep the
+// scenario strict on latency EMAs, but give the sampling window enough slack to
+// drain the queued transactions on slower grouped CI hosts.
+const SAMPLE_TIMEOUT: Duration = Duration::from_secs(150);
 // Grouped integration runs add startup serialization and telemetry sampling jitter on slower
 // hosts, so commit/precommit EMA budgets need slack beyond the nominal 1 s target.
 const COMMIT_EMA_MAX_MS: f64 = 4_000.0;
