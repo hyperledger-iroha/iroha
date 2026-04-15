@@ -427,6 +427,7 @@ const LOCALNET_TELEMETRY_ENABLED: bool = true;
 const LOCALNET_TELEMETRY_PROFILE: &str = "extended";
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
+const LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV: &str = "IROHA_LOCALNET_ALLOW_UNSAFE_SORA_SINGLE_PEER";
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
 /// Keep this at 1 so aggregators do not time out before quorum on fast pipelines.
 /// Default max transactions per block for localnet (targets 10k TPS).
@@ -730,11 +731,15 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             "`--mode-activation-height` must be greater than zero"
         ));
     }
+    let allow_single_peer_sora =
+        std::env::var_os(LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV).is_some();
     if opts.sora_profile.is_some() {
         if !opts.build_line.is_iroha3() {
             return Err(eyre!("`--sora-profile` requires `--build-line iroha3`"));
         }
-        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS {
+        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS
+            && !(allow_single_peer_sora && opts.peers.get() == 1)
+        {
             return Err(eyre!(
                 "`--sora-profile` requires at least {LOCALNET_SORA_MIN_PEERS} peers"
             ));
