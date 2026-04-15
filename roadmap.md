@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 DA eviction harness scales lane TEU budget for large payload blocks):
+the reproducible `sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store`
+stall was a test-harness lane-budget regression, not a new core consensus
+deadlock. `integration_tests/tests/sumeragi_da.rs` now keeps the historical
+256 KiB lane cap for tiny payload scenarios but scales
+`scheduler.teu_capacity` and `nexus.fusion.{floor_teu,exit_teu}` with payload
+size once overlay + RBC accounting for a single large DA block can exceed that
+fixed ceiling. That unblocks the height-2 commit in the 128 KiB eviction and
+restart-with-roster-change scenarios.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - rerun the broader failing batch only when another longer validation window
+    is available, especially `permissioned_localnet_reaches_100_blocks`,
+    `rotation_signer_indices_match_expected_set_a_n7_multiple_heights`, and
+    the longer randomness / confidential localnet cases from the original red
+    report.
+
 Latest sync (2026-04-15 stale prior-height frontier slots no longer hijack exact-frontier recovery):
 the user-reported `consensus_and_da` stall cluster is green on the current
 tree. `crates/iroha_core/src/sumeragi/main_loop.rs` now drops stale
