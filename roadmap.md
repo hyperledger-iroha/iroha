@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 same-height vote-backed recovery fixes the reported restart and timeout-pressure stalls):
+the reported `sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime`,
+`sumeragi_lock_convergence::sumeragi_view_change_lock_convergence`, and
+`zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet`
+failures are fixed on the current tree. Sumeragi now joins a lower same-height
+vote-backed recovery branch after downtime when the local validator has not
+already voted for the competing live owner, while still keeping locally
+conflicting branches passive. Higher-view proposal and precommit paths now wait
+for lower same-height vote evidence to resolve, and retained superseded payloads
+remain available for exact body fetch recovery.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/propose.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib stale_vote_backed_block_created_supersedes_live_owner_without_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_higher_view_block_created_stays_passive_after_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib stale_block_created -- --nocapture`
+  - `cargo test -p iroha_core --lib "higher_view" -- --nocapture`
+  - `cargo test -p iroha_core --lib event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_lower_conflict -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
+- open work after this slice:
+  - run `cargo test --workspace` only when a several-hour validation window is
+    available.
+
 Latest sync (2026-04-15 DA eviction harness scales lane TEU budget for large payload blocks):
 the reproducible `sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store`
 stall was a test-harness lane-budget regression, not a new core consensus
@@ -42,13 +76,13 @@ performance baseline now uses a 150-second sampling window that matches the
 observed bounded recovery behavior on slower grouped runs.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - verified in this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_core stale_frontier_slot_does_not_hijack_exact_frontier_view_advance -- --nocapture`

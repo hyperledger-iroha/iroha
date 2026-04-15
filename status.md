@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now keeps committed/old frontier slots out of active-round selection, prunes
+  frontier slot state after commit, and lets idle view-change repair ignore
+  stale exact-body repair state from older views.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  now treats stale same-height recovery payloads with commit-vote or QC evidence
+  as authoritative over a live frontier owner when the local validator has not
+  cast a conflicting vote. A local conflicting same-height vote still keeps the
+  recovery branch passive.
+- The commit/proposal paths now defer higher-view proposal or precommit work
+  while lower same-height vote verification is pending or cached, but allow the
+  candidate branch to proceed once its observed vote strength is at least as
+  strong as the conflict. Superseded vote-backed payloads are retained so exact
+  body fetch can still recover the lower branch.
+- Focused regression coverage was added in
+  `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  for stale vote-backed recovery, same-height conflict deferral, retained
+  superseded payload fetch, frontier pruning, and exact repair view rotation.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib stale_vote_backed_block_created_supersedes_live_owner_without_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_higher_view_block_created_stays_passive_after_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib stale_block_created -- --nocapture`
+  - `cargo test -p iroha_core --lib "higher_view" -- --nocapture`
+  - `cargo test -p iroha_core --lib event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_lower_conflict -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
+- `cargo test --workspace` was not run in this focused slice because the
+  repository notes document it as a multi-hour run.
+
 ## 2026-04-15 Follow-up: DA eviction harness now scales lane TEU budget for large payload blocks
 - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
   now derives `nexus.lane_catalog[*].metadata["scheduler.teu_capacity"]`
@@ -20,23 +52,23 @@ Last updated: 2026-04-15
   - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
 
 ## 2026-04-15 Follow-up: stale prior-height frontier slots no longer hijack exact-frontier recovery, and the reported `consensus_and_da` reds rerun cleanly
-- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now drops any cached `frontier_slot` whose height no longer matches the live
   contiguous frontier before applying exact-frontier events. This prevents an
   old slot from claiming `MissingQc` / timeout ownership for the previous
   height and discarding the real view-change request as stale.
-- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
   now locks that regression in with
   `stale_frontier_slot_does_not_hijack_exact_frontier_view_advance`.
-- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
   now matches restart recovery against the exact `(block_hash, height, view)`
   RBC session and waits for persisted session metadata to retain the pre-shutdown
   chunk count before killing the network, so the cold-restart assertion no
   longer races a partially flushed store file.
-- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
   now requires the restarted network to reconverge exactly at the recovered
   baseline height before sending the post-restart pacemaker traffic.
-- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
   now gives the six-peer full-telemetry baseline 150 seconds instead of 90
   seconds, which matches the observed bounded quorum-timeout recovery time on
   slower grouped runs without relaxing the EMA assertions.

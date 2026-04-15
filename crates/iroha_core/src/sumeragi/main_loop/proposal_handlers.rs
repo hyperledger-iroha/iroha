@@ -1175,12 +1175,44 @@ impl Actor {
             superseded.insert((owner_hash, view));
         }
         for (hash, old_view) in superseded {
-            self.pending.pending_blocks.remove(&hash);
+            let retain_payload = self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| {
+                    self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
+                });
+            let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
             self.pending.pending_fetch_requests.remove(&hash);
             self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_block_view_change(&hash);
+            if retain_payload && let Some(mut pending) = pending {
+                if !pending.is_retired_same_height() {
+                    pending.retire_same_height();
+                }
+                let frontier_info =
+                    self.authoritative_slot_frontier_info(pending.height, pending.view, hash);
+                self.slot_tracker.note_retained_branch(
+                    pending.height,
+                    pending.view,
+                    hash,
+                    frontier_info,
+                    true,
+                    Instant::now(),
+                );
+                self.pending.pending_blocks.insert(hash, pending);
+                debug!(
+                    height,
+                    incoming_view = view,
+                    superseded_view = old_view,
+                    incoming_block = %incoming_hash,
+                    superseded_block = %hash,
+                    "retiring superseded contiguous-frontier owner with commit evidence for payload recovery"
+                );
+                continue;
+            }
             self.clean_rbc_sessions_for_block(hash, height);
             debug!(
                 height,
@@ -1191,6 +1223,34 @@ impl Actor {
                 "dropping superseded contiguous-frontier owner after stronger same-height evidence"
             );
         }
+    }
+
+    fn should_retain_superseded_contiguous_frontier_payload(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        if !self.runtime_da_enabled()
+            || matches!(pending.validation_status, ValidationStatus::Invalid)
+            || self.kura.get_block_height_by_hash(block_hash).is_some()
+        {
+            return false;
+        }
+        let committed_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        if !pending_extends_tip(
+            pending.height,
+            pending.block.header().prev_block_hash(),
+            committed_height,
+            tip_hash,
+        ) {
+            return false;
+        }
+        pending.is_retired_same_height()
+            || pending.local_commit_vote_emitted()
+            || pending.commit_qc_observed()
+            || self.pending_block_has_commit_votes(block_hash, pending.height, pending.view)
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view)
     }
 
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
@@ -1888,13 +1948,6 @@ impl Actor {
                 block = %block_hash,
                 "accepting BlockCreated as passive retained branch because local same-height vote history conflicts"
             );
-        } else if passive_conflicting_same_height_owner {
-            debug!(
-                height,
-                view,
-                block = %block_hash,
-                "accepting BlockCreated as passive retained branch because the current same-height frontier owner is still locally live"
-            );
         }
         if let Some(local_view) = stale_view {
             if !allow_stale_block_created(
@@ -2085,11 +2138,45 @@ impl Actor {
                 pending.commit_qc_observed(),
             )
         });
+        let stale_recovery_has_commit_evidence = stale_view.is_some()
+            && !passive_conflicting_same_height_vote
+            && height == committed_height.saturating_add(1)
+            && pending_extends_tip(
+                height,
+                header.prev_block_hash(),
+                self.state.committed_height(),
+                self.state.latest_block_hash_fast(),
+            )
+            && (observed_commit_qc_epoch.is_some()
+                || self.pending_block_has_commit_votes(block_hash, height, view)
+                || self.pending_block_has_qc(block_hash, height, view));
+        if passive_conflicting_same_height_owner {
+            if stale_recovery_has_commit_evidence {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "accepting stale BlockCreated with commit evidence as authoritative recovery over the current same-height frontier owner"
+                );
+            } else {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "accepting BlockCreated as passive retained branch because the current same-height frontier owner is still locally live"
+                );
+            }
+        }
+        let authoritative_recovery_supersede = authoritative_frontier_owner_supersede
+            || (stale_recovery_has_commit_evidence && passive_conflicting_same_height_owner);
         // Certified same-height recovery must stay authoritative even if the incoming block's
         // view is older than the locally stalled branch. Demoting it to a passive retained
         // branch would keep the stale owner live and strand the commit QC on an inactive payload.
-        let stale_payload_only = (stale_view.is_some() && !authoritative_frontier_owner_supersede)
-            || passive_conflicting_same_height;
+        let stale_payload_only = (stale_view.is_some()
+            && !authoritative_recovery_supersede
+            && !stale_recovery_has_commit_evidence)
+            || passive_conflicting_same_height_vote
+            || (passive_conflicting_same_height_owner && !stale_recovery_has_commit_evidence);
         let revive_aborted = !stale_payload_only
             && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {
                 aborted
@@ -3523,7 +3610,7 @@ impl Actor {
             }
         }
         if !stale_payload_only {
-            if authoritative_frontier_owner_supersede {
+            if authoritative_recovery_supersede {
                 self.drop_superseded_contiguous_frontier_owner_state(block_hash, height, view);
             }
             if let Some(hint) = inline_hint {
@@ -3545,7 +3632,7 @@ impl Actor {
             );
             self.clear_missing_block_view_change(&block_hash);
         } else {
-            if authoritative_frontier_owner_supersede {
+            if authoritative_recovery_supersede {
                 self.note_frontier_block_created_authoritatively(
                     block_hash,
                     height,

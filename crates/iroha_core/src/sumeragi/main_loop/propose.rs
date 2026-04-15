@@ -648,6 +648,19 @@ impl Actor {
             );
             return Ok(false);
         }
+        if self.same_height_vote_verification_pending_at_or_before_view(
+            proposal_height,
+            view,
+            proposal_epoch,
+        ) {
+            debug!(
+                height = proposal_height,
+                view,
+                epoch = proposal_epoch,
+                "deferring proposal assembly: same-height vote verification is pending"
+            );
+            return Ok(false);
+        }
         let _lock_lag_highest_qc_deferred = !self.highest_qc_extends_locked(highest_qc)
             && self.defer_highest_qc_update_for_lock_catchup(
                 height, view, highest_qc, now, "proposal",

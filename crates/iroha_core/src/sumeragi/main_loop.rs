@@ -5125,6 +5125,199 @@ impl Actor {
         })
     }
 
+    fn same_height_vote_verification_pending_at_or_before_view(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+    ) -> bool {
+        let key_matches = |phase: crate::sumeragi::consensus::Phase,
+                           vote_height: u64,
+                           vote_view: u64,
+                           vote_epoch: u64| {
+            matches!(
+                phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote_height == height
+                && vote_view <= view
+                && vote_epoch == epoch
+        };
+
+        self.subsystems
+            .vote_verify
+            .pending_validation
+            .values()
+            .any(|vote| key_matches(vote.phase, vote.height, vote.view, vote.epoch))
+            || self
+                .subsystems
+                .vote_verify
+                .inflight
+                .values()
+                .any(|inflight| {
+                    let vote = &inflight.vote;
+                    key_matches(vote.phase, vote.height, vote.view, vote.epoch)
+                })
+            || self.subsystems.vote_verify.pending.values().any(|pending| {
+                let vote = &pending.vote;
+                key_matches(vote.phase, vote.height, vote.view, vote.epoch)
+            })
+    }
+
+    fn same_height_conflicting_consensus_evidence_at_or_before_view(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        candidate_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        let conflicting_qc = |phase: crate::sumeragi::consensus::Phase,
+                              vote_height: u64,
+                              vote_view: u64,
+                              vote_epoch: u64,
+                              block_hash: HashOf<BlockHeader>| {
+            matches!(
+                phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote_height == height
+                && vote_view <= view
+                && vote_epoch == epoch
+                && block_hash != candidate_hash
+        };
+
+        if self.qc_cache.values().any(|qc| {
+            conflicting_qc(
+                qc.phase,
+                qc.height,
+                qc.view,
+                qc.epoch,
+                qc.subject_block_hash,
+            )
+        }) {
+            return true;
+        }
+
+        let candidate_count = self.same_height_commit_vote_signer_count_at_or_before_view(
+            height,
+            view,
+            epoch,
+            candidate_hash,
+        );
+        let strongest_conflict = self
+            .strongest_conflicting_same_height_commit_vote_count_at_or_before_view(
+                height,
+                view,
+                epoch,
+                candidate_hash,
+            );
+
+        strongest_conflict > 0 && strongest_conflict >= candidate_count.max(1)
+    }
+
+    fn same_height_commit_vote_signer_count_at_or_before_view(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> usize {
+        let mut signers = BTreeSet::new();
+        self.collect_same_height_commit_vote_signers_at_or_before_view(
+            height,
+            view,
+            epoch,
+            |vote| {
+                if vote.block_hash == block_hash {
+                    signers.insert(vote.signer);
+                }
+            },
+        );
+        signers.len()
+    }
+
+    fn strongest_conflicting_same_height_commit_vote_count_at_or_before_view(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        candidate_hash: HashOf<BlockHeader>,
+    ) -> usize {
+        let mut signers_by_hash = BTreeMap::new();
+        self.collect_same_height_commit_vote_signers_at_or_before_view(
+            height,
+            view,
+            epoch,
+            |vote| {
+                if vote.block_hash != candidate_hash {
+                    signers_by_hash
+                        .entry(vote.block_hash)
+                        .or_insert_with(BTreeSet::new)
+                        .insert(vote.signer);
+                }
+            },
+        );
+        signers_by_hash
+            .values()
+            .map(BTreeSet::len)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn collect_same_height_commit_vote_signers_at_or_before_view(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        mut collect: impl FnMut(&crate::sumeragi::consensus::Vote),
+    ) {
+        let matches_vote = |vote: &crate::sumeragi::consensus::Vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::Commit
+                && vote.height == height
+                && vote.view <= view
+                && vote.epoch == epoch
+        };
+
+        for vote in self.stored_votes().filter(|vote| matches_vote(vote)) {
+            collect(vote);
+        }
+        for vote in self
+            .subsystems
+            .vote_verify
+            .pending_validation
+            .values()
+            .filter(|vote| matches_vote(vote))
+        {
+            collect(vote);
+        }
+        for inflight in self.subsystems.vote_verify.inflight.values() {
+            let vote = &inflight.vote;
+            if matches_vote(vote) {
+                collect(vote);
+            }
+        }
+        for pending in self.subsystems.vote_verify.pending.values() {
+            let vote = &pending.vote;
+            if matches_vote(vote) {
+                collect(vote);
+            }
+        }
+    }
+
+    fn should_defer_tip_precommit_for_same_height_conflict(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+    ) -> bool {
+        height == self.committed_height_snapshot().saturating_add(1)
+            && view > 0
+            && self.same_height_conflicting_consensus_evidence_at_or_before_view(
+                height, view, epoch, block_hash,
+            )
+    }
+
     fn authoritative_block_payload_available(&self, hash: HashOf<BlockHeader>) -> bool {
         self.block_payload_available_for_progress(hash)
             || self
@@ -5195,6 +5388,7 @@ impl Actor {
     fn slot_has_authoritative_payload(&self, height: u64, view: u64) -> bool {
         self.pending.pending_blocks.values().any(|pending| {
             !pending.aborted
+                && !pending.is_retired_same_height()
                 && pending.validation_status != ValidationStatus::Invalid
                 && pending.height == height
                 && pending.view == view
@@ -5205,6 +5399,7 @@ impl Actor {
             .as_ref()
             .is_some_and(|inflight| {
                 !inflight.pending.aborted
+                    && !inflight.pending.is_retired_same_height()
                     && inflight.pending.validation_status != ValidationStatus::Invalid
                     && inflight.pending.height == height
                     && inflight.pending.view == view
@@ -5223,6 +5418,10 @@ impl Actor {
                 .any(|(key, session)| {
                     key.1 == height
                         && key.2 == view
+                        && !self
+                            .slot_tracker
+                            .retained_branches
+                            .contains_key(&(height, view, key.0))
                         && self.rbc_session_has_authoritative_payload_for_progress(*key, session)
                 })
     }
@@ -14674,6 +14873,18 @@ impl Actor {
         height == self.committed_height_snapshot().saturating_add(1)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == height
+                    && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && slot.exact_fetch_armed
+                    && !slot.body_present
+            })
+    }
+
+    fn exact_frontier_body_repair_blocks_view_change(&self, height: u64, view: u64) -> bool {
+        height == self.committed_height_snapshot().saturating_add(1)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && (slot.view == view
+                        || self.frontier_slot_has_live_local_owner_work_for_view(slot, view))
                     && matches!(slot.mode, FrontierSlotMode::Normal)
                     && slot.exact_fetch_armed
                     && !slot.body_present
@@ -25428,7 +25639,7 @@ impl Actor {
         if let Some(frontier_height) = self
             .frontier_slot
             .as_ref()
-            .filter(|slot| !slot.body_present)
+            .filter(|slot| slot.height > committed_height && !slot.body_present)
             .map(|slot| slot.height)
             && frontier_height < active_height
         {
@@ -31160,10 +31371,8 @@ impl Actor {
                         tip_hash,
                     )
             });
-        let exact_frontier_body_repair_active = height == contiguous_frontier_height
-            && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height && slot.exact_fetch_armed && !slot.body_present
-            });
+        let exact_frontier_body_repair_active =
+            self.exact_frontier_body_repair_blocks_view_change(height, current_view);
         let authoritative_frontier_payload_present = height == contiguous_frontier_height
             && self.slot_has_authoritative_payload(height, current_view);
         let frontier_slot_vote_backed_evidence = height == contiguous_frontier_height
