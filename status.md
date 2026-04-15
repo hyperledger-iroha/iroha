@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-15
 
+## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now keeps committed/old frontier slots out of active-round selection, prunes
+  frontier slot state after commit, and lets idle view-change repair ignore
+  stale exact-body repair state from older views.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  now treats stale same-height recovery payloads with commit-vote or QC evidence
+  as authoritative over a live frontier owner when the local validator has not
+  cast a conflicting vote. A local conflicting same-height vote still keeps the
+  recovery branch passive.
+- The commit/proposal paths now defer higher-view proposal or precommit work
+  while lower same-height vote verification is pending or cached, but allow the
+  candidate branch to proceed once its observed vote strength is at least as
+  strong as the conflict. Superseded vote-backed payloads are retained so exact
+  body fetch can still recover the lower branch.
+- Focused regression coverage was added in
+  `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  for stale vote-backed recovery, same-height conflict deferral, retained
+  superseded payload fetch, frontier pruning, and exact repair view rotation.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib stale_vote_backed_block_created_supersedes_live_owner_without_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib conflicting_higher_view_block_created_stays_passive_after_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib stale_block_created -- --nocapture`
+  - `cargo test -p iroha_core --lib "higher_view" -- --nocapture`
+  - `cargo test -p iroha_core --lib event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_lower_conflict -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
+- `cargo test --workspace` was not run in this focused slice because the
+  repository notes document it as a multi-hour run.
+
 ## 2026-04-15 Follow-up: killed-leader idle view changes now recover after queue timer refreshes
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now evaluates no-proposal idle timeouts against the older of the tracked

@@ -2149,7 +2149,6 @@ impl Actor {
             && !block_known
             && incoming_qc.is_none()
             && validator_checkpoint.is_none()
-            && !has_commit_votes
             && !cached_frontier_qc
             && (requested_missing_block
                 || parent_known_locally

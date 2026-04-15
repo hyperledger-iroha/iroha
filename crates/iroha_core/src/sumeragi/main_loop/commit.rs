@@ -3152,7 +3152,23 @@ impl Actor {
                     && !pending.local_commit_vote_emitted()
                     && !pending.commit_qc_observed()
                 {
-                    emit_precommit = true;
+                    if self.should_defer_tip_precommit_for_same_height_conflict(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        vote_epoch,
+                    ) {
+                        debug!(
+                            block = %hash,
+                            height = pending_height,
+                            view = pending_view,
+                            epoch = vote_epoch,
+                            "deferring precommit: conflicting same-height consensus evidence is pending or cached"
+                        );
+                        precommit_action = Some("same_height_conflict_evidence");
+                    } else {
+                        emit_precommit = true;
+                    }
                 }
             } else {
                 debug!(
@@ -4064,6 +4080,19 @@ impl Actor {
 
         let topology = super::network_topology::Topology::new(local_commit_topology);
         let vote_epoch = self.epoch_for_height(height);
+        if self.should_defer_tip_precommit_for_same_height_conflict(
+            block_hash, height, view, vote_epoch,
+        ) {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                epoch = vote_epoch,
+                trigger,
+                "deferring event-driven precommit: conflicting same-height consensus evidence is pending or cached"
+            );
+            return false;
+        }
         let parent_hash = pending.block.header().prev_block_hash();
         let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
         let emitted = self.emit_precommit_vote(
@@ -6423,6 +6452,7 @@ impl Actor {
         self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
+        self.prune_frontier_slot_state();
         let _ = self.maybe_release_committed_edge_conflict_owner("committed_height_advanced");
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
