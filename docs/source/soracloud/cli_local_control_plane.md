@@ -38,6 +38,25 @@ manager; the CLI does not keep a shadow control-plane mirror.
   builds with `verify-build.sh`. This is a dev shim for the deterministic
   plane, not a full embedded IVM runtime.
 
+## Vanity Alias Access Modes
+
+- Soracloud deploys keep the registered vanity host stable. Releasing a new
+  revision updates Soracloud route state, not per-release DNS records or
+  per-service nginx host lists.
+- The canonical runtime origin is always the registered alias itself, for
+  example:
+  - `https://docs.sora/`
+  - `https://solswap-indexer.sora/api/indexer/v1/health`
+- For clients that cannot resolve SoraDNS names directly yet, Torii exposes a
+  generic fallback path:
+  - `https://taira.sora.org/soradns/docs.sora/`
+  - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
+- The `/soradns/<alias>/...` path is a compatibility gateway, not the
+  canonical app origin. App manifests, frontend env vars, and release notes
+  should continue to point at the vanity host itself.
+- The fallback accepts any active registered alias FQDN, not only `.sora`
+  names. `.dao`, `.nexus`, and future suffixes follow the same rule.
+
 ## Offline Scaffolding Commands
 
 - `iroha app soracloud init`
@@ -537,6 +556,12 @@ TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
 iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
-For Taira-style deployments, keep Torii root bound to Torii itself and publish
-the frontend only through SoraFS CID URLs under
-`https://taira.sora.org/sorafs/cid/...`.
+For Taira-style deployments, keep Torii root bound to Torii itself and use the
+gateway host only as:
+
+- the Torii/control-plane base URL
+- the non-SoraDNS fallback form `https://taira.sora.org/soradns/<alias>/...`
+- the SoraFS CID gateway for intentionally CID-only frontend assets
+
+Do not replace a stable Soracloud vanity host with a `taira.sora.org` path
+just because a new revision, build, or CID was published.

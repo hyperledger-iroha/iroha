@@ -468,22 +468,33 @@ From `../iroha2-block-explorer-web`:
    - if your Torii endpoints are not `127.0.0.1:18080..18083`, update the
      `upstream taira_validator_{1,2,3,4}_upstream` targets to the live
      validator endpoints before reload.
-   - keep the shared `taira_public_edge_upstream` wired to every live validator
-     and use it for `taira.sora.org` plus the explorer's `/status` and `/v1/*`
-     proxy locations. Do not pin those public hostnames to
-     `taira_validator_1_upstream`: a single dead validator will turn MCP and
-     explorer API traffic into `502 Bad Gateway`.
-   - keep the `proxy_next_upstream ... non_idempotent` retry policy on those
-     shared public locations. MCP `initialize` and tool calls are POSTs, so the
-     edge has to allow non-idempotent upstream failover when one validator
-     listener is down.
-   - keep the dedicated `location = /v1/mcp` blocks intact; they make the
+  - keep the shared `taira_public_edge_upstream` wired to every live validator
+    and use it for `taira.sora.org` plus the explorer's `/status` and the
+    general `/v1/*` proxy locations. Do not pin MCP or the generic API surface
+    to `taira_validator_1_upstream`: a single dead validator will turn MCP and
+    explorer API traffic into `502 Bad Gateway`.
+  - keep the `proxy_next_upstream ... non_idempotent` retry policy on those
+    shared public locations. MCP `initialize` and tool calls are POSTs, so the
+    edge has to allow non-idempotent upstream failover when one validator
+    listener is down.
+  - keep the dedicated `location = /v1/mcp` blocks intact; they make the
      Codex/Torii MCP path explicit on both public hostnames and keep future
      route changes from accidentally hiding the MCP endpoint behind the generic
      `/` or `/v1/` proxy rules.
-   - do not special-case `/sorafs/cid/`; it should proxy through the normal
-     Torii upstream just like the rest of the public API surface.
-   - keep `client_max_body_size 512m;` intact on both TLS server blocks; the
+  - on the shared convenience host, pin the public SoraFS/app-api publication
+    surface to `taira_validator_1_upstream` until all public validators expose
+    symmetric SoraFS capacity and can rehydrate the same CID set. The checked-in
+    nginx example now special-cases:
+    - `/v1/app-api/`
+    - `/v1/sorafs/storage/`
+    - `/v1/sorafs/pin/`
+    - `/v1/sorafs/cid/`
+    - `/sorafs/cid/`
+    - `*.sorafs.taira.sora.org`
+    Keep those routes on the same convenience validator that receives
+    `POST /v1/sorafs/storage/pin`; otherwise the shared host will flap between
+    `200` and `404` depending on which validator answers the CID read.
+  - keep `client_max_body_size 512m;` intact on both TLS server blocks; the
      native Hayahi runtime publish path now uploads about `300 MiB+` of JSON to
      `/v1/sorafs/storage/pin` once the payload is base64-encoded.
    - keep `torii.max_content_len = 536_870_912` in `config.toml`; otherwise

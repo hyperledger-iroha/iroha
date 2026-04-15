@@ -62601,6 +62601,60 @@ async fn frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stale_frontier_slot_does_not_hijack_exact_frontier_view_advance() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let stale_height = actor.committed_height_snapshot();
+    let frontier_height = stale_height.saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let stale_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC8; Hash::LENGTH]));
+
+    actor.phase_tracker.start_new_round(frontier_height, now);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, view, now);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        stale_height,
+        view,
+        stale_block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+    actor
+        .frontier_slot
+        .as_mut()
+        .expect("stale frontier slot")
+        .phase = super::FrontierSlotPhase::AwaitCommitQc;
+
+    actor.trigger_view_change_with_cause(frontier_height, view, super::ViewChangeCause::MissingQc);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(frontier_height),
+        Some(view.saturating_add(1)),
+        "MissingQc rotation for the live frontier must ignore stale prior-height slot ownership"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_none_or(|slot| slot.height == frontier_height),
+        "stale prior-height frontier slots must not survive exact-frontier view rotation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn duplicate_vote_observation_keeps_frontier_quorum_timeout_rebroadcast_window_armed() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

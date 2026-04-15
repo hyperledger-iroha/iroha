@@ -34,9 +34,7 @@ use iroha::{
         Encode,
         account::AccountId,
         asset::AssetDefinitionId,
-        isi::{
-            InstructionBox, OpaqueInstruction, decode_instruction_from_pair,
-        },
+        isi::{InstructionBox, OpaqueInstruction, decode_instruction_from_pair},
         metadata::Metadata,
         name::Name,
         prelude::ExposedPrivateKey,
@@ -51,18 +49,18 @@ use iroha::{
             SecretEnvelopeV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
             SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestV1,
             SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-            SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
-            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
-            SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraNetworkAllowlistEntryV1,
-            SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
+            SoraHfModelFormatV1, SoraInrouGuestOsV1, SoraInrouManifestV1, SoraLeaseVolumeBindingV1,
+            SoraLeaseVolumeKindV1, SoraMailboxContractV1, SoraModelHostCapabilityRecordV1,
+            SoraModelPrivacyModeV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+            SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
             SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
             SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-            SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
-            SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
-            SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
-            SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
-            encode_agent_artifact_allow_provenance_payload,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
+            SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
+            SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
+            SoraUploadedModelWrappedKeyV1, encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
@@ -9387,9 +9385,7 @@ fn soracloud_endpoint_requires_legacy_inrou_json(torii_url: &str) -> bool {
     let legacy_opt_in = std::env::var("IROHA_SORACLOUD_TAIRA_LEGACY_INROU_JSON")
         .map(|value| {
             let value = value.trim();
-            value == "1"
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("yes")
+            value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
         })
         .unwrap_or(false);
     legacy_opt_in
@@ -9400,9 +9396,7 @@ fn soracloud_endpoint_requires_legacy_inrou_json(torii_url: &str) -> bool {
 }
 
 fn apply_legacy_inrou_bundle_request_compat(value: &mut norito::json::Value) -> Result<()> {
-    fn rewrite_legacy_inrou_object(
-        inrou: &mut norito::json::Map,
-    ) {
+    fn rewrite_legacy_inrou_object(inrou: &mut norito::json::Map) {
         let legacy_overlay = inrou
             .get("guest_images")
             .and_then(norito::json::Value::as_object)
@@ -9477,8 +9471,8 @@ fn apply_legacy_inrou_bundle_request_compat(value: &mut norito::json::Value) -> 
 fn compute_taira_legacy_container_manifest_hash(
     container: &SoraContainerManifestV1,
 ) -> Result<Hash> {
-    let mut legacy_value =
-        json::to_value(container).wrap_err("failed to encode container manifest for Taira compat")?;
+    let mut legacy_value = json::to_value(container)
+        .wrap_err("failed to encode container manifest for Taira compat")?;
     if let Some(inrou) = legacy_value
         .as_object_mut()
         .and_then(|container| container.get_mut("inrou"))
@@ -10215,8 +10209,8 @@ fn publish_sorafs_directory_artifact(
     }
 
     let descriptor = chunker_registry::default_descriptor();
-    let (plan, payload) =
-        CarBuildPlan::from_directory_with_profile(input_dir, descriptor.profile).map_err(|err| {
+    let (plan, payload) = CarBuildPlan::from_directory_with_profile(input_dir, descriptor.profile)
+        .map_err(|err| {
             eyre!(
                 "failed to package {description} `{}`: {err}",
                 input_dir.display()
@@ -10386,8 +10380,13 @@ fn publish_inrou_guest_image_artifacts(
     })?;
     let inrou_dir = workspace_dir.join("inrou");
 
-    let mut member_paths_by_isa = Vec::new();
-    for (guest_isa, image) in &inrou.guest_images {
+    let mut outputs = Vec::new();
+    let guest_isas = inrou.guest_images.keys().copied().collect::<Vec<_>>();
+    for guest_isa in guest_isas {
+        let image = inrou
+            .guest_images
+            .get(&guest_isa)
+            .expect("guest image exists while publishing");
         let mut member_paths = vec![
             validate_local_inrou_member(&inrou_dir, &image.kernel_image_path)?,
             validate_local_inrou_member(&inrou_dir, &image.rootfs_image_path)?,
@@ -10395,25 +10394,48 @@ fn publish_inrou_guest_image_artifacts(
         if let Some(initrd_image_path) = image.initrd_image_path.as_deref() {
             member_paths.push(validate_local_inrou_member(&inrou_dir, initrd_image_path)?);
         }
-        member_paths_by_isa.push((*guest_isa, member_paths));
-    }
+        let distribution = image.distribution.clone();
 
-    let published = publish_sorafs_directory_artifact(
-        &inrou_dir,
-        "Inrou guest-image artifact",
-        torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
+        let staged_artifact = PrivateModelSourceTempDir::new("iroha-inrou-guest-image-artifact")
+            .wrap_err_with(|| {
+                format!(
+                    "failed to stage guest-image artifact for {}",
+                    guest_isa.as_str()
+                )
+            })?;
+        for member_path in &member_paths {
+            let source_path = inrou_dir.join(member_path);
+            let destination_path = staged_artifact.path().join(member_path);
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to create staged guest-image artifact directory `{}`",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::copy(&source_path, &destination_path).wrap_err_with(|| {
+                format!(
+                    "failed to stage guest-image artifact member `{}` into `{}`",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
 
-    let mut outputs = Vec::new();
-    for (guest_isa, member_paths) in member_paths_by_isa {
+        let published = publish_sorafs_directory_artifact(
+            staged_artifact.path(),
+            &format!("Inrou guest-image artifact ({})", guest_isa.as_str()),
+            torii_url,
+            authority,
+            key_pair,
+            timeout_secs,
+        )?;
+
         let image = inrou
             .guest_images
             .get_mut(&guest_isa)
             .expect("guest image was validated before publishing");
-        let distribution = image.distribution.clone();
         image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: published.manifest_digest_hex.clone(),
             content_cid: published.content_cid.clone(),
@@ -10423,7 +10445,7 @@ fn publish_inrou_guest_image_artifacts(
         outputs.push(InrouGuestImageArtifactPublishOutput {
             service_name: service_name.clone(),
             guest_isa: guest_isa.as_str().to_owned(),
-            source_dir: inrou_dir.to_string_lossy().into_owned(),
+            source_dir: inrou_dir.join(guest_isa.as_str()).to_string_lossy().into_owned(),
             hydrate_mount_path: "/inrou".to_owned(),
             member_paths,
             content_cid: published.content_cid.clone(),
@@ -10435,7 +10457,8 @@ fn publish_inrou_guest_image_artifacts(
     }
 
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    bundle.validate_for_admission()
+    bundle
+        .validate_for_admission()
         .wrap_err("published Inrou guest-image artifact refs made the deployment bundle invalid")?;
 
     Ok(outputs)
@@ -15792,7 +15815,8 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
+                    distribution:
+                        iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
                     published_artifact: None,
                 },
             ),
@@ -15802,7 +15826,8 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
+                    distribution:
+                        iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
                     published_artifact: None,
                 },
             ),
@@ -22436,8 +22461,8 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded = decode_soracloud_tx_instructions(&response, false)
-            .expect("decode framed instructions");
+        let decoded =
+            decode_soracloud_tx_instructions(&response, false).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
@@ -22463,8 +22488,7 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded =
-            decode_soracloud_tx_instructions(&response, true).expect("decode raw draft");
+        let decoded = decode_soracloud_tx_instructions(&response, true).expect("decode raw draft");
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);

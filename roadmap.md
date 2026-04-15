@@ -36,6 +36,43 @@ remain available for exact body fetch recovery.
   - run `cargo test --workspace` only when a several-hour validation window is
     available.
 
+Latest sync (2026-04-15 stale prior-height frontier slots no longer hijack exact-frontier recovery):
+the user-reported `consensus_and_da` stall cluster is green on the current
+tree. `crates/iroha_core/src/sumeragi/main_loop.rs` now drops stale
+prior-height `frontier_slot` ownership before processing exact-frontier events,
+which unblocks the real height-`committed + 1` `MissingQc` / timeout rotation.
+The cold-restart RBC test now waits for persisted session metadata keyed by the
+exact `(block_hash, height, view)` session and preserves the observed chunk
+count before shutdown. The two long-running NPoS harnesses were also tightened:
+the pacemaker restart scenario now waits for exact baseline-height
+reconvergence before injecting post-restart traffic, and the six-peer
+performance baseline now uses a 150-second sampling window that matches the
+observed bounded recovery behavior on slower grouped runs.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_frontier_slot_does_not_hijack_exact_frontier_view_advance -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_view_change_lock_convergence -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+  - `cargo test -p integration_tests npos_pacemaker_resumes_after_downtime -- --nocapture`
+  - `cargo test -p integration_tests npos_baseline_1s_k3_captures_metrics -- --nocapture`
+  - `cargo test -p integration_tests npos_late_vrf_reveal_clears_penalty_and_preserves_seed -- --nocapture`
+- open work after this slice:
+  - rerun `cargo test --workspace` only when a several-hour validation window
+    is available; and
+  - do a broader grouped `consensus_and_da` sweep only if additional signoff is
+    needed beyond the focused reruns above.
+
 Latest sync (2026-04-15 killed-leader lock convergence recovers after idle queue timer refresh):
 the reported `sumeragi_lock_convergence::sumeragi_view_change_lock_convergence`
 hang is fixed on the current tree. The idle view-change path now treats a

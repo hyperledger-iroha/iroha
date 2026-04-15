@@ -87,6 +87,29 @@ The `tools/soradns-resolver` binary is a recursive resolver prototype that
 serves configured static zones for testing. It does not register NS/DS
 delegations or act as a public authoritative DNS service.
 
+## 4.1 Vanity Alias Access Modes
+
+The deterministic host mapping above does not change the Soracloud runtime URL
+contract:
+
+1. The registered alias itself remains the canonical user-facing origin
+   (`https://docs.sora/`, `https://solswap-indexer.sora/...`).
+2. Deploying a new Soracloud revision updates route bindings behind that host;
+   it must not require per-release DNS edits.
+3. For clients that cannot resolve SoraDNS aliases directly yet, gateway hosts
+   may expose a compatibility path of the form
+   `https://<gateway>/soradns/<fqdn>/...`.
+
+Example:
+
+- canonical API origin:
+  `https://solswap-indexer.sora/api/indexer/v1/health`
+- fallback gateway origin:
+  `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
+
+The fallback path is transitional. Tooling, manifests, and app configs should
+continue to prefer the vanity alias host itself.
+
 ## 5. GAR Requirements
 
 Gateway Authorisation Records must authorise the following host patterns for

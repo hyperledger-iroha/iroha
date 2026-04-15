@@ -30,7 +30,7 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::Writer as TomlWriter;
-use iroha_core::sumeragi::{network_topology::Topology, rbc_status};
+use iroha_core::sumeragi::{network_topology::Topology, rbc_status, rbc_store};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use norito::json::{self, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
@@ -71,6 +71,7 @@ struct RbcInflightObservation {
     block_hash: String,
     sessions_url: reqwest::Url,
     height: u64,
+    view: u64,
     total_chunks: u64,
     received_chunks: u64,
     delivered: bool,
@@ -2415,6 +2416,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             &http,
             &inflight.sessions_url,
             inflight.height,
+            inflight.view,
             &inflight.block_hash,
             Instant::now(),
             da_rbc_inflight_timeout(),
@@ -2438,48 +2440,37 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         );
 
         let persist_start = Instant::now();
-        let expected_prefix = format!("{}_{}_", inflight.block_hash, inflight.height);
-        loop {
-            if persist_start.elapsed() > da_rbc_persist_timeout() {
-                return Err(eyre!(
-                    "timed out waiting for persisted RBC session file for {} at height {} in {}",
-                    inflight.block_hash,
-                    inflight.height,
-                    store_dir.display()
-                ));
-            }
-            let entries = match fs::read_dir(&store_dir) {
-                Ok(entries) => entries,
-                Err(err) if err.kind() == ErrorKind::NotFound => {
-                    sleep(Duration::from_millis(200)).await;
-                    continue;
-                }
-                Err(err) => {
-                    return Err(eyre!(
-                        "failed to read RBC session store dir {}: {err}",
-                        store_dir.display()
-                    ));
-                }
-            };
-            let mut found = false;
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with(&expected_prefix) && name.ends_with(".norito") {
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                break;
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
+        let session_key = (
+            parse_block_hash_hex(&inflight.block_hash)?,
+            inflight.height,
+            inflight.view,
+        );
+        let persisted_before = wait_for_persisted_rbc_session_metadata(
+            &store_dir,
+            session_key,
+            snapshot_before.received_chunks,
+            &network.chain_id(),
+            persist_start,
+        )
+        .await
+        .wrap_err("wait for persisted RBC session metadata before shutdown")?;
 
         let block_hash_hex = inflight.block_hash;
         let session_height = inflight.height;
+        let session_view = inflight.view;
         let expected_total_chunks = snapshot_before.total_chunks;
         let snapshot_before_received_chunks = snapshot_before.received_chunks;
+        ensure!(
+            u64::from(persisted_before.total_chunks) == expected_total_chunks,
+            "persisted total chunk count should remain {expected_total_chunks}, got {}",
+            persisted_before.total_chunks
+        );
+        ensure!(
+            u64::from(persisted_before.persisted_chunk_count) >= snapshot_before_received_chunks,
+            "persisted chunk snapshot should preserve received chunk count before shutdown (expected at least {}, got {})",
+            snapshot_before_received_chunks,
+            persisted_before.persisted_chunk_count
+        );
 
         network.shutdown().await;
 
@@ -2511,6 +2502,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             &http,
             &restart_sessions_url,
             session_height,
+            session_view,
             &block_hash_hex,
             Instant::now(),
             da_rbc_recovery_timeout(),
@@ -3827,6 +3819,7 @@ async fn wait_for_inflight_rbc(
                     }
                     let height =
                         extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
+                    let view = extract_u64(obj.get("view").ok_or_else(|| eyre!("missing view"))?)?;
                     let total_chunks = extract_u64(
                         obj.get("total_chunks")
                             .ok_or_else(|| eyre!("missing total_chunks"))?,
@@ -3843,6 +3836,7 @@ async fn wait_for_inflight_rbc(
                         block_hash,
                         sessions_url: probe.url.clone(),
                         height,
+                        view,
                         total_chunks,
                         received_chunks,
                         delivered,
@@ -3918,6 +3912,56 @@ async fn wait_for_persisted_inflight_rbc_session(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn wait_for_persisted_rbc_session_metadata(
+    store_dir: &Path,
+    key: rbc_store::SessionKey,
+    min_received_chunks: u64,
+    chain_id: &iroha::data_model::ChainId,
+    start: Instant,
+) -> Result<rbc_store::PersistedSessionMetadata> {
+    let timeout = da_rbc_persist_timeout();
+    let manifest = rbc_store::SoftwareManifest::current();
+    let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+    loop {
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for persisted RBC session metadata for {} at height {} view {} in {}",
+                hex::encode(key.0.as_ref()),
+                key.1,
+                key.2,
+                store_dir.display()
+            ));
+        }
+        match rbc_store::load_session_metadata_from_dir(store_dir, &key, &chain_hash, &manifest) {
+            Ok(Some(metadata))
+                if u64::from(metadata.persisted_chunk_count) >= min_received_chunks
+                    && !metadata.invalid =>
+            {
+                return Ok(metadata);
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(eyre!(
+                    "failed to read persisted RBC session metadata from {}: {err}",
+                    store_dir.display()
+                ));
+            }
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn parse_block_hash_hex(
+    block_hash_hex: &str,
+) -> Result<HashOf<iroha::data_model::block::BlockHeader>> {
+    let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
+    hex::decode_to_slice(block_hash_hex, &mut bytes).wrap_err("decode RBC block hash from hex")?;
+    Ok(HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed(bytes),
+    ))
 }
 
 fn is_transient_rbc_endpoint_error(err: &reqwest::Error) -> bool {
@@ -4272,6 +4316,7 @@ async fn fetch_rbc_session(
     http: &reqwest::Client,
     sessions_url: &reqwest::Url,
     expected_height: u64,
+    expected_view: u64,
     block_hash_hex: &str,
 ) -> Result<Option<RbcSessionSnapshot>> {
     let response = http
@@ -4301,6 +4346,10 @@ async fn fetch_rbc_session(
                 .ok_or_else(|| eyre!("missing height field"))?,
         )?;
         if height != expected_height {
+            continue;
+        }
+        let view = extract_u64(obj.get("view").ok_or_else(|| eyre!("missing view field"))?)?;
+        if view != expected_view {
             continue;
         }
         let block_hash = extract_string(
@@ -4341,6 +4390,7 @@ async fn wait_for_rbc_session_snapshot(
     http: &reqwest::Client,
     sessions_url: &reqwest::Url,
     expected_height: u64,
+    expected_view: u64,
     block_hash_hex: &str,
     start: Instant,
     timeout: Duration,
@@ -4348,11 +4398,17 @@ async fn wait_for_rbc_session_snapshot(
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
-                "timed out waiting for RBC session snapshot at height {expected_height} ({block_hash_hex})"
+                "timed out waiting for RBC session snapshot at height {expected_height} view {expected_view} ({block_hash_hex})"
             ));
         }
-        if let Some(snapshot) =
-            fetch_rbc_session(http, sessions_url, expected_height, block_hash_hex).await?
+        if let Some(snapshot) = fetch_rbc_session(
+            http,
+            sessions_url,
+            expected_height,
+            expected_view,
+            block_hash_hex,
+        )
+        .await?
         {
             return Ok(snapshot);
         }

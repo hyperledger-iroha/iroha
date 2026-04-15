@@ -10,6 +10,8 @@ PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 IROHA_BIN="${IROHA_BIN:-}"
+TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
+TRADER_APP_API_PROBE_INTERVAL_SECS="${TRADER_APP_API_PROBE_INTERVAL_SECS:-1}"
 RUN_DEPLOY=0
 RUN_SMOKE=0
 RUN_RELEASE_CHECKLIST=0
@@ -201,6 +203,8 @@ run_step() {
 probe_trader_app_api() {
   local trader_api_report="$SORASWAP_ROOT/deployments/testnet/trader_api_bundle.latest.json"
   local content_cid probe_url probe_body probe_http
+  local probe_attempts probe_interval_secs attempt probe_results probe_error
+  local success_count failure_count capacity_state_body capacity_state_http declaration_count
 
   if [[ ! -f "$trader_api_report" ]]; then
     echo "==> trader app-api CID route probe skipped: $trader_api_report not found"
@@ -215,17 +219,58 @@ probe_trader_app_api() {
 
   probe_url="${PUBLIC_TORII_ROOT%/}/v1/app-api/cid/${content_cid}"
   probe_body="$(mktemp)"
+  probe_attempts="$TRADER_APP_API_PROBE_ATTEMPTS"
+  probe_interval_secs="$TRADER_APP_API_PROBE_INTERVAL_SECS"
+  probe_results=()
+  success_count=0
+  failure_count=0
 
   echo "==> trader app-api CID route probe: ${probe_url}"
-  if ! probe_http="$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' "$probe_url")"; then
-    echo "trader app-api CID route probe failed to reach ${probe_url}" >&2
+  for ((attempt = 1; attempt <= probe_attempts; attempt++)); do
+    if ! probe_http="$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' "$probe_url")"; then
+      probe_error="$(sed -n '1,40p' "$probe_body" 2>/dev/null || true)"
+      probe_results+=("${attempt}:transport-error")
+      if [[ -n "$probe_error" ]]; then
+        probe_results+=("${attempt}:body=${probe_error}")
+      fi
+      ((failure_count += 1))
+    elif [[ "$probe_http" == 2* ]]; then
+      probe_results+=("${attempt}:${probe_http}")
+      ((success_count += 1))
+    else
+      probe_results+=("${attempt}:${probe_http}")
+      ((failure_count += 1))
+    fi
+
+    if [[ $attempt -lt $probe_attempts ]]; then
+      sleep "$probe_interval_secs"
+    fi
+  done
+
+  if [[ $failure_count -ne 0 ]]; then
+    echo "trader app-api CID route probe saw inconsistent public responses (${success_count}/${probe_attempts} successes): ${probe_results[*]}" >&2
     sed -n '1,40p' "$probe_body" >&2 || true
-    rm -f "$probe_body"
-    exit 1
-  fi
-  if [[ "$probe_http" != 2* ]]; then
-    echo "trader app-api CID route probe failed with HTTP ${probe_http}: ${probe_url}" >&2
-    sed -n '1,40p' "$probe_body" >&2 || true
+    echo >&2
+    capacity_state_body="$(mktemp)"
+    if capacity_state_http="$(curl --silent --show-error --output "$capacity_state_body" --write-out '%{http_code}' "${PUBLIC_TORII_ROOT%/}/v1/sorafs/capacity/state")" \
+      && [[ "$capacity_state_http" == "200" ]]; then
+      declaration_count="$(python3 - "$capacity_state_body" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+declarations = payload.get("declarations")
+if isinstance(declarations, list):
+    print(len(declarations))
+else:
+    print(0)
+PY
+      )"
+      echo "visible SoraFS capacity declarations on target: ${declaration_count}" >&2
+    fi
+    rm -f "$capacity_state_body"
     rm -f "$probe_body"
     exit 1
   fi
