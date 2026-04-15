@@ -21,6 +21,28 @@ The split-app path is the recommended workflow for apps that need:
 - a deterministic IVM vault/auth API
 - one shared `/api` surface split by authoritative longest-prefix routing
 
+## Access Model
+
+Soracloud deploys must behave like IPFS-style publishing for runtime URLs:
+
+- the registered vanity host stays fixed
+- deploys update Soracloud route bindings, not DNS records on every release
+- direct vanity-host access remains canonical
+- `/soradns/<alias>/...` is the gateway fallback for clients that cannot
+  resolve SoraDNS directly yet
+
+Examples:
+
+- direct frontend origin: `https://docs.sora/`
+- fallback frontend origin: `https://taira.sora.org/soradns/docs.sora/`
+- direct API origin:
+  `https://solswap-indexer.sora/api/indexer/v1/health`
+- fallback API origin:
+  `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
+
+The fallback path is not the canonical origin for app configs or release
+notes. Use it only as a compatibility gateway.
+
 ## 1. Generate the Scaffold
 
 Static site only:
@@ -277,9 +299,16 @@ same root manifest/hostname/workspace metadata, frontend publish projection,
 and per-service manifest metadata that `app status` reports.
 
 For split apps in production on Taira, keep `https://taira.sora.org/` bound to
-Torii and use the SoraFS gateway path for frontend access:
+Torii and use it as:
 
-- `https://taira.sora.org/sorafs/cid/<cid>/`
+- the Torii/control-plane base URL
+- the SoraDNS fallback gateway:
+  `https://taira.sora.org/soradns/<alias>/...`
+- the SoraFS CID gateway for intentionally CID-only frontends:
+  `https://taira.sora.org/sorafs/cid/<cid>/`
+
+Do not treat `taira.sora.org` paths as the canonical origin for a Soracloud
+runtime that already has a vanity alias host.
 
 ## 5. Deploy
 
@@ -472,5 +501,8 @@ the matching hosted-service or app-wide upgrade command.
   app-wide manifest hashes.
 - Fail frontend production builds if they point at demo/static data or the
   wrong API base.
-- Treat Torii root as Torii-only; publish user-facing frontend assets to SoraFS
-  CID paths instead.
+- Treat `taira.sora.org` as Torii/control-plane first and as the transitional
+  `/soradns/<alias>/...` fallback gateway second.
+- Keep the canonical runtime origin on the registered vanity alias host.
+- Use SoraFS CID paths only for apps that intentionally publish CID-only
+  frontend assets.
