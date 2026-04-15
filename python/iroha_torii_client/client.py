@@ -219,6 +219,9 @@ __all__ = [
     "TransactionInstruction",
     "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
+    "ContractDeployContractReceipt",
+    "ContractDeployCallReceipt",
+    "ContractDeployAssertionReceipt",
     "ContractDeployResponse",
     "ContractCallResponse",
     "GovernanceContractResponse",
@@ -2502,10 +2505,10 @@ class GovernanceProposalDraft:
 
 
 @dataclass(frozen=True)
-class ContractDeployResponse:
-    """Result returned by ``POST /v1/contracts/deploy``."""
+class ContractDeployContractReceipt:
+    """One contract receipt returned by ``POST /v1/contracts/deploy``."""
 
-    ok: bool
+    name: str
     contract_alias: Optional[str]
     contract_address: Optional[str]
     previous_contract_address: Optional[str]
@@ -2515,6 +2518,47 @@ class ContractDeployResponse:
     tx_hash_hex: Optional[str]
     code_hash_hex: str
     abi_hash_hex: str
+    status: str
+
+
+@dataclass(frozen=True)
+class ContractDeployCallReceipt:
+    """One init-call receipt returned by ``POST /v1/contracts/deploy``."""
+
+    id: str
+    contract_alias: Optional[str]
+    entrypoint: Optional[str]
+    tx_hash_hex: Optional[str]
+    status: str
+
+
+@dataclass(frozen=True)
+class ContractDeployAssertionReceipt:
+    """One assertion receipt returned by ``POST /v1/contracts/deploy``."""
+
+    id: str
+    contract_alias: Optional[str]
+    entrypoint: Optional[str]
+    status: str
+    actual_result: Any
+    expected_result: Any
+    error: Optional[str]
+
+
+@dataclass(frozen=True)
+class ContractDeployResponse:
+    """Canonical bundle receipt returned by ``POST /v1/contracts/deploy``."""
+
+    ok: bool
+    bundle_name: str
+    bundle_digest: str
+    chain_fingerprint: str
+    dry_run: bool
+    completed_stages: List[str]
+    failure_point: Optional[str]
+    contracts: List[ContractDeployContractReceipt]
+    init_calls: List[ContractDeployCallReceipt]
+    assertions: List[ContractDeployAssertionReceipt]
 
 
 @dataclass(frozen=True)
@@ -5468,6 +5512,12 @@ class ToriiClient:
         if isinstance(payload, Mapping):
             return payload
         raise RuntimeError(f"{context} response must be a JSON object")
+
+    @staticmethod
+    def _ensure_list(payload: Any, context: str) -> List[Any]:
+        if isinstance(payload, list):
+            return payload
+        raise RuntimeError(f"{context} response must be a JSON array")
 
     @staticmethod
     def _optional_mapping(
@@ -8504,28 +8554,12 @@ class ToriiClient:
         )
 
     @staticmethod
-    def _parse_contract_deploy_response(
+    def _parse_contract_deploy_contract_receipt(
         payload: Mapping[str, Any],
         *,
         context: str,
-    ) -> ContractDeployResponse:
+    ) -> ContractDeployContractReceipt:
         record = ToriiClient._ensure_mapping(payload, context)
-        contract_alias = ToriiClient._coerce_optional_string(
-            record.get("contract_alias"),
-            context=f"{context}.contract_alias",
-        )
-        contract_address = ToriiClient._coerce_optional_string(
-            record.get("contract_address"),
-            context=f"{context}.contract_address",
-        )
-        previous_contract_address = ToriiClient._coerce_optional_string(
-            record.get("previous_contract_address"),
-            context=f"{context}.previous_contract_address",
-        )
-        dataspace = ToriiClient._coerce_optional_string(
-            record.get("dataspace"),
-            context=f"{context}.dataspace",
-        )
         tx_hash_hex_value = record.get("tx_hash_hex")
         tx_hash_hex = None
         if tx_hash_hex_value is not None:
@@ -8541,13 +8575,25 @@ class ToriiClient:
                 deploy_nonce_value,
                 f"{context}.deploy_nonce",
             )
-        return ContractDeployResponse(
-            ok=bool(record.get("ok")),
-            contract_alias=contract_alias,
-            contract_address=contract_address,
-            previous_contract_address=previous_contract_address,
+        return ContractDeployContractReceipt(
+            name=ToriiClient._require_non_empty_string(record.get("name"), f"{context}.name"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            contract_address=ToriiClient._coerce_optional_string(
+                record.get("contract_address"),
+                context=f"{context}.contract_address",
+            ),
+            previous_contract_address=ToriiClient._coerce_optional_string(
+                record.get("previous_contract_address"),
+                context=f"{context}.previous_contract_address",
+            ),
             upgraded=bool(record.get("upgraded")),
-            dataspace=dataspace,
+            dataspace=ToriiClient._coerce_optional_string(
+                record.get("dataspace"),
+                context=f"{context}.dataspace",
+            ),
             deploy_nonce=deploy_nonce,
             tx_hash_hex=tx_hash_hex,
             code_hash_hex=ToriiClient._normalize_hex_string(
@@ -8560,6 +8606,145 @@ class ToriiClient:
                 context=f"{context}.abi_hash_hex",
                 expected_length=64,
             ),
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_call_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployCallReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+        tx_hash_hex_value = record.get("tx_hash_hex")
+        tx_hash_hex = None
+        if tx_hash_hex_value is not None:
+            tx_hash_hex = ToriiClient._normalize_hex_string(
+                tx_hash_hex_value,
+                context=f"{context}.tx_hash_hex",
+                expected_length=64,
+            )
+        return ContractDeployCallReceipt(
+            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            tx_hash_hex=tx_hash_hex,
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_assertion_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployAssertionReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return ContractDeployAssertionReceipt(
+            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+            actual_result=record.get("actual_result"),
+            expected_result=record.get("expected_result"),
+            error=ToriiClient._coerce_optional_string(
+                record.get("error"),
+                context=f"{context}.error",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_response(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        contracts = ToriiClient._ensure_list(
+            record.get("contracts"),
+            context=f"{context}.contracts",
+        )
+        init_calls = ToriiClient._ensure_list(
+            record.get("init_calls"),
+            context=f"{context}.init_calls",
+        )
+        assertions = ToriiClient._ensure_list(
+            record.get("assertions"),
+            context=f"{context}.assertions",
+        )
+        return ContractDeployResponse(
+            ok=bool(record.get("ok")),
+            bundle_name=ToriiClient._require_non_empty_string(
+                record.get("bundle_name"),
+                f"{context}.bundle_name",
+            ),
+            bundle_digest=ToriiClient._require_non_empty_string(
+                record.get("bundle_digest"),
+                f"{context}.bundle_digest",
+            ),
+            chain_fingerprint=ToriiClient._require_non_empty_string(
+                record.get("chain_fingerprint"),
+                f"{context}.chain_fingerprint",
+            ),
+            dry_run=bool(record.get("dry_run")),
+            completed_stages=ToriiClient._parse_string_list(
+                record.get("completed_stages"),
+                context=f"{context}.completed_stages",
+            ),
+            failure_point=ToriiClient._coerce_optional_string(
+                record.get("failure_point"),
+                context=f"{context}.failure_point",
+            ),
+            contracts=[
+                ToriiClient._parse_contract_deploy_contract_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.contracts[{index}]",
+                    ),
+                    context=f"{context}.contracts[{index}]",
+                )
+                for index, item in enumerate(contracts)
+            ],
+            init_calls=[
+                ToriiClient._parse_contract_deploy_call_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.init_calls[{index}]",
+                    ),
+                    context=f"{context}.init_calls[{index}]",
+                )
+                for index, item in enumerate(init_calls)
+            ],
+            assertions=[
+                ToriiClient._parse_contract_deploy_assertion_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.assertions[{index}]",
+                    ),
+                    context=f"{context}.assertions[{index}]",
+                )
+                for index, item in enumerate(assertions)
+            ],
         )
 
     @staticmethod

@@ -20,14 +20,25 @@ Torii URL of the node you are validating, for example:
 the shared Torii origin, not an app website. Do not bind product frontends to
 that host root through `sorafs_sites.json`.
 
+The shipped public Taira profile pins the first-release Torii posture in
+config rather than wrapper-local defaults:
+
+- `torii.max_content_len = 536_870_912`
+- `torii.deploy_rate_per_origin_per_sec = 4`
+- `torii.deploy_burst_per_origin = 8`
+- `torii.webhooks_enabled = false`
+- `torii.zk_attachments_enabled = false`
+
 ## Included artifacts
 
 - `config.toml`: baseline validator config for peer 1 and the shared template
-  source for rendered per-validator configs.
+  source for rendered per-validator configs. The checked-in file is template
+  only and intentionally does not carry runtime-only private keys.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me secret template for per-validator
-  private keys. Keep the populated file user-local.
+  private keys plus the shared onboarding/faucet authority and streaming
+  identity key material. Keep the populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for the convenience host, explorer host, and
   direct per-validator Torii hostnames.
@@ -62,8 +73,8 @@ that host root through `sorafs_sites.json`.
   canonical order.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
   served `dist/taira-localnet` genesis with seeded Kaigi relay metadata,
-  health samples, and the canonical Taira onboarding/faucet authority account,
-  then rewrites the live peer configs and restarts the detached
+  health samples, and one shared local onboarding/faucet signer account, then
+  rewrites the live peer configs and restarts the detached
   `taira-localnet` session.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
   `taira.sora.org`, `taira-explorer.sora.org`, and the current
@@ -79,7 +90,9 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `configs/soranexus/taira/validator_secrets.local.toml`.
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
-   roster, then put the matching `private_key` values in the secrets file.
+   roster, then put the matching validator `private_key` values and the shared
+   `torii_onboarding_*`, `torii_faucet_*`, and `streaming_identity_*` values
+   in the secrets file.
 3. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
@@ -382,6 +395,10 @@ away from the shipped MCP-enabled config:
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+   - `validator_secrets.local.toml` must include both the validator private
+     keys and the shared `torii_onboarding_*`, `torii_faucet_*`, and
+     `streaming_identity_*` fields because the checked-in template intentionally
+     leaves those runtime-only values blank
    - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
 4. Install the newly built binaries plus the sample systemd unit from
@@ -576,6 +593,11 @@ For the local `dist/taira-localnet` deployment, use:
    - if you built the helper in a non-default target dir, point the bootstrap
      at it explicitly, for example:
      `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+   - if `configs/soranexus/taira/validator_secrets.local.toml` is not present,
+     provide `IROHA_TAIRA_AUTHORITY` and `IROHA_TAIRA_AUTHORITY_PRIVATE_KEY`
+     (or point `IROHA_TAIRA_SECRETS_FILE` at a populated secrets file) so the
+     bootstrap can inject the shared local onboarding signer, which it also
+     reuses as the served local faucet signer, into the localnet configs
 3. Verify the relay endpoints and explorer page:
    - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
    - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`

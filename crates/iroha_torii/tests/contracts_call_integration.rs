@@ -475,9 +475,23 @@ async fn run_contract_view_response(
 
 fn deployed_contract_address(response: &json::Value) -> String {
     response
-        .get("contract_address")
+        .get("contracts")
+        .and_then(json::Value::as_array)
+        .and_then(|contracts| contracts.first())
+        .and_then(|contract| contract.get("contract_address"))
         .and_then(json::Value::as_str)
         .expect("contract_address present in deploy response")
+        .to_owned()
+}
+
+fn deployed_contract_abi_hash_hex(response: &json::Value) -> String {
+    response
+        .get("contracts")
+        .and_then(json::Value::as_array)
+        .and_then(|contracts| contracts.first())
+        .and_then(|contract| contract.get("abi_hash_hex"))
+        .and_then(json::Value::as_str)
+        .expect("abi_hash_hex present in deploy response")
         .to_owned()
 }
 
@@ -530,11 +544,7 @@ async fn contracts_call_enqueues_transaction() {
     let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
     let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
     let contract_address = deployed_contract_address(&deploy_json);
-    let abi_hash_hex = deploy_json
-        .get("abi_hash_hex")
-        .and_then(json::Value::as_str)
-        .expect("abi_hash_hex present")
-        .to_owned();
+    let abi_hash_hex = deployed_contract_abi_hash_hex(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);

@@ -9,6 +9,7 @@ GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
 GENESIS_PRIVATE_KEY="${IROHA_TAIRA_GENESIS_PRIVATE_KEY:-}"
 LOCALNET_BASE_SEED_OVERRIDE="${IROHA_TAIRA_LOCALNET_SEED:-}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
+TAIRA_SECRETS_FILE="${IROHA_TAIRA_SECRETS_FILE:-$ROOT_DIR/configs/soranexus/taira/validator_secrets.local.toml}"
 CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland.universal}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
 REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
@@ -43,31 +44,43 @@ load_taira_authority() {
   while IFS= read -r line; do
     values+=("$line")
   done < <(
-    python3 - "$TAIRA_PROFILE_CONFIG" <<'PY'
+    python3 - "$TAIRA_PROFILE_CONFIG" "$TAIRA_SECRETS_FILE" <<'PY'
 import sys
 import tomllib
 
 path = sys.argv[1]
+secrets_path = sys.argv[2]
 with open(path, "rb") as fh:
     cfg = tomllib.load(fh)
-onboarding = cfg["torii"]["onboarding"]
-print(onboarding["authority"])
-print(onboarding["private_key"])
+shared = {}
+if secrets_path:
+    try:
+        with open(secrets_path, "rb") as fh:
+            secrets = tomllib.load(fh)
+    except FileNotFoundError:
+        secrets = {}
+    shared = secrets.get("shared", {})
 print(cfg["torii"]["max_content_len"])
 quota = cfg.get("sorafs", {}).get("quota", {})
 print(quota.get("storage_pin_max_events", 64))
 print(quota.get("storage_pin_window_secs", 3600))
+print(shared.get("torii_onboarding_authority", ""))
+print(shared.get("torii_onboarding_private_key", ""))
 PY
   )
   if [[ "${#values[@]}" -lt 5 ]]; then
-    echo "failed to load Taira onboarding authority/max_content_len/quota from $TAIRA_PROFILE_CONFIG" >&2
+    echo "failed to load Taira max_content_len/quota/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
-  TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[0]}}"
-  TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[1]}}"
-  TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[2]}}"
-  TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-${values[3]}}"
-  TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[4]}}"
+  TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[0]}}"
+  TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-${values[1]}}"
+  TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[2]}}"
+  TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[3]}}"
+  TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[4]}}"
+  if [[ -z "$TAIRA_AUTHORITY" || -z "$TAIRA_AUTHORITY_PRIVATE_KEY" ]]; then
+    echo "set IROHA_TAIRA_AUTHORITY and IROHA_TAIRA_AUTHORITY_PRIVATE_KEY or provide [shared] torii_onboarding_* values in $TAIRA_SECRETS_FILE; local bootstrap reuses that shared signer for the served faucet too" >&2
+    exit 1
+  fi
 }
 
 load_localnet_genesis_signer_config() {
@@ -134,6 +147,7 @@ private_key = "{private_key}"
 allowed_permissions = []
 """
 
+# Local bootstrap intentionally reuses the onboarding signer as the served faucet authority.
 faucet_block = f"""[torii.faucet]
 enabled = true
 authority = "{authority}"

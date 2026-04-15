@@ -114,6 +114,8 @@ public, while higher-risk app-facing surfaces are opt-in:
 
 - `torii.webhooks_enabled = false` by default
 - `torii.zk_attachments_enabled = false` by default
+- `torii.deploy_rate_per_origin_per_sec = 4` plus
+  `torii.deploy_burst_per_origin = 8` are the public deploy baseline
 - trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
   `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
   part of the public-safe baseline
@@ -142,7 +144,10 @@ If you are operating the public Taira deployment itself, render per-validator
 configs from `configs/soranexus/taira/validator_roster.example.toml` plus
 `configs/soranexus/taira/validator_secrets.example.toml` with
 `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
-instead of cloning the checked-in peer-1 `config.toml` by hand.
+instead of cloning the checked-in peer-1 `config.toml` by hand. The secrets
+template now also carries the shared onboarding/faucet authority and streaming
+identity material, so the checked-in Taira config remains a template rather
+than a secret-bearing runtime profile.
 
 ## Core Crates
 

@@ -2,6 +2,66 @@
 
 Last updated: 2026-04-15
 
+Latest sync (2026-04-15 canonical contract deploy receipts landed across Torii/CLI/SDKs, and the shipped Taira validator profile is now template-only):
+the remaining repo-contained contract-app receipt gap is closed. Torii now
+returns the canonical `DeployContractBundleReceiptDto` for both
+`POST /v1/contracts/deploy-bundle` and the single-contract shortcut
+`POST /v1/contracts/deploy`, real bundle storage coverage now proves
+chain-fingerprint scoping plus dry-run / resume persistence behavior, and the
+CLI/Python/Kotlin/Java surfaces all now consume the same canonical
+`contracts[]` receipt instead of a branch-local flattened response shape. The
+same slice also closes the public Taira profile hardening gap in-tree:
+`configs/soranexus/taira/config.toml` is now a secret-free template, the
+runtime-only onboarding/faucet/streaming signing material moved into the
+user-local `validator_secrets.local.toml` render path, and the shipped public
+profile now pins its first-release Torii limits directly in config
+(`max_content_len = 536_870_912`, deploy rate/burst `4/8`,
+`webhooks_enabled = false`, `zk_attachments_enabled = false`) instead of
+leaving that posture implicit or wrapper-local.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/{routing.rs,lib.rs,openapi.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/{contracts_deploy_integration.rs,contracts_call_integration.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/{__init__.py,client.py,mock.py,tests/test_client.py}`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/{ContractDeployResponse.kt,ContractJsonParser.kt}`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{ContractDeployResponse.java,ContractJsonParser.java}`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/{config.toml,validator_roster.example.toml,validator_secrets.example.toml,bootstrap_kaigi_localnet.sh,README.md}`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/{render_taira_validator_bundle.py,tests/render_taira_validator_bundle_test.py}`
+  - `/Users/takemiyamakoto/dev/iroha/{README.md,status.md,roadmap.md}`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/torii_contracts_api*.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/torii/contract_lifecycle_app_api*.md`
+- verified in this slice:
+  - `cargo test -p iroha_torii --test contracts_deploy_integration -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-receipt cargo test -p iroha_torii contract_bundle_tests --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-hash cargo test -p iroha_cli --bin iroha extract_submitted_transaction_hash_ -- --nocapture`
+  - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m pytest scripts/tests/render_taira_validator_bundle_test.py -q`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'deploy_contract_encodes_alias_first_payload_and_parses_response or contract_bundle_helpers_against_mock_server or governance_contract_helpers_against_mock_server' -q`
+  - `cd /Users/takemiyamakoto/dev/iroha/kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain`
+  - `cd /Users/takemiyamakoto/dev/iroha/java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew -Dandroid.test.mains=org.hyperledger.iroha.android.client.HttpClientTransportTests android:testDebugUnitTest --console=plain`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/build_taira_rollout_bundle.sh`
+  - sanitized-template render smoke with a user-local roster/secrets pair
+- open work after this slice:
+  - rerun the live Taira rollout/write canary against the deployed direct
+    validator hostnames using a runtime-only signer file, then update the
+    operator runbook with the exact public results;
+  - finish the sibling-repo SCCP first-release work (destination-native
+    immutable verifiers / verifier-identity binding in `../sora2-network` and
+    matching consumer/release metadata in `../soraswap`) instead of leaving the
+    roadmap closed at local proof-summary surfaces;
+  - capture the real multi-host Inrou acceptance evidence on one
+    PortableVm-capable host, one Firecracker/KVM host, and one proxy-only
+    validator, then move those items out of the rollout checklist; and
+  - run the broader workspace validation (`cargo build --workspace` and, when a
+    multi-hour window exists, `cargo test --workspace`) after the remaining
+    dirty-tree Torii/lib-test harness fallout is either fixed or explicitly
+    split into separate follow-up work.
+
 Latest sync (2026-04-15 collector endpoint and lock-convergence regressions are green):
 the two reported `consensus_and_da` failures are addressed on the current tree.
 `crates/iroha_torii/src/routing.rs` now clamps `/v1/sumeragi/collectors`

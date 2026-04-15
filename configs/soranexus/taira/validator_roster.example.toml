@@ -1,7 +1,8 @@
 # Copy this file to a user-local path such as
 # `configs/soranexus/taira/validator_roster.local.toml`, replace every
 # placeholder, and keep the populated file out of the repo. Keep the matching
-# private keys in `validator_secrets.local.toml`, not here.
+# validator private keys plus the shared onboarding/faucet authority and
+# streaming identity keys in `validator_secrets.local.toml`, not here.
 #
 # Then render one config.toml per validator:
 #   python3 scripts/render_taira_validator_bundle.py \

@@ -1534,6 +1534,14 @@ public final class HttpClientTransportTests {
             200,
             ("{"
                     + "\"ok\":true,"
+                    + "\"bundle_name\":\"single-contract-deploy\","
+                    + "\"bundle_digest\":\"mock-bundle-digest\","
+                    + "\"chain_fingerprint\":\"mock-chain@height-0\","
+                    + "\"dry_run\":false,"
+                    + "\"completed_stages\":[\"plan\",\"deploy\"],"
+                    + "\"failure_point\":null,"
+                    + "\"contracts\":[{"
+                    + "\"name\":\"router::universal\","
                     + "\"contract_alias\":\"router::universal\","
                     + "\"contract_address\":\"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7\","
                     + "\"previous_contract_address\":null,"
@@ -1548,7 +1556,12 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"abi_hash_hex\":\""
                     + "33".repeat(32)
-                    + "\"}")
+                    + "\","
+                    + "\"status\":\"submitted\""
+                    + "}],"
+                    + "\"init_calls\":[],"
+                    + "\"assertions\":[]"
+                    + "}")
                 .getBytes(StandardCharsets.UTF_8),
             "ok");
     final HttpClientTransport transport =
@@ -1562,10 +1575,14 @@ public final class HttpClientTransportTests {
     assert response.isPresent() : "Deploy response should be present";
     final ContractDeployResponse parsed = response.get();
     assert parsed.ok() : "Deploy response should be successful";
-    assert "router::universal".equals(parsed.contractAlias()) : "Contract alias mismatch";
-    assert "router".equals(parsed.dataspace()) : "Dataspace mismatch";
-    assert Long.valueOf(9L).equals(parsed.deployNonce()) : "Deploy nonce mismatch";
-    assert "11".repeat(32).equals(parsed.txHashHex()) : "tx_hash_hex mismatch";
+    assert "mock-bundle-digest".equals(parsed.bundleDigest()) : "Bundle digest mismatch";
+    assert "router::universal".equals(parsed.contracts().get(0).contractAlias())
+        : "Contract alias mismatch";
+    assert "router".equals(parsed.contracts().get(0).dataspace()) : "Dataspace mismatch";
+    assert Long.valueOf(9L).equals(parsed.contracts().get(0).deployNonce())
+        : "Deploy nonce mismatch";
+    assert "11".repeat(32).equals(parsed.contracts().get(0).txHashHex())
+        : "tx_hash_hex mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Deploy request must be captured";

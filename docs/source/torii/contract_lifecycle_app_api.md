@@ -15,8 +15,9 @@ Torii when the `app_api` feature is enabled.
   `application/json` or `application/x-norito`. Responses follow the negotiated
   `Accept` format.
 - Public deploys are alias-first. `POST /v1/contracts/deploy` requires
-  `contract_alias`, derives the dataspace from that alias, and returns the
-  fresh immutable `contract_address` activated by the deploy.
+  `contract_alias`, derives the dataspace from that alias, and returns the same
+  canonical bundle receipt shape used by `POST /v1/contracts/deploy-bundle`
+  with exactly one `contracts[]` entry.
 - Runtime calls no longer resend full bytecode or manifests. Torii now builds
   `Executable::ContractCall(ContractInvocation)` and only keeps fee/gas fields
   in transaction metadata.
@@ -63,20 +64,26 @@ Validation and execution rules:
   clears the prior alias binding, deactivates the retired address, binds the
   alias to the new address, and reports `previous_contract_address`.
 
-### Response (`DeployContractResponseDto`)
+### Response (`DeployContractBundleReceiptDto`)
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `ok` | `bool` | `true` when the deploy transaction was queued. |
-| `contract_alias` | `ContractAlias` | Stable alias bound by the deploy. |
-| `contract_address` | `ContractAddress` | Fresh immutable address activated by this deploy. |
-| `previous_contract_address` | `Option<ContractAddress>` | Retired address when this deploy upgraded an existing alias. |
-| `upgraded` | `bool` | `true` when an existing alias binding was replaced. |
-| `dataspace` | `String` | Resolved dataspace alias. |
-| `deploy_nonce` | `u64` | Nonce consumed for address derivation. |
-| `tx_hash_hex` | `String` | Queued transaction hash. |
-| `code_hash_hex` | `String` | Blake2b-32 hash of the stored bytecode. |
-| `abi_hash_hex` | `String` | Blake2b-32 hash of the enforced ABI surface. |
+| `bundle_name` | `String` | Fixed to `single-contract-deploy` on this shortcut. |
+| `bundle_digest` | `String` | Canonical digest derived from the receipt payload. |
+| `chain_fingerprint` | `String` | Receipt storage scope (`<chain_id>@<block-1-hash>`). |
+| `dry_run` | `bool` | Always `false` on this route. |
+| `completed_stages` | `Vec<String>` | Completed pipeline stages; single deploys normally return `["plan", "deploy"]`. |
+| `failure_point` | `Option<String>` | Populated only when a persisted receipt records a failure. |
+| `contracts` | `Vec<DeployContractBundleContractReceiptDto>` | Always contains exactly one contract receipt for this route. |
+| `init_calls` | `Vec<DeployContractBundleCallReceiptDto>` | Empty on this shortcut. |
+| `assertions` | `Vec<DeployContractBundleAssertionReceiptDto>` | Empty on this shortcut. |
+
+For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
+fresh immutable `contract_address`, the stable `contract_alias`, any
+`previous_contract_address` retired by an upgrade, the resolved `dataspace`,
+the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
+and the current receipt `status`.
 
 ## `POST /v1/contracts/call`
 

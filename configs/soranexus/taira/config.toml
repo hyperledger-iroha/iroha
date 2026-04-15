@@ -1,15 +1,16 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
-# Start with: `irohad --sora --config configs/soranexus/taira/config.toml`
-# This is the checked-in peer-1 baseline. For real multi-validator deploys,
-# render per-validator configs from `validator_roster.example.toml` plus
-# `validator_secrets.example.toml` with
+# Render a per-validator config first, then start with:
+# `irohad --sora --config <rendered-validator-config.toml>`
+# This is the checked-in peer-1 template. Runtime-only validator private keys,
+# onboarding/faucet authorities, and streaming identity keys must come from a
+# user-local `validator_secrets.local.toml` rendered through
 # `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 chain_discriminant = 369
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
 
 trusted_peers = [
   "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
@@ -31,6 +32,10 @@ max_frame_bytes_tx_gossip = 1048576
 address = "0.0.0.0:18080"
 public_address = "https://taira-validator-1.sora.org"
 max_content_len = 536_870_912
+deploy_rate_per_origin_per_sec = 4
+deploy_burst_per_origin = 8
+webhooks_enabled = false
+zk_attachments_enabled = false
 
 [torii.mcp]
 enabled = true
@@ -39,13 +44,13 @@ expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
 [torii.onboarding]
-authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
-private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
+authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
+private_key = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY"
 allowed_permissions = []
 
 [torii.faucet]
-authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
-private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
+authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
+private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
 asset_definition_id = "xor#universal"
 amount = "25000"
 pow_difficulty_bits = 8
@@ -109,8 +114,8 @@ use_stake_snapshot_roster = true
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 
 [streaming]
-identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
-identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
+identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
+identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
 feature_bits = 0b11
 
 [nexus]

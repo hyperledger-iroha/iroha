@@ -128,15 +128,29 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
             status_code=202,
             payload={
                 "ok": True,
-                "contract_alias": "router::universal",
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                "previous_contract_address": None,
-                "upgraded": False,
-                "dataspace": "universal",
-                "deploy_nonce": 7,
-                "tx_hash_hex": "11" * 32,
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
+                "bundle_name": "single-contract-deploy",
+                "bundle_digest": "mock-bundle-digest",
+                "chain_fingerprint": "mock-chain@height-0",
+                "dry_run": False,
+                "completed_stages": ["plan", "deploy"],
+                "failure_point": None,
+                "contracts": [
+                    {
+                        "name": "router::universal",
+                        "contract_alias": "router::universal",
+                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                        "previous_contract_address": None,
+                        "upgraded": False,
+                        "dataspace": "universal",
+                        "deploy_nonce": 7,
+                        "tx_hash_hex": "11" * 32,
+                        "code_hash_hex": "22" * 32,
+                        "abi_hash_hex": "33" * 32,
+                        "status": "submitted",
+                    }
+                ],
+                "init_calls": [],
+                "assertions": [],
             },
         )
     )
@@ -152,8 +166,9 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
 
     assert isinstance(result, ContractDeployResponse)
     assert result is not None
-    assert result.contract_alias == "router::universal"
-    assert result.deploy_nonce == 7
+    assert result.bundle_digest == "mock-bundle-digest"
+    assert result.contracts[0].contract_alias == "router::universal"
+    assert result.contracts[0].deploy_nonce == 7
     assert len(session.calls) == 1
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
@@ -1415,15 +1430,29 @@ def test_contract_helpers_against_mock_server() -> None:
                 },
                 "contract_deploy_response": {
                     "ok": True,
-                    "contract_alias": "router::universal",
-                    "contract_address": contract_address,
-                    "previous_contract_address": None,
-                    "upgraded": False,
-                    "dataspace": "universal",
-                    "deploy_nonce": 1,
-                    "tx_hash_hex": "11" * 32,
-                    "code_hash_hex": "22" * 32,
-                    "abi_hash_hex": "33" * 32,
+                    "bundle_name": "single-contract-deploy",
+                    "bundle_digest": "mock-single-contract-digest",
+                    "chain_fingerprint": "mock-chain@height-0",
+                    "dry_run": False,
+                    "completed_stages": ["plan", "deploy"],
+                    "failure_point": None,
+                    "contracts": [
+                        {
+                            "name": "router::universal",
+                            "contract_alias": "router::universal",
+                            "contract_address": contract_address,
+                            "previous_contract_address": None,
+                            "upgraded": False,
+                            "dataspace": "universal",
+                            "deploy_nonce": 1,
+                            "tx_hash_hex": "11" * 32,
+                            "code_hash_hex": "22" * 32,
+                            "abi_hash_hex": "33" * 32,
+                            "status": "submitted",
+                        }
+                    ],
+                    "init_calls": [],
+                    "assertions": [],
                 },
                 "contract_call_response": {
                     "ok": True,
@@ -1462,7 +1491,7 @@ def test_contract_helpers_against_mock_server() -> None:
         governed = client.get_governance_contract(contract_address)
 
         assert deploy is not None
-        assert deploy.contract_address == contract_address
+        assert deploy.contracts[0].contract_address == contract_address
         assert call.contract_address == contract_address
         assert governed.contract_address == contract_address
         assert governed.code_hash_hex == "22" * 32

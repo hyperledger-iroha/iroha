@@ -13511,6 +13511,11 @@ fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 
 #[cfg(feature = "app_api")]
+const MULTISIG_PACS009_MARKER_PREFIX: &str = "SBP_PACS009_MINT_V1:";
+#[cfg(feature = "app_api")]
+const MULTISIG_PACS009_MINT_OPERATION_TYPE: &str = "ISO20022_PACS009_MINT";
+
+#[cfg(feature = "app_api")]
 fn multisig_contract_call_operation_type(
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> Option<&'static str> {
@@ -13615,6 +13620,43 @@ fn multisig_asset_transfer_control_operation(
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_pacs009_marker_intent(
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<IrohaJson> {
+    let first_instruction = proposal.instructions.first()?;
+    if !matches!(
+        first_instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::MintBox>(),
+        Some(iroha_data_model::isi::MintBox::Asset(_))
+    ) {
+        return None;
+    }
+    for instruction in proposal.instructions.iter().skip(1) {
+        let Some(log) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::Log>()
+        else {
+            continue;
+        };
+        let Some(raw_payload) = log.msg.trim().strip_prefix(MULTISIG_PACS009_MARKER_PREFIX) else {
+            continue;
+        };
+        let Ok(norito::json::Value::Object(mut payload)) =
+            norito::json::from_str::<norito::json::Value>(raw_payload)
+        else {
+            continue;
+        };
+        payload.insert(
+            "kind".into(),
+            norito::json::Value::from(MULTISIG_PACS009_MINT_OPERATION_TYPE),
+        );
+        return Some(IrohaJson::new(norito::json::Value::Object(payload)));
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_execute_trigger_is_issuance_swap(
     trigger_id: &str,
     args: Option<&norito::json::Value>,
@@ -13657,6 +13699,10 @@ fn multisig_proposal_operation_type(
         multisig_asset_transfer_control_operation(first_instruction)
     {
         return operation_type;
+    }
+
+    if multisig_pacs009_marker_intent(proposal).is_some() {
+        return MULTISIG_PACS009_MINT_OPERATION_TYPE;
     }
 
     if matches!(
@@ -13707,8 +13753,13 @@ fn multisig_proposal_operation_type(
 fn multisig_proposal_intent(
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> Option<IrohaJson> {
-    let first_instruction = proposal.instructions.first()?;
-    multisig_asset_transfer_control_operation(first_instruction).map(|(_, intent)| intent)
+    proposal
+        .instructions
+        .first()
+        .and_then(|instruction| {
+            multisig_asset_transfer_control_operation(instruction).map(|(_, intent)| intent)
+        })
+        .or_else(|| multisig_pacs009_marker_intent(proposal))
 }
 
 #[cfg(feature = "app_api")]
@@ -13761,9 +13812,13 @@ fn list_multisig_proposals(
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
+        let operation_type = multisig_proposal_operation_type(&proposal).to_owned();
+        let intent = multisig_proposal_intent(&proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
+            operation_type,
+            intent,
             proposal,
             status: status.as_str().to_owned(),
             terminal_at_ms: None,
@@ -13800,9 +13855,13 @@ fn list_multisig_proposals(
         if !status_matches_requested_set(requested_statuses, status) {
             continue;
         }
+        let operation_type = multisig_proposal_operation_type(&terminal_state.proposal).to_owned();
+        let intent = multisig_proposal_intent(&terminal_state.proposal);
         proposals.push(MultisigProposalEntryDto {
             proposal_id: hash_literal.to_owned(),
             instructions_hash: hash_literal.to_owned(),
+            operation_type,
+            intent,
             proposal: terminal_state.proposal,
             status: status.as_str().to_owned(),
             terminal_at_ms: Some(terminal_state.terminal_at_ms),
@@ -15419,6 +15478,355 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn multisig_proposals_list_and_get_include_asset_transfer_control_intent() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let asset_definition_id = test_asset_definition_id();
+        let freeze_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                dm::SetAssetTransferFreeze::new(
+                    signer_two_id.clone(),
+                    asset_definition_id.clone(),
+                    true,
+                    Some("risk review".to_owned()),
+                )
+                .into(),
+            ],
+            1_700_000_000_190,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+            }),
+        )
+        .await
+        .expect("list proposals");
+        let list_item = list_response
+            .proposals
+            .iter()
+            .find(|item| item.instructions_hash == freeze_hash)
+            .expect("freeze proposal in list");
+        assert_eq!(list_item.operation_type, "ASSET_TRANSFER_FREEZE");
+        let list_intent = list_item
+            .intent
+            .clone()
+            .expect("freeze list intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("list intent value");
+        assert_eq!(
+            list_intent["account_id"].as_str(),
+            Some(signer_two_id.to_string().as_str())
+        );
+        assert_eq!(list_intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(list_intent["reason"].as_str(), Some("risk review"));
+
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+            state,
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id),
+                proposal_id: Some(freeze_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get proposal");
+        assert_eq!(get_response.operation_type, "ASSET_TRANSFER_FREEZE");
+        let get_intent = get_response
+            .intent
+            .expect("freeze get intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("get intent value");
+        assert_eq!(
+            get_intent["asset_definition_id"].as_str(),
+            Some(asset_definition_id.to_string().as_str())
+        );
+        assert_eq!(get_intent["outgoing_frozen"].as_bool(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn multisig_proposals_list_and_get_include_pacs009_marker_intent() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            _signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let asset_definition_id = test_asset_definition_id().to_string();
+        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+            "instruction_id": "pacs-1",
+            "asset_id": asset_definition_id,
+            "amount": "25",
+            "to_account_id": multisig_account_id.to_string(),
+            "mint_intent": "pacs009",
+        }))
+        .expect("pacs009 marker payload");
+        let pacs009_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                )
+                .into(),
+            ],
+            1_700_000_000_195,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+            }),
+        )
+        .await
+        .expect("list proposals");
+        let list_item = list_response
+            .proposals
+            .iter()
+            .find(|item| item.instructions_hash == pacs009_hash)
+            .expect("pacs009 proposal in list");
+        assert_eq!(
+            list_item.operation_type,
+            MULTISIG_PACS009_MINT_OPERATION_TYPE
+        );
+        let list_intent = list_item
+            .intent
+            .clone()
+            .expect("pacs009 list intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("list intent value");
+        assert_eq!(
+            list_intent["kind"].as_str(),
+            Some(MULTISIG_PACS009_MINT_OPERATION_TYPE)
+        );
+        assert_eq!(list_intent["instruction_id"].as_str(), Some("pacs-1"));
+        assert_eq!(list_intent["mint_intent"].as_str(), Some("pacs009"));
+
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+            state,
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                proposal_id: Some(pacs009_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get proposal");
+        assert_eq!(
+            get_response.operation_type,
+            MULTISIG_PACS009_MINT_OPERATION_TYPE
+        );
+        let get_intent = get_response
+            .intent
+            .expect("pacs009 get intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("get intent value");
+        assert_eq!(
+            get_intent["kind"].as_str(),
+            Some(MULTISIG_PACS009_MINT_OPERATION_TYPE)
+        );
+        assert_eq!(get_intent["amount"].as_str(), Some("25"));
+        assert_eq!(
+            get_intent["to_account_id"].as_str(),
+            Some(multisig_account_id.to_string().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn multisig_proposals_list_and_get_ignore_pacs009_marker_on_non_mint_proposals() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+            "instruction_id": "pacs-non-mint",
+            "asset_id": test_asset_definition_id().to_string(),
+            "amount": "25",
+            "to_account_id": signer_two_id.to_string(),
+            "mint_intent": "pacs009",
+        }))
+        .expect("pacs009 marker payload");
+        let transfer_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                dm::Transfer::asset_numeric(
+                    test_asset_id_for(&multisig_account_id),
+                    25_u32,
+                    signer_two_id.clone(),
+                )
+                .into(),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                )
+                .into(),
+            ],
+            1_700_000_000_210,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let execute_trigger_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                execute_trigger_instruction(
+                    "custom_portal_job",
+                    norito::json!({ "kind": "SOMETHING_ELSE", "job_id": "job-with-marker" }),
+                ),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                )
+                .into(),
+            ],
+            1_700_000_000_220,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+            }),
+        )
+        .await
+        .expect("list proposals");
+        let transfer_item = list_response
+            .proposals
+            .iter()
+            .find(|item| item.instructions_hash == transfer_hash)
+            .expect("transfer proposal in list");
+        assert_eq!(transfer_item.operation_type, "TRANSFER");
+        assert!(transfer_item.intent.is_none());
+        let execute_trigger_item = list_response
+            .proposals
+            .iter()
+            .find(|item| item.instructions_hash == execute_trigger_hash)
+            .expect("execute trigger proposal in list");
+        assert_eq!(execute_trigger_item.operation_type, "EXECUTE_TRIGGER");
+        assert!(execute_trigger_item.intent.is_none());
+
+        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_get(
+            state.clone(),
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                proposal_id: Some(transfer_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get transfer proposal");
+        assert_eq!(transfer_get_response.operation_type, "TRANSFER");
+        assert!(transfer_get_response.intent.is_none());
+
+        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_get(
+            state,
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                proposal_id: Some(execute_trigger_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get execute trigger proposal");
+        assert_eq!(execute_trigger_get_response.operation_type, "EXECUTE_TRIGGER");
+        assert!(execute_trigger_get_response.intent.is_none());
+    }
+
+    #[tokio::test]
+    async fn multisig_proposals_list_and_get_ignore_malformed_pacs009_marker_on_mints() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            _signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let malformed_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{{not-json"),
+                )
+                .into(),
+            ],
+            1_700_000_000_230,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+            }),
+        )
+        .await
+        .expect("list proposals");
+        let list_item = list_response
+            .proposals
+            .iter()
+            .find(|item| item.instructions_hash == malformed_hash)
+            .expect("malformed mint proposal in list");
+        assert_eq!(list_item.operation_type, "MINT");
+        assert!(list_item.intent.is_none());
+
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
+            state,
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+                proposal_id: Some(malformed_hash),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get malformed mint proposal");
+        assert_eq!(get_response.operation_type, "MINT");
+        assert!(get_response.intent.is_none());
+    }
+
+    #[tokio::test]
     async fn multisig_approvals_list_is_signer_scoped_and_paginates() {
         let (
             world,
@@ -15674,6 +16082,14 @@ mod multisig_selector_tests {
             _alias_literal,
             onchain_hash,
         ) = multisig_test_world();
+        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+            "instruction_id": "pacs-1",
+            "asset_id": test_asset_definition_id().to_string(),
+            "amount": "25",
+            "to_account_id": multisig_account_id.to_string(),
+            "mint_intent": "pacs009",
+        }))
+        .expect("pacs009 marker payload");
 
         let transfer_hash = insert_active_multisig_proposal(
             &mut world,
@@ -15683,6 +16099,11 @@ mod multisig_selector_tests {
                     test_asset_id_for(&multisig_account_id),
                     10_u32,
                     signer_two_id.clone(),
+                )
+                .into(),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
                 )
                 .into(),
             ],
@@ -15696,6 +16117,22 @@ mod multisig_selector_tests {
             &multisig_account_id,
             vec![dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into()],
             1_700_000_000_120,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let pacs009_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![
+                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                )
+                .into(),
+            ],
+            1_700_000_000_125,
             4_000_000_000_000,
             BTreeSet::new(),
             None,
@@ -15799,10 +16236,17 @@ mod multisig_selector_tests {
         let execute_trigger_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![execute_trigger_instruction(
-                "custom_portal_job",
-                norito::json!({ "kind": "SOMETHING_ELSE", "job_id": "job-1" }),
-            )],
+            vec![
+                execute_trigger_instruction(
+                    "custom_portal_job",
+                    norito::json!({ "kind": "SOMETHING_ELSE", "job_id": "job-1" }),
+                ),
+                dm::Log::new(
+                    dm::Level::INFO,
+                    format!("{MULTISIG_PACS009_MARKER_PREFIX}{pacs009_marker_payload}"),
+                )
+                .into(),
+            ],
             1_700_000_000_150,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -15855,6 +16299,26 @@ mod multisig_selector_tests {
         assert_eq!(
             list_hashes(&mint_items.items),
             BTreeSet::from([mint_hash.clone()])
+        );
+
+        let JsonBody(pacs009_items) = handle_post_multisig_approvals_list(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec![MULTISIG_PACS009_MINT_OPERATION_TYPE.to_owned()],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(20),
+            }),
+        )
+        .await
+        .expect("pacs009 approvals");
+        assert_eq!(
+            list_hashes(&pacs009_items.items),
+            BTreeSet::from([pacs009_hash.clone()])
         );
 
         let JsonBody(mint_request_items) = handle_post_multisig_approvals_list(
@@ -17780,10 +18244,14 @@ fn multisig_proposals_get_response(
     )?
     .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
     .ok_or_else(multisig_not_found_error)?;
+    let operation_type = multisig_proposal_operation_type(&proposal_record.proposal).to_owned();
+    let intent = multisig_proposal_intent(&proposal_record.proposal);
     Ok(MultisigProposalGetResponseDto {
         resolved_multisig_account_id,
         proposal_id: hash_literal.clone(),
         instructions_hash: hash_literal,
+        operation_type,
+        intent,
         proposal: proposal_record.proposal,
         status: proposal_record.status.as_str().to_owned(),
         terminal_at_ms: proposal_record.terminal_at_ms,
@@ -18937,42 +19405,10 @@ pub struct DeployContractDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response for deploy contract endpoint
-pub struct DeployContractResponseDto {
-    /// Whether deploy succeeded
-    pub ok: bool,
-    /// Stable on-chain alias bound to the deployed contract instance.
-    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
-    /// Canonical Bech32m contract address activated by the deployment.
-    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
-    /// Previous contract address retired by the upgrade, when present.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub previous_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Whether this deploy replaced an existing alias binding.
-    pub upgraded: bool,
-    /// Dataspace alias hosting the activated contract instance.
-    pub dataspace: String,
-    /// Successful deploy nonce consumed for address derivation.
-    pub deploy_nonce: u64,
-    /// Hex-encoded transaction hash submitted to the queue.
-    pub tx_hash_hex: String,
-    /// Hex-encoded code hash
-    pub code_hash_hex: String,
-    /// Hex-encoded ABI hash (if present)
-    pub abi_hash_hex: String,
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default, serde::Deserialize)]
+/// Query parameters for bundle deployment.
 pub struct DeployBundleQuery {
+    /// Whether to validate and simulate the bundle without submitting transactions.
     pub dry_run: Option<bool>,
 }
 
@@ -18985,15 +19421,23 @@ pub struct DeployBundleQuery {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Request payload for deploying a named bundle of contracts plus optional checks.
 pub struct DeployContractBundleDto {
+    /// Human-readable bundle name used in receipts and diagnostics.
     pub bundle_name: String,
+    /// Account that authorizes deployment transactions.
     pub authority: iroha_data_model::account::AccountId,
+    /// Signing key used to submit deployment and initialization transactions.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Optional default dataspace alias used by contracts that omit one.
     #[norito(default)]
     pub default_dataspace: Option<String>,
+    /// Contracts to deploy as part of the bundle.
     pub contracts: Vec<DeployContractBundleContractDto>,
+    /// Optional initialization calls to run after deployment.
     #[norito(default)]
     pub init_calls: Vec<DeployContractBundleInitCallDto>,
+    /// Optional read assertions to verify after deployment and initialization.
     #[norito(default)]
     pub assertions: Vec<DeployContractBundleAssertionDto>,
 }
@@ -19007,12 +19451,18 @@ pub struct DeployContractBundleDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// One contract member in a deployment bundle.
 pub struct DeployContractBundleContractDto {
+    /// Stable local name used by dependency references and receipts.
     pub name: String,
+    /// On-chain alias to bind to the deployed contract instance.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Base64-encoded compiled contract artifact.
     pub code_b64: String,
+    /// Optional lease expiry timestamp in milliseconds for the alias binding.
     #[norito(default)]
     pub lease_expiry_ms: Option<u64>,
+    /// Names of bundle contracts that must deploy before this contract.
     #[norito(default)]
     pub depends_on: Vec<String>,
 }
@@ -19026,16 +19476,24 @@ pub struct DeployContractBundleContractDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Initialization call executed after bundle contract deployment.
 pub struct DeployContractBundleInitCallDto {
+    /// Stable call identifier used in receipts.
     pub id: String,
+    /// Target contract alias.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Optional entrypoint name; defaults to the contract call default.
     #[norito(default)]
     pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload passed to the entrypoint.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
+    /// Maximum gas allowed for the call.
     pub gas_limit: u64,
+    /// Optional gas asset identifier override.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
+    /// Optional account that sponsors the call fee.
     #[norito(default)]
     pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
 }
@@ -19049,14 +19507,21 @@ pub struct DeployContractBundleInitCallDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Post-deployment read assertion for a bundle.
 pub struct DeployContractBundleAssertionDto {
+    /// Stable assertion identifier used in receipts.
     pub id: String,
+    /// Target contract alias.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Optional view entrypoint name.
     #[norito(default)]
     pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload passed to the view.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
+    /// Maximum gas allowed for the assertion view.
     pub gas_limit: u64,
+    /// Optional expected Norito JSON result.
     #[norito(default)]
     pub expected_result: Option<IrohaJson>,
 }
@@ -19070,18 +19535,29 @@ pub struct DeployContractBundleAssertionDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Receipt returned after processing a deployment bundle.
 pub struct DeployContractBundleReceiptDto {
+    /// Whether all requested stages completed.
     pub ok: bool,
+    /// Human-readable bundle name from the request.
     pub bundle_name: String,
+    /// Digest over the normalized bundle request.
     pub bundle_digest: String,
+    /// Chain fingerprint observed while processing the bundle.
     pub chain_fingerprint: String,
+    /// Whether the request was a dry run.
     pub dry_run: bool,
+    /// Stage names that completed before returning the receipt.
     pub completed_stages: Vec<String>,
+    /// Stage or operation where processing failed, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub failure_point: Option<String>,
+    /// Per-contract deployment receipts.
     pub contracts: Vec<DeployContractBundleContractReceiptDto>,
+    /// Per-initialization-call receipts.
     #[norito(default)]
     pub init_calls: Vec<DeployContractBundleCallReceiptDto>,
+    /// Per-assertion receipts.
     #[norito(default)]
     pub assertions: Vec<DeployContractBundleAssertionReceiptDto>,
 }
@@ -19095,19 +19571,31 @@ pub struct DeployContractBundleReceiptDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Receipt for one deployed contract in a bundle.
 pub struct DeployContractBundleContractReceiptDto {
+    /// Stable local contract name from the request.
     pub name: String,
+    /// On-chain alias requested for this contract.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Contract address that was deployed or resolved.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Previous contract address replaced by an upgrade, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub previous_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Whether this deployment replaced a previous alias target.
     pub upgraded: bool,
+    /// Dataspace alias used for the deployed contract.
     pub dataspace: String,
+    /// Nonce used for deployment.
     pub deploy_nonce: u64,
+    /// Hex-encoded contract code hash.
     pub code_hash_hex: String,
+    /// Hex-encoded contract ABI hash.
     pub abi_hash_hex: String,
+    /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Final deployment status.
     pub status: String,
 }
 
@@ -19120,13 +19608,19 @@ pub struct DeployContractBundleContractReceiptDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Receipt for one initialization call in a bundle.
 pub struct DeployContractBundleCallReceiptDto {
+    /// Stable call identifier from the request.
     pub id: String,
+    /// Target contract alias.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Entrypoint called, when provided.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Transaction hash for the submitted call, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Final call status.
     pub status: String,
 }
 
@@ -19139,16 +19633,24 @@ pub struct DeployContractBundleCallReceiptDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Receipt for one post-deployment assertion.
 pub struct DeployContractBundleAssertionReceiptDto {
+    /// Stable assertion identifier from the request.
     pub id: String,
+    /// Target contract alias.
     pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Entrypoint queried, when provided.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Assertion status.
     pub status: String,
+    /// Actual Norito JSON result returned by the assertion view.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub actual_result: Option<IrohaJson>,
+    /// Expected Norito JSON result from the request.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expected_result: Option<IrohaJson>,
+    /// Assertion or query error message, when any.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -20567,6 +21069,9 @@ pub struct MultisigProposalsListRequestDto {
 pub struct MultisigProposalEntryDto {
     pub proposal_id: String,
     pub instructions_hash: String,
+    pub operation_type: String,
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     pub status: String,
     #[norito(default)]
@@ -20609,6 +21114,9 @@ pub struct MultisigProposalGetResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub proposal_id: String,
     pub instructions_hash: String,
+    pub operation_type: String,
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     pub status: String,
     #[norito(default)]
@@ -21854,7 +22362,7 @@ async fn submit_contract_deploy_request(
     telemetry: MaybeTelemetry,
     req: DeployContractDto,
     endpoint: &'static str,
-) -> Result<DeployContractResponseDto> {
+) -> Result<DeployContractBundleContractReceiptDto> {
     use iroha_data_model::{
         isi::{
             contract_alias::SetContractAlias,
@@ -21945,17 +22453,18 @@ async fn submit_contract_deploy_request(
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
 
-    Ok(DeployContractResponseDto {
-        ok: true,
+    Ok(DeployContractBundleContractReceiptDto {
+        name: contract_alias.to_string(),
         contract_alias,
         contract_address,
         previous_contract_address: previous_contract_address.clone(),
         upgraded: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
-        tx_hash_hex,
+        tx_hash_hex: Some(tx_hash_hex),
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
+        status: "submitted".to_owned(),
     })
 }
 
@@ -22137,8 +22646,8 @@ async fn execute_contract_bundle_request(
                     return Err(err);
                 }
             };
-            receipt.contracts[index].tx_hash_hex = Some(response.tx_hash_hex);
-            receipt.contracts[index].status = "submitted".to_owned();
+            receipt.contracts[index].tx_hash_hex = response.tx_hash_hex.clone();
+            receipt.contracts[index].status = response.status.clone();
             persist_contract_bundle_receipt(&receipt)?;
 
             if let Err(err) =
@@ -22276,30 +22785,6 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
-fn deploy_bundle_receipt_to_legacy_response(
-    receipt: DeployContractBundleReceiptDto,
-) -> Result<DeployContractResponseDto> {
-    let contract = receipt.contracts.into_iter().next().ok_or_else(|| {
-        conversion_error("bundle receipt did not include any contracts".to_owned())
-    })?;
-    let tx_hash_hex = contract.tx_hash_hex.ok_or_else(|| {
-        conversion_error("bundle receipt did not include a deployment transaction hash".to_owned())
-    })?;
-    Ok(DeployContractResponseDto {
-        ok: receipt.ok,
-        contract_alias: contract.contract_alias,
-        contract_address: contract.contract_address,
-        previous_contract_address: contract.previous_contract_address,
-        upgraded: contract.upgraded,
-        dataspace: contract.dataspace,
-        deploy_nonce: contract.deploy_nonce,
-        tx_hash_hex,
-        code_hash_hex: contract.code_hash_hex,
-        abi_hash_hex: contract.abi_hash_hex,
-    })
-}
-
-#[cfg(feature = "app_api")]
 /// POST /v1/contracts/deploy-bundle — deploy a dependency-ordered bundle of
 /// public contracts, init calls, and post-deploy assertions.
 pub async fn handle_post_contract_deploy_bundle(
@@ -22346,7 +22831,7 @@ pub async fn handle_get_contract_deploy_bundle_status(
 
 #[cfg(feature = "app_api")]
 /// POST /v1/contracts/deploy — submit a single public contract deployment and
-/// return the queued deploy receipt metadata.
+/// return the canonical bundle receipt metadata used by deploy-bundle.
 pub async fn handle_post_contract_deploy(
     chain_id: Arc<ChainId>,
     kura: Arc<Kura>,
@@ -22365,8 +22850,7 @@ pub async fn handle_post_contract_deploy(
         false,
     )
     .await?;
-    let response = deploy_bundle_receipt_to_legacy_response(receipt)?;
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let body = norito::json::to_json_pretty(&receipt).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -22379,12 +22863,15 @@ pub async fn handle_post_contract_deploy(
 mod contract_bundle_tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
+    use base64::Engine as _;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State};
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         account::AccountId,
         nexus::DataSpaceId,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
     };
+    use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
     fn sample_authority() -> AccountId {
@@ -22407,6 +22894,47 @@ mod contract_bundle_tests {
             DataSpaceId::GLOBAL,
         )
         .expect("derive contract address")
+    }
+
+    fn sample_bundle_request(
+        authority: AccountId,
+        private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    ) -> DeployContractBundleDto {
+        DeployContractBundleDto {
+            bundle_name: "demo".to_owned(),
+            authority,
+            private_key,
+            default_dataspace: None,
+            contracts: vec![DeployContractBundleContractDto {
+                name: "demo.greeter".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                code_b64: base64::engine::general_purpose::STANDARD
+                    .encode(crate::test_utils::minimal_ivm_program(1)),
+                lease_expiry_ms: None,
+                depends_on: Vec::new(),
+            }],
+            init_calls: Vec::new(),
+            assertions: Vec::new(),
+        }
+    }
+
+    fn contract_test_state(
+        authority: &AccountId,
+    ) -> (Arc<State>, Arc<Kura>, Arc<Queue>, Arc<ChainId>) {
+        let world = crate::test_utils::world_with_authority(authority);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+        crate::test_utils::grant_contract_operator_permissions(&state, authority);
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: nonzero!(100usize),
+            capacity_per_user: nonzero!(100usize),
+            ..Default::default()
+        };
+        let queue = Arc::new(Queue::from_config(queue_cfg, events));
+        let chain_id = Arc::new("chain".parse().expect("chain id"));
+        (state, kura, queue, chain_id)
     }
 
     #[test]
@@ -22497,8 +23025,10 @@ mod contract_bundle_tests {
     }
 
     #[test]
-    fn bundle_receipt_flattens_to_legacy_single_contract_response() {
-        let response = deploy_bundle_receipt_to_legacy_response(DeployContractBundleReceiptDto {
+    fn bundle_receipt_storage_is_chain_scoped() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let receipt = DeployContractBundleReceiptDto {
             ok: true,
             bundle_name: "single-contract-deploy".to_owned(),
             bundle_digest: "digest-1".to_owned(),
@@ -22521,19 +23051,87 @@ mod contract_bundle_tests {
             }],
             init_calls: Vec::new(),
             assertions: Vec::new(),
-        })
-        .expect("legacy response");
+        };
 
-        assert!(response.ok);
-        assert_eq!(response.contract_alias, sample_alias("greeter::universal"));
-        assert_eq!(response.contract_address, sample_address(0));
-        assert_eq!(response.previous_contract_address, Some(sample_address(1)));
-        assert!(response.upgraded);
-        assert_eq!(response.dataspace, "universal");
-        assert_eq!(response.deploy_nonce, 7);
-        assert_eq!(response.tx_hash_hex, "tx");
-        assert_eq!(response.code_hash_hex, "code");
-        assert_eq!(response.abi_hash_hex, "abi");
+        persist_contract_bundle_receipt(&receipt).expect("persist receipt");
+        assert!(
+            load_contract_bundle_receipt("digest-1", "other-chain@block1")
+                .expect("load receipt")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_contract_bundle_dry_run_does_not_persist_receipt() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let creds = crate::test_utils::random_authority();
+        let (state, kura, queue, chain_id) = contract_test_state(&creds.account);
+        let request = sample_bundle_request(creds.account.clone(), creds.private_key.clone());
+
+        let receipt = execute_contract_bundle_request(
+            chain_id.clone(),
+            kura.clone(),
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            request,
+            true,
+        )
+        .await
+        .expect("dry-run receipt");
+
+        assert!(receipt.dry_run);
+        assert_eq!(receipt.completed_stages, vec!["plan".to_owned()]);
+        assert!(
+            load_contract_bundle_receipt(&receipt.bundle_digest, &receipt.chain_fingerprint)
+                .expect("load receipt")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_contract_bundle_resume_reuses_completed_deploy_stage() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let creds = crate::test_utils::random_authority();
+        let (state, kura, queue, chain_id) = contract_test_state(&creds.account);
+        let request = sample_bundle_request(creds.account.clone(), creds.private_key.clone());
+        let mut persisted = plan_contract_bundle(
+            chain_id.as_ref(),
+            kura.as_ref(),
+            state.as_ref(),
+            &request,
+            false,
+        )
+        .expect("plan receipt");
+        persisted.completed_stages.push("deploy".to_owned());
+        persisted.contracts[0].status = "deployed".to_owned();
+        persisted.contracts[0].tx_hash_hex = Some("11".repeat(32));
+        persisted.ok = false;
+        persisted.failure_point = Some("stale failure".to_owned());
+        persist_contract_bundle_receipt(&persisted).expect("persist receipt");
+
+        let resumed = execute_contract_bundle_request(
+            chain_id,
+            kura,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            request,
+            false,
+        )
+        .await
+        .expect("resume receipt");
+
+        assert!(resumed.ok);
+        assert!(resumed.failure_point.is_none());
+        assert_eq!(
+            resumed.completed_stages,
+            vec!["plan".to_owned(), "deploy".to_owned()]
+        );
+        assert_eq!(resumed.contracts[0].status, "deployed");
+        assert_eq!(resumed.contracts[0].tx_hash_hex, Some("11".repeat(32)));
     }
 }
 

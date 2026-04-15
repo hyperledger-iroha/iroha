@@ -76,7 +76,7 @@ Validation and execution rules:
   clears the prior alias binding, deactivates the retired address, binds the
   alias to the new address, and reports `previous_contract_address`.
 
-### Response (`DeployContractResponseDto`)
+### Response (`DeployContractBundleReceiptDto`)
 
 | Field | Type | Notes |
 |-------|------|-------|

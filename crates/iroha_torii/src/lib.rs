@@ -58,6 +58,8 @@
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
 #[cfg(feature = "app_api")]
+mod app_api;
+#[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
 mod offline_lineage;
@@ -310,7 +312,6 @@ use tokio::{
 use tower::ServiceExt as _;
 use tower_http::{
     cors::{Any, CorsLayer},
-    timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use utils::extractors::NoritoVersioned;
@@ -389,17 +390,19 @@ pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery}
 pub use routing::{
     ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
     ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
-    ContractViewDto, ContractViewResponseDto, DeployContractDto, DeployContractResponseDto,
-    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
-    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
-    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
-    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
-    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
-    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
+    ContractViewDto, ContractViewResponseDto, DeployContractBundleDto,
+    DeployContractBundleReceiptDto, DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto,
+    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
+    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
+    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
+    PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
+    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
+    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
+    ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
+    handle_count_proofs, handle_get_contract_code_bytes, handle_get_contract_deploy_bundle_status,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_deploy, handle_post_contract_view,
+    handle_post_contract_call_simulate, handle_post_contract_deploy,
+    handle_post_contract_deploy_bundle, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
@@ -1252,9 +1255,9 @@ struct AppState {
     da_receipt_signer: KeyPair,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     #[cfg(feature = "connect")]
     connect_bus: connect::Bus,
@@ -2533,6 +2536,23 @@ async fn enforce_json_utf8_charset(
     let mut response = next.run(req).await;
     normalize_json_response_content_type(response.headers_mut());
     Ok(response)
+}
+
+fn route_timeout_for_path(path: &str) -> Duration {
+    match path {
+        "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" => CONTRACT_DEPLOY_ROUTE_TIMEOUT,
+        _ => DEFAULT_ROUTE_TIMEOUT,
+    }
+}
+
+async fn enforce_route_timeout(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    match tokio::time::timeout(route_timeout_for_path(req.uri().path()), next.run(req)).await {
+        Ok(response) => Ok(response),
+        Err(_) => Ok(StatusCode::REQUEST_TIMEOUT.into_response()),
+    }
 }
 
 async fn record_http_metrics(
@@ -10628,7 +10648,7 @@ async fn execute_soracloud_local_read_via_proxy(
     ))
 }
 
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(feature = "app_api")]
 fn validate_incoming_soracloud_proxy_request_authority(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -10737,7 +10757,7 @@ fn validate_incoming_soracloud_proxy_request_authority(
     Ok(())
 }
 
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(feature = "app_api")]
 async fn process_incoming_soracloud_proxy_request(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
@@ -10808,7 +10828,7 @@ async fn process_incoming_soracloud_proxy_request(
     });
 }
 
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(feature = "app_api")]
 async fn process_incoming_soracloud_proxy_response(
     app: &SharedAppState,
     responder_peer_id: iroha_data_model::peer::PeerId,
@@ -11264,7 +11284,7 @@ fn torii_proxy_candidate_peer_ids(
     }
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return true;
@@ -11275,7 +11295,7 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
         .any(|peer_id| peer_id == local_peer_id)
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
     if is_local_authoritative_for_route(app, routing_decision) {
         return true;
@@ -13919,6 +13939,23 @@ async fn execute_torii_proxy_request_with_fallback(
         },
     )
     .await
+}
+
+#[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
+async fn execute_torii_proxy_request_with_fallback(
+    _app: &SharedAppState,
+    routing_decision: RoutingDecision,
+    _request: ToriiProxyRequestKindV1,
+) -> Response {
+    torii_proxy_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "route_unavailable",
+        format!(
+            "Torii ingress routing for lane {} dataspace {} requires P2P support",
+            routing_decision.lane_id.as_u32(),
+            routing_decision.dataspace_id.as_u64(),
+        ),
+    )
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -22713,6 +22750,7 @@ async fn handler_post_transaction(
         transaction.clone(),
         &app.telemetry,
     )?;
+    #[allow(unused_variables)]
     let routing_decision = app
         .queue
         .route_with_state(&accepted_tx, app.state.as_ref())
@@ -25261,7 +25299,8 @@ pub mod zk_attachments;
 #[cfg(feature = "app_api")]
 pub mod zk_prover;
 
-const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_mins(1);
+const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
+const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
 const HEADER_API_TOKEN: &str = "x-api-token";
@@ -25360,9 +25399,9 @@ pub struct Torii {
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_geo: telemetry::peers::GeoLookupConfig,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     // Query and transaction rate limits (operator-local)
     #[allow(dead_code)]
@@ -26437,6 +26476,33 @@ impl Torii {
         builder.apply(|router| {
             // App-facing endpoints
             let aa_group = Router::new()
+                .route(
+                    "/v1/app-api/bindings",
+                    get(app_api::handle_get_app_api_bindings),
+                )
+                .route(
+                    "/v1/app-api/cid/{cid}",
+                    get(app_api::handle_get_app_api_cid_manifest),
+                )
+                .route(
+                    "/v1/app-api/cid/{cid}/{*path}",
+                    get(app_api::handle_get_app_api_cid_path)
+                        .post(app_api::handle_post_app_api_cid_path),
+                )
+                .route(
+                    "/v1/app-api/active/{*path}",
+                    get(app_api::handle_get_app_api_active_path)
+                        .post(app_api::handle_post_app_api_active_path),
+                )
+                .route(
+                    "/v1/api/cid/{cid}",
+                    get(app_api::handle_get_app_api_cid_manifest),
+                )
+                .route(
+                    "/v1/api/cid/{cid}/{*path}",
+                    get(app_api::handle_get_app_api_cid_path)
+                        .post(app_api::handle_post_app_api_cid_path),
+                )
                 .route("/v1/accounts/{account_id}", get(handler_account_get))
                 .route(
                     "/v1/accounts/{account_id}/transactions/query",
@@ -28012,9 +28078,9 @@ impl Torii {
             address: config.address,
             transaction_max_content_len: config.max_content_len,
             ws_message_timeout: config.ws_message_timeout,
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: None,
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
@@ -28123,7 +28189,7 @@ impl Torii {
     }
 
     /// Wire a P2P handle for WebSocket fallback (feature `p2p_ws`).
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
         self.p2p = Some(p2p);
         #[cfg(feature = "connect")]
@@ -28136,20 +28202,20 @@ impl Torii {
         self
     }
     /// No-op when both `p2p_ws` and `connect` features are disabled.
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
     pub fn with_p2p(self, _p2p: iroha_core::IrohaNetwork) -> Self {
         self
     }
 
     /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
         self
     }
 
     /// No-op when P2P support is disabled.
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
     pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
@@ -28370,9 +28436,9 @@ impl Torii {
             da_receipt_signer: self.da_receipt_signer.clone(),
             da_ingest: self.da_ingest.clone(),
             sumeragi: self.sumeragi.clone(),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: self.p2p.clone(),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: self.local_peer_id.clone(),
             #[cfg(feature = "connect")]
             connect_bus: self.connect_bus.clone(),
@@ -28466,7 +28532,7 @@ impl Torii {
 
         // Touch certain fields to avoid dead-code warnings under feature combinations
         let _ = (&app_state.kiso, &app_state.online_peers);
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
         let _ = &app_state.p2p;
         let _ = (
             &app_state.mcp,
@@ -28582,13 +28648,8 @@ impl Torii {
 
         let router = builder
             .finish()
-            .layer((
-                TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()),
-                TimeoutLayer::with_status_code(
-                    StatusCode::REQUEST_TIMEOUT,
-                    SERVER_SHUTDOWN_TIMEOUT,
-                ),
-            ))
+            .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
+            .layer(axum::middleware::from_fn(enforce_route_timeout))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_preauth,
@@ -31421,6 +31482,7 @@ pub(crate) mod tests_runtime_handlers {
         push: Option<iroha_config::parameters::actual::Push>,
     ) -> SharedAppState {
         // Minimal core state
+        let _ = &push;
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state_inner =
@@ -31740,9 +31802,9 @@ pub(crate) mod tests_runtime_handlers {
             rbc_sampling_manifest,
             rbc_chain_hash,
             sumeragi: None,
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: None,
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: None,
             #[cfg(feature = "connect")]
             connect_bus: crate::connect::Bus::from_config(&connect_cfg),
@@ -36787,6 +36849,8 @@ pub(crate) mod tests_runtime_handlers {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -36795,6 +36859,8 @@ pub(crate) mod tests_runtime_handlers {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),
@@ -36825,6 +36891,8 @@ pub(crate) mod tests_runtime_handlers {
                         selected_backend:
                             iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     }
                 },
             )
@@ -41703,6 +41771,8 @@ pub(crate) mod tests_runtime_handlers {
                     max_memory_bytes: 2 * 1024 * 1024 * 1024,
                     max_storage_bytes: 16 * 1024 * 1024 * 1024,
                     proxy_only: false,
+                    geography_tags: Default::default(),
+                    observed_latency_ms: None,
                     advertised_at_ms: 1,
                     heartbeat_expires_at_ms: u64::MAX,
                 },
@@ -41727,6 +41797,8 @@ pub(crate) mod tests_runtime_handlers {
                     max_memory_bytes: 1024 * 1024 * 1024,
                     max_storage_bytes: 8 * 1024 * 1024 * 1024,
                     proxy_only: false,
+                    geography_tags: Default::default(),
+                    observed_latency_ms: None,
                     advertised_at_ms: 1,
                     heartbeat_expires_at_ms: u64::MAX,
                 },
@@ -41751,6 +41823,8 @@ pub(crate) mod tests_runtime_handlers {
                     max_memory_bytes: 0,
                     max_storage_bytes: 0,
                     proxy_only: true,
+                    geography_tags: Default::default(),
+                    observed_latency_ms: None,
                     advertised_at_ms: 1,
                     heartbeat_expires_at_ms: u64::MAX,
                 },
@@ -41775,6 +41849,8 @@ pub(crate) mod tests_runtime_handlers {
                             iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa:
                             iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     },
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 2,
@@ -41784,6 +41860,8 @@ pub(crate) mod tests_runtime_handlers {
                             iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::FirecrackerKvm,
                         selected_guest_isa:
                             iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                        selected_geography_tag: None,
+                        selection_latency_ms: None,
                     },
                 ],
                     reconciled_at_ms: 1,
@@ -42467,28 +42545,40 @@ pub(crate) mod tests_runtime_handlers {
             v.get("ok").and_then(norito::json::Value::as_bool),
             Some(true)
         );
+        let contract = v
+            .get("contracts")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|contracts| contracts.first())
+            .expect("single-contract receipt");
         assert_eq!(
-            v.get("dataspace").and_then(norito::json::Value::as_str),
+            contract
+                .get("dataspace")
+                .and_then(norito::json::Value::as_str),
             Some("universal")
         );
         assert_eq!(
-            v.get("deploy_nonce").and_then(norito::json::Value::as_u64),
+            contract
+                .get("deploy_nonce")
+                .and_then(norito::json::Value::as_u64),
             Some(0)
         );
         assert!(
-            v.get("contract_address")
+            contract
+                .get("contract_address")
                 .and_then(norito::json::Value::as_str)
                 .is_some_and(|value| !value.is_empty()),
             "expected canonical contract address in deploy response"
         );
         assert_eq!(
-            v.get("code_hash_hex")
+            contract
+                .get("code_hash_hex")
                 .and_then(norito::json::Value::as_str)
                 .map(str::len),
             Some(64)
         );
         assert_eq!(
-            v.get("abi_hash_hex")
+            contract
+                .get("abi_hash_hex")
                 .and_then(norito::json::Value::as_str)
                 .map(str::len),
             Some(64)
@@ -43431,6 +43521,8 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -43439,6 +43531,8 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),

@@ -11412,7 +11412,7 @@ fn portable_vm_kernel_cmdline(
     datasource_base_url: &str,
 ) -> String {
     format!(
-        "console={} root=/dev/vda rw panic=1 ds=nocloud-net;s={}",
+        "console={} root=/dev/vda rw rootdelay=5 rootfstype=ext4 panic=1 ds=nocloud-net;s={}",
         profile.serial_console, datasource_base_url
     )
 }

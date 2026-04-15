@@ -73,7 +73,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   - Redeploying the same `contract_alias` performs an in-place upgrade:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.
-  - Response: `{ ok, contract_alias, contract_address, previous_contract_address?, upgraded, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }`.
+  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`

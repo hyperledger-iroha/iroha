@@ -276,15 +276,29 @@ class _MockState:
             self.contract_code_bytes.clear()
             self.contract_deploy_response = {
                 "ok": True,
-                "contract_alias": "router::universal",
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                "previous_contract_address": None,
-                "upgraded": False,
-                "dataspace": "universal",
-                "deploy_nonce": 0,
-                "tx_hash_hex": "11" * 32,
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
+                "bundle_name": "single-contract-deploy",
+                "bundle_digest": "mock-single-contract-digest",
+                "chain_fingerprint": "mock-chain@height-0",
+                "dry_run": False,
+                "completed_stages": ["plan", "deploy"],
+                "failure_point": None,
+                "contracts": [
+                    {
+                        "name": "router::universal",
+                        "contract_alias": "router::universal",
+                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                        "previous_contract_address": None,
+                        "upgraded": False,
+                        "dataspace": "universal",
+                        "deploy_nonce": 0,
+                        "tx_hash_hex": "11" * 32,
+                        "code_hash_hex": "22" * 32,
+                        "abi_hash_hex": "33" * 32,
+                        "status": "submitted",
+                    }
+                ],
+                "init_calls": [],
+                "assertions": [],
             }
             self.contract_bundle_response = {
                 "bundle_digest": "mock-bundle-digest",
@@ -924,7 +938,14 @@ class _MockState:
             raise ValueError("contract deploy payload must not include manifest")
         if "lease_expiry_ms" in payload and not isinstance(payload.get("lease_expiry_ms"), (int, float, str)):
             raise ValueError("contract deploy payload lease_expiry_ms must be numeric")
-        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_deploy_response))
+        receipt = dict(self.contract_deploy_response)
+        contracts = receipt.get("contracts")
+        if isinstance(contracts, list) and contracts:
+            contract = dict(contracts[0])
+            contract.setdefault("name", payload["contract_alias"])
+            contract.setdefault("contract_alias", payload["contract_alias"])
+            receipt["contracts"] = [contract]
+        return _json_response(HTTPStatus.ACCEPTED, receipt)
 
     def _contracts_deploy_bundle(
         self,

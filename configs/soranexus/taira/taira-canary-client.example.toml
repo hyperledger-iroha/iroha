@@ -13,3 +13,8 @@ chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 domain = "wonderland.universal"
 public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
 private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"
+
+[transaction]
+time_to_live_ms = 900000
+status_timeout_ms = 900000
+nonce = false

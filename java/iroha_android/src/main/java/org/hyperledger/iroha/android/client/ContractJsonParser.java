@@ -2,7 +2,9 @@ package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 public final class ContractJsonParser {
@@ -12,27 +14,97 @@ public final class ContractJsonParser {
   public static ContractDeployResponse parseDeployResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract deploy response"), "contract deploy response");
+    final List<Object> contracts =
+        requiredList(root.get("contracts"), "contract deploy response.contracts");
+    final List<Object> initCalls =
+        requiredList(root.get("init_calls"), "contract deploy response.init_calls");
+    final List<Object> assertions =
+        requiredList(root.get("assertions"), "contract deploy response.assertions");
     return new ContractDeployResponse(
         Boolean.TRUE.equals(root.get("ok")),
-        optionalString(root.get("contract_alias")),
-        optionalString(root.get("contract_address")),
-        optionalString(root.get("previous_contract_address")),
-        Boolean.TRUE.equals(root.get("upgraded")),
-        optionalString(root.get("dataspace")),
-        root.containsKey("deploy_nonce")
-            ? asOptionalLong(root.get("deploy_nonce"), "contract deploy response.deploy_nonce")
-            : null,
-        root.containsKey("tx_hash_hex") && root.get("tx_hash_hex") != null
-            ? HttpClientTransport.normalizeHex32(
-                requiredString(root.get("tx_hash_hex"), "contract deploy response.tx_hash_hex"),
-                "txHashHex")
-            : null,
-        HttpClientTransport.normalizeHex32(
-            requiredString(root.get("code_hash_hex"), "contract deploy response.code_hash_hex"),
-            "codeHashHex"),
-        HttpClientTransport.normalizeHex32(
-            requiredString(root.get("abi_hash_hex"), "contract deploy response.abi_hash_hex"),
-            "abiHashHex"));
+        requiredString(root.get("bundle_name"), "contract deploy response.bundle_name"),
+        requiredString(root.get("bundle_digest"), "contract deploy response.bundle_digest"),
+        requiredString(root.get("chain_fingerprint"), "contract deploy response.chain_fingerprint"),
+        Boolean.TRUE.equals(root.get("dry_run")),
+        requiredStringList(root.get("completed_stages"), "contract deploy response.completed_stages"),
+        optionalString(root.get("failure_point")),
+        contracts.stream()
+            .map(
+                item -> {
+                  final Map<String, Object> contract =
+                      expectObject(item, "contract deploy response.contracts[]");
+                  return new ContractDeployResponse.ContractReceipt(
+                      requiredString(contract.get("name"), "contract deploy response.contracts[].name"),
+                      optionalString(contract.get("contract_alias")),
+                      optionalString(contract.get("contract_address")),
+                      optionalString(contract.get("previous_contract_address")),
+                      Boolean.TRUE.equals(contract.get("upgraded")),
+                      optionalString(contract.get("dataspace")),
+                      contract.containsKey("deploy_nonce")
+                          ? asOptionalLong(
+                              contract.get("deploy_nonce"),
+                              "contract deploy response.contracts[].deploy_nonce")
+                          : null,
+                      contract.containsKey("tx_hash_hex") && contract.get("tx_hash_hex") != null
+                          ? HttpClientTransport.normalizeHex32(
+                              requiredString(
+                                  contract.get("tx_hash_hex"),
+                                  "contract deploy response.contracts[].tx_hash_hex"),
+                              "txHashHex")
+                          : null,
+                      HttpClientTransport.normalizeHex32(
+                          requiredString(
+                              contract.get("code_hash_hex"),
+                              "contract deploy response.contracts[].code_hash_hex"),
+                          "codeHashHex"),
+                      HttpClientTransport.normalizeHex32(
+                          requiredString(
+                              contract.get("abi_hash_hex"),
+                              "contract deploy response.contracts[].abi_hash_hex"),
+                          "abiHashHex"),
+                      requiredString(
+                          contract.get("status"),
+                          "contract deploy response.contracts[].status"));
+                })
+            .collect(Collectors.toList()),
+        initCalls.stream()
+            .map(
+                item -> {
+                  final Map<String, Object> call =
+                      expectObject(item, "contract deploy response.init_calls[]");
+                  return new ContractDeployResponse.InitCallReceipt(
+                      requiredString(call.get("id"), "contract deploy response.init_calls[].id"),
+                      optionalString(call.get("contract_alias")),
+                      optionalString(call.get("entrypoint")),
+                      call.containsKey("tx_hash_hex") && call.get("tx_hash_hex") != null
+                          ? HttpClientTransport.normalizeHex32(
+                              requiredString(
+                                  call.get("tx_hash_hex"),
+                                  "contract deploy response.init_calls[].tx_hash_hex"),
+                              "txHashHex")
+                          : null,
+                      requiredString(
+                          call.get("status"),
+                          "contract deploy response.init_calls[].status"));
+                })
+            .collect(Collectors.toList()),
+        assertions.stream()
+            .map(
+                item -> {
+                  final Map<String, Object> assertion =
+                      expectObject(item, "contract deploy response.assertions[]");
+                  return new ContractDeployResponse.AssertionReceipt(
+                      requiredString(assertion.get("id"), "contract deploy response.assertions[].id"),
+                      optionalString(assertion.get("contract_alias")),
+                      optionalString(assertion.get("entrypoint")),
+                      requiredString(
+                          assertion.get("status"),
+                          "contract deploy response.assertions[].status"),
+                      assertion.get("actual_result"),
+                      assertion.get("expected_result"),
+                      optionalString(assertion.get("error")));
+                })
+            .collect(Collectors.toList()));
   }
 
   public static ContractCallResponse parseCallResponse(final byte[] payload) {
@@ -126,6 +198,20 @@ public final class ContractJsonParser {
       return null;
     }
     return asLong(value, path);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Object> requiredList(final Object value, final String path) {
+    if (!(value instanceof List<?>)) {
+      throw new IllegalStateException(path + " must be an array");
+    }
+    return (List<Object>) value;
+  }
+
+  private static List<String> requiredStringList(final Object value, final String path) {
+    return requiredList(value, path).stream()
+        .map(item -> requiredString(item, path + "[]"))
+        .collect(Collectors.toList());
   }
 
   private static String optionalBase64(final Object value, final String path) {

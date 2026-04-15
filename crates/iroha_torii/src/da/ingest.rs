@@ -41,6 +41,7 @@ use iroha_logger::{error, warn};
 use iroha_torii_shared::da::sampling::{
     build_sampling_plan, compute_sample_window, sampling_plan_to_value,
 };
+#[cfg(feature = "ipa-commitment")]
 use iroha_zkp_halo2::pallas::{
     Params as IpaCurveParams, Polynomial as IpaPolynomial, Scalar as IpaScalar,
 };
@@ -1187,6 +1188,7 @@ fn effective_chunk_role(commitment: &ChunkCommitment) -> ChunkRole {
     }
 }
 
+#[cfg(feature = "ipa-commitment")]
 fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     let mut hasher = Blake3Hasher::new();
     hasher.update(&commitment.index.to_le_bytes());
@@ -1200,6 +1202,7 @@ fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     IpaScalar::from_uniform(&wide)
 }
 
+#[cfg(feature = "ipa-commitment")]
 pub fn ipa_commitment_from_chunks(
     commitments: &[ChunkCommitment],
 ) -> Result<BlobDigest, (StatusCode, String)> {
@@ -1225,6 +1228,16 @@ pub fn ipa_commitment_from_chunks(
         )
     })?;
     Ok(BlobDigest::new(commitment.to_bytes()))
+}
+
+#[cfg(not(feature = "ipa-commitment"))]
+pub fn ipa_commitment_from_chunks(
+    _commitments: &[ChunkCommitment],
+) -> Result<BlobDigest, (StatusCode, String)> {
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "IPA commitments require the `ipa-commitment` feature".to_owned(),
+    ))
 }
 
 fn compute_tree_height(count: usize) -> u16 {
