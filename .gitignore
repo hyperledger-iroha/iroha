@@ -131,6 +131,7 @@ javascript/iroha_js/dist/
 javascript/iroha_js/target-cargo/
 
 # Python build artifacts
+*.pyc
 python/norito_py/build/
 python/iroha_python/dist/
 python/iroha_python/src/iroha_python/*.so
