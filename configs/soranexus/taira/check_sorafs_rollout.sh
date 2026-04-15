@@ -16,6 +16,7 @@ SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
 SORAFS_MANIFEST_STUB_RUNNER=()
 SORAFS_TX_STDIN_BUILDER_RUNNER=()
+CURL_RESOLVE_RULES=()
 
 usage() {
   cat <<'EOF'
@@ -27,6 +28,7 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--stake-amount N]
                                [--declaration-valid-blocks N]
                                [--provider-seed-prefix TEXT]
+                               [--resolve-host HOST:IP|HOST:PORT:IP]
                                [--skip-write-canary]
 
 Verify that a public Taira node exposes the required SoraFS routes and, unless
@@ -119,6 +121,14 @@ while [[ $# -gt 0 ]]; do
       PROVIDER_SEED_PREFIX="$2"
       shift 2
       ;;
+    --resolve-host)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --resolve-host" >&2
+        exit 1
+      }
+      CURL_RESOLVE_RULES+=("$2")
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -160,6 +170,47 @@ cleanup() {
 
 trap cleanup EXIT
 
+build_curl_resolve_args() {
+  local url="$1"
+  CURL_URL_RESOLVE_ARGS=()
+  [[ ${#CURL_RESOLVE_RULES[@]} -gt 0 ]] || return 0
+
+  local host port
+  read -r host port < <(python3 - "$url" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+if parsed.port is not None:
+    port = parsed.port
+elif parsed.scheme == "https":
+    port = 443
+else:
+    port = 80
+print(host, port)
+PY
+)
+
+  [[ -n "$host" && -n "$port" ]] || return 0
+
+  local rule rule_host remainder rule_port rule_ip
+  for rule in "${CURL_RESOLVE_RULES[@]}"; do
+    rule_host="${rule%%:*}"
+    remainder="${rule#*:}"
+    if [[ "$remainder" == *:* ]]; then
+      rule_port="${remainder%%:*}"
+      rule_ip="${remainder#*:}"
+    else
+      rule_port="$port"
+      rule_ip="$remainder"
+    fi
+    if [[ "$rule_host" == "$host" && -n "$rule_ip" ]]; then
+      CURL_URL_RESOLVE_ARGS+=(--resolve "${host}:${rule_port}:${rule_ip}")
+    fi
+  done
+}
+
 http_request() {
   local method="$1"
   local url="$2"
@@ -169,12 +220,14 @@ http_request() {
   body_file="$(mktemp)"
   cleanup
   last_body="$body_file"
+  build_curl_resolve_args "$url"
 
   if [[ "$method" == "GET" ]]; then
     last_status="$(
       curl \
         --silent \
         --show-error \
+        "${CURL_URL_RESOLVE_ARGS[@]}" \
         --output "$body_file" \
         --write-out '%{http_code}' \
         "$url"
@@ -184,6 +237,7 @@ http_request() {
       curl \
         --silent \
         --show-error \
+        "${CURL_URL_RESOLVE_ARGS[@]}" \
         --output "$body_file" \
         --write-out '%{http_code}' \
         --header 'content-type: application/json' \

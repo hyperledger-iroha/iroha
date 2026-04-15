@@ -14,7 +14,7 @@ use std::{
 };
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -63,9 +63,9 @@ use iroha_data_model::{
         SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1,
         SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
         SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBindingV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraStateMutationOperationV1, SoraTlsModeV1, SoraTrainingJobActionV1,
+        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
+        SoraUploadedModelBindingV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
         SoraUploadedModelEncryptionRecipientV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -109,6 +109,8 @@ use tokio::sync::RwLock;
 use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
 
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
+const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
+const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
@@ -1901,6 +1903,51 @@ pub(crate) struct HealthPolicyDiffEntry {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SoracloudPublicServiceDiscoveryV1 {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub service_version: String,
+    pub execution_plane: String,
+    pub runtime: String,
+    pub route_host: String,
+    pub path_prefix: String,
+    pub base_url: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub healthcheck_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub healthcheck_url: Option<String>,
+    pub service_manifest_hash: Hash,
+    pub container_manifest_hash: Hash,
+    pub deployment_bundle_hash: Hash,
+    pub content_cid: String,
+    pub public_discovery_url: String,
+    pub public_discovery_cid_host_url: String,
+    pub manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub manifest_id_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SoracloudPublicServiceDiscoveryRegistryV1 {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub current_version: String,
+    pub revisions: BTreeMap<String, SoracloudPublicServiceDiscoveryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServicePublicDiscoveryResponse {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub current_version: String,
+    pub requested_version: String,
+    pub discovery: SoracloudPublicServiceDiscoveryV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct ControlPlaneServiceSnapshot {
     pub service_name: String,
     pub current_version: String,
@@ -1928,6 +1975,15 @@ pub(crate) struct ControlPlaneServiceSnapshot {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub remaining_runtime_balance_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_content_cid: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_cid_host_url: Option<String>,
     #[norito(default)]
     pub latest_revision: Option<ControlPlaneServiceRevision>,
     #[norito(default)]
@@ -1972,6 +2028,21 @@ pub(crate) struct ControlPlaneServiceRevision {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub route_path_prefix: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub healthcheck_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_content_cid: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_discovery_cid_host_url: Option<String>,
     pub state_binding_count: u32,
     #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
@@ -6675,6 +6746,84 @@ fn authoritative_service_deployment_bundle(
     Ok((deployment, bundle))
 }
 
+fn decode_public_service_discovery_registry(
+    entry: &SoraServiceConfigEntryV1,
+) -> Result<SoracloudPublicServiceDiscoveryRegistryV1, SoracloudError> {
+    let value_json = entry
+        .value_json
+        .clone()
+        .try_into_any_norito::<norito::json::Value>()
+        .map_err(|err| {
+            SoracloudError::internal(format!(
+                "failed to decode authoritative public discovery config json: {err}"
+            ))
+        })?;
+    let registry: SoracloudPublicServiceDiscoveryRegistryV1 = norito::json::from_value(value_json)
+        .map_err(|err| {
+            SoracloudError::internal(format!(
+                "failed to parse authoritative public discovery registry: {err}"
+            ))
+        })?;
+    Ok(registry)
+}
+
+fn authoritative_public_service_discovery_registry(
+    deployment: &SoraServiceDeploymentStateV1,
+) -> Result<Option<SoracloudPublicServiceDiscoveryRegistryV1>, SoracloudError> {
+    deployment
+        .service_configs
+        .get(PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME)
+        .map(decode_public_service_discovery_registry)
+        .transpose()
+}
+
+fn authoritative_public_service_discovery_for_version(
+    deployment: &SoraServiceDeploymentStateV1,
+    service_version: &str,
+) -> Result<Option<SoracloudPublicServiceDiscoveryV1>, SoracloudError> {
+    let Some(registry) = authoritative_public_service_discovery_registry(deployment)? else {
+        return Ok(None);
+    };
+    Ok(registry.revisions.get(service_version).cloned())
+}
+
+fn bundle_base_url(bundle: &SoraDeploymentBundleV1) -> Option<String> {
+    let route = bundle.service.route.as_ref()?;
+    let scheme = match route.tls_mode {
+        SoraTlsModeV1::Disabled => "http",
+        SoraTlsModeV1::Optional | SoraTlsModeV1::Required => "https",
+    };
+    let mut base_url = reqwest::Url::parse(&format!("{scheme}://{}", route.host)).ok()?;
+    let route_root = if route.path_prefix.trim().is_empty() {
+        "/".to_owned()
+    } else if route.path_prefix.ends_with('/') {
+        route.path_prefix.clone()
+    } else {
+        format!("{}/", route.path_prefix)
+    };
+    base_url.set_path(&route_root);
+    base_url.set_query(None);
+    base_url.set_fragment(None);
+    Some(base_url.to_string())
+}
+
+fn bundle_healthcheck_url(bundle: &SoraDeploymentBundleV1) -> Option<String> {
+    let route = bundle.service.route.as_ref()?;
+    let healthcheck_path = bundle.container.lifecycle.healthcheck_path.as_ref()?;
+    let scheme = match route.tls_mode {
+        SoraTlsModeV1::Disabled => "http",
+        SoraTlsModeV1::Optional | SoraTlsModeV1::Required => "https",
+    };
+    let mut url = reqwest::Url::parse(&format!("{scheme}://{}", route.host)).ok()?;
+    url.set_path(&join_public_route_paths(
+        route.path_prefix.as_str(),
+        healthcheck_path,
+    ));
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
 fn authoritative_binding_runtime_summary(
     world: &impl WorldReadOnly,
     service_name: &str,
@@ -7282,6 +7431,42 @@ fn authoritative_service_secret_status_response(
         secret_generation: deployment.secret_generation,
         secret_entry_count: u32::try_from(secrets.len()).unwrap_or(u32::MAX),
         secrets,
+    })
+}
+
+fn authoritative_service_public_discovery_response(
+    app: &SharedAppState,
+    service_name: &str,
+    requested_version: Option<&str>,
+) -> Result<ServicePublicDiscoveryResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let registry =
+        authoritative_public_service_discovery_registry(&deployment)?.ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "service `{service_name}` has no authoritative public discovery record"
+            ))
+        })?;
+    let current_version = deployment.current_service_version.clone();
+    let requested_version = requested_version
+        .unwrap_or(current_version.as_str())
+        .to_owned();
+    let discovery = registry
+        .revisions
+        .get(requested_version.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "service `{service_name}` has no public discovery record for revision `{requested_version}`"
+            ))
+        })?;
+    Ok(ServicePublicDiscoveryResponse {
+        schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+        service_name: deployment.service_name.to_string(),
+        current_version,
+        requested_version,
+        discovery,
     })
 }
 
@@ -9010,6 +9195,7 @@ fn deployment_bundle_to_control_plane_revision(
     deployment: &SoraServiceDeploymentStateV1,
     bundle: &SoraDeploymentBundleV1,
     latest_audit: Option<&SoraServiceAuditEventV1>,
+    public_discovery: Option<&SoracloudPublicServiceDiscoveryV1>,
 ) -> ControlPlaneServiceRevision {
     let host_admission = admit_scr_host_bundle(bundle).ok();
     let route = bundle.service.route.as_ref();
@@ -9034,6 +9220,12 @@ fn deployment_bundle_to_control_plane_revision(
         execution_plane: bundle.service.execution_plane,
         route_host: route.map(|route| route.host.clone()),
         route_path_prefix: route.map(|route| route.path_prefix.clone()),
+        base_url: bundle_base_url(bundle),
+        healthcheck_url: bundle_healthcheck_url(bundle),
+        public_discovery_content_cid: public_discovery.map(|entry| entry.content_cid.clone()),
+        public_discovery_url: public_discovery.map(|entry| entry.public_discovery_url.clone()),
+        public_discovery_cid_host_url: public_discovery
+            .map(|entry| entry.public_discovery_cid_host_url.clone()),
         state_binding_count: u32::try_from(bundle.service.state_bindings.len()).unwrap_or(u32::MAX),
         state_bindings: bundle.service.state_bindings.clone(),
         lease_volumes: bundle.service.lease_volumes.clone(),
@@ -9413,6 +9605,12 @@ pub(crate) fn control_plane_snapshot(
             .soracloud_service_revisions()
             .get(&revision_key)
             .cloned();
+        let current_public_discovery = authoritative_public_service_discovery_for_version(
+            deployment,
+            deployment.current_service_version.as_str(),
+        )
+        .ok()
+        .flatten();
         let latest_audit = world
             .soracloud_service_audit_events()
             .iter()
@@ -9452,8 +9650,22 @@ pub(crate) fn control_plane_snapshot(
                 .map(|lease| lease.prepaid_runtime_balance_nanos),
             remaining_runtime_balance_nanos: deployment
                 .hosted_service_remaining_balance_nanos(current_sequence),
+            public_discovery_content_cid: current_public_discovery
+                .as_ref()
+                .map(|entry| entry.content_cid.clone()),
+            public_discovery_url: current_public_discovery
+                .as_ref()
+                .map(|entry| entry.public_discovery_url.clone()),
+            public_discovery_cid_host_url: current_public_discovery
+                .as_ref()
+                .map(|entry| entry.public_discovery_cid_host_url.clone()),
             latest_revision: current_bundle.as_ref().map(|bundle| {
-                deployment_bundle_to_control_plane_revision(deployment, bundle, latest_audit)
+                deployment_bundle_to_control_plane_revision(
+                    deployment,
+                    bundle,
+                    latest_audit,
+                    current_public_discovery.as_ref(),
+                )
             }),
             active_rollout: deployment
                 .active_rollout
@@ -9948,6 +10160,70 @@ pub(crate) async fn handle_service_config_status(
         &app,
         service_name.as_ref(),
         query.config_name.as_deref(),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_public_discovery(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Path(service_name): Path<String>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/services/{service_name}/public-discovery",
+    )
+    .await
+    {
+        return err.into_response();
+    }
+
+    let service_name = match parse_service_name(&service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    match authoritative_service_public_discovery_response(&app, service_name.as_ref(), None) {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_revision_public_discovery(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Path((service_name, service_version)): Path<(String, String)>,
+) -> Response {
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
+    )
+    .await
+    {
+        return err.into_response();
+    }
+
+    let service_name = match parse_service_name(&service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_version = service_version.trim();
+    if service_version.is_empty() {
+        return SoracloudError::bad_request("service_version must not be empty").into_response();
+    }
+    match authoritative_service_public_discovery_response(
+        &app,
+        service_name.as_ref(),
+        Some(service_version),
     ) {
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
@@ -15072,6 +15348,141 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_service_public_discovery_reads_world_state() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let mut world = World::default();
+            let bundle = fixture_bundle("1.0.0");
+            let service_name = bundle.service.service_name.clone();
+            let discovery = SoracloudPublicServiceDiscoveryV1 {
+                schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+                service_name: service_name.to_string(),
+                service_version: bundle.service.service_version.clone(),
+                execution_plane: format!("{:?}", bundle.service.execution_plane),
+                runtime: format!("{:?}", bundle.container.runtime),
+                route_host: bundle
+                    .service
+                    .route
+                    .as_ref()
+                    .expect("fixture route")
+                    .host
+                    .clone(),
+                path_prefix: bundle
+                    .service
+                    .route
+                    .as_ref()
+                    .expect("fixture route")
+                    .path_prefix
+                    .clone(),
+                base_url: "https://web_portal.taira.sora.org/api/v1/".to_owned(),
+                healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+                healthcheck_url: Some("https://web_portal.taira.sora.org/api/v1/health".to_owned()),
+                service_manifest_hash: bundle.service_manifest_hash(),
+                container_manifest_hash: bundle.container_manifest_hash(),
+                deployment_bundle_hash: Hash::new(Encode::encode(&bundle)),
+                content_cid: "bafytestpublicdiscovery".to_owned(),
+                public_discovery_url:
+                    "https://taira.sora.org/sorafs/cid/bafytestpublicdiscovery/index.json"
+                        .to_owned(),
+                public_discovery_cid_host_url:
+                    "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json".to_owned(),
+                manifest_digest_hex: "deadbeef".to_owned(),
+                manifest_id_hex: Some("feedface".to_owned()),
+            };
+            let registry = SoracloudPublicServiceDiscoveryRegistryV1 {
+                schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+                service_name: service_name.to_string(),
+                current_version: bundle.service.service_version.clone(),
+                revisions: BTreeMap::from([(
+                    bundle.service.service_version.clone(),
+                    discovery.clone(),
+                )]),
+            };
+
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 1,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::from([(
+                        PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
+                        SoraServiceConfigEntryV1 {
+                            schema_version:
+                                iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                            config_name: PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
+                            value_hash: Hash::new(
+                                norito::json::to_vec(&registry)
+                                    .expect("registry json should encode"),
+                            ),
+                            value_json: Json::from(
+                                norito::json::to_json(&registry)
+                                    .expect("registry json should encode")
+                                    .as_str(),
+                            ),
+                            last_update_sequence: 21,
+                        },
+                    )]),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let response =
+                authoritative_service_public_discovery_response(&app, service_name.as_ref(), None)
+                    .map_err(|err| {
+                        eyre::eyre!("authoritative service public discovery query failed: {err:?}")
+                    })?;
+            assert_eq!(response.discovery.content_cid, "bafytestpublicdiscovery");
+            assert_eq!(
+                response.discovery.public_discovery_cid_host_url,
+                "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json"
+            );
+
+            let snapshot = control_plane_snapshot(&app, Some(service_name.as_ref()), 10);
+            assert_eq!(snapshot.services.len(), 1);
+            assert_eq!(
+                snapshot.services[0].public_discovery_content_cid.as_deref(),
+                Some("bafytestpublicdiscovery")
+            );
+            assert_eq!(
+                snapshot.services[0]
+                    .latest_revision
+                    .as_ref()
+                    .and_then(|revision| revision.public_discovery_url.as_deref()),
+                Some("https://taira.sora.org/sorafs/cid/bafytestpublicdiscovery/index.json")
+            );
+            Ok(())
+        })
+    }
+
+    #[test]
     fn authoritative_service_secret_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
 
@@ -17108,7 +17519,8 @@ mod tests {
             service_lease: None,
             lease_volume_states: Vec::new(),
         };
-        let revision = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None);
+        let revision =
+            deployment_bundle_to_control_plane_revision(&deployment, &bundle, None, None);
         assert!(revision.allow_model_inference);
     }
 

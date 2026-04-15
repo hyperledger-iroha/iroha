@@ -34,7 +34,9 @@ use iroha::{
         Encode,
         account::AccountId,
         asset::AssetDefinitionId,
-        isi::{InstructionBox, decode_instruction_from_pair},
+        isi::{
+            InstructionBox, OpaqueInstruction, decode_instruction_from_pair,
+        },
         metadata::Metadata,
         name::Name,
         prelude::ExposedPrivateKey,
@@ -144,8 +146,11 @@ const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
+const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
+const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
@@ -1466,9 +1471,7 @@ impl AppInitArgs {
             return Err(eyre!("--public-host must not be empty"));
         }
         if host.contains("://") || host.contains('/') {
-            return Err(eyre!(
-                "--public-host must be a hostname only, got `{host}`"
-            ));
+            return Err(eyre!("--public-host must be a hostname only, got `{host}`"));
         }
         Ok(host.to_owned())
     }
@@ -1625,6 +1628,15 @@ impl AppDeployArgs {
                 static_site_root_binding.as_ref(),
                 static_site_binding_attached,
             )?;
+            let published_public_discovery = attach_public_service_discovery_config(
+                &bundle,
+                &mut initial_service_configs,
+                &torii_url,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+                authority,
+                key_pair,
+            )?;
             let initial_service_secrets = load_initial_service_secrets(
                 service
                     .initial_secrets
@@ -1666,6 +1678,7 @@ impl AppDeployArgs {
                 route_host,
                 route_path_prefix,
                 route_visibility,
+                published_public_discovery,
                 response,
                 notes,
             });
@@ -2020,8 +2033,7 @@ impl AppDoctorArgs {
         for service_ref in &manifest.services {
             let container_path =
                 resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
-            let service_path =
-                resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
+            let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let container: SoraContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
             let bundle_exists = service_ref
@@ -2035,7 +2047,11 @@ impl AppDoctorArgs {
                 service_ref
                     .bundle_file
                     .as_deref()
-                    .map(|path| resolve_manifest_path(&manifest_dir, path).display().to_string())
+                    .map(|path| {
+                        resolve_manifest_path(&manifest_dir, path)
+                            .display()
+                            .to_string()
+                    })
                     .unwrap_or_else(|| "<none>".to_owned()),
             );
 
@@ -2062,15 +2078,18 @@ impl AppDoctorArgs {
             service_manifest_summaries.push((service_ref.service_name.clone(), container, service));
         }
 
-        let live_storage_ok = service_manifest_summaries.iter().all(|(_service_name, container, service)| {
-            if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
-                && container.runtime == SoraContainerRuntimeV1::Inrou
-            {
-                !service.lease_volumes.is_empty() && service.state_bindings.is_empty()
-            } else {
-                true
-            }
-        });
+        let live_storage_ok =
+            service_manifest_summaries
+                .iter()
+                .all(|(_service_name, container, service)| {
+                    if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+                        && container.runtime == SoraContainerRuntimeV1::Inrou
+                    {
+                        !service.lease_volumes.is_empty() && service.state_bindings.is_empty()
+                    } else {
+                        true
+                    }
+                });
         push_check(
             "live_storage_plane",
             live_storage_ok,
@@ -2092,31 +2111,34 @@ impl AppDoctorArgs {
                 .join(", "),
         );
 
-        let vault_routes_ok = service_manifest_summaries.iter().all(|(_service_name, container, service)| {
-            if service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
-                && container.runtime == SoraContainerRuntimeV1::Ivm
-            {
-                service.lease_volumes.is_empty()
-                    && service.handlers.iter().all(|handler| {
-                        handler.route_path.as_deref().is_some_and(|path| {
-                            path.starts_with("/auth/")
-                                || path == "/auth/me"
-                                || path.starts_with("/v1/user/")
-                        })
-                    })
-                    && service.state_bindings.iter().all(|binding| {
-                        matches!(
-                            binding.binding_name.as_ref(),
-                            "auth_challenges"
-                                | "auth_sessions"
-                                | "user_preferences"
-                                | "user_saved_searches"
-                        )
-                    })
-            } else {
-                true
-            }
-        });
+        let vault_routes_ok =
+            service_manifest_summaries
+                .iter()
+                .all(|(_service_name, container, service)| {
+                    if service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
+                        && container.runtime == SoraContainerRuntimeV1::Ivm
+                    {
+                        service.lease_volumes.is_empty()
+                            && service.handlers.iter().all(|handler| {
+                                handler.route_path.as_deref().is_some_and(|path| {
+                                    path.starts_with("/auth/")
+                                        || path == "/auth/me"
+                                        || path.starts_with("/v1/user/")
+                                })
+                            })
+                            && service.state_bindings.iter().all(|binding| {
+                                matches!(
+                                    binding.binding_name.as_ref(),
+                                    "auth_challenges"
+                                        | "auth_sessions"
+                                        | "user_preferences"
+                                        | "user_saved_searches"
+                                )
+                            })
+                    } else {
+                        true
+                    }
+                });
         push_check(
             "vault_surface",
             vault_routes_ok,
@@ -2161,7 +2183,11 @@ impl AppDoctorArgs {
                     .map(|((host, path), services)| {
                         format!(
                             "{host}{path} => {}",
-                            services.iter().map(String::as_str).collect::<Vec<_>>().join(",")
+                            services
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(",")
                         )
                     })
                     .collect::<Vec<_>>()
@@ -2584,7 +2610,9 @@ impl AppDoctorWorkspaceArgs {
         }
 
         let mut notes = plan.notes;
-        notes.push("doctor-workspace completed through the manifest-adjacent root script".to_owned());
+        notes.push(
+            "doctor-workspace completed through the manifest-adjacent root script".to_owned(),
+        );
         Ok(AppDoctorWorkspaceOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
@@ -2834,7 +2862,9 @@ impl AppReleaseWorkspaceArgs {
             ));
         }
 
-        notes.push("release-workspace completed through the manifest-adjacent root script".to_owned());
+        notes.push(
+            "release-workspace completed through the manifest-adjacent root script".to_owned(),
+        );
         Ok(AppWorkspaceMutationScriptOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
@@ -3244,6 +3274,7 @@ fn build_direct_service_mutation_output(
     mode: MutationMode,
     torii_url: &str,
     uses_api_token: bool,
+    published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
     response: norito::json::Value,
 ) -> ServiceMutationOutput {
     let mut notes = plan.notes;
@@ -3278,6 +3309,7 @@ fn build_direct_service_mutation_output(
         torii_url: torii_url.to_owned(),
         uses_api_token,
         routes: plan.routes,
+        published_public_discovery,
         response,
         notes,
     }
@@ -3572,12 +3604,21 @@ impl DeployArgs {
             service,
         };
         bundle.validate_for_admission()?;
-        let initial_service_configs =
+        let mut initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let published_public_discovery = attach_public_service_discovery_config(
+            &bundle,
+            &mut initial_service_configs,
+            &torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
+            key_pair,
+        )?;
         let response = run_service_bundle_mutation(
             mode,
             bundle,
@@ -3596,6 +3637,7 @@ impl DeployArgs {
             mode,
             &torii_url,
             self.api_token.is_some(),
+            published_public_discovery,
             response,
         ))
     }
@@ -3643,12 +3685,21 @@ impl UpgradeArgs {
             service,
         };
         bundle.validate_for_admission()?;
-        let initial_service_configs =
+        let mut initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let published_public_discovery = attach_public_service_discovery_config(
+            &bundle,
+            &mut initial_service_configs,
+            &torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
+            key_pair,
+        )?;
         let response = run_service_bundle_mutation(
             mode,
             bundle,
@@ -3667,6 +3718,7 @@ impl UpgradeArgs {
             mode,
             &torii_url,
             self.api_token.is_some(),
+            published_public_discovery,
             response,
         ))
     }
@@ -6911,6 +6963,21 @@ struct ControlPlaneServiceRevision {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     route_path_prefix: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    healthcheck_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_content_cid: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_cid_host_url: Option<String>,
     state_binding_count: u32,
 }
 
@@ -6995,6 +7062,15 @@ struct ServiceStatusOutput {
     service_name: String,
     current_version: String,
     revision_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_content_cid: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_url: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    public_discovery_cid_host_url: Option<String>,
     #[norito(default)]
     latest_revision: Option<ControlPlaneServiceRevision>,
     #[norito(default)]
@@ -7261,6 +7337,9 @@ struct AppServiceMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     route_visibility: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
     response: norito::json::Value,
     #[norito(default)]
     notes: Vec<String>,
@@ -7364,6 +7443,9 @@ struct ServiceMutationOutput {
     torii_url: String,
     uses_api_token: bool,
     routes: Vec<ServiceLocalRouteOutput>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
     response: norito::json::Value,
     #[norito(default)]
     notes: Vec<String>,
@@ -7805,6 +7887,60 @@ struct AppStaticSitePublishOutput {
 struct AppStaticSiteRootBindingPlan {
     target_host: String,
     binding_value: Json,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudPublicServiceDiscoveryV1 {
+    schema_version: u16,
+    service_name: String,
+    service_version: String,
+    execution_plane: String,
+    runtime: String,
+    route_host: String,
+    path_prefix: String,
+    base_url: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    healthcheck_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    healthcheck_url: Option<String>,
+    service_manifest_hash: Hash,
+    container_manifest_hash: Hash,
+    deployment_bundle_hash: Hash,
+    content_cid: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudPublicServiceDiscoveryRegistryV1 {
+    schema_version: u16,
+    service_name: String,
+    current_version: String,
+    revisions: BTreeMap<String, SoracloudPublicServiceDiscoveryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct PublicServiceDiscoveryPublishOutput {
+    service_name: String,
+    service_version: String,
+    route_host: String,
+    base_url: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    healthcheck_url: Option<String>,
+    content_cid: String,
+    public_discovery_url: String,
+    public_discovery_cid_host_url: String,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8964,6 +9100,165 @@ impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BundleSignatureMode {
+    Canonical,
+    TairaLegacyInrou,
+}
+
+type BundleMaterialsSignatureTuple = (
+    SoraDeploymentBundleV1,
+    BTreeMap<String, Json>,
+    BTreeMap<String, SecretEnvelopeV1>,
+);
+
+#[derive(Clone, Copy)]
+struct TairaLegacyInrouManifestRef<'a> {
+    manifest: &'a SoraInrouManifestV1,
+}
+
+impl<'a> TairaLegacyInrouManifestRef<'a> {
+    const fn new(manifest: &'a SoraInrouManifestV1) -> Self {
+        Self { manifest }
+    }
+
+    fn legacy_guest_image(self) -> &'a iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+        self.manifest
+            .guest_images
+            .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+            .or_else(|| {
+                self.manifest
+                    .guest_images
+                    .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+            })
+            .or_else(|| self.manifest.guest_images.values().next())
+            .expect("validated Inrou manifests must contain at least one guest image")
+    }
+}
+
+impl norito::core::NoritoSerialize for TairaLegacyInrouManifestRef<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<SoraInrouManifestV1>()
+    }
+
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let _guard = enter_default_norito_encode_flags();
+        let legacy_image = self.legacy_guest_image();
+        serialize_tuple_field(&mut writer, &self.manifest.schema_version)?;
+        serialize_tuple_field(&mut writer, &self.manifest.guest_os)?;
+        serialize_tuple_field(&mut writer, &legacy_image.kernel_image_path)?;
+        serialize_tuple_field(&mut writer, &legacy_image.rootfs_image_path)?;
+        serialize_tuple_field(&mut writer, &legacy_image.initrd_image_path)?;
+        serialize_tuple_field(&mut writer, &self.manifest.bootstrap_user_data_path)?;
+        serialize_tuple_field(&mut writer, &self.manifest.ssh_authorized_keys)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TairaLegacyContainerManifestRef<'a> {
+    manifest: &'a SoraContainerManifestV1,
+}
+
+impl<'a> TairaLegacyContainerManifestRef<'a> {
+    const fn new(manifest: &'a SoraContainerManifestV1) -> Self {
+        Self { manifest }
+    }
+}
+
+impl norito::core::NoritoSerialize for TairaLegacyContainerManifestRef<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<SoraContainerManifestV1>()
+    }
+
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let _guard = enter_default_norito_encode_flags();
+        let legacy_inrou = self
+            .manifest
+            .inrou
+            .as_ref()
+            .map(TairaLegacyInrouManifestRef::new);
+        serialize_tuple_field(&mut writer, &self.manifest.schema_version)?;
+        serialize_tuple_field(&mut writer, &self.manifest.runtime)?;
+        serialize_tuple_field(&mut writer, &self.manifest.bundle_hash)?;
+        serialize_tuple_field(&mut writer, &self.manifest.bundle_path)?;
+        serialize_tuple_field(&mut writer, &self.manifest.entrypoint)?;
+        serialize_tuple_field(&mut writer, &self.manifest.args)?;
+        serialize_tuple_field(&mut writer, &self.manifest.env)?;
+        serialize_tuple_field(&mut writer, &legacy_inrou)?;
+        serialize_tuple_field(&mut writer, &self.manifest.required_config_names)?;
+        serialize_tuple_field(&mut writer, &self.manifest.required_secret_names)?;
+        serialize_tuple_field(&mut writer, &self.manifest.config_exports)?;
+        serialize_tuple_field(&mut writer, &self.manifest.capabilities)?;
+        serialize_tuple_field(&mut writer, &self.manifest.resources)?;
+        serialize_tuple_field(&mut writer, &self.manifest.lifecycle)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TairaLegacyDeploymentBundleRef<'a> {
+    bundle: &'a SoraDeploymentBundleV1,
+}
+
+impl<'a> TairaLegacyDeploymentBundleRef<'a> {
+    const fn new(bundle: &'a SoraDeploymentBundleV1) -> Self {
+        Self { bundle }
+    }
+}
+
+impl norito::core::NoritoSerialize for TairaLegacyDeploymentBundleRef<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<SoraDeploymentBundleV1>()
+    }
+
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let _guard = enter_default_norito_encode_flags();
+        serialize_tuple_field(&mut writer, &self.bundle.schema_version)?;
+        serialize_tuple_field(
+            &mut writer,
+            &TairaLegacyContainerManifestRef::new(&self.bundle.container),
+        )?;
+        serialize_tuple_field(&mut writer, &self.bundle.service)?;
+        Ok(())
+    }
+}
+
+struct TairaLegacyBundleMaterialsPayloadRef<'a> {
+    bundle: &'a SoraDeploymentBundleV1,
+    initial_service_configs: &'a BTreeMap<String, Json>,
+    initial_service_secrets: &'a BTreeMap<String, SecretEnvelopeV1>,
+}
+
+impl norito::core::NoritoSerialize for TairaLegacyBundleMaterialsPayloadRef<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<BundleMaterialsSignatureTuple>()
+    }
+
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let _guard = enter_default_norito_encode_flags();
+        serialize_tuple_field(
+            &mut writer,
+            &TairaLegacyDeploymentBundleRef::new(self.bundle),
+        )?;
+        serialize_tuple_field(&mut writer, self.initial_service_configs)?;
+        serialize_tuple_field(&mut writer, self.initial_service_secrets)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct OwnedStorageFileEntry {
     path: Vec<String>,
@@ -8986,15 +9281,35 @@ fn run_service_bundle_mutation(
         MutationMode::Deploy => "v1/soracloud/deploy",
         MutationMode::Upgrade => "v1/soracloud/upgrade",
     };
+    let (request_bundle, signature_mode) = prepare_endpoint_compatible_bundle(bundle, torii_url)?;
     let request = signed_bundle_request(
-        bundle,
+        request_bundle,
         initial_service_configs,
         initial_service_secrets,
         Some(authority),
         key_pair,
+        signature_mode,
     )?;
-    let (_, payload) =
-        post_torii_soracloud_mutation(torii_url, endpoint_path, &request, api_token, timeout_secs)?;
+    let request_value = if soracloud_endpoint_requires_legacy_inrou_json(torii_url) {
+        let mut value = json::to_value(&request)
+            .wrap_err("failed to encode soracloud mutation request payload")?;
+        apply_legacy_inrou_bundle_request_compat(&mut value)?;
+        Some(value)
+    } else {
+        None
+    };
+    let (_, payload) = match request_value.as_ref() {
+        Some(value) => {
+            post_torii_soracloud_mutation(torii_url, endpoint_path, value, api_token, timeout_secs)
+        }
+        None => post_torii_soracloud_mutation(
+            torii_url,
+            endpoint_path,
+            &request,
+            api_token,
+            timeout_secs,
+        ),
+    }?;
     let (_, status_payload) =
         fetch_torii_soracloud_status(torii_url, Some(&service_name), api_token, timeout_secs)?;
     build_service_mutation_output(
@@ -9006,6 +9321,182 @@ fn run_service_bundle_mutation(
             MutationMode::Upgrade => "Upgrade",
         },
     )
+}
+
+fn prepare_endpoint_compatible_bundle(
+    bundle: SoraDeploymentBundleV1,
+    torii_url: &str,
+) -> Result<(SoraDeploymentBundleV1, BundleSignatureMode)> {
+    if !soracloud_endpoint_requires_legacy_inrou_json(torii_url) {
+        return Ok((bundle, BundleSignatureMode::Canonical));
+    }
+    if bundle.container.runtime != SoraContainerRuntimeV1::Inrou || bundle.container.inrou.is_none()
+    {
+        return Ok((bundle, BundleSignatureMode::Canonical));
+    }
+    let legacy_container_hash = compute_taira_legacy_container_manifest_hash(&bundle.container)?;
+    let mut compatible_bundle = bundle;
+    compatible_bundle.service.container.manifest_hash = legacy_container_hash;
+    Ok((compatible_bundle, BundleSignatureMode::TairaLegacyInrou))
+}
+
+fn soracloud_endpoint_requires_legacy_inrou_json(torii_url: &str) -> bool {
+    let legacy_opt_in = std::env::var("IROHA_SORACLOUD_TAIRA_LEGACY_INROU_JSON")
+        .map(|value| {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false);
+    legacy_opt_in
+        && reqwest::Url::parse(torii_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .is_some_and(|host| host.eq_ignore_ascii_case("taira.sora.org"))
+}
+
+fn apply_legacy_inrou_bundle_request_compat(value: &mut norito::json::Value) -> Result<()> {
+    fn rewrite_legacy_inrou_object(
+        inrou: &mut norito::json::Map,
+    ) {
+        let legacy_overlay = inrou
+            .get("guest_images")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|guest_images| {
+                guest_images
+                    .get("x86_64")
+                    .or_else(|| guest_images.get("aarch64"))
+            })
+            .and_then(norito::json::Value::as_object)
+            .map(|legacy_image| {
+                (
+                    legacy_image.get("kernel_image_path").cloned(),
+                    legacy_image.get("rootfs_image_path").cloned(),
+                    legacy_image.get("initrd_image_path").cloned(),
+                )
+            });
+
+        if let Some((kernel_image_path, rootfs_image_path, initrd_image_path)) = legacy_overlay {
+            if let Some(kernel_image_path) = kernel_image_path {
+                inrou.insert("kernel_image_path".to_owned(), kernel_image_path);
+            }
+            if let Some(rootfs_image_path) = rootfs_image_path {
+                inrou.insert("rootfs_image_path".to_owned(), rootfs_image_path);
+            }
+            if let Some(initrd_image_path) = initrd_image_path {
+                inrou.insert("initrd_image_path".to_owned(), initrd_image_path);
+            }
+        }
+
+        inrou.remove("guest_images");
+
+        inrou.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "schema_version"
+                    | "guest_os"
+                    | "kernel_image_path"
+                    | "rootfs_image_path"
+                    | "initrd_image_path"
+                    | "bootstrap_user_data_path"
+                    | "ssh_authorized_keys"
+            )
+        });
+    }
+
+    let Some(root) = value.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(bundle) = root
+        .get_mut("bundle")
+        .and_then(norito::json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let Some(container) = bundle
+        .get_mut("container")
+        .and_then(norito::json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let Some(inrou) = container
+        .get_mut("inrou")
+        .and_then(norito::json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    rewrite_legacy_inrou_object(inrou);
+
+    Ok(())
+}
+
+fn compute_taira_legacy_container_manifest_hash(
+    container: &SoraContainerManifestV1,
+) -> Result<Hash> {
+    let mut legacy_value =
+        json::to_value(container).wrap_err("failed to encode container manifest for Taira compat")?;
+    if let Some(inrou) = legacy_value
+        .as_object_mut()
+        .and_then(|container| container.get_mut("inrou"))
+        .and_then(norito::json::Value::as_object_mut)
+    {
+        let legacy_overlay = inrou
+            .get("guest_images")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|guest_images| {
+                guest_images
+                    .get("x86_64")
+                    .or_else(|| guest_images.get("aarch64"))
+            })
+            .and_then(norito::json::Value::as_object)
+            .map(|legacy_image| {
+                (
+                    legacy_image.get("kernel_image_path").cloned(),
+                    legacy_image.get("rootfs_image_path").cloned(),
+                    legacy_image.get("initrd_image_path").cloned(),
+                )
+            });
+        if let Some((kernel_image_path, rootfs_image_path, initrd_image_path)) = legacy_overlay {
+            if let Some(kernel_image_path) = kernel_image_path {
+                inrou.insert("kernel_image_path".to_owned(), kernel_image_path);
+            }
+            if let Some(rootfs_image_path) = rootfs_image_path {
+                inrou.insert("rootfs_image_path".to_owned(), rootfs_image_path);
+            }
+            if let Some(initrd_image_path) = initrd_image_path {
+                inrou.insert("initrd_image_path".to_owned(), initrd_image_path);
+            }
+        }
+        inrou.remove("guest_images");
+        inrou.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "schema_version"
+                    | "guest_os"
+                    | "kernel_image_path"
+                    | "rootfs_image_path"
+                    | "initrd_image_path"
+                    | "bootstrap_user_data_path"
+                    | "ssh_authorized_keys"
+            )
+        });
+    }
+    let compat_container: SoraContainerManifestV1 = json::from_value(legacy_value)
+        .wrap_err("failed to decode Taira-compatible legacy container manifest")?;
+    Ok(Hash::new(Encode::encode(&compat_container)))
+}
+
+fn encode_taira_legacy_bundle_with_materials_provenance_payload(
+    bundle: &SoraDeploymentBundleV1,
+    initial_service_configs: &BTreeMap<String, Json>,
+    initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&TairaLegacyBundleMaterialsPayloadRef {
+        bundle,
+        initial_service_configs,
+        initial_service_secrets,
+    })
 }
 
 fn build_app_static_site_binding_value(
@@ -9132,6 +9623,363 @@ fn join_service_route_path(path_prefix: &str, route_path: &str) -> String {
         return route_path.to_owned();
     }
     format!("{trimmed_prefix}/{}", route_path.trim_start_matches('/'))
+}
+
+fn service_uses_public_inrou_http_route(bundle: &SoraDeploymentBundleV1) -> bool {
+    bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+        && bundle
+            .service
+            .route
+            .as_ref()
+            .is_some_and(|route| route.visibility == SoraRouteVisibilityV1::Public)
+}
+
+fn normalize_public_service_base_url(bundle: &SoraDeploymentBundleV1) -> Result<reqwest::Url> {
+    let route = bundle.service.route.as_ref().ok_or_else(|| {
+        eyre!(
+            "service `{}` does not declare a public route",
+            bundle.service.service_name
+        )
+    })?;
+    let scheme = match route.tls_mode {
+        SoraTlsModeV1::Disabled => "http",
+        SoraTlsModeV1::Optional | SoraTlsModeV1::Required => "https",
+    };
+    let mut base_url = reqwest::Url::parse(&format!("{scheme}://{}", route.host))
+        .wrap_err_with(|| format!("invalid public route host `{}`", route.host))?;
+    let route_root = if route.path_prefix.trim().is_empty() {
+        "/".to_owned()
+    } else if route.path_prefix.ends_with('/') {
+        route.path_prefix.clone()
+    } else {
+        format!("{}/", route.path_prefix)
+    };
+    base_url.set_path(&route_root);
+    base_url.set_query(None);
+    base_url.set_fragment(None);
+    Ok(base_url)
+}
+
+fn sorafs_cid_host_suffix_for_hostname(hostname: &str) -> String {
+    let hostname = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+    if hostname == "taira.sora.org" || hostname.ends_with(".taira.sora.org") {
+        return "sorafs.taira.sora.org".to_owned();
+    }
+    if hostname == "sora.org" || hostname.ends_with(".sora.org") {
+        return "sorafs.sora.org".to_owned();
+    }
+    if let Some((_, suffix)) = hostname.split_once('.') {
+        return format!("sorafs.{suffix}");
+    }
+    format!("sorafs.{hostname}")
+}
+
+fn fetch_existing_public_service_discovery_registry(
+    torii_url: &str,
+    service_name: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<Option<SoracloudPublicServiceDiscoveryRegistryV1>> {
+    let service_name = service_name
+        .trim()
+        .parse::<Name>()
+        .map(|name| name.to_string())
+        .wrap_err("invalid --service-name")?;
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/service/config/status")
+        .wrap_err("failed to derive /v1/soracloud/service/config/status URL from --torii-url")?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query.append_pair("service_name", service_name.as_str());
+        query.append_pair("config_name", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
+    }
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for public service discovery config status")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii public discovery config status response body")?;
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/service/config/status returned {} while loading `{}`: {}",
+            status,
+            PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii public discovery config status JSON payload")?;
+    let Some(entry) = payload
+        .get("configs")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|configs| configs.first())
+    else {
+        return Ok(None);
+    };
+    let value_json = entry
+        .get("value_json")
+        .cloned()
+        .ok_or_else(|| eyre!("public discovery config payload is missing value_json"))?;
+    let registry: SoracloudPublicServiceDiscoveryRegistryV1 = json::from_value(value_json)
+        .wrap_err("failed to decode public service discovery registry JSON")?;
+    Ok(Some(registry))
+}
+
+fn publish_public_service_discovery(
+    bundle: &SoraDeploymentBundleV1,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<(
+    SoracloudPublicServiceDiscoveryV1,
+    PublicServiceDiscoveryPublishOutput,
+)> {
+    let base_url = normalize_public_service_base_url(bundle)?;
+    let route = bundle.service.route.as_ref().ok_or_else(|| {
+        eyre!(
+            "service `{}` does not declare a route",
+            bundle.service.service_name
+        )
+    })?;
+    let healthcheck_path = bundle.container.lifecycle.healthcheck_path.clone();
+    let healthcheck_url = healthcheck_path.as_ref().map(|path| {
+        let mut url = base_url.clone();
+        url.set_path(&join_service_route_path(route.path_prefix.as_str(), path));
+        url.set_query(None);
+        url.set_fragment(None);
+        url.to_string()
+    });
+
+    let tempdir = PrivateModelSourceTempDir::new("iroha-public-service-discovery")
+        .wrap_err("failed to create temporary public discovery dir")?;
+    let discovery_stub = SoracloudPublicServiceDiscoveryV1 {
+        schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+        service_name: bundle.service.service_name.to_string(),
+        service_version: bundle.service.service_version.clone(),
+        execution_plane: format!("{:?}", bundle.service.execution_plane),
+        runtime: format!("{:?}", bundle.container.runtime),
+        route_host: route.host.clone(),
+        path_prefix: route.path_prefix.clone(),
+        base_url: base_url.to_string(),
+        healthcheck_path: healthcheck_path.clone(),
+        healthcheck_url: healthcheck_url.clone(),
+        service_manifest_hash: bundle.service_manifest_hash(),
+        container_manifest_hash: bundle.container_manifest_hash(),
+        deployment_bundle_hash: Hash::new(Encode::encode(bundle)),
+        content_cid: String::new(),
+        public_discovery_url: String::new(),
+        public_discovery_cid_host_url: String::new(),
+        manifest_digest_hex: String::new(),
+        manifest_id_hex: None,
+    };
+    write_json(
+        &tempdir.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
+        &discovery_stub,
+    )
+    .wrap_err("failed to write public discovery document")?;
+
+    let descriptor = chunker_registry::default_descriptor();
+    let (plan, payload) =
+        CarBuildPlan::from_directory_with_profile(tempdir.path(), descriptor.profile).map_err(
+            |err| {
+                eyre!(
+                    "failed to package public discovery `{}`: {err}",
+                    tempdir.path().display()
+                )
+            },
+        )?;
+    let writer = CarWriter::new(&plan, &payload)
+        .wrap_err("failed to prepare public discovery CAR writer")?;
+    let mut sink = io::sink();
+    let car_stats = writer
+        .write_to(&mut sink)
+        .wrap_err("failed to compute public discovery CAR metadata")?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("public discovery CAR planning produced no root CID"))?;
+    let mut car_payload_digest = [0u8; 32];
+    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .content_length(plan.content_length)
+        .car_digest(car_payload_digest)
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err("failed to build public discovery manifest")?;
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err("failed to encode public discovery manifest")?;
+    let manifest_digest = manifest
+        .digest()
+        .wrap_err("failed to compute public discovery manifest digest")?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let files = plan
+        .files
+        .iter()
+        .map(|file| OwnedStorageFileEntry {
+            path: file.path.clone(),
+            size: file.size,
+        })
+        .collect::<Vec<_>>();
+
+    let mut client_config = soracloud_submission_config()?;
+    client_config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    client_config.account = authority.clone();
+    client_config.key_pair = key_pair.clone();
+    let client = Client::new(client_config);
+    client
+        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
+            authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            alias: None,
+            successor_of: None,
+        })
+        .wrap_err("failed to register public discovery manifest")?;
+    let borrowed_files = files
+        .iter()
+        .map(|entry| iroha::client::SorafsStorageFileEntry {
+            path: entry.path.as_slice(),
+            size: entry.size,
+        })
+        .collect::<Vec<_>>();
+    let storage_response = client
+        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
+        .wrap_err("failed to upload public discovery bundle into SoraFS storage")?;
+    let status = storage_response.status();
+    let body = storage_response.body().to_vec();
+    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
+    if status != iroha::http::StatusCode::OK && !already_stored {
+        return Err(eyre!(
+            "failed to upload public discovery bundle into SoraFS storage: {} {}",
+            status,
+            std::str::from_utf8(&body).unwrap_or("")
+        ));
+    }
+    let storage_value: norito::json::Value = if already_stored {
+        norito::json::Value::Null
+    } else {
+        json::from_slice(&body).wrap_err("failed to decode public discovery storage response")?
+    };
+    let manifest_id_hex = storage_value
+        .get("manifest_id_hex")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let content_cid = encode_content_cid(&manifest.root_cid);
+    let mut public_discovery_url = base_url.clone();
+    public_discovery_url.set_path(&format!(
+        "/sorafs/cid/{content_cid}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
+    ));
+    let cid_host_suffix = sorafs_cid_host_suffix_for_hostname(route.host.as_str());
+    let public_discovery_cid_host_url = format!(
+        "https://{content_cid}.{cid_host_suffix}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
+    );
+
+    let discovery = SoracloudPublicServiceDiscoveryV1 {
+        content_cid: content_cid.clone(),
+        public_discovery_url: public_discovery_url.to_string(),
+        public_discovery_cid_host_url: public_discovery_cid_host_url.clone(),
+        manifest_digest_hex: manifest_digest_hex.clone(),
+        manifest_id_hex: manifest_id_hex.clone(),
+        ..discovery_stub
+    };
+    let output = PublicServiceDiscoveryPublishOutput {
+        service_name: discovery.service_name.clone(),
+        service_version: discovery.service_version.clone(),
+        route_host: discovery.route_host.clone(),
+        base_url: discovery.base_url.clone(),
+        healthcheck_url: discovery.healthcheck_url.clone(),
+        content_cid,
+        public_discovery_url: public_discovery_url.to_string(),
+        public_discovery_cid_host_url,
+        manifest_digest_hex,
+        manifest_id_hex,
+    };
+    Ok((discovery, output))
+}
+
+fn attach_public_service_discovery_config(
+    bundle: &SoraDeploymentBundleV1,
+    initial_service_configs: &mut BTreeMap<String, Json>,
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<Option<PublicServiceDiscoveryPublishOutput>> {
+    if initial_service_configs.contains_key(PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME) {
+        return Err(eyre!(
+            "service `{}` initial configs may not set reserved config `{PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME}`",
+            bundle.service.service_name
+        ));
+    }
+    if !service_uses_public_inrou_http_route(bundle) {
+        return Ok(None);
+    }
+
+    let existing_registry = fetch_existing_public_service_discovery_registry(
+        torii_url,
+        bundle.service.service_name.as_ref(),
+        api_token,
+        timeout_secs,
+    )?;
+    let (discovery, publication) =
+        publish_public_service_discovery(bundle, torii_url, authority, key_pair, timeout_secs)?;
+    let mut revisions = existing_registry
+        .as_ref()
+        .map(|registry| registry.revisions.clone())
+        .unwrap_or_default();
+    revisions.insert(discovery.service_version.clone(), discovery.clone());
+    let registry = SoracloudPublicServiceDiscoveryRegistryV1 {
+        schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
+        service_name: discovery.service_name.clone(),
+        current_version: discovery.service_version.clone(),
+        revisions,
+    };
+    initial_service_configs.insert(
+        PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_owned(),
+        Json::from(
+            json::to_value(&registry)
+                .wrap_err("failed to encode public service discovery registry JSON")?,
+        ),
+    );
+    Ok(Some(publication))
 }
 
 fn publish_app_static_site(
@@ -9358,12 +10206,22 @@ fn signed_bundle_request(
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
+    signature_mode: BundleSignatureMode,
 ) -> Result<SignedBundleRequest> {
-    let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
-        &bundle,
-        &initial_service_configs,
-        &initial_service_secrets,
-    )
+    let payload = match signature_mode {
+        BundleSignatureMode::Canonical => encode_bundle_with_materials_provenance_payload(
+            &bundle,
+            &initial_service_configs,
+            &initial_service_secrets,
+        ),
+        BundleSignatureMode::TairaLegacyInrou => {
+            encode_taira_legacy_bundle_with_materials_provenance_payload(
+                &bundle,
+                &initial_service_configs,
+                &initial_service_secrets,
+            )
+        }
+    }
     .wrap_err("failed to encode deployment bundle payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &payload);
     Ok(SignedBundleRequest {
@@ -11510,7 +12368,10 @@ fn build_soracloud_mutation_auth_headers(
     ])
 }
 
-fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
+fn decode_soracloud_tx_instructions(
+    payload: &json::Value,
+    allow_raw_wire_fallback: bool,
+) -> Result<Vec<InstructionBox>> {
     let instructions = payload
         .get("tx_instructions")
         .and_then(json::Value::as_array)
@@ -11527,8 +12388,21 @@ fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<Instruc
             .ok_or_else(|| eyre!("Soracloud tx instruction is missing `payload_hex`"))?;
         let payload_bytes = hex::decode(payload_hex)
             .wrap_err("failed to decode Soracloud tx instruction hex payload")?;
-        let instruction = decode_instruction_from_pair(wire_id, &payload_bytes)
-            .map_err(|error| eyre!("failed to decode Soracloud instruction skeleton: {error}"))?;
+        let instruction = match decode_instruction_from_pair(wire_id, &payload_bytes) {
+            Ok(instruction) => instruction,
+            Err(error) if allow_raw_wire_fallback => InstructionBox::from(
+                OpaqueInstruction::from_framed(wire_id, &payload_bytes).wrap_err_with(|| {
+                    format!(
+                        "failed to decode Soracloud instruction skeleton and preserve raw wire payload: {error}"
+                    )
+                })?,
+            ),
+            Err(error) => {
+                return Err(eyre!(
+                    "failed to decode Soracloud instruction skeleton: {error}"
+                ));
+            }
+        };
         decoded.push(instruction);
     }
     Ok(decoded)
@@ -11578,6 +12452,9 @@ where
         .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
+    if let Ok(path) = std::env::var("IROHA_SORACLOUD_DEBUG_BODY_FILE") {
+        let _ = std::fs::write(path, &body);
+    }
     let submission_config = soracloud_submission_config()?;
     let auth_headers = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
 
@@ -11619,7 +12496,10 @@ where
     }
     let mut payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
-    let instructions = decode_soracloud_tx_instructions(&payload)?;
+    let instructions = decode_soracloud_tx_instructions(
+        &payload,
+        soracloud_endpoint_requires_legacy_inrou_json(torii_url),
+    )?;
     let submitted_tx_hash =
         submit_soracloud_draft_transaction(torii_url, timeout_secs, instructions)?;
     if let Some(root) = payload.as_object_mut() {
@@ -12135,6 +13015,26 @@ where
     norito::core::write_len(writer, len)?;
     writer.write_all(&payload)?;
     Ok(())
+}
+
+fn enter_default_norito_encode_flags() -> norito::core::DecodeFlagsGuard {
+    let current = norito::core::get_decode_flags();
+    let defaults = norito::core::default_encode_flags();
+    let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
+    let static_defaults = defaults & !dynamic_mask;
+    let merged = if current == 0 {
+        defaults
+    } else {
+        let current_dynamic = current & dynamic_mask;
+        let current_static = current & !dynamic_mask;
+        let effective_static = if current_static == 0 {
+            static_defaults
+        } else {
+            current_static | static_defaults
+        };
+        current_dynamic | effective_static
+    };
+    norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged)
 }
 
 fn hash_encoded<T>(value: &T) -> Result<Hash>
@@ -14517,7 +15417,9 @@ where
 {
     let bytes =
         fs::read(path).wrap_err_with(|| format!("failed to read JSON file {}", path.display()))?;
-    json::from_slice(&bytes).wrap_err_with(|| format!("failed to decode {}", path.display()))
+    let text = String::from_utf8(bytes)
+        .wrap_err_with(|| format!("failed to decode {} as UTF-8", path.display()))?;
+    json::from_str(&text).wrap_err_with(|| format!("failed to decode {}", path.display()))
 }
 
 fn write_json<T>(path: &Path, value: &T) -> Result<()>
@@ -15879,6 +16781,8 @@ fn scaffold_split_app_template(
             live_dir.join("inrou/README.md"),
             http_service_inrou_assets_readme(),
         ),
+        (live_dir.join("inrou/x86_64/.gitkeep"), String::new()),
+        (live_dir.join("inrou/aarch64/.gitkeep"), String::new()),
         (live_dir.join("dev.sh"), http_service_dev_sh().to_owned()),
         (
             live_dir.join("build.sh"),
@@ -18454,7 +19358,7 @@ fn http_service_deploy_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -18482,7 +19386,7 @@ fn http_service_upgrade_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -19490,7 +20394,7 @@ fn split_app_vault_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8788}}"
 exec node "$SCRIPT_DIR/dev-server.mjs"
@@ -19501,7 +20405,7 @@ fn split_app_vault_verify_build_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 BYTECODE_FILE="$SCRIPT_DIR/build/vault-api.to"
 MANIFEST_FILE="$SCRIPT_DIR/build/vault-api.contract_manifest.json"
 TMP_DIR="$(mktemp -d)"
@@ -19865,9 +20769,25 @@ Build:
 ./build.sh
 ```
 
-The build emits `build/live-api.tgz`. Add the live service guest assets under
-`services/live/inrou/` so they are bundled at `/inrou/*`, and replace the
-placeholder SSH key in `services/live/container_manifest.json`.
+The build emits `build/live-api.tgz`.
+
+Stage these guest assets under `services/live/inrou/` before build or deploy:
+
+- `x86_64/vmlinux`
+- `x86_64/rootfs.ext4`
+- `aarch64/vmlinux`
+- `aarch64/rootfs.ext4`
+
+Optional initrd images live at `x86_64/initrd.img` and `aarch64/initrd.img`.
+
+The live container manifest references these bundle paths:
+
+- `/inrou/x86_64/vmlinux`
+- `/inrou/x86_64/rootfs.ext4`
+- `/inrou/aarch64/vmlinux`
+- `/inrou/aarch64/rootfs.ext4`
+
+Replace the placeholder SSH key in `services/live/container_manifest.json`.
 
 The generated app manifest references that tarball through `bundle_file`, so:
 
@@ -19925,7 +20845,7 @@ fn split_app_local_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
 LIVE_PORT="${SORACLOUD_LIVE_DEV_PORT:-8787}"
 VAULT_PORT="${SORACLOUD_VAULT_DEV_PORT:-8788}"
@@ -19974,7 +20894,7 @@ fn split_app_build_and_sync_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
 {prelude}
 
@@ -20005,7 +20925,7 @@ fn split_app_existing_repo_build_and_sync_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 cat >&2 <<'EOF'
@@ -20025,7 +20945,7 @@ fn split_app_doctor_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 "$SCRIPT_DIR/build-and-sync.sh"
@@ -20039,7 +20959,7 @@ fn split_app_release_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -20066,7 +20986,7 @@ fn split_app_deploy_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 exec "$SCRIPT_DIR/release.sh" "$@"
 "#
@@ -20078,7 +20998,7 @@ fn split_app_upgrade_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -20471,7 +21391,7 @@ fn single_api_local_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
 API_PORT="${SORACLOUD_SINGLE_API_DEV_PORT:-8787}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
@@ -20506,7 +21426,7 @@ fn single_api_build_and_sync_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
 {prelude}
 
@@ -20532,7 +21452,7 @@ fn single_api_deploy_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -20559,7 +21479,7 @@ fn single_api_upgrade_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
@@ -20911,7 +21831,7 @@ mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
         PrivateModelHuggingFaceSnapshotSourceV1, PrivateModelLocalDirSourceV1,
-        SoraServiceExecutionPlaneV1,
+        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use rand::SeedableRng as _;
     use std::{
@@ -21217,8 +22137,8 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded =
-            decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
+        let decoded = decode_soracloud_tx_instructions(&response, false)
+            .expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
@@ -21226,6 +22146,31 @@ mod tests {
         assert_eq!(
             norito::to_bytes(decoded_instruction).expect("encode decoded"),
             norito::to_bytes(&instruction).expect("encode expected"),
+        );
+    }
+
+    #[test]
+    fn decode_soracloud_tx_instructions_can_preserve_raw_wire_payloads() {
+        let wire_id = "soracloud::UpgradeSoracloudService";
+        let framed = norito::core::frame_bare_with_header_flags::<
+            iroha::data_model::isi::soracloud::UpgradeSoracloudService,
+        >(&[1_u8, 2, 3], norito::core::default_encode_flags())
+        .expect("frame opaque payload");
+        let response = json::from_str(&format!(
+            r#"{{"tx_instructions":[{{"wire_id":"{wire_id}","payload_hex":"{}"}}]}}"#,
+            hex::encode(&framed)
+        ))
+        .expect("build draft response");
+
+        let decoded =
+            decode_soracloud_tx_instructions(&response, true).expect("decode raw draft");
+        let decoded_instruction = decoded.first().expect("single instruction");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(IrohaInstruction::id(&**decoded_instruction), wire_id);
+        assert_eq!(
+            norito::to_bytes(decoded_instruction).expect("encode preserved"),
+            norito::to_bytes(&(wire_id.to_owned(), framed)).expect("encode expected raw pair"),
         );
     }
 
@@ -21687,6 +22632,13 @@ mod tests {
             service_name: "echo_console".to_owned(),
             current_version: "1.2.3".to_owned(),
             revision_count: 4,
+            public_discovery_content_cid: Some("bafyteststatus".to_owned()),
+            public_discovery_url: Some(
+                "https://taira.sora.org/sorafs/cid/bafyteststatus/index.json".to_owned(),
+            ),
+            public_discovery_cid_host_url: Some(
+                "https://bafyteststatus.sorafs.taira.sora.org/index.json".to_owned(),
+            ),
             latest_revision: Some(ControlPlaneServiceRevision {
                 sequence: 7,
                 action: SoracloudAction::Deploy,
@@ -21696,6 +22648,15 @@ mod tests {
                 replicas: 1,
                 route_host: Some("taira.sora.org".to_owned()),
                 route_path_prefix: Some("/api/v1".to_owned()),
+                base_url: Some("https://taira.sora.org/api/v1/".to_owned()),
+                healthcheck_url: Some("https://taira.sora.org/api/v1/health".to_owned()),
+                public_discovery_content_cid: Some("bafyteststatus".to_owned()),
+                public_discovery_url: Some(
+                    "https://taira.sora.org/sorafs/cid/bafyteststatus/index.json".to_owned(),
+                ),
+                public_discovery_cid_host_url: Some(
+                    "https://bafyteststatus.sorafs.taira.sora.org/index.json".to_owned(),
+                ),
                 state_binding_count: 0,
             }),
             active_rollout: Some(RolloutRuntimeState {
@@ -24370,6 +25331,7 @@ mod tests {
             BTreeMap::new(),
             Some(&authority),
             &key_pair,
+            BundleSignatureMode::Canonical,
         )
         .expect("signed request");
         let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
@@ -24385,6 +25347,105 @@ mod tests {
             .expect("signature should verify");
         assert!(request.authority.is_none());
         assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn prepare_endpoint_compatible_bundle_keeps_canonical_signature_by_default() {
+        let mut container = fixture_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(SoraInrouManifestV1 {
+            schema_version: SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: SoraInrouGuestOsV1::DebianSlim,
+            guest_images: BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
+                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
+                        initrd_image_path: None,
+                    },
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
+                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
+                        initrd_image_path: None,
+                    },
+                ),
+            ]),
+            bootstrap_user_data_path: None,
+            ssh_authorized_keys: vec!["ssh-ed25519 test soracloud".to_owned()],
+        });
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        let (compatible_bundle, signature_mode) =
+            prepare_endpoint_compatible_bundle(bundle, "https://taira.sora.org")
+                .expect("compat bundle");
+        assert_eq!(signature_mode, BundleSignatureMode::Canonical);
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_bundle_request(
+            compatible_bundle,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Some(&authority),
+            &key_pair,
+            signature_mode,
+        )
+        .expect("signed request");
+        let payload = encode_bundle_with_materials_provenance_payload(
+            &request.bundle,
+            &request.initial_service_configs,
+            &request.initial_service_secrets,
+        )
+        .expect("encode canonical payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("canonical signature should verify");
+    }
+
+    #[test]
+    fn sorafs_cid_host_suffix_for_hostname_prefers_network_suffix() {
+        assert_eq!(
+            sorafs_cid_host_suffix_for_hostname("solswap-indexer.taira.sora.org"),
+            "sorafs.taira.sora.org"
+        );
+        assert_eq!(
+            sorafs_cid_host_suffix_for_hostname("market-api.sora.org"),
+            "sorafs.sora.org"
+        );
+        assert_eq!(
+            sorafs_cid_host_suffix_for_hostname("travel-ops.sora"),
+            "sorafs.sora"
+        );
+    }
+
+    #[test]
+    fn normalize_public_service_base_url_uses_route_prefix() {
+        let container = fixture_container();
+        let mut service = fixture_service();
+        service.route.as_mut().expect("fixture route").host =
+            "solswap-indexer.taira.sora.org".to_owned();
+        service.route.as_mut().expect("fixture route").path_prefix = "/".to_owned();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        let base_url = normalize_public_service_base_url(&bundle).expect("public base url");
+        assert_eq!(base_url.as_str(), "https://solswap-indexer.taira.sora.org/");
     }
 
     #[test]
@@ -26690,20 +27751,6 @@ main().catch((error) => {
         assert!(
             output
                 .workspace_scripts
-                .doctor
-                .as_deref()
-                .is_some_and(|path| path.ends_with("doctor.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
-                .release
-                .as_deref()
-                .is_some_and(|path| path.ends_with("release.sh"))
-        );
-        assert!(
-            output
-                .workspace_scripts
                 .deploy
                 .as_deref()
                 .is_some_and(|path| path.ends_with("deploy.sh"))
@@ -26862,7 +27909,7 @@ main().catch((error) => {
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/http-service-local-dev-ran.txt"
 "#,
         )
@@ -26973,7 +28020,7 @@ exit 130
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
 "#,
         )
@@ -27105,7 +28152,7 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/deploy-workspace-torii.txt"
 printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/deploy-workspace-token.txt"
 printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
@@ -27191,7 +28238,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/upgrade-workspace-torii.txt"
 printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
 "#,
@@ -27881,6 +28928,9 @@ main().catch((error) => {
         assert!(dir.join("frontend/src/App.vue").exists());
         assert!(dir.join("services/live/app/server.mjs").exists());
         assert!(dir.join("services/live/dev.sh").exists());
+        assert!(dir.join("services/live/inrou/README.md").exists());
+        assert!(dir.join("services/live/inrou/x86_64/.gitkeep").exists());
+        assert!(dir.join("services/live/inrou/aarch64/.gitkeep").exists());
         assert!(dir.join("services/vault/contract/vault_api.ko").exists());
         assert!(dir.join("services/vault/dev-server.mjs").exists());
         assert!(dir.join("services/vault/dev.sh").exists());
@@ -28033,7 +29083,44 @@ main().catch((error) => {
         );
         assert_eq!(live_service.replicas.get(), 1);
         assert_eq!(live_service.lease_volumes.len(), 5);
-        assert!(live_container.inrou.is_some());
+        let inrou = live_container.inrou.expect("live inrou manifest");
+        assert_eq!(inrou.guest_os, SoraInrouGuestOsV1::DebianSlim);
+        assert_eq!(
+            inrou
+                .guest_images
+                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                .expect("x86_64 guest image")
+                .kernel_image_path,
+            "/inrou/x86_64/vmlinux"
+        );
+        assert_eq!(
+            inrou
+                .guest_images
+                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                .expect("x86_64 guest image")
+                .rootfs_image_path,
+            "/inrou/x86_64/rootfs.ext4"
+        );
+        assert_eq!(
+            inrou
+                .guest_images
+                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+                .expect("aarch64 guest image")
+                .kernel_image_path,
+            "/inrou/aarch64/vmlinux"
+        );
+        assert_eq!(
+            inrou
+                .guest_images
+                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+                .expect("aarch64 guest image")
+                .rootfs_image_path,
+            "/inrou/aarch64/rootfs.ext4"
+        );
+        assert_eq!(
+            inrou.ssh_authorized_keys,
+            vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()]
+        );
 
         let live_server =
             fs::read_to_string(dir.join("services/live/app/server.mjs")).expect("read live server");
@@ -28053,6 +29140,10 @@ main().catch((error) => {
             !live_server.contains("\"business\""),
             "split-app live scaffold must not fabricate cabin defaults"
         );
+        let live_inrou_readme = fs::read_to_string(dir.join("services/live/inrou/README.md"))
+            .expect("read inrou readme");
+        assert!(live_inrou_readme.contains("x86_64/vmlinux"));
+        assert!(live_inrou_readme.contains("aarch64/vmlinux"));
 
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
@@ -28154,7 +29245,7 @@ main().catch((error) => {
         let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
         assert!(app_readme.contains("/sorafs/cid/"));
         assert!(app_readme.contains("share `/api` on the host origin"));
-        assert!(app_readme.contains("without manual pin registration"));
+        assert!(app_readme.contains("without manual pin"));
         assert!(app_readme.contains("SSH-only steps"));
         assert!(app_readme.contains("app local-plan"));
         assert!(app_readme.contains("workspace_dir"));
@@ -28185,9 +29276,6 @@ main().catch((error) => {
         assert!(app_readme.contains("app release-workspace --manifest ./app_manifest.json"));
         assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
         assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./release.sh"));
-        assert!(app_readme.contains(
-            "iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
-        ));
         assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./upgrade.sh"));
         assert!(app_readme.contains(
             "iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
@@ -28215,9 +29303,11 @@ main().catch((error) => {
         assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
         assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
         assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
-        let deploy_sh = fs::read_to_string(dir.join("deploy.sh")).expect("read split-app deploy.sh");
+        let deploy_sh =
+            fs::read_to_string(dir.join("deploy.sh")).expect("read split-app deploy.sh");
         assert!(deploy_sh.contains("\"$SCRIPT_DIR/release.sh\""));
-        let doctor_sh = fs::read_to_string(dir.join("doctor.sh")).expect("read split-app doctor.sh");
+        let doctor_sh =
+            fs::read_to_string(dir.join("doctor.sh")).expect("read split-app doctor.sh");
         assert!(doctor_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
         assert!(doctor_sh.contains("IROHA_CLI_BIN"));
         assert!(doctor_sh.contains("IROHA_MANIFEST_PATH"));
@@ -28391,7 +29481,10 @@ main().catch((error) => {
         let vault_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/vault/service_manifest.json")).expect("vault service");
         assert_eq!(
-            vault_service.route.as_ref().map(|route| route.host.as_str()),
+            vault_service
+                .route
+                .as_ref()
+                .map(|route| route.host.as_str()),
             Some("taira.sora.org")
         );
     }
@@ -28636,26 +29729,34 @@ main().catch((error) => {
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_local_dev_dry_run"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -28708,7 +29809,7 @@ main().catch((error) => {
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/local-dev-ran.txt"
 "#,
         )
@@ -28725,11 +29826,13 @@ printf 'ok' > "$SCRIPT_DIR/local-dev-ran.txt"
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.workspace_dir.contains("single_api_local_dev_run"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./local-dev.sh".to_owned()]);
         assert_eq!(output.services.len(), 1);
@@ -28784,7 +29887,11 @@ exit 130
 
         assert_eq!(output.mode, "interrupted");
         assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.workspace_dir.contains("single_api_local_dev_interrupt"));
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_local_dev_interrupt")
+        );
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.services.len(), 1);
         assert!(
@@ -28821,27 +29928,39 @@ exit 130
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("split_app_build_and_sync_dry_run"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("split_app_build_and_sync_dry_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -28888,7 +30007,7 @@ exit 130
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
 "#,
         )
@@ -28905,12 +30024,18 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
 
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.workspace_dir.contains("single_api_build_and_sync_run"));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_build_and_sync_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
         assert_eq!(output.services.len(), 1);
@@ -28952,17 +30077,25 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("split_app_doctor_workspace_dry_run"));
-        assert!(output
-            .workspace_scripts
-            .doctor
-            .as_deref()
-            .is_some_and(|path| path.ends_with("doctor.sh")));
-        assert!(output
-            .workspace_scripts
-            .release
-            .as_deref()
-            .is_some_and(|path| path.ends_with("release.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("split_app_doctor_workspace_dry_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .doctor
+                .as_deref()
+                .is_some_and(|path| path.ends_with("doctor.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .release
+                .as_deref()
+                .is_some_and(|path| path.ends_with("release.sh"))
+        );
         assert_eq!(output.script_name, "doctor.sh");
         assert_eq!(output.command, vec!["./doctor.sh".to_owned()]);
         assert!(output.script_path.ends_with("doctor.sh"));
@@ -29026,17 +30159,25 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-workspace-args.txt"
 
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.workspace_dir.contains("single_api_release_workspace_run"));
-        assert!(output
-            .workspace_scripts
-            .doctor
-            .as_deref()
-            .is_some_and(|path| path.ends_with("doctor.sh")));
-        assert!(output
-            .workspace_scripts
-            .release
-            .as_deref()
-            .is_some_and(|path| path.ends_with("release.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_release_workspace_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .doctor
+                .as_deref()
+                .is_some_and(|path| path.ends_with("doctor.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .release
+                .as_deref()
+                .is_some_and(|path| path.ends_with("release.sh"))
+        );
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "release.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -29093,17 +30234,25 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-workspace-args.txt"
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("split_app_deploy_workspace_dry_run"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("split_app_deploy_workspace_dry_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(output.script_name, "deploy.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
@@ -29183,17 +30332,25 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
 
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.workspace_dir.contains("single_api_upgrade_workspace_run"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_upgrade_workspace_run")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -29266,7 +30423,10 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
         .run()
         .expect("doctor should succeed");
 
-        assert!(output.ok, "doctor should pass on the scaffolded split-app contract");
+        assert!(
+            output.ok,
+            "doctor should pass on the scaffolded split-app contract"
+        );
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);

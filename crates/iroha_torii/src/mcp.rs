@@ -658,7 +658,7 @@ async fn handle_tools_call(
             None,
         );
     };
-    let Some(tool_spec) = app.mcp_tools.iter().find(|tool| tool.name == name) else {
+    let Some(tool_spec) = find_tool_spec_by_name(app.mcp_tools.as_slice(), name) else {
         return jsonrpc_error_response(
             id,
             JSONRPC_INVALID_PARAMS,
@@ -1696,21 +1696,9 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        _ => match app.mcp_tools.iter().find(|tool| tool.name == name) {
-            Some(tool) => {
-                match dispatch_openapi_tool(&app, inbound_headers, tool, &arguments).await {
-                    Ok(result) => mcp_tool_success(result),
-                    Err(err) => mcp_tool_error(err),
-                }
-            }
-            None => {
-                return jsonrpc_error_response(
-                    id,
-                    JSONRPC_INVALID_PARAMS,
-                    "tool not found",
-                    Some(norito::json!({ "name": name })),
-                );
-            }
+        _ => match dispatch_openapi_tool(&app, inbound_headers, tool_spec, &arguments).await {
+            Ok(result) => mcp_tool_success(result),
+            Err(err) => mcp_tool_error(err),
         },
     };
 
@@ -2305,6 +2293,48 @@ fn fallback_operation_id(method: &str, path: &str) -> String {
         out = out.replace("__", "_");
     }
     out.trim_matches('_').to_owned()
+}
+
+fn method_key(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "get",
+        Method::POST => "post",
+        Method::PUT => "put",
+        Method::PATCH => "patch",
+        Method::DELETE => "delete",
+        Method::HEAD => "head",
+        Method::OPTIONS => "options",
+        _ => "get",
+    }
+}
+
+fn openapi_operation_alias(tool: &ToolSpec, spec: &Value) -> Option<String> {
+    if !tool.name.starts_with("torii.") {
+        return None;
+    }
+    let paths = spec.get("paths")?.as_object()?;
+    let path_item = paths.get(&tool.path_template)?.as_object()?;
+    let operation = path_item.get(method_key(&tool.method))?.as_object()?;
+    let operation_id = operation.get("operationId")?.as_str()?.trim();
+    if operation_id.is_empty() {
+        return None;
+    }
+    let alias = format!("torii.{operation_id}");
+    (alias != tool.name).then_some(alias)
+}
+
+fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Option<&'a ToolSpec> {
+    if let Some(tool) = tools.iter().find(|tool| tool.name == requested_name) {
+        return Some(tool);
+    }
+    if !requested_name.starts_with("torii.") {
+        return None;
+    }
+
+    let spec = openapi::generate_spec();
+    tools
+        .iter()
+        .find(|tool| openapi_operation_alias(tool, &spec).as_deref() == Some(requested_name))
 }
 
 async fn dispatch_openapi_tool(
@@ -13620,6 +13650,17 @@ mod tests {
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
+    }
+
+    #[test]
+    fn find_tool_spec_by_name_accepts_openapi_operation_id_alias() {
+        let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        let tools = build_tool_specs(&cfg);
+
+        let tool = find_tool_spec_by_name(&tools, "torii.healthCheck")
+            .expect("operationId alias should resolve to the health tool");
+        assert_eq!(tool.path_template, "/health");
+        assert_eq!(tool.method, Method::GET);
     }
 
     #[tokio::test]

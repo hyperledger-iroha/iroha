@@ -13669,6 +13669,103 @@ test("listContractActivity rejects camelCase payload aliases", async () => {
   );
 });
 
+test("listContractEvents encodes generic contract event filters", async () => {
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            event_id: "abc:0",
+            schema_version: 1,
+            provenance: "derived",
+            authority: FIXTURE_ALICE_ID,
+            timestamp_ms: 123,
+            tx_hash_hex: "abc",
+            block_height: 9,
+            block_hash_hex: "deadbeef",
+            result_ok: true,
+            contract_address: "tairac1router",
+            contract_alias: "dlmm_router",
+            module: "dlmm_router",
+            event_kind: "route_swap",
+            participants: [FIXTURE_ALICE_ID],
+            asset_ids: ["xor#universal"],
+            numeric_fields: { amount_in: 100 },
+            payload: { amount_in: 100, min_out: 95 },
+            gas_asset_id: "xor#universal",
+            fee_sponsor: FIXTURE_ALICE_ID,
+            gas_limit: 100000,
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listContractEvents({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    module: "dlmm_router",
+    eventKind: "route_swap",
+    participant: FIXTURE_ALICE_ID,
+    assetId: "xor#universal",
+    provenance: "derived",
+    resultOk: true,
+    sinceTimestampMs: 100,
+    untilTimestampMs: 200,
+    limit: 5,
+    offset: 1,
+  });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/contracts/events");
+  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("module"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
+  assert.equal(parsed.searchParams.get("participant"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
+  assert.equal(parsed.searchParams.get("provenance"), "derived");
+  assert.equal(parsed.searchParams.get("result_ok"), "true");
+  assert.equal(payload.items[0].payload.amount_in, 100);
+  assert.equal(payload.items[0].block_height, 9);
+});
+
+test("listContractEvents rejects camelCase payload aliases", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              event_id: "tx1:0",
+              schema_version: 1,
+              provenance: "derived",
+              tx_hash_hex: "tx1",
+              block_height: 1,
+              block_hash_hex: "deadbeef",
+              result_ok: true,
+              contract_address: "tairac1router",
+              module: "router",
+              event_kind: "route_swap",
+              numericFields: {},
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listContractEvents(),
+    /contract event list response\.items\[0]\.numericFields is not supported/,
+  );
+});
+
 test("queryAccountTransactions posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
@@ -14442,6 +14539,43 @@ test("streamEvents yields parsed SSE payloads", async () => {
     id: "block-1",
     retry: null,
     raw: '{"height":1}',
+  });
+  const second = await iterator.next();
+  assert.equal(second.done, true);
+});
+
+test("streamContractEvents encodes selector params", async () => {
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, "/v1/contracts/events/sse");
+    assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+    assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
+    assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+    assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
+    assert.equal(init.headers["Last-Event-ID"], "resume-contract");
+    return createSseResponse([
+      "id: tx1:0\n",
+      "event: contract_event\n",
+      'data: {"event_id":"tx1:0","event_kind":"route_swap"}\n',
+      "\n",
+    ]);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const iterator = client.streamContractEvents({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    eventKind: "route_swap",
+    assetId: "xor#universal",
+    lastEventId: "resume-contract",
+  });
+  const first = await iterator.next();
+  assert.equal(first.done, false);
+  assert.deepEqual(first.value, {
+    event: "contract_event",
+    data: { event_id: "tx1:0", event_kind: "route_swap" },
+    id: "tx1:0",
+    retry: null,
+    raw: '{"event_id":"tx1:0","event_kind":"route_swap"}',
   });
   const second = await iterator.next();
   assert.equal(second.done, true);

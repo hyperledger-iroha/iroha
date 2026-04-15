@@ -19,6 +19,8 @@ use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, Parser, Value};
 use thiserror::Error;
 
 use crate::{
@@ -341,10 +343,7 @@ pub enum SoraInrouRuntimeBackendV1 {
 
 /// Guest-image asset paths for one admitted Inrou ISA profile.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct SoraInrouGuestImageV1 {
     /// Kernel image path inside the signed Soracloud VM artifact bundle.
     pub kernel_image_path: String,
@@ -353,6 +352,64 @@ pub struct SoraInrouGuestImageV1 {
     /// Optional initrd image path inside the signed Soracloud VM artifact bundle.
     #[norito(default)]
     pub initrd_image_path: Option<String>,
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SoraInrouGuestImageV1 {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let value = Value::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &Value) -> Result<Self, json::Error> {
+        fn take_required<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<T, json::Error> {
+            let value = object
+                .remove(field)
+                .ok_or_else(|| json::Error::MissingField {
+                    field: field.to_owned(),
+                })?;
+            json::from_value(value)
+        }
+
+        fn take_optional<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<Option<T>, json::Error> {
+            match object.remove(field) {
+                Some(Value::Null) => Ok(None),
+                Some(value) => json::from_value(value).map(Some),
+                None => Ok(None),
+            }
+        }
+
+        let mut object = match value.clone() {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::InvalidField {
+                    field: "SoraInrouGuestImageV1".to_owned(),
+                    message: format!("expected object, got {other:?}"),
+                });
+            }
+        };
+
+        let kernel_image_path = take_required(&mut object, "kernel_image_path")?;
+        let rootfs_image_path = take_required(&mut object, "rootfs_image_path")?;
+        let initrd_image_path =
+            take_optional::<Option<String>>(&mut object, "initrd_image_path")?.flatten();
+
+        if let Some(extra) = object.keys().next().cloned() {
+            return Err(json::Error::UnknownField { field: extra });
+        }
+
+        Ok(Self {
+            kernel_image_path,
+            rootfs_image_path,
+            initrd_image_path,
+        })
+    }
 }
 
 impl SoraInrouGuestImageV1 {
@@ -384,10 +441,6 @@ impl SoraInrouGuestImageV1 {
 
 /// Explicit Inrou VM metadata carried by hosted HTTP container manifests.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
 pub struct SoraInrouManifestV1 {
     /// Schema version; must equal [`SORA_INROU_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -405,6 +458,232 @@ pub struct SoraInrouManifestV1 {
     /// SSH public keys injected for tenant administration.
     #[norito(default)]
     pub ssh_authorized_keys: Vec<String>,
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for SoraInrouManifestV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let legacy_image = self
+            .guest_images
+            .get(&SoraInrouGuestIsaV1::Aarch64)
+            .or_else(|| self.guest_images.get(&SoraInrouGuestIsaV1::X8664))
+            .or_else(|| self.guest_images.values().next())
+            .expect("SoraInrouManifestV1 must contain at least one guest image");
+
+        out.push('{');
+        json::write_json_string("schema_version", out);
+        out.push(':');
+        self.schema_version.json_serialize(out);
+        out.push(',');
+        json::write_json_string("guest_os", out);
+        out.push(':');
+        self.guest_os.json_serialize(out);
+        out.push(',');
+        json::write_json_string("kernel_image_path", out);
+        out.push(':');
+        legacy_image.kernel_image_path.json_serialize(out);
+        out.push(',');
+        json::write_json_string("rootfs_image_path", out);
+        out.push(':');
+        legacy_image.rootfs_image_path.json_serialize(out);
+        out.push(',');
+        json::write_json_string("initrd_image_path", out);
+        out.push(':');
+        legacy_image.initrd_image_path.json_serialize(out);
+        out.push(',');
+        json::write_json_string("guest_images", out);
+        out.push(':');
+        out.push('{');
+        let mut guest_images = self.guest_images.iter();
+        if let Some((guest_isa, image)) = guest_images.next() {
+            json::write_json_string(guest_isa.as_str(), out);
+            out.push(':');
+            image.json_serialize(out);
+            for (guest_isa, image) in guest_images {
+                out.push(',');
+                json::write_json_string(guest_isa.as_str(), out);
+                out.push(':');
+                image.json_serialize(out);
+            }
+        }
+        out.push('}');
+        out.push(',');
+        json::write_json_string("bootstrap_user_data_path", out);
+        out.push(':');
+        self.bootstrap_user_data_path.json_serialize(out);
+        out.push(',');
+        json::write_json_string("ssh_authorized_keys", out);
+        out.push(':');
+        self.ssh_authorized_keys.json_serialize(out);
+        out.push('}');
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SoraInrouManifestV1 {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let value = Value::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &Value) -> Result<Self, json::Error> {
+        fn take_required<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<T, json::Error> {
+            let value = object
+                .remove(field)
+                .ok_or_else(|| json::Error::MissingField {
+                    field: field.to_owned(),
+                })?;
+            json::from_value(value)
+        }
+
+        fn take_optional<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<Option<T>, json::Error> {
+            match object.remove(field) {
+                Some(Value::Null) => Ok(None),
+                Some(value) => json::from_value(value).map(Some),
+                None => Ok(None),
+            }
+        }
+
+        let mut object = match value.clone() {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::InvalidField {
+                    field: "SoraInrouManifestV1".to_owned(),
+                    message: format!("expected object, got {other:?}"),
+                });
+            }
+        };
+
+        let schema_version = take_required(&mut object, "schema_version")?;
+        let guest_os = match object
+            .remove("guest_os")
+            .ok_or_else(|| json::Error::MissingField {
+                field: "guest_os".to_owned(),
+            })? {
+            Value::String(label) => match label.as_str() {
+                "DebianSlim" => SoraInrouGuestOsV1::DebianSlim,
+                other => {
+                    return Err(json::Error::UnknownField {
+                        field: other.to_owned(),
+                    });
+                }
+            },
+            Value::Object(mut tagged) => {
+                let label =
+                    match tagged
+                        .remove("guest_os")
+                        .ok_or_else(|| json::Error::MissingField {
+                            field: "guest_os".to_owned(),
+                        })? {
+                        Value::String(label) => label,
+                        other => {
+                            return Err(json::Error::InvalidField {
+                                field: "guest_os".to_owned(),
+                                message: format!("expected string, got {other:?}"),
+                            });
+                        }
+                    };
+                if let Some(extra_value) = tagged.remove("value")
+                    && !matches!(extra_value, Value::Null)
+                {
+                    return Err(json::Error::InvalidField {
+                        field: "guest_os.value".to_owned(),
+                        message: format!("expected null, got {extra_value:?}"),
+                    });
+                }
+                if let Some(extra) = tagged.keys().next().cloned() {
+                    return Err(json::Error::UnknownField { field: extra });
+                }
+                match label.as_str() {
+                    "DebianSlim" => SoraInrouGuestOsV1::DebianSlim,
+                    other => {
+                        return Err(json::Error::UnknownField {
+                            field: other.to_owned(),
+                        });
+                    }
+                }
+            }
+            other => {
+                return Err(json::Error::InvalidField {
+                    field: "guest_os".to_owned(),
+                    message: format!("expected string or tagged object, got {other:?}"),
+                });
+            }
+        };
+        let bootstrap_user_data_path =
+            take_optional::<Option<String>>(&mut object, "bootstrap_user_data_path")?.flatten();
+        let ssh_authorized_keys =
+            take_optional::<Vec<String>>(&mut object, "ssh_authorized_keys")?.unwrap_or_default();
+
+        let legacy_kernel_image_path = take_optional::<String>(&mut object, "kernel_image_path")?;
+        let legacy_rootfs_image_path = take_optional::<String>(&mut object, "rootfs_image_path")?;
+        let legacy_initrd_image_path =
+            take_optional::<Option<String>>(&mut object, "initrd_image_path")?.flatten();
+
+        let guest_images = match object.remove("guest_images") {
+            Some(value) => {
+                let guest_image_object = match value {
+                    Value::Object(map) => map,
+                    other => {
+                        return Err(json::Error::InvalidField {
+                            field: "guest_images".to_owned(),
+                            message: format!("expected object, got {other:?}"),
+                        });
+                    }
+                };
+
+                guest_image_object
+                    .into_iter()
+                    .map(|(key, value)| -> Result<_, json::Error> {
+                        let guest_isa = SoraInrouGuestIsaV1::parse_key(&key)
+                            .ok_or_else(|| json::Error::UnknownField { field: key.clone() })?;
+                        let image: SoraInrouGuestImageV1 = json::from_value(value)?;
+                        Ok((guest_isa, image))
+                    })
+                    .collect::<Result<
+                        BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
+                        json::Error,
+                    >>()?
+            }
+            None => {
+                let kernel_image_path =
+                    legacy_kernel_image_path.ok_or_else(|| json::Error::MissingField {
+                        field: "guest_images".to_owned(),
+                    })?;
+                let rootfs_image_path =
+                    legacy_rootfs_image_path.ok_or_else(|| json::Error::MissingField {
+                        field: "guest_images".to_owned(),
+                    })?;
+                let image = SoraInrouGuestImageV1 {
+                    kernel_image_path,
+                    rootfs_image_path,
+                    initrd_image_path: legacy_initrd_image_path,
+                };
+                BTreeMap::from([
+                    (SoraInrouGuestIsaV1::X8664, image.clone()),
+                    (SoraInrouGuestIsaV1::Aarch64, image),
+                ])
+            }
+        };
+
+        if let Some(extra) = object.keys().next().cloned() {
+            return Err(json::Error::UnknownField { field: extra });
+        }
+
+        Ok(Self {
+            schema_version,
+            guest_os,
+            guest_images,
+            bootstrap_user_data_path,
+            ssh_authorized_keys,
+        })
+    }
 }
 
 impl SoraInrouManifestV1 {
@@ -690,10 +969,7 @@ pub struct CanonicalRequestWitnessV1 {
 
 /// Canonical executable bundle manifest for `SoraCloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct SoraContainerManifestV1 {
     /// Schema version; must equal [`SORA_CONTAINER_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -729,6 +1005,90 @@ pub struct SoraContainerManifestV1 {
     pub resources: SoraResourceLimitsV1,
     /// Lifecycle and health probe settings.
     pub lifecycle: SoraLifecycleHooksV1,
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SoraContainerManifestV1 {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let value = Value::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &Value) -> Result<Self, json::Error> {
+        fn take_required<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<T, json::Error> {
+            let value = object
+                .remove(field)
+                .ok_or_else(|| json::Error::MissingField {
+                    field: field.to_owned(),
+                })?;
+            json::from_value(value)
+        }
+
+        fn take_optional<T: JsonDeserialize>(
+            object: &mut BTreeMap<String, Value>,
+            field: &str,
+        ) -> Result<Option<T>, json::Error> {
+            match object.remove(field) {
+                Some(Value::Null) => Ok(None),
+                Some(value) => json::from_value(value).map(Some),
+                None => Ok(None),
+            }
+        }
+
+        let mut object = match value.clone() {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::InvalidField {
+                    field: "SoraContainerManifestV1".to_owned(),
+                    message: format!("expected object, got {other:?}"),
+                });
+            }
+        };
+
+        let schema_version = take_required(&mut object, "schema_version")?;
+        let runtime = take_required(&mut object, "runtime")?;
+        let bundle_hash = take_required(&mut object, "bundle_hash")?;
+        let bundle_path = take_required(&mut object, "bundle_path")?;
+        let entrypoint = take_required(&mut object, "entrypoint")?;
+        let args = take_optional::<Vec<String>>(&mut object, "args")?.unwrap_or_default();
+        let env =
+            take_optional::<BTreeMap<String, String>>(&mut object, "env")?.unwrap_or_default();
+        let inrou = take_optional(&mut object, "inrou")?;
+        let required_config_names =
+            take_optional::<Vec<String>>(&mut object, "required_config_names")?.unwrap_or_default();
+        let required_secret_names =
+            take_optional::<Vec<String>>(&mut object, "required_secret_names")?.unwrap_or_default();
+        let config_exports =
+            take_optional::<Vec<SoraConfigExportV1>>(&mut object, "config_exports")?
+                .unwrap_or_default();
+        let capabilities = take_required(&mut object, "capabilities")?;
+        let resources = take_required(&mut object, "resources")?;
+        let lifecycle = take_required(&mut object, "lifecycle")?;
+
+        if let Some(extra) = object.keys().next().cloned() {
+            return Err(json::Error::UnknownField { field: extra });
+        }
+
+        Ok(Self {
+            schema_version,
+            runtime,
+            bundle_hash,
+            bundle_path,
+            entrypoint,
+            args,
+            env,
+            inrou,
+            required_config_names,
+            required_secret_names,
+            config_exports,
+            capabilities,
+            resources,
+            lifecycle,
+        })
+    }
 }
 
 impl SoraContainerManifestV1 {
@@ -13228,6 +13588,245 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inrou_manifest_json_deserialize_accepts_legacy_flat_guest_images() {
+        let json = r#"{
+          "schema_version": 1,
+          "guest_os": "DebianSlim",
+          "kernel_image_path": "/inrou/shared/vmlinux",
+          "rootfs_image_path": "/inrou/shared/rootfs.ext4",
+          "initrd_image_path": null,
+          "ssh_authorized_keys": ["ssh-ed25519 AAAA legacy"]
+        }"#;
+
+        let manifest: SoraInrouManifestV1 =
+            norito::json::from_str(json).expect("legacy Inrou JSON should deserialize");
+
+        assert_eq!(
+            manifest.guest_images[&SoraInrouGuestIsaV1::X8664].kernel_image_path,
+            "/inrou/shared/vmlinux"
+        );
+        assert_eq!(
+            manifest.guest_images[&SoraInrouGuestIsaV1::Aarch64].rootfs_image_path,
+            "/inrou/shared/rootfs.ext4"
+        );
+        assert_eq!(manifest.ssh_authorized_keys.len(), 1);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inrou_manifest_json_deserialize_prefers_nested_guest_images_when_overlay_fields_exist() {
+        let json = r#"{
+          "schema_version": 1,
+          "guest_os": "DebianSlim",
+          "guest_images": {
+            "x86_64": {
+              "kernel_image_path": "/inrou/x86_64/vmlinux",
+              "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
+              "initrd_image_path": null
+            },
+            "aarch64": {
+              "kernel_image_path": "/inrou/aarch64/vmlinux",
+              "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
+              "initrd_image_path": null
+            }
+          },
+          "kernel_image_path": "/legacy/vmlinux",
+          "rootfs_image_path": "/legacy/rootfs.ext4"
+        }"#;
+
+        let manifest: SoraInrouManifestV1 =
+            norito::json::from_str(json).expect("overlay Inrou JSON should deserialize");
+
+        assert_eq!(
+            manifest.guest_images[&SoraInrouGuestIsaV1::X8664].kernel_image_path,
+            "/inrou/x86_64/vmlinux"
+        );
+        assert_eq!(
+            manifest.guest_images[&SoraInrouGuestIsaV1::Aarch64].kernel_image_path,
+            "/inrou/aarch64/vmlinux"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inrou_manifest_json_serialize_emits_legacy_flat_guest_image_fields() {
+        let manifest = sample_inrou_manifest();
+
+        let value = norito::json::to_value(&manifest).expect("serialize inrou manifest");
+
+        assert_eq!(
+            value.get("kernel_image_path").and_then(Value::as_str),
+            Some("/inrou/aarch64/vmlinux")
+        );
+        assert_eq!(
+            value.get("rootfs_image_path").and_then(Value::as_str),
+            Some("/inrou/aarch64/rootfs.ext4")
+        );
+        assert!(value.get("guest_images").is_some());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inrou_manifest_json_serialize_emits_valid_string_keyed_guest_images() {
+        let manifest = sample_inrou_manifest();
+
+        let json = norito::json::to_json(&manifest).expect("serialize inrou manifest to JSON");
+        assert!(
+            !json.contains("\"guest_isa\""),
+            "guest image keys must render as strings: {json}"
+        );
+
+        let value: Value =
+            norito::json::from_str(&json).expect("serialized inrou manifest JSON should parse");
+        let guest_images = value
+            .get("guest_images")
+            .and_then(Value::as_object)
+            .expect("guest_images should decode as an object");
+        assert_eq!(
+            guest_images.keys().cloned().collect::<Vec<_>>(),
+            vec!["aarch64".to_owned(), "x86_64".to_owned()]
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn container_manifest_json_deserialize_accepts_null_inrou() {
+        let json = r#"{
+          "schema_version": 1,
+          "runtime": {
+            "runtime": "Ivm",
+            "value": null
+          },
+          "bundle_hash": "hash:0708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212223242527#81B4",
+          "bundle_path": "/bundles/vault-api.to",
+          "entrypoint": "main",
+          "args": ["--http", "--port=8788"],
+          "env": {
+            "SORACLOUD_TEMPLATE": "split-app-vault"
+          },
+          "inrou": null,
+          "required_config_names": [],
+          "required_secret_names": [],
+          "config_exports": [],
+          "capabilities": {
+            "network": {
+              "mode": "Open",
+              "value": null
+            },
+            "allow_wallet_signing": false,
+            "allow_state_writes": false,
+            "allow_model_inference": false,
+            "allow_model_training": false
+          },
+          "resources": {
+            "cpu_millis": 750,
+            "memory_bytes": 536870912,
+            "ephemeral_storage_bytes": 2147483648,
+            "max_open_files": 512,
+            "max_tasks": 64
+          },
+          "lifecycle": {
+            "start_grace_secs": 30,
+            "stop_grace_secs": 20,
+            "healthcheck_path": "/api/auth/me"
+          }
+        }"#;
+
+        let manifest: SoraContainerManifestV1 = norito::json::from_str(json)
+            .expect("container manifest with null inrou should deserialize");
+
+        assert_eq!(manifest.runtime, SoraContainerRuntimeV1::Ivm);
+        assert!(manifest.inrou.is_none());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn container_manifest_json_deserialize_accepts_inrou_guest_images() {
+        let json = r#"{
+          "schema_version": 1,
+          "runtime": {
+            "runtime": "Inrou",
+            "value": null
+          },
+          "bundle_hash": "hash:6F1EB280D8121258AE08C4FCDB5995500A2A0CC36785E5A680F3DFC534F70D2D#FEA9",
+          "bundle_path": "/bundles/ton-indexer.inrou",
+          "entrypoint": "/app/bin/launch-ton-indexer.sh",
+          "args": [],
+          "env": {
+            "RUST_LOG": "info"
+          },
+          "inrou": {
+            "schema_version": 1,
+            "guest_os": {
+              "guest_os": "DebianSlim",
+              "value": null
+            },
+            "guest_images": {
+              "x86_64": {
+                "kernel_image_path": "/inrou/x86_64/vmlinux",
+                "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
+                "initrd_image_path": null
+              },
+              "aarch64": {
+                "kernel_image_path": "/inrou/aarch64/vmlinux",
+                "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
+                "initrd_image_path": null
+              }
+            },
+            "bootstrap_user_data_path": null,
+            "ssh_authorized_keys": [
+              "ssh-ed25519 CHANGE_ME ton-indexer-taira"
+            ]
+          },
+          "required_config_names": [],
+          "required_secret_names": [],
+          "config_exports": [],
+          "capabilities": {
+            "network": {
+              "mode": "Allowlist",
+              "value": [
+                {
+                  "host": "taira.sora.org",
+                  "ports": [443]
+                }
+              ]
+            },
+            "allow_wallet_signing": false,
+            "allow_state_writes": false,
+            "allow_model_inference": false,
+            "allow_model_training": false
+          },
+          "resources": {
+            "cpu_millis": 2000,
+            "memory_bytes": 4294967296,
+            "ephemeral_storage_bytes": 8589934592,
+            "max_open_files": 4096,
+            "max_tasks": 512
+          },
+          "lifecycle": {
+            "start_grace_secs": 60,
+            "stop_grace_secs": 30,
+            "healthcheck_path": "/api/indexer/v1/health"
+          }
+        }"#;
+
+        let manifest: SoraContainerManifestV1 =
+            norito::json::from_str(json).expect("container JSON should deserialize");
+
+        assert_eq!(manifest.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(manifest.bundle_path, "/bundles/ton-indexer.inrou");
+        assert_eq!(
+            manifest
+                .inrou
+                .expect("inrou config should be present")
+                .guest_images[&SoraInrouGuestIsaV1::X8664]
+                .kernel_image_path,
+            "/inrou/x86_64/vmlinux"
+        );
     }
 
     #[test]
