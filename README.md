@@ -106,12 +106,17 @@ deploy surfaces. The maintained public path is:
 - `GET /v1/contracts/deploy-bundles/{bundle_digest}` for receipt/status lookup
 - `POST /v1/contracts/deploy` for the single-contract path, implemented through
   the same planner/executor as a one-contract bundle
+- `POST /v1/contracts/view/batch` for batched read-only contract queries in one
+  round-trip
 
 For the public-safe Torii posture, contract deploy/call/view/status routes stay
 public, while higher-risk app-facing surfaces are opt-in:
 
 - `torii.webhooks_enabled = false` by default
 - `torii.zk_attachments_enabled = false` by default
+- trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
+  `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
+  part of the public-safe baseline
 - enable them explicitly when the node is meant to expose those app features
 
 ## Codex Integration

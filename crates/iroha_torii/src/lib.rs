@@ -2325,6 +2325,7 @@ fn is_public_contract_api_token_bypass(method: &axum::http::Method, path: &str) 
             | "/v1/contracts/call"
             | "/v1/contracts/call/simulate"
             | "/v1/contracts/view"
+            | "/v1/contracts/view/batch"
     );
     let is_public_contract_get =
         path == "/v1/contracts/state" || path.starts_with("/v1/contracts/deploy-bundles/");
@@ -3729,6 +3730,142 @@ async fn handler_contracts_events_get(
             .await?;
     }
     routing::handle_v1_contracts_events_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_swaps_fills_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsFillsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .contract_alias
+            .as_deref()
+            .or(params.contract_address.as_deref())
+            .unwrap_or("contracts-rollups-swaps-fills");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_swaps_fills_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_swaps_candles_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsCandlesParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .contract_alias
+            .as_deref()
+            .or(params.contract_address.as_deref())
+            .unwrap_or("contracts-rollups-swaps-candles");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_swaps_candles_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_trader_activity_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .module
+            .as_deref()
+            .or(params.event_kind.as_deref())
+            .or(params.authority.as_deref())
+            .unwrap_or("contracts-rollups-trader-activity");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_trader_activity_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_trader_account_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::TraderRollupAccountParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(limits.default_page_limit);
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote_ip),
+            params.authority.as_str(),
+            enforce,
+            cost,
+        )
+        .await?;
+    }
+    routing::handle_v1_contracts_rollups_trader_account_get(
         app.state.clone(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
@@ -19951,6 +20088,31 @@ async fn handler_post_contract_view(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_view_batch(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::ContractViewBatchDto>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/contracts/view/batch",
+        "view_batch",
+    )
+    .await?;
+    match crate::routing::handle_post_contract_view_batch(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("view_batch"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -25985,6 +26147,10 @@ impl Torii {
                 )
                 .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
+                    "/v1/contracts/view/batch",
+                    post(handler_post_contract_view_batch),
+                )
+                .route(
                     "/v1/contracts/call/multisig/propose",
                     post(handler_post_contract_call_multisig_propose),
                 )
@@ -26287,6 +26453,22 @@ impl Torii {
                 .route(
                     "/v1/contracts/events",
                     get(handler_contracts_events_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/swaps/fills",
+                    get(handler_contracts_rollups_swaps_fills_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/swaps/candles",
+                    get(handler_contracts_rollups_swaps_candles_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/trader/activity",
+                    get(handler_contracts_rollups_trader_activity_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/trader/account",
+                    get(handler_contracts_rollups_trader_account_get),
                 )
                 .route(
                     "/v1/accounts/{account_id}/assets",
@@ -47624,6 +47806,10 @@ mod tests {
         assert!(is_public_contract_api_token_bypass(
             &Method::POST,
             "/v1/contracts/view"
+        ));
+        assert!(is_public_contract_api_token_bypass(
+            &Method::POST,
+            "/v1/contracts/view/batch"
         ));
         assert!(is_public_contract_api_token_bypass(
             &Method::GET,

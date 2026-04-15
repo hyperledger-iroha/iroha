@@ -11278,6 +11278,105 @@ pub async fn handle_post_contract_view(
 }
 
 #[cfg(feature = "app_api")]
+/// POST /v1/contracts/view/batch — execute multiple read-only contract view entrypoints locally.
+pub async fn handle_post_contract_view_batch(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<ContractViewBatchDto>,
+) -> Result<impl IntoResponse> {
+    let ContractViewBatchDto {
+        authority,
+        gas_limit,
+        items,
+    } = req;
+    if items.is_empty() {
+        return Err(conversion_error(
+            "contract view batch must include at least one item".to_owned(),
+        ));
+    }
+
+    let default_gas_limit = gas_limit.unwrap_or(100_000);
+    if default_gas_limit == 0 {
+        return Err(conversion_error(
+            "contract view batch gas_limit must be positive".to_owned(),
+        ));
+    }
+
+    let mut response_items = Vec::with_capacity(items.len());
+    let mut all_ok = true;
+    for item in items {
+        let request_id = item.request_id.clone();
+        let item_response = evaluate_contract_view_request(
+            Arc::clone(&state),
+            ContractViewDto {
+                authority: authority.clone(),
+                contract_address: item.contract_address,
+                contract_alias: item.contract_alias,
+                entrypoint: item.entrypoint,
+                payload: item.payload,
+                gas_limit: item.gas_limit.unwrap_or(default_gas_limit),
+            },
+        )?;
+
+        let mut object = Map::new();
+        if let Some(request_id) = request_id {
+            object.insert("request_id".into(), Value::from(request_id));
+        }
+        match item_response {
+            Ok(ok) => {
+                object.insert("ok".into(), Value::Bool(true));
+                object.insert("dataspace".into(), Value::from(ok.dataspace));
+                if let Some(contract_address) = ok.contract_address {
+                    object.insert(
+                        "contract_address".into(),
+                        Value::from(contract_address.to_string()),
+                    );
+                }
+                object.insert("code_hash_hex".into(), Value::from(ok.code_hash_hex));
+                object.insert("abi_hash_hex".into(), Value::from(ok.abi_hash_hex));
+                object.insert("entrypoint".into(), Value::from(ok.entrypoint));
+                object.insert(
+                    "result".into(),
+                    json::parse_value(ok.result.get()).unwrap_or(Value::Null),
+                );
+            }
+            Err(err) => {
+                all_ok = false;
+                object.insert("ok".into(), Value::Bool(false));
+                object.insert("dataspace".into(), Value::from(err.dataspace));
+                if let Some(contract_address) = err.contract_address {
+                    object.insert(
+                        "contract_address".into(),
+                        Value::from(contract_address.to_string()),
+                    );
+                }
+                object.insert("code_hash_hex".into(), Value::from(err.code_hash_hex));
+                object.insert("abi_hash_hex".into(), Value::from(err.abi_hash_hex));
+                object.insert("entrypoint".into(), Value::from(err.entrypoint));
+                object.insert("error".into(), Value::from(err.error));
+                if let Some(diag) = err.vm_diagnostic {
+                    object.insert(
+                        "vm_diagnostic".into(),
+                        norito::json::to_value(&diag).unwrap_or(Value::Null),
+                    );
+                }
+            }
+        }
+        response_items.push(Value::Object(object));
+    }
+
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(all_ok));
+    top.insert("items".into(), Value::Array(response_items));
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
 const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
 
 #[cfg(feature = "app_api")]
@@ -12197,6 +12296,34 @@ fn build_contract_call_metadata(
         let payload_key =
             Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
         metadata.insert(payload_key, payload.clone());
+    }
+    if let Some(module) = trader_contract_module(
+        contract_alias.map(ToString::to_string).as_deref(),
+        &contract_address.to_string(),
+    ) {
+        let module_key =
+            Name::from_str("contract_module").expect("static metadata key `contract_module`");
+        metadata.insert(module_key, IrohaJson::new(module.to_owned()));
+        if let Some(entrypoint) = entrypoint {
+            if let Some(event_kind) = canonical_contract_event_kind(module, entrypoint) {
+                let event_kind_key = Name::from_str("contract_event_kind")
+                    .expect("static metadata key `contract_event_kind`");
+                metadata.insert(event_kind_key, IrohaJson::new(event_kind.to_owned()));
+                let schema_version_key = Name::from_str("contract_event_schema_version")
+                    .expect("static metadata key `contract_event_schema_version`");
+                metadata.insert(schema_version_key, IrohaJson::new(1_u64));
+                let provenance_key = Name::from_str("contract_event_provenance")
+                    .expect("static metadata key `contract_event_provenance`");
+                metadata.insert(provenance_key, IrohaJson::new("emitted"));
+                if let Some(event_payload) =
+                    canonical_contract_event_payload(module, entrypoint, payload)
+                {
+                    let payload_key = Name::from_str("contract_event_payload")
+                        .expect("static metadata key `contract_event_payload`");
+                    metadata.insert(payload_key, event_payload);
+                }
+            }
+        }
     }
     if let Some(asset_id) = gas_asset_id {
         let gas_asset_key =
@@ -19795,6 +19922,55 @@ pub struct ContractViewDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// One item inside a batched read-only contract view request.
+pub struct ContractViewBatchItemDto {
+    /// Optional stable caller-provided item identifier.
+    #[norito(default)]
+    pub request_id: Option<String>,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional entrypoint selector; defaults to `main`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Optional per-item gas limit override for the local read execution.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for invoking multiple read-only contract view entrypoints in one HTTP round-trip.
+pub struct ContractViewBatchDto {
+    /// Account identity used as the read authority and host context.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional default gas limit inherited by items that omit `gas_limit`.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
+    /// The batch items to execute.
+    pub items: Vec<ContractViewBatchItemDto>,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload returned after executing a read-only contract view.
 pub struct ContractViewResponseDto {
@@ -19862,6 +20038,18 @@ pub struct ContractViewErrorResponseDto {
     pub error: String,
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
+pub struct ContractViewBatchGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -26396,12 +26584,388 @@ fn contract_activity_projections_for_height_range(
 
 #[cfg(feature = "app_api")]
 fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
+    if let Some(module) = trader_contract_module(contract_alias, contract_address) {
+        return module.to_owned();
+    }
     let source = contract_alias.unwrap_or(contract_address);
     source
         .split(|ch: char| matches!(ch, '.' | '/' | ':' | ' '))
         .find(|segment| !segment.is_empty())
         .unwrap_or(source)
         .to_owned()
+}
+
+#[cfg(feature = "app_api")]
+fn trader_contract_module(
+    contract_alias: Option<&str>,
+    contract_address: &str,
+) -> Option<&'static str> {
+    let source = contract_alias
+        .unwrap_or(contract_address)
+        .trim()
+        .to_ascii_lowercase();
+    if source.contains("dlmm_router") {
+        return Some("swaps");
+    }
+    if source.contains("n3x_hub") {
+        return Some("n3x");
+    }
+    if source.contains("perps_engine") {
+        return Some("perps");
+    }
+    if source.contains("farms.farm") || source.contains("fixturefarms") || source.ends_with(".farm")
+    {
+        return Some("farms");
+    }
+    if source.contains("sale_factory") {
+        return Some("launchpad");
+    }
+    if source.contains("options.factory")
+        || source.contains("options.manager")
+        || source.contains("optfactory")
+        || source.contains("optmgr")
+    {
+        return Some("options");
+    }
+    if source.contains("policy_manager") || source.contains("fixturecover") {
+        return Some("cover");
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'static str> {
+    let normalized = entrypoint.trim().to_ascii_lowercase();
+    match (module, normalized.as_str()) {
+        ("swaps", "route_swap") => Some("swap_executed"),
+        ("n3x", "deposit_and_mint") => Some("n3x_minted"),
+        ("n3x", "burn_and_redeem") => Some("n3x_redeemed"),
+        ("perps", "open_position") => Some("perps_position_opened"),
+        ("perps", "modify_position") => Some("perps_position_modified"),
+        ("perps", "add_margin") => Some("perps_margin_added"),
+        ("perps", "remove_margin") => Some("perps_margin_removed"),
+        ("perps", "close_position") => Some("perps_position_closed"),
+        ("perps", "sync_funding") => Some("perps_funding_synced"),
+        ("perps", "run_liquidation_pass") => Some("perps_liquidation_pass"),
+        ("farms", "stake") => Some("farm_staked"),
+        ("farms", "unstake") => Some("farm_unstaked"),
+        ("farms", "claim") => Some("farm_rewards_claimed"),
+        ("launchpad", "contribute") | ("launchpad", "contribute_recorded") => {
+            Some("launchpad_contributed")
+        }
+        ("launchpad", "claim_allocation") => Some("launchpad_claimed"),
+        ("launchpad", "refund_allocation") => Some("launchpad_refunded"),
+        ("launchpad", "finalize_sale_activation") => Some("launchpad_activation_finalized"),
+        ("options", "create_series") => Some("options_series_created"),
+        ("options", "buy_shout") | ("options", "buy_outperformance") => {
+            Some("options_position_bought")
+        }
+        ("options", "record_shout") => Some("options_shout_recorded"),
+        ("options", "exercise_shout_position")
+        | ("options", "exercise_outperformance_position") => Some("options_position_exercised"),
+        ("options", "settle_series") => Some("options_series_settled"),
+        ("cover", "register_policy") => Some("cover_policy_opened"),
+        ("cover", "record_observation") => Some("cover_observation_recorded"),
+        ("cover", "route_claim") => Some("cover_claim_routed"),
+        ("cover", "expire_policy") => Some("cover_policy_expired"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_contract_event_payload(
+    module: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+) -> Option<IrohaJson> {
+    fn payload_object(payload: &IrohaJson) -> Option<Map> {
+        let parsed = json::parse_value(payload.get()).ok()?;
+        match parsed {
+            Value::Object(object) => Some(object),
+            other => {
+                let mut object = Map::new();
+                object.insert("value".into(), other);
+                Some(object)
+            }
+        }
+    }
+
+    fn copy_first(object: &Map, target: &mut Map, target_key: &str, keys: &[&str]) -> bool {
+        for key in keys {
+            if let Some(value) = object.get(*key) {
+                target.insert(target_key.into(), value.clone());
+                return true;
+            }
+        }
+        false
+    }
+
+    fn first_i64(object: &Map, keys: &[&str]) -> Option<i64> {
+        keys.iter().find_map(|key| {
+            object.get(*key).and_then(|value| {
+                value
+                    .as_i64()
+                    .or_else(|| value.as_u64().and_then(|raw| i64::try_from(raw).ok()))
+                    .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
+            })
+        })
+    }
+
+    let mut normalized = payload_object(payload?)?;
+    let normalized_entrypoint = entrypoint.trim().to_ascii_lowercase();
+
+    match (module, normalized_entrypoint.as_str()) {
+        ("swaps", "route_swap") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount",
+                &["amount_in"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount_in",
+                &["amount_in"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "min_out",
+                &["min_out"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "input_is_base",
+                &["input_is_base"],
+            );
+        }
+        ("n3x", "deposit_and_mint") => {
+            if let Some(total) = first_i64(&normalized, &["usdt_in"]).and_then(|usdt| {
+                Some(
+                    usdt + first_i64(&normalized, &["usdc_in"]).unwrap_or(0)
+                        + first_i64(&normalized, &["kusd_in"]).unwrap_or(0),
+                )
+            }) {
+                normalized.insert("amount".into(), Value::from(total));
+            }
+        }
+        ("n3x", "burn_and_redeem") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount",
+                &["n3x_amount"],
+            );
+        }
+        ("perps", "open_position") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "market_id",
+                &["market_id"],
+            );
+            copy_first(&normalized.clone(), &mut normalized, "notional", &["size"]);
+            copy_first(&normalized.clone(), &mut normalized, "size", &["size"]);
+            copy_first(&normalized.clone(), &mut normalized, "margin", &["margin"]);
+        }
+        ("perps", "modify_position") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position_id",
+                &["position_id"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "size_delta",
+                &["size_delta"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "margin_delta",
+                &["margin_delta"],
+            );
+        }
+        ("perps", "add_margin") | ("perps", "remove_margin") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position_id",
+                &["position_id"],
+            );
+            copy_first(&normalized.clone(), &mut normalized, "amount", &["amount"]);
+        }
+        ("perps", "close_position") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position_id",
+                &["position_id"],
+            );
+        }
+        ("perps", "sync_funding") | ("perps", "run_liquidation_pass") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "market_id",
+                &["market_id"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount",
+                &["max_positions"],
+            );
+        }
+        ("farms", "stake") | ("farms", "unstake") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position",
+                &["position"],
+            );
+            copy_first(&normalized.clone(), &mut normalized, "amount", &["amount"]);
+        }
+        ("farms", "claim") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position",
+                &["position"],
+            );
+        }
+        ("launchpad", "contribute") | ("launchpad", "contribute_recorded") => {
+            copy_first(&normalized.clone(), &mut normalized, "sale", &["sale"]);
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "allocation",
+                &["allocation"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount",
+                &["payment_amount"],
+            );
+        }
+        ("launchpad", "claim_allocation") | ("launchpad", "refund_allocation") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "allocation",
+                &["allocation"],
+            );
+        }
+        ("launchpad", "finalize_sale_activation") => {
+            copy_first(&normalized.clone(), &mut normalized, "sale", &["sale"]);
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "amount",
+                &["claim_inventory_amount"],
+            );
+        }
+        ("options", "create_series") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "series_id",
+                &["series_id"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "notional",
+                &["max_notional"],
+            );
+        }
+        ("options", "buy_shout") | ("options", "buy_outperformance") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "series_id",
+                &["series_id"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "notional",
+                &["notional"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "premium_paid",
+                &["premium_paid"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "collateral_locked",
+                &["collateral_locked"],
+            );
+        }
+        ("options", "record_shout")
+        | ("options", "exercise_shout_position")
+        | ("options", "exercise_outperformance_position") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "position_id",
+                &["position_id"],
+            );
+        }
+        ("options", "settle_series") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "series_id",
+                &["series_id"],
+            );
+        }
+        ("cover", "register_policy") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "policy_id",
+                &["policy_id"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "notional",
+                &["covered_notional"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "premium_paid",
+                &["premium_paid"],
+            );
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "payout_amount",
+                &["payout_amount"],
+            );
+        }
+        ("cover", "record_observation") | ("cover", "route_claim") | ("cover", "expire_policy") => {
+            copy_first(
+                &normalized.clone(),
+                &mut normalized,
+                "policy_id",
+                &["policy_id"],
+            );
+        }
+        _ => {}
+    }
+
+    Some(IrohaJson::new(Value::Object(normalized)))
 }
 
 #[cfg(feature = "app_api")]
@@ -28975,6 +29539,17 @@ pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_EVENTS_SSE: &str = "/v1/contracts/events/sse";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_VIEW_BATCH: &str = "/v1/contracts/view/batch";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS: &str = "/v1/contracts/rollups/swaps/fills";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES: &str = "/v1/contracts/rollups/swaps/candles";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
+    "/v1/contracts/rollups/trader/activity";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -45368,6 +45943,67 @@ pub struct ContractEventGetParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
+pub struct ContractRollupSwapsFillsParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Trader authority whose swap fills should be returned.
+    pub authority: String,
+    /// Optional canonical contract address for the router.
+    #[norito(default)]
+    pub contract_address: Option<String>,
+    /// Optional contract alias for the router.
+    #[norito(default)]
+    pub contract_alias: Option<String>,
+    /// Optional scan limit for walking the router mirror history.
+    #[norito(default)]
+    pub scan_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
+pub struct ContractRollupSwapsCandlesParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Trader authority whose swap candles should be returned.
+    pub authority: String,
+    /// Optional canonical contract address for the router.
+    #[norito(default)]
+    pub contract_address: Option<String>,
+    /// Optional contract alias for the router.
+    #[norito(default)]
+    pub contract_alias: Option<String>,
+    /// Optional scan limit for walking the router mirror history.
+    #[norito(default)]
+    pub scan_limit: Option<u64>,
+    /// Candle bucket width in milliseconds.
+    #[norito(default)]
+    pub bucket_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
+pub struct TraderRollupAccountParams {
+    /// Trader authority whose product summary should be returned.
+    pub authority: String,
+    /// Optional scan limit for walking router history and event history.
+    #[norito(default)]
+    pub scan_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
@@ -45920,6 +46556,1415 @@ fn contract_event_projections_to_json(
         .collect()
 }
 
+#[cfg(feature = "app_api")]
+const DEFAULT_TRADER_SWAP_SCAN_LIMIT: u64 = 600;
+#[cfg(feature = "app_api")]
+const MAX_TRADER_SWAP_SCAN_LIMIT: u64 = 5_000;
+#[cfg(feature = "app_api")]
+const DEFAULT_TRADER_CANDLE_BUCKET_MS: u64 = 900_000;
+
+#[cfg(feature = "app_api")]
+const TRADER_MODULE_ORDER: &[&str] = &[
+    "swaps",
+    "n3x",
+    "perps",
+    "farms",
+    "launchpad",
+    "options",
+    "cover",
+];
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct SwapFillRollupItem {
+    record_id: u64,
+    trader: String,
+    input_is_base: i64,
+    amount_in: i64,
+    amount_out: i64,
+    min_out: i64,
+    side: String,
+    price: f64,
+    protection_ratio: Option<f64>,
+    timestamp_ms: Option<u64>,
+    execution_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct SwapFillRollup {
+    authority: String,
+    contract_address: String,
+    contract_alias: Option<String>,
+    base_asset_id: String,
+    quote_asset_id: String,
+    history_head: u64,
+    scanned: usize,
+    total: usize,
+    items: Vec<SwapFillRollupItem>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default)]
+struct SwapAnalytics {
+    avg_entry: Option<f64>,
+    avg_exit: Option<f64>,
+    open_quote_amount: f64,
+    realized_pnl_base: f64,
+    unrealized_pnl_base: Option<f64>,
+    total_pnl_base: Option<f64>,
+    total_base_spent: f64,
+    total_base_realized: f64,
+    last_price: Option<f64>,
+    win_rate: Option<f64>,
+    avg_cushion_ratio: Option<f64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct TraderActivityItem {
+    module_key: String,
+    module_label: String,
+    timestamp_ms: Option<u64>,
+    action: String,
+    exposure: String,
+    context: String,
+    execution_hash: String,
+}
+
+#[cfg(feature = "app_api")]
+fn trader_module_label(module: &str) -> &'static str {
+    match module {
+        "swaps" => "Swaps",
+        "n3x" => "n3x Basket",
+        "perps" => "Perps Engine",
+        "farms" => "Farms",
+        "launchpad" => "Launchpad",
+        "options" => "Options",
+        "cover" => "Cover",
+        _ => "Contract",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn trader_module_contract_key(module: &str) -> &'static str {
+    match module {
+        "swaps" => "dlmm.dlmm_router",
+        "n3x" => "n3x.n3x_hub",
+        "perps" => "perps.perps_engine",
+        "farms" => "farms.farm",
+        "launchpad" => "launchpad.sale_factory",
+        "options" => "options.factory",
+        "cover" => "cover.policy_manager",
+        _ => "unknown",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn trader_module_alias_candidates(module: &str) -> &'static [&'static str] {
+    match module {
+        "swaps" => &["dlmm.dlmm_router"],
+        "n3x" => &["n3x.n3x_hub"],
+        "perps" => &["perps.perps_engine"],
+        "farms" => &["farms.farm"],
+        "launchpad" => &["launchpad.sale_factory"],
+        "options" => &["options.factory", "options.manager"],
+        "cover" => &["cover.policy_manager"],
+        _ => &[],
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn trader_module_is_supported(module: &str) -> bool {
+    TRADER_MODULE_ORDER
+        .iter()
+        .any(|candidate| *candidate == module)
+}
+
+#[cfg(feature = "app_api")]
+fn compact_number(value: f64, max_fraction_digits: usize) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
+    }
+    let mut rendered = format!("{value:.prec$}", prec = max_fraction_digits);
+    while rendered.contains('.') && rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    if rendered.is_empty() {
+        "0".to_owned()
+    } else {
+        rendered
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn format_signed_asset_amount(value: f64, symbol: &str) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
+    }
+    let sign = if value > 0.0 {
+        "+"
+    } else if value < 0.0 {
+        "-"
+    } else {
+        ""
+    };
+    format!("{sign}{} {}", compact_number(value.abs(), 4), symbol)
+}
+
+#[cfg(feature = "app_api")]
+fn format_percent_ratio(value: Option<f64>) -> String {
+    value
+        .map(|raw| format!("{}%", compact_number(raw * 100.0, 2)))
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn asset_ticker(asset_id: &str) -> String {
+    asset_id
+        .split('#')
+        .next()
+        .unwrap_or(asset_id)
+        .trim()
+        .to_ascii_uppercase()
+}
+
+#[cfg(feature = "app_api")]
+fn humanize_identifier(raw: &str) -> String {
+    raw.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "app_api")]
+fn format_timestamp_label(timestamp_ms: Option<u64>) -> String {
+    timestamp_ms
+        .and_then(|raw| OffsetDateTime::from_unix_timestamp((raw / 1000) as i64).ok())
+        .map(|dt| format!("{:02}:{:02} UTC", dt.hour(), dt.minute()))
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn value_as_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|raw| i64::try_from(raw).ok()))
+        .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
+}
+
+#[cfg(feature = "app_api")]
+fn object_lookup_i64(object: &Map, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(value_as_i64))
+}
+
+#[cfg(feature = "app_api")]
+fn object_lookup_string(object: &Map, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn iroha_json_to_value(value: &IrohaJson) -> Result<Value> {
+    json::parse_value(value.get())
+        .map_err(|err| conversion_error(format!("invalid contract view JSON: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_view_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Array(values) => values.first().and_then(value_as_i64),
+        Value::Object(object) => object_lookup_i64(object, &["value", "result"]),
+        other => value_as_i64(other),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn parse_router_assets_from_value(value: &Value) -> (String, String) {
+    match value {
+        Value::Array(values) if values.len() >= 2 => (
+            values[0].as_str().unwrap_or("xor#universal").to_owned(),
+            values[1].as_str().unwrap_or("quote").to_owned(),
+        ),
+        Value::Object(object) => (
+            object_lookup_string(object, &["base_asset", "baseAsset"])
+                .unwrap_or_else(|| "xor#universal".to_owned()),
+            object_lookup_string(object, &["quote_asset", "quoteAsset"])
+                .unwrap_or_else(|| "quote".to_owned()),
+        ),
+        _ => ("xor#universal".to_owned(), "quote".to_owned()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn parse_swap_history_record(record_id: u64, value: &Value) -> Option<SwapFillRollupItem> {
+    let (trader, input_is_base, amount_in, amount_out, min_out) = match value {
+        Value::Array(values) if values.len() >= 5 => (
+            values[0].as_str()?.to_owned(),
+            value_as_i64(values.get(1)?)?,
+            value_as_i64(values.get(2)?)?,
+            value_as_i64(values.get(3)?)?,
+            value_as_i64(values.get(4)?)?,
+        ),
+        Value::Object(object) => (
+            object_lookup_string(object, &["trader", "authority"])?,
+            object_lookup_i64(object, &["input_is_base", "inputIsBase"])?,
+            object_lookup_i64(object, &["amount_in", "amountIn"])?,
+            object_lookup_i64(object, &["amount_out", "amountOut"])?,
+            object_lookup_i64(object, &["min_out", "minOut"])?,
+        ),
+        _ => return None,
+    };
+    let side = if input_is_base == 1 { "buy" } else { "sell" }.to_owned();
+    let price = if input_is_base == 1 {
+        amount_in as f64 / (amount_out.max(1) as f64)
+    } else {
+        amount_out as f64 / (amount_in.max(1) as f64)
+    };
+    let protection_ratio = (min_out > 0).then_some((amount_out - min_out) as f64 / min_out as f64);
+    Some(SwapFillRollupItem {
+        record_id,
+        trader,
+        input_is_base,
+        amount_in,
+        amount_out,
+        min_out,
+        side,
+        price,
+        protection_ratio,
+        timestamp_ms: None,
+        execution_hash: None,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_alias_literal(
+    literal: Option<&str>,
+) -> Result<Option<iroha_data_model::smart_contract::ContractAlias>> {
+    literal
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            iroha_data_model::smart_contract::ContractAlias::from_str(value)
+                .map_err(|err| conversion_error(format!("invalid contract_alias `{value}`: {err}")))
+        })
+        .transpose()
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_address_literal(
+    literal: Option<&str>,
+) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>> {
+    literal
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            iroha_data_model::smart_contract::ContractAddress::from_str(value).map_err(|err| {
+                conversion_error(format!("invalid contract_address `{value}`: {err}"))
+            })
+        })
+        .transpose()
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_rollup_contract_target(
+    state: &CoreState,
+    contract_address_literal: Option<&str>,
+    contract_alias_literal: Option<&str>,
+    default_alias_literal: &str,
+) -> Result<PreparedContractCall> {
+    let contract_address = parse_contract_address_literal(contract_address_literal)?;
+    let contract_alias = parse_contract_alias_literal(contract_alias_literal)?;
+    match (contract_address.as_ref(), contract_alias.as_ref()) {
+        (Some(_), Some(_)) => Err(conversion_error(
+            "exactly one of contract_address or contract_alias must be provided".to_owned(),
+        )),
+        (Some(contract_address), None) => prepare_contract_call_by_address(state, contract_address),
+        (None, Some(contract_alias)) => {
+            prepare_contract_call_by_alias(state, contract_alias, current_time_millis())
+        }
+        (None, None) => {
+            let alias =
+                iroha_data_model::smart_contract::ContractAlias::from_str(default_alias_literal)
+                    .map_err(|err| {
+                        conversion_error(format!(
+                            "invalid default contract alias `{default_alias_literal}`: {err}"
+                        ))
+                    })?;
+            prepare_contract_call_by_alias(state, &alias, current_time_millis())
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn call_contract_view_value(
+    state: Arc<CoreState>,
+    authority: &iroha_data_model::account::AccountId,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    entrypoint: &str,
+    payload: Option<Value>,
+    gas_limit: u64,
+) -> Result<Value> {
+    let response = evaluate_contract_view_request(
+        state,
+        ContractViewDto {
+            authority: authority.clone(),
+            contract_address: Some(contract_address),
+            contract_alias,
+            entrypoint: Some(entrypoint.to_owned()),
+            payload: payload.map(IrohaJson::new),
+            gas_limit,
+        },
+    )?;
+    let result = match response {
+        Ok(ok) => ok.result,
+        Err(err) => {
+            return Err(conversion_error(format!(
+                "contract view `{entrypoint}` failed: {}",
+                err.error
+            )));
+        }
+    };
+    iroha_json_to_value(&result)
+}
+
+#[cfg(feature = "app_api")]
+fn load_swap_fill_rollup(
+    state: Arc<CoreState>,
+    params: &ContractRollupSwapsFillsParams,
+) -> Result<SwapFillRollup> {
+    let telemetry = MaybeTelemetry::disabled();
+    let (authority_id, authority) = parse_account_literal_with_state(
+        state.as_ref(),
+        &params.authority,
+        &telemetry,
+        ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid authority `{}`: {}",
+            params.authority,
+            err.reason()
+        ))
+    })?;
+    let prepared = resolve_rollup_contract_target(
+        state.as_ref(),
+        params.contract_address.as_deref(),
+        params.contract_alias.as_deref(),
+        "dlmm.dlmm_router",
+    )?;
+    let contract_address = prepared.contract_address.clone();
+    let contract_alias = prepared.contract_alias.clone();
+    let gas_limit = 100_000;
+    let assets_value = call_contract_view_value(
+        Arc::clone(&state),
+        &authority_id,
+        contract_address.clone(),
+        contract_alias.clone(),
+        "router_assets",
+        None,
+        gas_limit,
+    )?;
+    let (base_asset_id, quote_asset_id) = parse_router_assets_from_value(&assets_value);
+    let history_head_value = call_contract_view_value(
+        Arc::clone(&state),
+        &authority_id,
+        contract_address.clone(),
+        contract_alias.clone(),
+        "swap_history_head",
+        None,
+        gas_limit,
+    )?;
+    let history_head = parse_contract_view_int(&history_head_value)
+        .and_then(|raw| u64::try_from(raw).ok())
+        .ok_or_else(|| {
+            conversion_error("swap_history_head returned an unexpected value".to_owned())
+        })?;
+
+    let scan_limit = params
+        .scan_limit
+        .unwrap_or(DEFAULT_TRADER_SWAP_SCAN_LIMIT)
+        .clamp(1, MAX_TRADER_SWAP_SCAN_LIMIT) as usize;
+    let mut records = Vec::new();
+    let mut scanned = 0usize;
+    let mut cursor = history_head;
+    while cursor > 0 && scanned < scan_limit {
+        let record_value = call_contract_view_value(
+            Arc::clone(&state),
+            &authority_id,
+            contract_address.clone(),
+            contract_alias.clone(),
+            "mirror_swap_history",
+            Some(crate::json_object(vec![crate::json_entry(
+                "record_id",
+                cursor,
+            )])),
+            gas_limit,
+        )?;
+        scanned = scanned.saturating_add(1);
+        if let Some(record) = parse_swap_history_record(cursor, &record_value) {
+            if record.trader == authority {
+                records.push(record);
+            }
+        }
+        cursor = cursor.saturating_sub(1);
+    }
+
+    let index = contract_event_index_snapshot(state.as_ref());
+    let mut swap_events: Vec<ContractEventProjection> = index
+        .items
+        .iter()
+        .rev()
+        .filter(|projection| {
+            projection.result_ok
+                && projection.authority.as_deref() == Some(authority.as_str())
+                && projection.contract_address == contract_address.to_string()
+                && projection.module == "swaps"
+                && matches!(
+                    projection.event_kind.as_str(),
+                    "swap_executed" | "route_swap"
+                )
+        })
+        .cloned()
+        .collect();
+
+    let mut stitched = Vec::with_capacity(records.len());
+    for mut record in records {
+        let matched_index = swap_events.iter().position(|projection| {
+            let Some(Value::Object(object)) = projection.payload.as_ref() else {
+                return false;
+            };
+            object_lookup_i64(&object, &["amount_in", "amount"]) == Some(record.amount_in)
+                && object_lookup_i64(&object, &["min_out"]) == Some(record.min_out)
+                && object_lookup_i64(&object, &["input_is_base"]) == Some(record.input_is_base)
+        });
+        let matched = matched_index.map(|index| swap_events.remove(index));
+        if let Some(event) =
+            matched.or_else(|| (!swap_events.is_empty()).then(|| swap_events.remove(0)))
+        {
+            record.timestamp_ms = event.timestamp_ms;
+            record.execution_hash = Some(event.tx_hash_hex);
+        }
+        stitched.push(record);
+    }
+
+    Ok(SwapFillRollup {
+        authority,
+        contract_address: contract_address.to_string(),
+        contract_alias: contract_alias.map(|value| value.to_string()),
+        base_asset_id,
+        quote_asset_id,
+        history_head,
+        scanned,
+        total: stitched.len(),
+        items: stitched,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn swap_fill_rollup_to_json_value(
+    rollup: &SwapFillRollup,
+    limit: Option<u64>,
+    offset: u64,
+) -> Value {
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    let limit = limit
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(rollup.items.len());
+    let items = rollup
+        .items
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|item| {
+            let mut object = Map::new();
+            object.insert("recordId".into(), Value::from(item.record_id));
+            object.insert("trader".into(), Value::from(item.trader.clone()));
+            object.insert("inputIsBase".into(), Value::from(item.input_is_base));
+            object.insert("amountIn".into(), Value::from(item.amount_in));
+            object.insert("amountOut".into(), Value::from(item.amount_out));
+            object.insert("minOut".into(), Value::from(item.min_out));
+            object.insert("side".into(), Value::from(item.side.clone()));
+            object.insert("price".into(), Value::from(item.price));
+            object.insert(
+                "protectionRatio".into(),
+                item.protection_ratio.map_or(Value::Null, Value::from),
+            );
+            object.insert(
+                "timestampMs".into(),
+                item.timestamp_ms.map_or(Value::Null, Value::from),
+            );
+            object.insert(
+                "executionHash".into(),
+                item.execution_hash
+                    .as_ref()
+                    .map_or(Value::Null, |value| Value::from(value.clone())),
+            );
+            Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert("authority".into(), Value::from(rollup.authority.clone()));
+    top.insert(
+        "contract_address".into(),
+        Value::from(rollup.contract_address.clone()),
+    );
+    if let Some(alias) = rollup.contract_alias.as_ref() {
+        top.insert("contract_alias".into(), Value::from(alias.clone()));
+    }
+    top.insert(
+        "base_asset_id".into(),
+        Value::from(rollup.base_asset_id.clone()),
+    );
+    top.insert(
+        "quote_asset_id".into(),
+        Value::from(rollup.quote_asset_id.clone()),
+    );
+    top.insert("history_head".into(), Value::from(rollup.history_head));
+    top.insert("scanned".into(), Value::from(rollup.scanned as u64));
+    top.insert("total".into(), Value::from(rollup.total as u64));
+    top.insert("items".into(), Value::Array(items));
+    Value::Object(top)
+}
+
+#[cfg(feature = "app_api")]
+fn compute_swap_analytics(items: &[SwapFillRollupItem]) -> SwapAnalytics {
+    let mut quote_inventory = 0.0_f64;
+    let mut cost_basis_base = 0.0_f64;
+    let mut realized_pnl_base = 0.0_f64;
+    let mut total_base_spent = 0.0_f64;
+    let mut total_base_realized = 0.0_f64;
+    let mut total_quote_bought = 0.0_f64;
+    let mut total_quote_sold = 0.0_f64;
+    let mut win_count = 0.0_f64;
+    let mut sell_count = 0.0_f64;
+    let mut cushion_ratio_sum = 0.0_f64;
+    let mut cushion_count = 0.0_f64;
+
+    for fill in items.iter().rev() {
+        if fill.side == "buy" {
+            total_base_spent += fill.amount_in as f64;
+            total_quote_bought += fill.amount_out as f64;
+            quote_inventory += fill.amount_out as f64;
+            cost_basis_base += fill.amount_in as f64;
+        } else {
+            total_base_realized += fill.amount_out as f64;
+            total_quote_sold += fill.amount_in as f64;
+            sell_count += 1.0;
+
+            let inventory_before = quote_inventory;
+            let basis_before = cost_basis_base;
+            let sold_quote = (fill.amount_in as f64).min(inventory_before);
+            let cost_portion = if inventory_before > 0.0 {
+                (basis_before * sold_quote) / inventory_before
+            } else {
+                0.0
+            };
+            let trade_realized = fill.amount_out as f64 - cost_portion;
+            realized_pnl_base += trade_realized;
+            if trade_realized > 0.0 {
+                win_count += 1.0;
+            }
+            quote_inventory = (inventory_before - fill.amount_in as f64).max(0.0);
+            cost_basis_base = (basis_before - cost_portion).max(0.0);
+        }
+        if let Some(ratio) = fill.protection_ratio {
+            cushion_ratio_sum += ratio;
+            cushion_count += 1.0;
+        }
+    }
+
+    let avg_entry = (total_quote_bought > 0.0).then_some(total_base_spent / total_quote_bought);
+    let avg_exit = (total_quote_sold > 0.0).then_some(total_base_realized / total_quote_sold);
+    let last_price = items.first().map(|item| item.price);
+    let unrealized_pnl_base = last_price.map(|price| (quote_inventory * price) - cost_basis_base);
+    let total_pnl_base = unrealized_pnl_base.map(|value| realized_pnl_base + value);
+
+    SwapAnalytics {
+        avg_entry,
+        avg_exit,
+        open_quote_amount: quote_inventory,
+        realized_pnl_base,
+        unrealized_pnl_base,
+        total_pnl_base,
+        total_base_spent,
+        total_base_realized,
+        last_price,
+        win_rate: (sell_count > 0.0).then_some(win_count / sell_count),
+        avg_cushion_ratio: (cushion_count > 0.0).then_some(cushion_ratio_sum / cushion_count),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn swap_analytics_to_json_value(analytics: &SwapAnalytics) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "avgEntry".into(),
+        analytics.avg_entry.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "avgExit".into(),
+        analytics.avg_exit.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "openQuoteAmount".into(),
+        Value::from(analytics.open_quote_amount),
+    );
+    object.insert(
+        "realizedPnlBase".into(),
+        Value::from(analytics.realized_pnl_base),
+    );
+    object.insert(
+        "unrealizedPnlBase".into(),
+        analytics
+            .unrealized_pnl_base
+            .map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "totalPnlBase".into(),
+        analytics.total_pnl_base.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "totalBaseSpent".into(),
+        Value::from(analytics.total_base_spent),
+    );
+    object.insert(
+        "totalBaseRealized".into(),
+        Value::from(analytics.total_base_realized),
+    );
+    object.insert(
+        "lastPrice".into(),
+        analytics.last_price.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "winRate".into(),
+        analytics.win_rate.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "avgCushionRatio".into(),
+        analytics.avg_cushion_ratio.map_or(Value::Null, Value::from),
+    );
+    Value::Object(object)
+}
+
+#[cfg(feature = "app_api")]
+fn event_payload_object(projection: &ContractEventProjection) -> Option<Map> {
+    projection.payload.as_ref().and_then(|value| match value {
+        Value::Object(object) => Some(object.clone()),
+        _ => None,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn trader_activity_item_from_projection(
+    projection: &ContractEventProjection,
+) -> TraderActivityItem {
+    let payload = event_payload_object(projection).unwrap_or_default();
+    let mut action = humanize_identifier(&projection.event_kind);
+    let mut exposure = "-".to_owned();
+    let mut context = trader_module_label(&projection.module).to_owned();
+    match projection.event_kind.as_str() {
+        "swap_executed" | "route_swap" => {
+            let input_is_base = object_lookup_i64(&payload, &["input_is_base"]).unwrap_or(1);
+            let amount_in = object_lookup_i64(&payload, &["amount_in", "amount"]).unwrap_or(0);
+            let amount_out = object_lookup_i64(&payload, &["amount_out"]).unwrap_or(0);
+            let min_out = object_lookup_i64(&payload, &["min_out"]).unwrap_or(0);
+            action = if input_is_base == 1 {
+                "Bought quote".to_owned()
+            } else {
+                "Sold quote".to_owned()
+            };
+            exposure = format!(
+                "{} -> {}",
+                compact_number(amount_in as f64, 0),
+                compact_number(amount_out as f64, 0)
+            );
+            context = format!("Min out {}", compact_number(min_out as f64, 0));
+        }
+        "n3x_minted" => {
+            action = "Minted n3x".to_owned();
+            let amount = object_lookup_i64(&payload, &["amount"]).unwrap_or(0);
+            exposure = format!("{} basket in", compact_number(amount as f64, 0));
+            let usdt = object_lookup_i64(&payload, &["usdt_in"]).unwrap_or(0);
+            let usdc = object_lookup_i64(&payload, &["usdc_in"]).unwrap_or(0);
+            let kusd = object_lookup_i64(&payload, &["kusd_in"]).unwrap_or(0);
+            context = format!(
+                "{} USDT / {} USDC / {} KUSD",
+                compact_number(usdt as f64, 0),
+                compact_number(usdc as f64, 0),
+                compact_number(kusd as f64, 0)
+            );
+        }
+        "n3x_redeemed" => {
+            action = "Redeemed n3x".to_owned();
+            let amount = object_lookup_i64(&payload, &["amount", "n3x_amount"]).unwrap_or(0);
+            exposure = format!("{} N3X", compact_number(amount as f64, 0));
+            context = "Basket redeem".to_owned();
+        }
+        "perps_position_opened"
+        | "perps_position_modified"
+        | "perps_margin_added"
+        | "perps_margin_removed"
+        | "perps_position_closed"
+        | "perps_funding_synced"
+        | "perps_liquidation_pass" => {
+            let position_id = object_lookup_i64(&payload, &["position_id"]);
+            let market_id = object_lookup_i64(&payload, &["market_id"]);
+            let size = object_lookup_i64(&payload, &["size", "size_delta", "notional"]);
+            let margin = object_lookup_i64(&payload, &["margin", "margin_delta", "amount"]);
+            exposure = [
+                size.map(|value| format!("{} size", compact_number(value as f64, 0))),
+                margin.map(|value| format!("{} margin", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Perp action".to_owned();
+            }
+            context = [
+                market_id.map(|value| format!("Market {value}")),
+                position_id.map(|value| format!("Position #{value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if context.is_empty() {
+                context = "Perps Engine".to_owned();
+            }
+        }
+        "farm_staked" | "farm_unstaked" | "farm_rewards_claimed" => {
+            let position = object_lookup_string(&payload, &["position"]);
+            let amount = object_lookup_i64(&payload, &["amount"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Farm action".to_owned());
+            context = position
+                .map(|value| format!("Position {value}"))
+                .unwrap_or_else(|| "Farm position".to_owned());
+        }
+        "launchpad_contributed"
+        | "launchpad_claimed"
+        | "launchpad_refunded"
+        | "launchpad_activation_finalized" => {
+            let sale = object_lookup_string(&payload, &["sale"]);
+            let allocation = object_lookup_string(&payload, &["allocation"]);
+            let amount = object_lookup_i64(&payload, &["amount", "payment_amount"]);
+            exposure = amount
+                .map(|value| compact_number(value as f64, 0))
+                .unwrap_or_else(|| "Launchpad action".to_owned());
+            context = [sale, allocation]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if context.is_empty() {
+                context = "Launchpad".to_owned();
+            }
+        }
+        "options_series_created"
+        | "options_position_bought"
+        | "options_shout_recorded"
+        | "options_position_exercised"
+        | "options_series_settled" => {
+            let series_id = object_lookup_i64(&payload, &["series_id"]);
+            let position_id = object_lookup_i64(&payload, &["position_id"]);
+            let notional = object_lookup_i64(&payload, &["notional"]);
+            let premium = object_lookup_i64(&payload, &["premium_paid"]);
+            exposure = [
+                notional.map(|value| format!("{} notional", compact_number(value as f64, 0))),
+                premium.map(|value| format!("{} premium", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Option action".to_owned();
+            }
+            context = [
+                series_id.map(|value| format!("Series #{value}")),
+                position_id.map(|value| format!("Position #{value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if context.is_empty() {
+                context = "Options".to_owned();
+            }
+        }
+        "cover_policy_opened"
+        | "cover_observation_recorded"
+        | "cover_claim_routed"
+        | "cover_policy_expired" => {
+            let policy_id = object_lookup_i64(&payload, &["policy_id"]);
+            let notional = object_lookup_i64(&payload, &["notional", "covered_notional"]);
+            let payout = object_lookup_i64(&payload, &["payout_amount"]);
+            exposure = [
+                notional.map(|value| format!("{} covered", compact_number(value as f64, 0))),
+                payout.map(|value| format!("{} payout", compact_number(value as f64, 0))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if exposure.is_empty() {
+                exposure = "Policy action".to_owned();
+            }
+            context = policy_id
+                .map(|value| format!("Policy #{value}"))
+                .unwrap_or_else(|| "Cover".to_owned());
+        }
+        _ => {
+            if !payload.is_empty() {
+                let summary = payload
+                    .iter()
+                    .filter_map(|(key, value)| match value {
+                        Value::String(text) if !text.is_empty() => Some(format!("{key}={text}")),
+                        Value::Number(number) => Some(match number {
+                            norito::json::native::Number::I64(value) => {
+                                format!("{key}={value}")
+                            }
+                            norito::json::native::Number::U64(value) => {
+                                format!("{key}={value}")
+                            }
+                            norito::json::native::Number::F64(value) => {
+                                format!("{key}={value}")
+                            }
+                        }),
+                        _ => None,
+                    })
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                if !summary.is_empty() {
+                    exposure = summary;
+                }
+            }
+        }
+    }
+    TraderActivityItem {
+        module_key: projection.module.clone(),
+        module_label: trader_module_label(&projection.module).to_owned(),
+        timestamp_ms: projection.timestamp_ms,
+        action,
+        exposure,
+        context,
+        execution_hash: projection.tx_hash_hex.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_trader_activity_page(
+    index: &ContractEventIndex,
+    params: &ContractEventGetParams,
+    pagination: EffectivePagination,
+) -> (Vec<ContractEventProjection>, usize) {
+    let offset_usize = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
+    let limit_usize = pagination
+        .limit
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let mut matched = 0usize;
+    let mut items = Vec::new();
+
+    let mut visit = |projection: &ContractEventProjection| {
+        if !trader_module_is_supported(&projection.module)
+            || !contract_event_matches(projection, params)
+        {
+            return;
+        }
+        matched = matched.saturating_add(1);
+        if matched > offset_usize && limit_usize.map(|limit| items.len() < limit).unwrap_or(true) {
+            items.push(projection.clone());
+        }
+    };
+
+    match contract_event_candidate_positions(index, params) {
+        ContractEventCandidatePositions::All => {
+            for projection in index.items.iter().rev() {
+                visit(projection);
+            }
+        }
+        ContractEventCandidatePositions::Indexed(positions) => {
+            for position in positions.iter().rev() {
+                if let Some(projection) = index.items.get(*position) {
+                    visit(projection);
+                }
+            }
+        }
+        ContractEventCandidatePositions::Empty => {}
+    }
+    (items, matched)
+}
+
+#[cfg(feature = "app_api")]
+fn trader_activity_items_to_json(items: &[TraderActivityItem]) -> Vec<Value> {
+    items
+        .iter()
+        .map(|item| {
+            let mut object = Map::new();
+            object.insert("moduleKey".into(), Value::from(item.module_key.clone()));
+            object.insert("moduleLabel".into(), Value::from(item.module_label.clone()));
+            object.insert(
+                "timestampMs".into(),
+                item.timestamp_ms.map_or(Value::Null, Value::from),
+            );
+            object.insert("action".into(), Value::from(item.action.clone()));
+            object.insert("exposure".into(), Value::from(item.exposure.clone()));
+            object.insert("context".into(), Value::from(item.context.clone()));
+            object.insert(
+                "executionHash".into(),
+                Value::from(item.execution_hash.clone()),
+            );
+            Value::Object(object)
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn module_card_json(
+    key: &str,
+    contract_address: Option<String>,
+    status_tone: &str,
+    status_label: &str,
+    hero: String,
+    blurb: String,
+    radar_value: String,
+    metrics: [(&str, String); 3],
+) -> Value {
+    let mut object = Map::new();
+    object.insert("key".into(), Value::from(key.to_owned()));
+    object.insert(
+        "label".into(),
+        Value::from(trader_module_label(key).to_owned()),
+    );
+    object.insert(
+        "contractKey".into(),
+        Value::from(trader_module_contract_key(key).to_owned()),
+    );
+    object.insert(
+        "contractAddress".into(),
+        contract_address.map_or(Value::Null, Value::from),
+    );
+    object.insert("statusTone".into(), Value::from(status_tone.to_owned()));
+    object.insert("statusLabel".into(), Value::from(status_label.to_owned()));
+    object.insert("hero".into(), Value::from(hero));
+    object.insert("blurb".into(), Value::from(blurb));
+    object.insert("radarValue".into(), Value::from(radar_value));
+    object.insert(
+        "metrics".into(),
+        Value::Array(
+            metrics
+                .into_iter()
+                .map(|(label, value)| {
+                    crate::json_object(vec![
+                        crate::json_entry("label", label),
+                        crate::json_entry("value", value),
+                    ])
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(object)
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_trader_module_contract_address(state: &CoreState, module: &str) -> Option<String> {
+    trader_module_alias_candidates(module)
+        .iter()
+        .find_map(|alias_literal| {
+            let alias =
+                iroha_data_model::smart_contract::ContractAlias::from_str(alias_literal).ok()?;
+            prepare_contract_call_by_alias(state, &alias, current_time_millis())
+                .ok()
+                .map(|prepared| prepared.contract_address.to_string())
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn build_trader_account_modules_json(
+    state: &CoreState,
+    fills: &SwapFillRollup,
+    analytics: &SwapAnalytics,
+    activities: &[TraderActivityItem],
+) -> Vec<Value> {
+    let base_symbol = asset_ticker(&fills.base_asset_id);
+    let quote_symbol = asset_ticker(&fills.quote_asset_id);
+    TRADER_MODULE_ORDER
+        .iter()
+        .map(|module| {
+            let contract_address = resolve_trader_module_contract_address(state, module);
+            let latest = activities.iter().find(|item| item.module_key == *module);
+            if *module == "swaps" {
+                return module_card_json(
+                    "swaps",
+                    contract_address,
+                    if fills.items.is_empty() { "watch" } else { "live" },
+                    if fills.items.is_empty() {
+                        "Awaiting flow"
+                    } else {
+                        "Trading"
+                    },
+                    analytics
+                        .total_pnl_base
+                        .map(|value| format_signed_asset_amount(value, &base_symbol))
+                        .unwrap_or_else(|| "No personal PnL yet".to_owned()),
+                    if fills.items.is_empty() {
+                        "The router is deployed, but this wallet has no successful fills in the visible journal window yet."
+                            .to_owned()
+                    } else {
+                        format!(
+                            "Avg entry {} {} · Open {} {} · {} executed fills",
+                            analytics
+                                .avg_entry
+                                .map(|value| compact_number(value, 4))
+                                .unwrap_or_else(|| "-".to_owned()),
+                            base_symbol,
+                            compact_number(analytics.open_quote_amount, 4),
+                            quote_symbol,
+                            fills.items.len()
+                        )
+                    },
+                    if fills.items.is_empty() {
+                        "No fills".to_owned()
+                    } else {
+                        format!("{} fills", fills.items.len())
+                    },
+                    [
+                        (
+                            "Avg Entry",
+                            analytics
+                                .avg_entry
+                                .map(|value| format!("{} {}", compact_number(value, 4), base_symbol))
+                                .unwrap_or_else(|| "-".to_owned()),
+                        ),
+                        (
+                            "Realized",
+                            format_signed_asset_amount(analytics.realized_pnl_base, &base_symbol),
+                        ),
+                        (
+                            "Open Quote",
+                            format!("{} {}", compact_number(analytics.open_quote_amount, 4), quote_symbol),
+                        ),
+                    ],
+                );
+            }
+
+            match (contract_address, latest) {
+                (None, _) => module_card_json(
+                    module,
+                    None,
+                    "missing",
+                    "Not deployed",
+                    "Not available here".to_owned(),
+                    format!(
+                        "{} is not deployed in this environment yet.",
+                        trader_module_contract_key(module)
+                    ),
+                    "Missing".to_owned(),
+                    [
+                        ("Contract", "Unavailable".to_owned()),
+                        ("Last Action", "-".to_owned()),
+                        ("Last Seen", "-".to_owned()),
+                    ],
+                ),
+                (Some(contract_address), None) => module_card_json(
+                    module,
+                    Some(contract_address),
+                    "watch",
+                    "Watching",
+                    "No recent wallet activity".to_owned(),
+                    "This product is deployed, but no recent canonical trader events were found for the selected authority."
+                        .to_owned(),
+                    "Watching".to_owned(),
+                    [
+                        ("Contract", trader_module_contract_key(module).to_owned()),
+                        ("Last Action", "None yet".to_owned()),
+                        ("Last Seen", "-".to_owned()),
+                    ],
+                ),
+                (Some(contract_address), Some(latest)) => module_card_json(
+                    module,
+                    Some(contract_address),
+                    "live",
+                    "Live",
+                    latest.exposure.clone(),
+                    format!("{} · {}", latest.action, latest.context),
+                    latest.action.clone(),
+                    [
+                        ("Latest", latest.action.clone()),
+                        ("Context", latest.context.clone()),
+                        ("Last Seen", format_timestamp_label(latest.timestamp_ms)),
+                    ],
+                ),
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_swaps_fills_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsFillsParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let rollup = load_swap_fill_rollup(state, &params)?;
+    let body = norito::json::to_json_pretty(&swap_fill_rollup_to_json_value(
+        &rollup,
+        params.limit,
+        params.offset,
+    ))
+    .unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_swaps_candles_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsCandlesParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let fills = load_swap_fill_rollup(
+        state,
+        &ContractRollupSwapsFillsParams {
+            limit: None,
+            offset: 0,
+            authority: params.authority.clone(),
+            contract_address: params.contract_address.clone(),
+            contract_alias: params.contract_alias.clone(),
+            scan_limit: params.scan_limit,
+        },
+    )?;
+    let bucket_ms = params
+        .bucket_ms
+        .unwrap_or(DEFAULT_TRADER_CANDLE_BUCKET_MS)
+        .max(60_000);
+    let mut buckets: BTreeMap<u64, Map> = BTreeMap::new();
+    for fill in fills
+        .items
+        .iter()
+        .filter(|item| item.timestamp_ms.is_some())
+    {
+        let timestamp_ms = fill.timestamp_ms.unwrap_or_default();
+        let bucket_start_ms = timestamp_ms - (timestamp_ms % bucket_ms);
+        let entry = buckets.entry(bucket_start_ms).or_insert_with(|| {
+            let mut object = Map::new();
+            object.insert("bucketStartMs".into(), Value::from(bucket_start_ms));
+            object.insert("open".into(), Value::from(fill.price));
+            object.insert("high".into(), Value::from(fill.price));
+            object.insert("low".into(), Value::from(fill.price));
+            object.insert("close".into(), Value::from(fill.price));
+            object.insert("buyCount".into(), Value::from(0_u64));
+            object.insert("sellCount".into(), Value::from(0_u64));
+            object.insert("baseVolume".into(), Value::from(0_f64));
+            object.insert("quoteVolume".into(), Value::from(0_f64));
+            object
+        });
+        let high = entry
+            .get("high")
+            .and_then(Value::as_f64)
+            .unwrap_or(fill.price);
+        let low = entry
+            .get("low")
+            .and_then(Value::as_f64)
+            .unwrap_or(fill.price);
+        entry.insert("high".into(), Value::from(high.max(fill.price)));
+        entry.insert("low".into(), Value::from(low.min(fill.price)));
+        entry.insert("close".into(), Value::from(fill.price));
+        let buy_count = entry.get("buyCount").and_then(Value::as_u64).unwrap_or(0);
+        let sell_count = entry.get("sellCount").and_then(Value::as_u64).unwrap_or(0);
+        if fill.side == "buy" {
+            entry.insert("buyCount".into(), Value::from(buy_count + 1));
+        } else {
+            entry.insert("sellCount".into(), Value::from(sell_count + 1));
+        }
+        let base_volume = entry
+            .get("baseVolume")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let quote_volume = entry
+            .get("quoteVolume")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let fill_base = if fill.side == "buy" {
+            fill.amount_in as f64
+        } else {
+            fill.amount_out as f64
+        };
+        let fill_quote = if fill.side == "buy" {
+            fill.amount_out as f64
+        } else {
+            fill.amount_in as f64
+        };
+        entry.insert("baseVolume".into(), Value::from(base_volume + fill_base));
+        entry.insert("quoteVolume".into(), Value::from(quote_volume + fill_quote));
+    }
+    let offset = usize::try_from(params.offset).unwrap_or(usize::MAX);
+    let limit = params
+        .limit
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(usize::MAX);
+    let items = buckets
+        .into_iter()
+        .rev()
+        .skip(offset)
+        .take(limit)
+        .map(|(_, value)| Value::Object(value))
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert("authority".into(), Value::from(fills.authority));
+    top.insert("bucketMs".into(), Value::from(bucket_ms));
+    top.insert("items".into(), Value::Array(items));
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_trader_activity_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        params.limit,
+        params.offset,
+        cap,
+        ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY,
+    )?;
+    let index = contract_event_index_snapshot(state.as_ref());
+    let (items, total) = collect_trader_activity_page(index.as_ref(), &params, pagination);
+    let activity_items = items
+        .iter()
+        .map(trader_activity_item_from_projection)
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert(
+        "items".into(),
+        Value::Array(trader_activity_items_to_json(&activity_items)),
+    );
+    top.insert("total".into(), Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_trader_account_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<TraderRollupAccountParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let fills = load_swap_fill_rollup(
+        Arc::clone(&state),
+        &ContractRollupSwapsFillsParams {
+            limit: None,
+            offset: 0,
+            authority: params.authority.clone(),
+            contract_address: None,
+            contract_alias: None,
+            scan_limit: params.scan_limit,
+        },
+    )?;
+    let analytics = compute_swap_analytics(&fills.items);
+    let activity_params = ContractEventGetParams {
+        limit: Some(64),
+        offset: 0,
+        authority: Some(fills.authority.clone()),
+        contract_address: None,
+        contract_alias: None,
+        module: None,
+        event_kind: None,
+        participant: None,
+        asset_id: None,
+        provenance: None,
+        since_timestamp_ms: None,
+        until_timestamp_ms: None,
+        result_ok: Some(true),
+    };
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        activity_params.limit,
+        activity_params.offset,
+        cap,
+        ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT,
+    )?;
+    let index = contract_event_index_snapshot(state.as_ref());
+    let (activity_projections, _) =
+        collect_trader_activity_page(index.as_ref(), &activity_params, pagination);
+    let activity_items = activity_projections
+        .iter()
+        .map(trader_activity_item_from_projection)
+        .collect::<Vec<_>>();
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert("authority".into(), Value::from(fills.authority.clone()));
+    top.insert(
+        "assets".into(),
+        crate::json_object(vec![
+            crate::json_entry("baseAssetId", fills.base_asset_id.clone()),
+            crate::json_entry("quoteAssetId", fills.quote_asset_id.clone()),
+        ]),
+    );
+    top.insert("historyHead".into(), Value::from(fills.history_head));
+    top.insert("fillCount".into(), Value::from(fills.items.len() as u64));
+    top.insert("metrics".into(), swap_analytics_to_json_value(&analytics));
+    top.insert(
+        "modules".into(),
+        Value::Array(build_trader_account_modules_json(
+            state.as_ref(),
+            &fills,
+            &analytics,
+            &activity_items,
+        )),
+    );
+    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
     use iroha_data_model::account::AccountId;
@@ -46324,6 +48369,125 @@ mod tx_projection_display_tests {
         assert_eq!(total, 3);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash_hex, "hash-3");
+    }
+
+    fn sample_swap_fill_rollup() -> SwapFillRollup {
+        SwapFillRollup {
+            authority: ALICE_ID.to_string(),
+            contract_address: "tairac1router".into(),
+            contract_alias: Some("dlmm.dlmm_router".into()),
+            base_asset_id: "xor#universal".into(),
+            quote_asset_id: "usdt#soraswap.universal".into(),
+            history_head: 7,
+            scanned: 2,
+            total: 2,
+            items: vec![
+                SwapFillRollupItem {
+                    record_id: 7,
+                    trader: ALICE_ID.to_string(),
+                    input_is_base: 0,
+                    amount_in: 40,
+                    amount_out: 60,
+                    min_out: 55,
+                    side: "sell".into(),
+                    price: 1.5,
+                    protection_ratio: Some(1.2),
+                    timestamp_ms: Some(2_000),
+                    execution_hash: Some("hash-sell".into()),
+                },
+                SwapFillRollupItem {
+                    record_id: 6,
+                    trader: ALICE_ID.to_string(),
+                    input_is_base: 1,
+                    amount_in: 50,
+                    amount_out: 100,
+                    min_out: 95,
+                    side: "buy".into(),
+                    price: 0.5,
+                    protection_ratio: Some(1.1),
+                    timestamp_ms: Some(1_000),
+                    execution_hash: Some("hash-buy".into()),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn swap_fill_rollup_json_respects_limit_and_offset() {
+        let rollup = sample_swap_fill_rollup();
+        let json = swap_fill_rollup_to_json_value(&rollup, Some(1), 1);
+
+        assert_eq!(json["ok"].as_bool(), Some(true));
+        assert_eq!(json["authority"].as_str(), Some(rollup.authority.as_str()));
+        assert_eq!(json["history_head"].as_u64(), Some(7));
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+        assert_eq!(json["items"][0]["recordId"].as_u64(), Some(6));
+        assert_eq!(json["items"][0]["executionHash"].as_str(), Some("hash-buy"));
+    }
+
+    #[test]
+    fn compute_swap_analytics_tracks_realized_and_open_inventory() {
+        let rollup = sample_swap_fill_rollup();
+        let analytics = compute_swap_analytics(&rollup.items);
+
+        assert_eq!(analytics.avg_entry, Some(0.5));
+        assert_eq!(analytics.avg_exit, Some(1.5));
+        assert_eq!(analytics.open_quote_amount, 60.0);
+        assert_eq!(analytics.realized_pnl_base, 40.0);
+        assert_eq!(analytics.unrealized_pnl_base, Some(60.0));
+        assert_eq!(analytics.total_pnl_base, Some(100.0));
+        assert_eq!(analytics.win_rate, Some(1.0));
+        let avg_cushion_ratio = analytics.avg_cushion_ratio.expect("avg cushion ratio");
+        assert!((avg_cushion_ratio - 1.15).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trader_activity_page_ignores_unsupported_modules() {
+        let mut index = sample_contract_event_index();
+        append_contract_event_projection(
+            &mut index,
+            ContractEventProjection {
+                event_id: "hash-5:0".into(),
+                schema_version: 1,
+                provenance: "derived".into(),
+                authority: Some(ALICE_ID.to_string()),
+                timestamp_ms: Some(500),
+                tx_hash_hex: "hash-5".into(),
+                block_height: 5,
+                block_hash_hex: "block-5".into(),
+                result_ok: true,
+                contract_address: "router-c".into(),
+                contract_alias: Some("unknown_router".into()),
+                module: "unsupported".into(),
+                event_kind: "custom_event".into(),
+                participants: vec![ALICE_ID.to_string()],
+                asset_ids: Vec::new(),
+                numeric_fields: Map::new(),
+                payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+        );
+        let params = ContractEventGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        let (items, total) = collect_trader_activity_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 0,
+                cap: 100,
+            },
+        );
+
+        assert_eq!(total, 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].tx_hash_hex, "hash-4");
     }
 }
 

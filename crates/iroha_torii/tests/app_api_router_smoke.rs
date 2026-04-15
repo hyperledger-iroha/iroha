@@ -24,6 +24,19 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
 
+async fn assert_route_is_not_auth_denied(
+    app: axum::Router,
+    request: Request<axum::body::Body>,
+) -> StatusCode {
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    assert!(
+        !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN),
+        "route unexpectedly denied access with {status}"
+    );
+    status
+}
+
 #[tokio::test]
 async fn app_api_router_smoke() {
     // Start Kiso and minimal components for Torii
@@ -309,6 +322,78 @@ async fn app_api_router_smoke() {
         status,
         StatusCode::CREATED | StatusCode::TOO_MANY_REQUESTS
     ));
+
+    let fills_status = assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/swaps/fills?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        fills_status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::OK
+    ));
+
+    let candles_status = assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/swaps/candles?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        candles_status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::OK
+    ));
+
+    let trader_activity_status = assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/trader/activity?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        trader_activity_status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::OK
+    ));
+
+    let trader_account_status = assert_route_is_not_auth_denied(
+        app,
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/trader/account?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        trader_account_status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::OK
+    ));
 }
 
 #[tokio::test]
@@ -386,39 +471,69 @@ async fn contract_routes_ignore_api_token_requirement() {
 
     let app = torii.api_router_for_tests();
 
-    let deploy_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(Uri::from_static("/v1/contracts/deploy"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(!matches!(
-        deploy_resp.status(),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-    ));
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(Uri::from_static("/v1/contracts/deploy"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
 
-    let bundle_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(Uri::from_static("/v1/contracts/deploy-bundle"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(!matches!(
-        bundle_resp.status(),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-    ));
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(Uri::from_static("/v1/contracts/deploy-bundle"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(Uri::from_static("/v1/contracts/call"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(Uri::from_static("/v1/contracts/view"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(Uri::from_static("/v1/contracts/view/batch"))
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static("/v1/contracts/state"))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
 
     let status_resp = app
         .oneshot(

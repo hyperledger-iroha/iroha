@@ -1154,6 +1154,52 @@ fn contract_event_list_query_parameters() -> Vec<Value> {
     params
 }
 
+fn contract_rollup_swaps_fills_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(required_string_query_param(
+        "authority",
+        "Trader authority whose swap fills should be returned.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Optional canonical contract address for the router.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Optional contract alias for the router.",
+    ));
+    params.push(integer_query_param(
+        "scan_limit",
+        "Optional scan limit for walking the router mirror history.",
+        Some("uint64"),
+    ));
+    params
+}
+
+fn contract_rollup_swaps_candles_query_parameters() -> Vec<Value> {
+    let mut params = contract_rollup_swaps_fills_query_parameters();
+    params.push(integer_query_param(
+        "bucket_ms",
+        "Optional candle bucket width in milliseconds.",
+        Some("uint64"),
+    ));
+    params
+}
+
+fn trader_account_rollup_query_parameters() -> Vec<Value> {
+    vec![
+        required_string_query_param(
+            "authority",
+            "Trader authority whose account summary should be returned.",
+        ),
+        integer_query_param(
+            "scan_limit",
+            "Optional scan limit for walking router history and event history.",
+            Some("uint64"),
+        ),
+    ]
+}
+
 fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
@@ -1762,6 +1808,46 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/rollups/swaps/fills".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List stitched trader swap fills.",
+            "Load the router mirror history for one trader authority, stitch it to indexed swap events, and return a paginated fills rollup.",
+            "#/components/schemas/JsonValue",
+            contract_rollup_swaps_fills_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/swaps/candles".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List stitched trader swap candles.",
+            "Bucket the trader swap fills rollup into OHLC candles for one authority and return the paginated time buckets.",
+            "#/components/schemas/JsonValue",
+            contract_rollup_swaps_candles_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/trader/activity".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List trader activity cards.",
+            "Return the trader-facing activity stream derived from indexed contract events across the supported product modules.",
+            "#/components/schemas/JsonValue",
+            contract_event_list_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/trader/account".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "Fetch trader account summary.",
+            "Combine the stitched swap fills rollup with supported trader activity modules into one account summary response.",
+            "#/components/schemas/JsonValue",
+            trader_account_rollup_query_parameters(),
+        )),
+    );
+    paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
         Value::Object(json_post_operation(
             "ISO20022",
@@ -2122,6 +2208,17 @@ fn contracts_paths() -> Map {
             "Contracts",
             "Execute a read-only contract view.",
             "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/view/batch".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Execute multiple read-only contract views.",
+            "Execute a batch of manifest-validated read-only contract view entrypoints and return one normalized item per request.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -10517,6 +10614,11 @@ mod tests {
         assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
+        assert!(paths.contains_key("/v1/contracts/view/batch"));
+        assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
+        assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));
+        assert!(paths.contains_key("/v1/contracts/rollups/trader/activity"));
+        assert!(paths.contains_key("/v1/contracts/rollups/trader/account"));
         assert!(paths.contains_key("/health"));
         assert!(paths.contains_key("/v1/operator/auth/login/verify"));
         assert!(paths.contains_key("/v1/kaigi/relays"));

@@ -1,0 +1,31 @@
+{
+  "ok": false,
+  "bundle_name": "single-contract-deploy",
+  "bundle_digest": "b48447e5d8b61cf9217830e711c6b9433f919fd4cf99f278d39f79ed2773b3b1",
+  "chain_fingerprint": "chain@missing-block-1",
+  "dry_run": false,
+  "completed_stages": [
+    "plan"
+  ],
+  "failure_point": "activate contract `fixture::universal`: Failed to process query",
+  "contracts": [
+    {
+      "name": "fixture::universal",
+      "contract_alias": "fixture::universal",
+      "contract_address": "sorac1qyqqqqqqqqqqqqz53as94a5j0vqghlhe5848093fpd54y4cdvmndw",
+      "upgraded": false,
+      "dataspace": "universal",
+      "deploy_nonce": 0,
+      "code_hash_hex": "ac1dd55ac04e32dde62fe129c65cdb4fd999ef3c867377bab5147eb314d0cf55",
+      "abi_hash_hex": "919d5cdca5efe4c668165b8f2c737c136db0bf399ef7c33e24a95808b1c692bb",
+      "tx_hash_hex": "a73740c12708cd01fdf529f8edcdb7972d95cfbea5c477dc5c5acac1f9bfa9d1",
+      "status": "submitted"
+    }
+  ],
+  "init_calls": [
+    
+  ],
+  "assertions": [
+    
+  ]
+}

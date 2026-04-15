@@ -142,6 +142,60 @@ Executes a read-only view entrypoint locally.
   `ContractViewErrorResponseDto`, including the same target metadata plus
   `error` and optional `vm_diagnostic`.
 
+## `POST /v1/contracts/view/batch`
+
+Executes multiple read-only view entrypoints in one HTTP round-trip.
+
+- Request type: `ContractViewBatchDto`.
+- The top-level `authority` supplies the read authority and host context for
+  every item in the batch.
+- The top-level `gas_limit` is optional; when present it becomes the default
+  item gas limit and must still be positive.
+- Each `ContractViewBatchItemDto` follows the same selector rules as
+  `ContractViewDto`: exactly one of `contract_address` or `contract_alias`,
+  `entrypoint` defaults to `main`, and the selected manifest entrypoint must be
+  of kind `View`.
+- The response always returns an `items` array with one normalized result per
+  request item. Individual failures are reported inline with `ok = false`,
+  `error`, and optional `vm_diagnostic`.
+
+## Rollup Endpoints
+
+### `GET /v1/contracts/rollups/swaps/fills`
+
+- Query type: `ContractRollupSwapsFillsParams`.
+- Required query: `authority`.
+- Optional queries: `limit`, `offset`, `contract_address`, `contract_alias`,
+  and `scan_limit`.
+- The route walks the router mirror history, stitches it to indexed swap
+  events, and returns trader-facing fill cards plus pagination metadata.
+
+### `GET /v1/contracts/rollups/swaps/candles`
+
+- Query type: `ContractRollupSwapsCandlesParams`.
+- Required query: `authority`.
+- Optional queries: `limit`, `offset`, `contract_address`, `contract_alias`,
+  `scan_limit`, and `bucket_ms`.
+- The route reuses the fills rollup and buckets the stitched fills into OHLC
+  candle windows.
+
+### `GET /v1/contracts/rollups/trader/activity`
+
+- Query type: `ContractEventGetParams`.
+- Optional queries: `limit`, `offset`, `authority`, `contract_address`,
+  `contract_alias`, `module`, `event_kind`, `participant`, `asset_id`,
+  `provenance`, `since_timestamp_ms`, `until_timestamp_ms`, and `result_ok`.
+- The route filters the indexed contract-event stream down to the supported
+  trader modules and returns a trader-facing activity feed.
+
+### `GET /v1/contracts/rollups/trader/account`
+
+- Query type: `TraderRollupAccountParams`.
+- Required query: `authority`.
+- Optional query: `scan_limit`.
+- The route combines stitched swap fills, derived swap analytics, and supported
+  trader-module activity cards into one account summary payload.
+
 ## Multisig Contract Calls
 
 ### `POST /v1/contracts/call/multisig/propose`
