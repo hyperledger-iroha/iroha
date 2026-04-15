@@ -56,6 +56,7 @@ manager; the CLI does not keep a shadow control-plane mirror.
   - templates now include:
     - `single-api`
     - `split-app`
+    - `nexus-split-app` as an alias for `split-app`
   - `single-api` produces a root-bound frontend plus one deterministic API
     service under `/api`
   - `split-app` produces a SoraFS frontend plus one hosted live API and one
@@ -85,6 +86,24 @@ manager; the CLI does not keep a shadow control-plane mirror.
     summary, the same root app identity fields that `app local-plan` reports,
     and the same child service plus route plan
   - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
+- `iroha app soracloud app doctor`
+  - validates the split-app release contract locally without Torii
+  - fail-closes on CID-only frontend publication, same-origin `/api`, mixed
+    hosted-live plus deterministic-vault planes, lease-backed live storage,
+    vault-only auth/user bindings, and cross-service route collisions
+- `iroha app soracloud app doctor-workspace`
+  - resolves `doctor.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root doctor entrypoint in place
+- `iroha app soracloud app release-workspace`
+  - resolves `release.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root release entrypoint in place
 - `iroha app soracloud app deploy-workspace`
   - resolves `deploy.sh` adjacent to the app manifest
   - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
@@ -162,6 +181,13 @@ Torii-backed and require `--torii-url`.
   - follows the same app-wide flow, but uses upgrade semantics
   - returns the same app-scoped root manifest/hostname/workspace metadata,
     frontend, top-level `routes`, and service projection
+- `iroha app soracloud app release`
+  - composes the manifest-adjacent `build-and-sync` path with deploy-then-upgrade-on-conflict semantics
+  - is the recommended one-command mixed-app operator path for split apps
+  - returns the same root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the frontend publish projection, the
+    top-level app `routes` split, and one manifest-derived service entry per
+    app service alongside the live mutation response
 - `iroha app soracloud status`
   - accepts `--service-name` directly or resolves the filter from
     `--container` plus `--service`
@@ -268,8 +294,10 @@ cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/in
 ```
 
 PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
-`virtiofsd` (or `qemu-virtiofsd`), and `tar`. The Firecracker/KVM path keeps
-the Linux host prerequisites for tap networking and the NFS transport adapter:
+and `tar`. Shared non-root lease volumes are attached as persistent block
+devices that the guest formats and mounts on first boot. The Firecracker/KVM
+path keeps the Linux host prerequisites for tap networking and the NFS
+transport adapter:
 
 - host OS is Linux
 - the caller is root
@@ -284,6 +312,7 @@ Portable smoke expects:
 - `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
 - `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
 - optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
+- optional `IROHA_INROU_PORTABLE_ACCEL` (`auto`, `tcg`, `kvm`, `hvf`, `whpx`)
 
 Firecracker smoke expects:
 
@@ -293,19 +322,20 @@ Firecracker smoke expects:
 
 Focused validation now covers both shared-storage transports:
 
-- `build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay`
+- `build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay`
+- `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
 - `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
 - `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
 - `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
 - `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
 
-The portable path mounts shared lease storage through `virtio-fs`. The
-Firecracker fast path keeps the backend-private NFS adapter, but both backends
-now expose the same guest-visible lease semantics through the LeaseFs
-authority. Mixed-host acceptance is expected to cover one Linux/KVM
-Firecracker validator, one non-Linux PortableVm validator, and one proxy-only
-validator that publishes zero hosted capacity.
+The portable path mounts shared lease storage through attached virtio block
+devices. The Firecracker fast path keeps the backend-private NFS adapter, but
+both backends now expose the same guest-visible lease semantics. Mixed-host
+acceptance is expected to cover one Linux/KVM Firecracker validator, one
+non-Linux PortableVm validator, and one proxy-only validator that publishes
+zero hosted capacity.
 
 ## Recommended Hosted-Service Workflow
 
@@ -438,8 +468,14 @@ For local development, the scaffold includes:
   contract and verify that the committed build outputs still match
 - `./local-dev.sh` to boot the frontend plus both local API processes
 - `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
-- `./deploy.sh` to run the full app-wide publish + deploy flow
-- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+- `./doctor.sh` to rebuild and fail-close on the split-app release contract
+- `./release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
+- `./deploy.sh` as the compatibility wrapper around `./release.sh`
+- `./upgrade.sh` to rerun the same rebuild path, validate, and submit the app upgrade
+
+The scaffolded Vite proxy strips the shared `/api` prefix before forwarding to
+the live and vault child processes, which matches the hosted longest-prefix
+routing behavior Torii applies in production.
 
 Run the local mixed-app loop:
 
@@ -468,9 +504,30 @@ Deploy the static site plus every service without SSH or manual pinning:
 
 ```bash
 cd .soracloud-hayahi
+./doctor.sh
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app doctor --manifest ./app_manifest.json
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
+
+`app doctor-workspace` and `app release-workspace` resolve and run the same
+root `doctor.sh` and `release.sh` scripts adjacent to `app_manifest.json`, so
+operators can stay on the manifest-driven CLI path without shelling into the
+workspace manually.
+
+Those generated root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so local app workspaces
+can target a nearby `iroha_cli` checkout without requiring a globally
+installed wrapper. When you drive the fallback through `IROHA_MANIFEST_PATH`,
+set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
+artifact state isolated from other local builds.
 
 Upgrade the static site plus every service without SSH or manual pinning:
 

@@ -13594,6 +13594,178 @@ test("listAccountTransactions rejects camelCase entrypointHash fields", async ()
   );
 });
 
+test("listContractActivity encodes contract activity filters", async () => {
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            authority: FIXTURE_ALICE_ID,
+            entrypoint_hash: "abc",
+            result_ok: true,
+            timestamp_ms: 123,
+            contract_address: "tairac1router",
+            contract_alias: "dlmm_router",
+            contract_entrypoint: "route_swap",
+            contract_payload: { amount_in: 100, min_out: 95 },
+            gas_asset_id: "xor#universal",
+            fee_sponsor: FIXTURE_ALICE_ID,
+            gas_limit: 100000,
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listContractActivity({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    contractEntrypoint: "route_swap",
+    resultOk: true,
+    sinceTimestampMs: 100,
+    untilTimestampMs: 200,
+    limit: 5,
+    offset: 1,
+  });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/contracts/activity");
+  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("contract_entrypoint"), "route_swap");
+  assert.equal(parsed.searchParams.get("result_ok"), "true");
+  assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
+  assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
+  assert.equal(payload.items[0].contract_payload.amount_in, 100);
+  assert.equal(payload.items[0].gas_limit, 100000);
+});
+
+test("listContractActivity rejects camelCase payload aliases", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              entrypoint_hash: "tx1",
+              result_ok: true,
+              contract_address: "tairac1router",
+              contractPayload: {},
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listContractActivity(),
+    /contract activity list response\.items\[0]\.contractPayload is not supported/,
+  );
+});
+
+test("listContractEvents encodes generic contract event filters", async () => {
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            event_id: "abc:0",
+            schema_version: 1,
+            provenance: "derived",
+            authority: FIXTURE_ALICE_ID,
+            timestamp_ms: 123,
+            tx_hash_hex: "abc",
+            block_height: 9,
+            block_hash_hex: "deadbeef",
+            result_ok: true,
+            contract_address: "tairac1router",
+            contract_alias: "dlmm_router",
+            module: "dlmm_router",
+            event_kind: "route_swap",
+            participants: [FIXTURE_ALICE_ID],
+            asset_ids: ["xor#universal"],
+            numeric_fields: { amount_in: 100 },
+            payload: { amount_in: 100, min_out: 95 },
+            gas_asset_id: "xor#universal",
+            fee_sponsor: FIXTURE_ALICE_ID,
+            gas_limit: 100000,
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listContractEvents({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    module: "dlmm_router",
+    eventKind: "route_swap",
+    participant: FIXTURE_ALICE_ID,
+    assetId: "xor#universal",
+    provenance: "derived",
+    resultOk: true,
+    sinceTimestampMs: 100,
+    untilTimestampMs: 200,
+    limit: 5,
+    offset: 1,
+  });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/contracts/events");
+  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("module"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
+  assert.equal(parsed.searchParams.get("participant"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
+  assert.equal(parsed.searchParams.get("provenance"), "derived");
+  assert.equal(parsed.searchParams.get("result_ok"), "true");
+  assert.equal(payload.items[0].payload.amount_in, 100);
+  assert.equal(payload.items[0].block_height, 9);
+});
+
+test("listContractEvents rejects camelCase payload aliases", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              event_id: "tx1:0",
+              schema_version: 1,
+              provenance: "derived",
+              tx_hash_hex: "tx1",
+              block_height: 1,
+              block_hash_hex: "deadbeef",
+              result_ok: true,
+              contract_address: "tairac1router",
+              module: "router",
+              event_kind: "route_swap",
+              numericFields: {},
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listContractEvents(),
+    /contract event list response\.items\[0]\.numericFields is not supported/,
+  );
+});
+
 test("queryAccountTransactions posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
@@ -14367,6 +14539,43 @@ test("streamEvents yields parsed SSE payloads", async () => {
     id: "block-1",
     retry: null,
     raw: '{"height":1}',
+  });
+  const second = await iterator.next();
+  assert.equal(second.done, true);
+});
+
+test("streamContractEvents encodes selector params", async () => {
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, "/v1/contracts/events/sse");
+    assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+    assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
+    assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+    assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
+    assert.equal(init.headers["Last-Event-ID"], "resume-contract");
+    return createSseResponse([
+      "id: tx1:0\n",
+      "event: contract_event\n",
+      'data: {"event_id":"tx1:0","event_kind":"route_swap"}\n',
+      "\n",
+    ]);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const iterator = client.streamContractEvents({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    eventKind: "route_swap",
+    assetId: "xor#universal",
+    lastEventId: "resume-contract",
+  });
+  const first = await iterator.next();
+  assert.equal(first.done, false);
+  assert.deepEqual(first.value, {
+    event: "contract_event",
+    data: { event_id: "tx1:0", event_kind: "route_swap" },
+    id: "tx1:0",
+    retry: null,
+    raw: '{"event_id":"tx1:0","event_kind":"route_swap"}',
   });
   const second = await iterator.next();
   assert.equal(second.done, true);
@@ -16987,6 +17196,220 @@ test("getOfflineRevocationBundle fetches canonical bundle route", async () => {
   assert.deepEqual(response, bundle);
 });
 
+test("listOfflineAllowances normalizes payloads and query params", async () => {
+  let capturedUrl = null;
+  const allowanceRecord = {
+    certificate: {
+      controller: FIXTURE_ALICE_ID,
+      allowance: { asset: "usd#wonderland", amount: "500" },
+    },
+    current_commitment: "0xdeadbeef",
+    registered_at_ms: 1234,
+    remaining_amount: "499",
+    counter_state: {},
+    metadata: {
+      "android.integrity.policy": "ProViSiOnEd",
+      "android.provisioned.inspector_public_key":
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+      "android.provisioned.manifest_schema": "offline_provisioning_v1",
+      "android.provisioned.manifest_version": "2",
+      "android.provisioned.max_manifest_age_ms": "604800000",
+      "android.provisioned.manifest_digest":
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+    },
+  };
+  const minimalAllowanceRecord = { remaining_amount: "125" };
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            certificate_id_hex: "cafebabe",
+            controller_id: FIXTURE_ALICE_ID,
+            controller_display: "soraqqqqqqqq",
+            asset_id: "usd#wonderland",
+            asset_definition_id: "usd#wonderland",
+            asset_definition_name: "USD",
+            asset_definition_alias: null,
+            registered_at_ms: "1234",
+            expires_at_ms: "9999",
+            policy_expires_at_ms: "10001",
+            refresh_at_ms: "1500",
+            verdict_id_hex: "deadbeef",
+            attestation_nonce_hex: "beadfeed",
+            remaining_amount: "499.25",
+            deadline_kind: "policy",
+            deadline_state: "warning",
+            deadline_ms: 50_000,
+            deadline_ms_remaining: -5_000,
+            record: allowanceRecord,
+          },
+          {
+            certificate_id_hex: "feedface",
+            controller_id: FIXTURE_BOB_ID,
+            controller_display: "soraqqqqqqqr",
+            asset_id: "usd#wonderland",
+            asset_definition_id: "usd#wonderland",
+            asset_definition_name: "USD",
+            asset_definition_alias: null,
+            registered_at_ms: 2000,
+            expires_at_ms: 3000,
+            policy_expires_at_ms: 4000,
+            remaining_amount: "125",
+            record: minimalAllowanceRecord,
+          },
+        ],
+        total: "2",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const filter = { Eq: ["controller_id", FIXTURE_ALICE_ID] };
+  const page = await client.listOfflineAllowances({
+    filter,
+    sort: "registered_at_ms:desc",
+    limit: 5,
+    offset: 10,
+  });
+  assert.ok(capturedUrl, "request not issued");
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/offline/allowances");
+  assert.equal(parsed.searchParams.get("limit"), "5");
+  assert.equal(parsed.searchParams.get("offset"), "10");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
+  assert.equal(parsed.searchParams.get("sort"), "registered_at_ms:desc");
+  assert.equal(parsed.searchParams.get("filter"), JSON.stringify(filter));
+  assert.equal(page.total, 2);
+  assert.equal(page.items.length, 2);
+  const item = page.items[0];
+  assert.equal(item.certificate_id_hex, "cafebabe");
+  assert.equal(item.controller_id, FIXTURE_ALICE_ID);
+  assert.equal(item.controller_display, "soraqqqqqqqq");
+  assert.equal(item.asset_id, "usd#wonderland");
+  assert.equal(item.asset_definition_id, "usd#wonderland");
+  assert.equal(item.asset_definition_name, "USD");
+  assert.equal(item.asset_definition_alias, null);
+  assert.equal(item.registered_at_ms, 1234);
+  assert.equal(item.expires_at_ms, 9999);
+  assert.equal(item.policy_expires_at_ms, 10001);
+  assert.equal(item.refresh_at_ms, 1500);
+  assert.equal(item.verdict_id_hex, "deadbeef");
+  assert.equal(item.attestation_nonce_hex, "beadfeed");
+  assert.equal(item.remaining_amount, "499.25");
+  assert.equal(item.deadline_kind, "policy");
+  assert.equal(item.deadline_state, "warning");
+  assert.equal(item.deadline_ms, 50_000);
+  assert.equal(item.deadline_ms_remaining, -5_000);
+  assert.deepEqual(item.record, allowanceRecord);
+  assert.deepEqual(item.integrity_metadata, {
+    policy: "provisioned",
+    provisioned: {
+      inspector_public_key:
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+      manifest_schema: "offline_provisioning_v1",
+      manifest_version: 2,
+      max_manifest_age_ms: 604800000,
+      manifest_digest_hex:
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+    },
+  });
+  const fallback = page.items[1];
+  assert.equal(fallback.refresh_at_ms, null);
+  assert.equal(fallback.verdict_id_hex, null);
+  assert.equal(fallback.attestation_nonce_hex, null);
+  assert.equal(fallback.deadline_kind, null);
+  assert.equal(fallback.deadline_state, null);
+  assert.equal(fallback.deadline_ms, null);
+  assert.equal(fallback.deadline_ms_remaining, null);
+  assert.equal(fallback.remaining_amount, "125");
+  assert.equal(fallback.integrity_metadata, null);
+});
+
+test("listOfflineAllowances encodes convenience query params", async () => {
+  let capturedUrl = null;
+  const assetId = FIXTURE_ASSET_ID_A;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      capturedUrl = url;
+      return createResponse({
+        status: 200,
+        jsonData: { items: [], total: 0 },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await client.listOfflineAllowances({
+    controllerId: FIXTURE_ALICE_ID,
+    assetId,
+    certificateExpiresBeforeMs: 1_000,
+    certificateExpiresAfterMs: 100,
+    policyExpiresBeforeMs: 2_000,
+    policyExpiresAfterMs: 250,
+    refreshBeforeMs: 750,
+    refreshAfterMs: 500,
+    attestationNonceHex: "CAFEBABE",
+    verdictIdHex: "DEADBEEF",
+    requireVerdict: true,
+  });
+  assert.ok(capturedUrl, "request not issued");
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
+  assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "1000");
+  assert.equal(parsed.searchParams.get("certificate_expires_after_ms"), "100");
+  assert.equal(parsed.searchParams.get("policy_expires_before_ms"), "2000");
+  assert.equal(parsed.searchParams.get("policy_expires_after_ms"), "250");
+  assert.equal(parsed.searchParams.get("refresh_before_ms"), "750");
+  assert.equal(parsed.searchParams.get("refresh_after_ms"), "500");
+  assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
+  assert.equal(parsed.searchParams.get("verdict_id_hex"), "deadbeef");
+  assert.equal(parsed.searchParams.get("require_verdict"), "true");
+  assert.equal(parsed.searchParams.get("only_missing_verdict"), null);
+});
+
+test("queryOfflineAllowances forwards allowance options to query endpoint", async () => {
+  let capturedUrl = null;
+  let capturedBody = null;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = url;
+    capturedBody = init?.body ?? null;
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const filter = { Eq: ["controller_id", FIXTURE_ALICE_ID] };
+  await client.queryOfflineAllowances({
+    controllerId: FIXTURE_ALICE_ID,
+    certificateExpiresBeforeMs: "5000",
+    verdictIdHex: "DEADBEEF",
+    attestationNonceHex: "CAFEBABE",
+    includeExpired: true,
+    fetchSize: 2,
+    queryName: "offline_allowances",
+    filter,
+  });
+  assert.ok(capturedUrl, "request not issued");
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/offline/allowances/query");
+  assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "5000");
+  assert.equal(parsed.searchParams.get("verdict_id_hex"), "deadbeef");
+  assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
+  assert.equal(parsed.searchParams.get("include_expired"), "true");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
+  const body = JSON.parse(capturedBody);
+  assert.deepEqual(body.filter, filter);
+  assert.equal(body.fetch_size, 2);
+  assert.equal(body.query, "offline_allowances");
+});
+
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
   let capturedUrl = null;
   const assetId = FIXTURE_ASSET_ID_A;
@@ -17123,6 +17546,54 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
     },
   });
   assert.equal(fallback.integrity_metadata, null);
+});
+
+test("iterateOfflineAllowances paginates and honours maxItems", async () => {
+  const allowances = [
+    createOfflineAllowanceItem({ certificate_id_hex: "aa".repeat(32) }),
+    createOfflineAllowanceItem({
+      certificate_id_hex: "bb".repeat(32),
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
+    }),
+    createOfflineAllowanceItem({
+      certificate_id_hex: "cc".repeat(32),
+      controller_id: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
+    }),
+    createOfflineAllowanceItem({
+      certificate_id_hex: "dd".repeat(32),
+      controller_id: SAMPLE_ACCOUNT_ID,
+    }),
+  ];
+  const capturedRequests = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, "/v1/offline/allowances");
+    const limit = Number(parsed.searchParams.get("limit"));
+    const offset = Number(parsed.searchParams.get("offset") ?? "0");
+    capturedRequests.push({ limit, offset });
+    const items = allowances.slice(offset, offset + limit);
+    return createResponse({
+      status: 200,
+      jsonData: { items, total: allowances.length },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const certificates = [];
+  for await (const allowance of client.iterateOfflineAllowances({
+    pageSize: 2,
+    maxItems: 3,
+  })) {
+    certificates.push(allowance.certificate_id_hex);
+  }
+  assert.deepEqual(
+    certificates,
+    allowances.slice(0, 3).map((entry) => entry.certificate_id_hex),
+  );
+  assert.deepEqual(capturedRequests, [
+    { limit: 2, offset: 0 },
+    { limit: 1, offset: 2 },
+  ]);
 });
 
 test("issueOfflineBuildClaim posts request and parses response", async () => {

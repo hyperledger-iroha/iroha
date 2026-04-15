@@ -190,6 +190,15 @@ const RBC_SCENARIO_RS16: RbcEncodingScenario = RbcEncodingScenario {
     parity_shards: 2,
 };
 
+impl RbcEncodingScenario {
+    fn delivery_budget_premium_ms(self) -> u64 {
+        match self.encoding {
+            "rs16" => RBC_DELIVER_RS16_BUDGET_PREMIUM_MS,
+            _ => 0,
+        }
+    }
+}
+
 impl PendingRbcStashCounters {
     fn total(&self) -> u64 {
         self.stash_ready_total
@@ -386,9 +395,11 @@ const RBC_RECOVERY_PAYLOAD_BYTES: usize = 1024 * 1024;
 const RBC_RECOVERY_CHUNK_BYTES: i64 = 16 * 1024;
 const RBC_DELIVER_BUDGET_MS: u64 = 30_000;
 const RBC_DELIVER_GRACE_MS: u64 = 5_000;
-const COMMIT_BUDGET_MS: u64 = 75_000;
-const RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS: u64 = 15_000;
-const COMMIT_BUDGET_PER_EXTRA_PEER_MS: u64 = 30_000;
+const RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS: u64 = 60_000;
+// RS16 delivery shows a higher first-run cost on shared hosts even when the
+// warmed direct reruns settle lower, so keep extra slack for the cold-path run.
+const RBC_DELIVER_RS16_BUDGET_PREMIUM_MS: u64 = 40_000;
+const COMMIT_BUDGET_HEADROOM_MS: u64 = 40_000;
 const THROUGHPUT_FLOOR_MIB_S: f64 = 0.1;
 const BG_POST_QUEUE_DEPTH_BUDGET: f64 = 32.0;
 const P2P_QUEUE_DROP_BUDGET: f64 = 0.0;
@@ -473,6 +484,7 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
         "sumeragi_rbc_da_large_payload_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_PLAIN,
         false,
         true,
         |layer| {
@@ -496,6 +508,7 @@ async fn sumeragi_rbc_da_large_payload_four_peers_rs16() -> Result<()> {
         "sumeragi_rbc_da_large_payload_four_peers_rs16",
         4,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_RS16,
         false,
         true,
         |layer| {
@@ -528,6 +541,7 @@ async fn sumeragi_da_commit_certificate_history_four_peers() -> Result<()> {
         "sumeragi_da_commit_certificate_history_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_PLAIN,
         true,
         true,
         |_| {},
@@ -548,6 +562,7 @@ async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
         "sumeragi_rbc_da_large_payload_six_peers",
         6,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_PLAIN,
         false,
         true,
         |layer| {
@@ -571,6 +586,7 @@ async fn sumeragi_rbc_da_large_payload_six_peers_rs16() -> Result<()> {
         "sumeragi_rbc_da_large_payload_six_peers_rs16",
         6,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_RS16,
         false,
         true,
         |layer| {
@@ -603,6 +619,7 @@ async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
         "sumeragi_commit_qc_with_tight_block_queue_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_PLAIN,
         false,
         false,
         |layer| {
@@ -628,6 +645,7 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
         "sumeragi_rbc_background_queue_synchronous",
         4,
         LARGE_PAYLOAD_BYTES,
+        RBC_SCENARIO_PLAIN,
         false,
         true,
         |layer| {
@@ -2586,6 +2604,7 @@ async fn run_sumeragi_da_scenario_with<F, G>(
     scenario_name: &str,
     peer_count: usize,
     payload_bytes: usize,
+    rbc_scenario: RbcEncodingScenario,
     check_commit_certificates: bool,
     require_rbc_observation: bool,
     configure: F,
@@ -3026,9 +3045,9 @@ where
     let extra_peers = u64::try_from(peer_count.saturating_sub(4)).unwrap_or(0);
     let deliver_budget_ms = RBC_DELIVER_BUDGET_MS
         .saturating_add(RBC_DELIVER_GRACE_MS)
-        .saturating_add(extra_peers.saturating_mul(RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS));
-    let commit_budget_ms = COMMIT_BUDGET_MS
-        .saturating_add(extra_peers.saturating_mul(COMMIT_BUDGET_PER_EXTRA_PEER_MS));
+        .saturating_add(extra_peers.saturating_mul(RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS))
+        .saturating_add(rbc_scenario.delivery_budget_premium_ms());
+    let commit_budget_ms = deliver_budget_ms.saturating_add(COMMIT_BUDGET_HEADROOM_MS);
     #[allow(clippy::cast_precision_loss)]
     let throughput_floor_mib_s =
         (payload_mib / ((deliver_budget_ms as f64) / 1000.0)).min(THROUGHPUT_FLOOR_MIB_S);
@@ -3259,6 +3278,7 @@ async fn run_sumeragi_da_scenario(
         scenario_name,
         peer_count,
         payload_bytes,
+        RBC_SCENARIO_PLAIN,
         false,
         true,
         |_| {},

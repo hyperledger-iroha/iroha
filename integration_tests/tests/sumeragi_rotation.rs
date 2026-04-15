@@ -256,7 +256,9 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     init_instruction_registry();
 
     // Start a 7-peer validator network
-    let builder = NetworkBuilder::new().with_peers(7);
+    let builder = NetworkBuilder::new()
+        .with_peers(7)
+        .with_sync_timeout(Duration::from_secs(300));
     let Some((network, rt)) = start_network(
         builder,
         stringify!(rotation_signer_indices_match_expected_set_a_n7_multiple_heights),

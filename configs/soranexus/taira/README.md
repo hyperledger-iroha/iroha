@@ -47,7 +47,9 @@ that host root through `sorafs_sites.json`.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
   `iroha` / `sorafs_manifest_stub` / `sorafs_tx_stdin_builder` build plus the
   checked-in Taira config bundle into one timestamped
-  rollout artifact and records the git revision in `rollout.manifest.json`.
+  rollout artifact, building `irohad` with
+  `--features embedded-soracloud-runtime`, and records the git revision in
+  `rollout.manifest.json`.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
@@ -245,13 +247,27 @@ redeployed with the shipped `[torii.mcp]` block from `config.toml`:
 
 This intentionally exposes only curated `iroha.*` tools on the public network
 so Codex sees the stable live-network aliases and not the full raw `torii.*`
-OpenAPI-derived surface.
+OpenAPI-derived surface. The rollout smoke now also rejects any advertised MCP
+tool whose top-level `inputSchema` is not an OpenAI-compatible object schema.
 
 After rollout, verify the chosen public node directly:
 
 - `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
+- `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' | jq .`
+- `curl -sS -D - "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'`
 - `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq .`
 - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
+
+The `notifications/initialized` probe should return `HTTP 202 Accepted` with
+an empty body. A `200` JSON-RPC error there means the endpoint advertises MCP
+but still fails the standard post-initialize handshake that Codex and other
+streamable-HTTP MCP clients require.
+
+The `tools/list` payload must also keep every tool's `inputSchema` as a
+top-level `"type": "object"` schema without top-level `anyOf`, `oneOf`,
+`allOf`, `enum`, or `not`. If a live node still advertises an invalid schema
+for tools such as `iroha.connect.session.delete`, `check_mcp_rollout.sh` now
+fails the rollout immediately instead of letting Codex discover the breakage.
 
 The repo-local Codex plugin and Taira skill now expect an explicit direct-node
 MCP URL rather than a canonical committed live host. Future Nexus/Torii
@@ -435,6 +451,15 @@ From `../iroha2-block-explorer-web`:
    - if your Torii endpoints are not `127.0.0.1:18080..18083`, update the
      `upstream taira_validator_{1,2,3,4}_upstream` targets to the live
      validator endpoints before reload.
+   - keep the shared `taira_public_edge_upstream` wired to every live validator
+     and use it for `taira.sora.org` plus the explorer's `/status` and `/v1/*`
+     proxy locations. Do not pin those public hostnames to
+     `taira_validator_1_upstream`: a single dead validator will turn MCP and
+     explorer API traffic into `502 Bad Gateway`.
+   - keep the `proxy_next_upstream ... non_idempotent` retry policy on those
+     shared public locations. MCP `initialize` and tool calls are POSTs, so the
+     edge has to allow non-idempotent upstream failover when one validator
+     listener is down.
    - keep the dedicated `location = /v1/mcp` blocks intact; they make the
      Codex/Torii MCP path explicit on both public hostnames and keep future
      route changes from accidentally hiding the MCP endpoint behind the generic

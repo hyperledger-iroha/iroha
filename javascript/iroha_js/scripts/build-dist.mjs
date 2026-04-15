@@ -1,4 +1,4 @@
-import { cp, rm } from "node:fs/promises";
+import { cpSync, existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,8 +9,14 @@ const DIST = join(ROOT, "dist");
 const SRC = join(ROOT, "src");
 
 async function main() {
-  await rm(DIST, { recursive: true, force: true });
-  await cp(SRC, DIST, { recursive: true });
+  rmSync(DIST, { recursive: true, force: true });
+  cpSync(SRC, DIST, { recursive: true });
+  const requiredOutputs = ["address.js", "curveRegistry.js", "toriiClient.js"];
+  for (const fileName of requiredOutputs) {
+    if (!existsSync(join(DIST, fileName))) {
+      throw new Error(`build:dist missing expected output: ${fileName}`);
+    }
+  }
 }
 
 main().catch((error) => {

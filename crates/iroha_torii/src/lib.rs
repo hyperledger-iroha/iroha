@@ -3665,6 +3665,79 @@ async fn handler_transactions_history_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_contracts_activity_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractActivityGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .contract_alias
+            .as_deref()
+            .or(params.contract_address.as_deref())
+            .or(params.contract_entrypoint.as_deref())
+            .or(params.authority.as_deref())
+            .unwrap_or("contracts-activity");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_activity_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_contracts_events_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .contract_alias
+            .as_deref()
+            .or(params.contract_address.as_deref())
+            .or(params.module.as_deref())
+            .or(params.event_kind.as_deref())
+            .or(params.authority.as_deref())
+            .unwrap_or("contracts-events");
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_events_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_proofs_query(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -17087,6 +17160,63 @@ async fn handler_events_sse(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_contracts_events_sse(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<routing::ContractEventsSseParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return Ok(routing::handle_v1_contracts_events_sse(
+            app.events.clone(),
+            app.state.clone(),
+            AxQuery(params),
+        )?
+        .into_response());
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key_hint = params
+        .contract_alias
+        .as_deref()
+        .or(params.contract_address.as_deref())
+        .or(params.module.as_deref())
+        .or(params.event_kind.as_deref())
+        .or(params.authority.as_deref())
+        .unwrap_or("v1/contracts/events/sse");
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        key_hint,
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(routing::handle_v1_contracts_events_sse(
+        app.events.clone(),
+        app.state.clone(),
+        AxQuery(params),
+    )?
+    .into_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_gov_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -26037,6 +26167,10 @@ impl Torii {
                 {
                     Router::new()
                         .route("/v1/events/sse", get(handler_events_sse))
+                        .route(
+                            "/v1/contracts/events/sse",
+                            get(handler_contracts_events_sse),
+                        )
                         .route(uri::SUBSCRIPTION, get(handler_subscription_ws))
                         .route(uri::BLOCKS_STREAM, get(handler_blocks_stream_ws))
                 }
@@ -26145,6 +26279,14 @@ impl Torii {
                 .route(
                     "/v1/transactions/history",
                     get(handler_transactions_history_get),
+                )
+                .route(
+                    "/v1/contracts/activity",
+                    get(handler_contracts_activity_get),
+                )
+                .route(
+                    "/v1/contracts/events",
+                    get(handler_contracts_events_get),
                 )
                 .route(
                     "/v1/accounts/{account_id}/assets",
@@ -26313,6 +26455,14 @@ impl Torii {
                 )
                 .route("/v1/sns/policies/{suffix_id}", get(sns::handle_get_policy))
                 .route("/v1/soracloud/status", get(handler_soracloud_status))
+                .route(
+                    "/v1/soracloud/services/{service_name}/public-discovery",
+                    get(soracloud::handle_service_public_discovery),
+                )
+                .route(
+                    "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
+                    get(soracloud::handle_service_revision_public_discovery),
+                )
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
@@ -28537,7 +28687,7 @@ async fn handler_mcp_jsonrpc(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::http::Request<Body>,
-) -> (StatusCode, JsonBody<norito::json::Value>) {
+) -> Response {
     let remote_ip = remote.ip();
     let rate_key = limits::key_from_headers(
         &headers,
@@ -28549,7 +28699,8 @@ async fn handler_mcp_jsonrpc(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             JsonBody(mcp::jsonrpc_rate_limited()),
-        );
+        )
+            .into_response();
     }
 
     let request_bytes =
@@ -28557,7 +28708,7 @@ async fn handler_mcp_jsonrpc(
             Ok(bytes) => bytes,
             Err(_) => {
                 let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
-                return (status, JsonBody(payload));
+                return (status, JsonBody(payload)).into_response();
             }
         };
 
@@ -28567,9 +28718,14 @@ async fn handler_mcp_jsonrpc(
             return (
                 StatusCode::BAD_REQUEST,
                 JsonBody(mcp::invalid_json_payload(&err)),
-            );
+            )
+                .into_response();
         }
     };
+
+    if mcp::is_initialized_notification(&payload) {
+        return StatusCode::ACCEPTED.into_response();
+    }
 
     let response_payload = if let Some(batch) = payload.as_array() {
         if batch.is_empty() {
@@ -28587,7 +28743,7 @@ async fn handler_mcp_jsonrpc(
         mcp::handle_jsonrpc_request(app, &headers, payload).await
     };
 
-    (StatusCode::OK, JsonBody(response_payload))
+    (StatusCode::OK, JsonBody(response_payload)).into_response()
 }
 
 #[cfg(feature = "app_api")]

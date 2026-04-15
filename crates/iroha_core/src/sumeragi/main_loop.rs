@@ -24566,6 +24566,7 @@ impl Actor {
                 | "lock_lag_future_prune"
                 | "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
@@ -24581,6 +24582,7 @@ impl Actor {
             reason,
             "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
@@ -24618,6 +24620,7 @@ impl Actor {
             reason,
             "frontier_gap_realign"
                 | "frontier_stall_reset"
+                | "frontier_stall_reset_fallback"
                 | "missing_block_height_hard_cap"
                 | "lock_lag_highest_qc_defer"
                 | "lock_lag_future_prune"
@@ -24667,6 +24670,7 @@ impl Actor {
         let local_height = self.committed_height_snapshot();
         if height == local_height.saturating_add(1)
             && reason != "lock_lag_highest_qc_defer"
+            && reason != "frontier_stall_reset_fallback"
             && self.exact_frontier_body_repair_active_at_height(height)
             && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
@@ -25231,6 +25235,8 @@ impl Actor {
                 anchor_latest_hash,
                 BTreeSet::new(),
             );
+            self.frontier_block_sync_hint
+                .record_direct_block_sync_response_permit(peer.clone(), now);
             self.network.post(Post {
                 data: NetworkMessage::BlockSync(Box::new(
                     crate::block_sync::message::Message::GetBlocksAfter(request),
@@ -28831,6 +28837,8 @@ impl Actor {
                 anchor_latest_hash,
                 BTreeSet::new(),
             );
+            self.frontier_block_sync_hint
+                .record_direct_block_sync_response_permit(peer.clone(), now);
             self.network.post(Post {
                 data: NetworkMessage::BlockSync(Box::new(
                     crate::block_sync::message::Message::GetBlocksAfter(request),

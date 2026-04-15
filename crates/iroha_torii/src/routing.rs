@@ -9301,6 +9301,10 @@ pub async fn handle_get_contract_code(
     Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default,
 )]
 pub struct ContractStateQuery {
+    /// Optional canonical contract address used to scope logical state paths.
+    pub contract_address: Option<String>,
+    /// Optional on-chain contract alias used to scope logical state paths.
+    pub contract_alias: Option<String>,
     /// Exact state key path (Name).
     pub path: Option<String>,
     /// Comma-separated list of state key paths (Names).
@@ -9335,6 +9339,10 @@ pub struct ContractStateEntry {
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateResponse {
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -9385,21 +9393,33 @@ fn register_contract_state_schema(
 #[cfg(feature = "app_api")]
 fn collect_contract_state_schemas(
     world: &impl WorldReadOnly,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
 ) -> BTreeMap<String, Option<ivm::EmbeddedStateType>> {
     let mut registry = BTreeMap::new();
-    for (_, code_hash) in world.contract_instances().iter() {
+    let mut register_schemas_for = |code_hash: &iroha_crypto::Hash| {
         let Some(code_bytes) = world.contract_code().get(code_hash) else {
-            continue;
+            return;
         };
         let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
-            continue;
+            return;
         };
         let Some(contract_interface) = parsed.contract_interface else {
-            continue;
+            return;
         };
         for state in contract_interface.states {
             register_contract_state_schema(&mut registry, state.name, state.ty);
         }
+    };
+
+    if let Some(contract_address) = contract_address {
+        if let Some(code_hash) = world.contract_instances().get(contract_address) {
+            register_schemas_for(code_hash);
+        }
+        return registry;
+    }
+
+    for (_, code_hash) in world.contract_instances().iter() {
+        register_schemas_for(code_hash);
     }
     registry
 }
@@ -9407,6 +9427,137 @@ fn collect_contract_state_schemas(
 #[cfg(feature = "app_api")]
 fn contract_state_child_base(base: &str, suffix: &str) -> String {
     format!("{base}_{suffix}")
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_pointer_payload<'a>(
+    bytes: &'a [u8],
+    expected: ivm::pointer_abi::PointerType,
+    label: &str,
+) -> core::result::Result<&'a [u8], String> {
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes)
+        .map_err(|err| format!("invalid durable TLV: {err}"))?;
+    if tlv.type_id == expected {
+        return Ok(tlv.payload);
+    }
+    if tlv.type_id != ivm::pointer_abi::PointerType::NoritoBytes {
+        return Err(format!("expected {label} payload for {label} state"));
+    }
+    let inner = ivm::pointer_abi::validate_tlv_bytes(tlv.payload)
+        .map_err(|err| format!("invalid nested durable TLV: {err}"))?;
+    if inner.type_id != expected {
+        return Err(format!("expected {label} payload for {label} state"));
+    }
+    Ok(inner.payload)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_state_pointer_tlv_bytes(
+    ty: &ivm::EmbeddedStateType,
+    raw: &str,
+) -> Option<Vec<u8>> {
+    use ivm::pointer_abi::PointerType;
+    use norito::to_bytes;
+
+    let (type_id, payload) = match ty {
+        ivm::EmbeddedStateType::Name => {
+            let value: iroha_data_model::name::Name = raw.parse().ok()?;
+            (PointerType::Name, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::AccountId => {
+            let value = iroha_data_model::account::AccountId::parse_encoded(raw)
+                .ok()?
+                .into_account_id();
+            (PointerType::AccountId, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::AssetDefinitionId => {
+            let value: iroha_data_model::asset::AssetDefinitionId = raw.parse().ok()?;
+            (PointerType::AssetDefinitionId, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::AssetId => {
+            let value: iroha_data_model::asset::AssetId = raw.parse().ok()?;
+            (PointerType::AssetId, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::NftId => {
+            let value: iroha_data_model::nft::NftId = raw.parse().ok()?;
+            (PointerType::NftId, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::DomainId => {
+            let value = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
+            (PointerType::DomainId, to_bytes(&value).ok()?)
+        }
+        ivm::EmbeddedStateType::DataSpaceId => {
+            let raw_id = raw.parse::<u64>().ok()?;
+            let value = iroha_data_model::nexus::DataSpaceId::new(raw_id);
+            (PointerType::DataSpaceId, to_bytes(&value).ok()?)
+        }
+        _ => return None,
+    };
+
+    let mut encoded = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
+    encoded.extend_from_slice(&(type_id as u16).to_be_bytes());
+    encoded.push(1);
+    encoded.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    encoded.extend_from_slice(&payload);
+    let digest: [u8; 32] = Hash::new(&payload).into();
+    encoded.extend_from_slice(&digest);
+    Some(encoded)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_stored_map_key_suffix(
+    key_ty: &ivm::EmbeddedStateType,
+    logical_key_suffix: &str,
+) -> Option<String> {
+    match key_ty {
+        ivm::EmbeddedStateType::Int => Some(logical_key_suffix.to_owned()),
+        ivm::EmbeddedStateType::FixedU128
+        | ivm::EmbeddedStateType::Amount
+        | ivm::EmbeddedStateType::Balance => {
+            let value = logical_key_suffix
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?;
+            let encoded = norito::to_bytes(&value).ok()?;
+            Some(hex::encode(Hash::new(&encoded).as_ref()))
+        }
+        ivm::EmbeddedStateType::Blob | ivm::EmbeddedStateType::Bytes => {
+            let encoded = if let Some(trimmed) = logical_key_suffix.strip_prefix("0x") {
+                hex::decode(trimmed).ok()?
+            } else {
+                logical_key_suffix.as_bytes().to_vec()
+            };
+            Some(hex::encode(Hash::new(&encoded).as_ref()))
+        }
+        ivm::EmbeddedStateType::Name
+        | ivm::EmbeddedStateType::AccountId
+        | ivm::EmbeddedStateType::AssetDefinitionId
+        | ivm::EmbeddedStateType::AssetId
+        | ivm::EmbeddedStateType::NftId
+        | ivm::EmbeddedStateType::DomainId
+        | ivm::EmbeddedStateType::DataSpaceId => {
+            let encoded = encode_contract_state_pointer_tlv_bytes(key_ty, logical_key_suffix)?;
+            Some(hex::encode(Hash::new(&encoded).as_ref()))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_logical_map_entry_value(
+    registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    logical_path: &str,
+    get_value: &impl Fn(&str) -> Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    if let Some(Some(_)) = registry.get(logical_path) {
+        return get_value(logical_path);
+    }
+    let (base, key_suffix) = logical_path.rsplit_once('/')?;
+    let Some(Some(ivm::EmbeddedStateType::Map { key, .. })) = registry.get(base) else {
+        return None;
+    };
+    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
+        .unwrap_or_else(|| key_suffix.to_owned());
+    get_value(&format!("{base}/{stored_key_suffix}"))
 }
 
 #[cfg(feature = "app_api")]
@@ -9447,9 +9598,7 @@ fn decode_contract_state_scalar_json(
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Json => {
-            if tlv.type_id != PointerType::Json {
-                return Err("expected Json payload for json state".into());
-            }
+            let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
             let value: iroha_primitives::json::Json =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
             value
@@ -9457,60 +9606,56 @@ fn decode_contract_state_scalar_json(
                 .map_err(|err| format!("convert json payload: {err}"))
         }
         ivm::EmbeddedStateType::Name => {
-            if tlv.type_id != PointerType::Name {
-                return Err("expected Name payload for Name state".into());
-            }
+            let payload = decode_contract_state_pointer_payload(bytes, PointerType::Name, "Name")?;
             let value: iroha_data_model::prelude::Name =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode name: {err}"))?;
             Ok(norito::json::Value::from(value.as_ref().to_owned()))
         }
         ivm::EmbeddedStateType::AccountId => {
-            if tlv.type_id != PointerType::AccountId {
-                return Err("expected AccountId payload for AccountId state".into());
-            }
+            let payload =
+                decode_contract_state_pointer_payload(bytes, PointerType::AccountId, "AccountId")?;
             let value: iroha_data_model::account::AccountId = norito::decode_from_bytes(payload)
                 .map_err(|err| format!("decode account id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::AssetDefinitionId => {
-            if tlv.type_id != PointerType::AssetDefinitionId {
-                return Err(
-                    "expected AssetDefinitionId payload for AssetDefinitionId state".into(),
-                );
-            }
+            let payload = decode_contract_state_pointer_payload(
+                bytes,
+                PointerType::AssetDefinitionId,
+                "AssetDefinitionId",
+            )?;
             let value: iroha_data_model::asset::AssetDefinitionId =
                 norito::decode_from_bytes(payload)
                     .map_err(|err| format!("decode asset definition id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::AssetId => {
-            if tlv.type_id != PointerType::AssetId {
-                return Err("expected AssetId payload for AssetId state".into());
-            }
+            let payload =
+                decode_contract_state_pointer_payload(bytes, PointerType::AssetId, "AssetId")?;
             let value: iroha_data_model::asset::AssetId = norito::decode_from_bytes(payload)
                 .map_err(|err| format!("decode asset id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::NftId => {
-            if tlv.type_id != PointerType::NftId {
-                return Err("expected NftId payload for NftId state".into());
-            }
+            let payload =
+                decode_contract_state_pointer_payload(bytes, PointerType::NftId, "NftId")?;
             let value: iroha_data_model::nft::NftId = norito::decode_from_bytes(payload)
                 .map_err(|err| format!("decode nft id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::DomainId => {
-            if tlv.type_id != PointerType::DomainId {
-                return Err("expected DomainId payload for DomainId state".into());
-            }
+            let payload =
+                decode_contract_state_pointer_payload(bytes, PointerType::DomainId, "DomainId")?;
             let value: iroha_data_model::domain::DomainId = norito::decode_from_bytes(payload)
                 .map_err(|err| format!("decode domain id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::DataSpaceId => {
-            if tlv.type_id != PointerType::DataSpaceId {
-                return Err("expected DataSpaceId payload for DataSpaceId state".into());
-            }
+            let payload = decode_contract_state_pointer_payload(
+                bytes,
+                PointerType::DataSpaceId,
+                "DataSpaceId",
+            )?;
             let value: iroha_data_model::nexus::DataSpaceId = norito::decode_from_bytes(payload)
                 .map_err(|err| format!("decode dataspace id: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
@@ -9639,15 +9784,16 @@ fn decode_contract_state_path_json(
     logical_path: &str,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
 ) -> core::result::Result<norito::json::Value, String> {
-    let direct = registry
-        .get(logical_path)
-        .ok_or_else(|| format!("no embedded state schema found for path `{logical_path}`"))?;
-    if let Some(schema) = direct {
-        return decode_contract_state_value_json(logical_path, schema, get_value);
+    if let Some(direct) = registry.get(logical_path) {
+        if let Some(schema) = direct {
+            return decode_contract_state_value_json(logical_path, schema, get_value);
+        }
     }
 
     let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
-        return Err(format!("state schema for `{logical_path}` is ambiguous"));
+        return Err(format!(
+            "no embedded state schema found for path `{logical_path}`"
+        ));
     };
     let Some(state_schema) = registry.get(base) else {
         return Err(format!(
@@ -9658,8 +9804,10 @@ fn decode_contract_state_path_json(
         return Err(format!("state schema for `{base}` is ambiguous"));
     };
     match schema {
-        ivm::EmbeddedStateType::Map { value, .. } => {
-            decode_contract_state_map_value_json(base, value, key_suffix, get_value)
+        ivm::EmbeddedStateType::Map { key, value } => {
+            let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
+                .unwrap_or_else(|| key_suffix.to_owned());
+            decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
         }
         _ => Err(format!(
             "path `{logical_path}` does not refer to a state map entry"
@@ -9697,7 +9845,7 @@ fn contract_state_value_exists(
 fn contract_state_map_entry_exists(
     base: &str,
     value_ty: &ivm::EmbeddedStateType,
-    key_suffix: &str,
+    stored_key_suffix: &str,
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
     match value_ty {
@@ -9705,7 +9853,7 @@ fn contract_state_map_entry_exists(
             contract_state_map_entry_exists(
                 &contract_state_child_base(base, &field.name),
                 &field.ty,
-                key_suffix,
+                stored_key_suffix,
                 has_value,
             )
         }),
@@ -9713,12 +9861,12 @@ fn contract_state_map_entry_exists(
             contract_state_map_entry_exists(
                 &contract_state_child_base(base, &index.to_string()),
                 item,
-                key_suffix,
+                stored_key_suffix,
                 has_value,
             )
         }),
         ivm::EmbeddedStateType::Map { .. } => false,
-        _ => has_value(&format!("{base}/{key_suffix}")),
+        _ => has_value(&format!("{base}/{stored_key_suffix}")),
     }
 }
 
@@ -9736,8 +9884,10 @@ fn contract_state_logical_path_exists(
             return false;
         };
         return match state_schema {
-            ivm::EmbeddedStateType::Map { value, .. } => {
-                contract_state_map_entry_exists(base, value, key_suffix, has_value)
+            ivm::EmbeddedStateType::Map { key, value } => {
+                let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
+                    .unwrap_or_else(|| key_suffix.to_owned());
+                contract_state_map_entry_exists(base, value, &stored_key_suffix, has_value)
             }
             _ => false,
         };
@@ -9788,11 +9938,83 @@ pub async fn handle_get_contract_state(
         parse_contract_state_decode_mode(q.decode.as_deref()).map_err(conversion_error)?;
 
     let world = state.world_view();
+    let (resolved_contract_address, resolved_contract_alias) =
+        match (q.contract_address.as_deref(), q.contract_alias.as_deref()) {
+            (Some(_), Some(_)) => {
+                return Err(conversion_error(
+                    "provide at most one of contract_address or contract_alias".to_owned(),
+                ));
+            }
+            (Some(raw), None) => {
+                let contract_address = raw.parse().map_err(|err| {
+                    conversion_error(format!("invalid contract address `{raw}`: {err}"))
+                })?;
+                (Some(contract_address), None)
+            }
+            (None, Some(raw)) => {
+                let contract_alias = raw.parse().map_err(|err| {
+                    conversion_error(format!("invalid contract alias `{raw}`: {err}"))
+                })?;
+                let contract_address = world
+                    .contract_address_by_alias_at(&contract_alias, current_time_millis())
+                    .ok_or_else(|| {
+                        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                        ))
+                    })?;
+                (Some(contract_address), Some(contract_alias))
+            }
+            (None, None) => (None, None),
+        };
+    let scoped_prefix = resolved_contract_address.as_ref().map(|contract_address| {
+        let scope_id = contract_address.to_string();
+        let digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
+        format!("sc/{digest}/")
+    });
+    let scoped_name_for = |logical_path: &str| -> Result<Name> {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{logical_path}")
+        } else {
+            logical_path.to_owned()
+        };
+        Name::from_str(&scoped).map_err(|err| {
+            conversion_error(format!(
+                "invalid scoped smart-contract state path `{scoped}`: {err}"
+            ))
+        })
+    };
+    let strip_scope_prefix = |stored_path: &str| -> Option<String> {
+        if let Some(prefix) = scoped_prefix.as_deref() {
+            stored_path.strip_prefix(prefix).map(str::to_owned)
+        } else {
+            Some(stored_path.to_owned())
+        }
+    };
     let storage = world.smart_contract_state();
     let schema_registry = matches!(decode_mode, Some(ContractStateDecodeMode::Json))
-        .then(|| collect_contract_state_schemas(&world));
-    let get_value = |path: &str| storage.get(path).cloned();
-    let has_value = |path: &str| storage.get(path).is_some();
+        .then(|| collect_contract_state_schemas(&world, resolved_contract_address.as_ref()));
+    let get_value = |path: &str| {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{path}")
+        } else {
+            path.to_owned()
+        };
+        storage.get(scoped.as_str()).cloned()
+    };
+    let has_value = |path: &str| {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{path}")
+        } else {
+            path.to_owned()
+        };
+        storage.get(scoped.as_str()).is_some()
+    };
+    let contract_address_response = resolved_contract_address
+        .as_ref()
+        .map(std::string::ToString::to_string);
+    let contract_alias_response = resolved_contract_alias
+        .as_ref()
+        .map(std::string::ToString::to_string);
 
     let encode_entry = |path: &str,
                         value: Option<&Vec<u8>>,
@@ -9830,7 +10052,11 @@ pub async fn handle_get_contract_state(
     if let Some(path_raw) = q.path {
         let name = parse_name(&path_raw, "path")?;
         let path = name.as_ref();
-        let stored = storage.get(path);
+        let stored = get_value(path).or_else(|| {
+            schema_registry.as_ref().and_then(|registry| {
+                contract_state_logical_map_entry_value(registry, path, &get_value)
+            })
+        });
         let logical_found = schema_registry
             .as_ref()
             .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
@@ -9852,8 +10078,10 @@ pub async fn handle_get_contract_state(
             )));
         }
 
-        let entry = encode_entry(path, stored, true, value_json, decode_error);
+        let entry = encode_entry(path, stored.as_ref(), true, value_json, decode_error);
         return Ok(JsonBody(ContractStateResponse {
+            contract_address: contract_address_response.clone(),
+            contract_alias: contract_alias_response.clone(),
             path: Some(path.to_string()),
             paths: None,
             prefix: None,
@@ -9881,7 +10109,11 @@ pub async fn handle_get_contract_state(
         let mut paths = Vec::with_capacity(parsed.len());
         for name in parsed {
             let path = name.as_ref();
-            let stored = storage.get(path);
+            let stored = get_value(path).or_else(|| {
+                schema_registry.as_ref().and_then(|registry| {
+                    contract_state_logical_map_entry_value(registry, path, &get_value)
+                })
+            });
             let logical_found = schema_registry.as_ref().is_some_and(|registry| {
                 contract_state_logical_path_exists(registry, path, &has_value)
             });
@@ -9896,11 +10128,19 @@ pub async fn handle_get_contract_state(
                 }
                 _ => (None, None),
             };
-            entries.push(encode_entry(path, stored, found, value_json, decode_error));
+            entries.push(encode_entry(
+                path,
+                stored.as_ref(),
+                found,
+                value_json,
+                decode_error,
+            ));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
         return Ok(JsonBody(ContractStateResponse {
+            contract_address: contract_address_response.clone(),
+            contract_alias: contract_alias_response.clone(),
             path: None,
             paths: Some(paths),
             prefix: None,
@@ -9919,19 +10159,24 @@ pub async fn handle_get_contract_state(
     let mut entries = Vec::new();
     let mut skipped = 0u64;
     let mut has_more = false;
+    let storage_prefix_name = scoped_name_for(prefix_str)?;
+    let storage_prefix_str = storage_prefix_name.as_ref().to_owned();
 
     if let (Some(ContractStateDecodeMode::Json), Some(registry)) =
         (decode_mode, schema_registry.as_ref())
     {
         if let Some(Some(ivm::EmbeddedStateType::Map { value, .. })) = registry.get(prefix_str) {
             let mut key_suffixes = BTreeSet::new();
-            for (key, _) in storage.range(prefix.clone()..) {
+            for (key, _) in storage.range(storage_prefix_name.clone()..) {
                 let key_str = key.as_ref();
-                if !key_str.starts_with(prefix_str) {
+                if !key_str.starts_with(&storage_prefix_str) {
                     break;
                 }
+                let Some(logical_key) = strip_scope_prefix(key_str) else {
+                    continue;
+                };
                 if let Some(key_suffix) =
-                    match_contract_state_map_key_suffix(prefix_str, value, key_str)
+                    match_contract_state_map_key_suffix(prefix_str, value, logical_key.as_str())
                 {
                     key_suffixes.insert(key_suffix);
                 }
@@ -9971,6 +10216,8 @@ pub async fn handle_get_contract_state(
                 None
             };
             return Ok(JsonBody(ContractStateResponse {
+                contract_address: contract_address_response.clone(),
+                contract_alias: contract_alias_response.clone(),
                 path: None,
                 paths: None,
                 prefix: Some(prefix_str.to_string()),
@@ -9982,11 +10229,14 @@ pub async fn handle_get_contract_state(
         }
     }
 
-    for (key, value) in storage.range(prefix.clone()..) {
+    for (key, value) in storage.range(storage_prefix_name.clone()..) {
         let key_str = key.as_ref();
-        if !key_str.starts_with(prefix_str) {
+        if !key_str.starts_with(&storage_prefix_str) {
             break;
         }
+        let Some(logical_key) = strip_scope_prefix(key_str) else {
+            continue;
+        };
         if skipped < offset {
             skipped += 1;
             continue;
@@ -9997,9 +10247,9 @@ pub async fn handle_get_contract_state(
         }
         let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry))
-                if registry.contains_key(key_str) =>
+                if registry.contains_key(logical_key.as_str()) =>
             {
-                match decode_contract_state_path_json(registry, key_str, &get_value) {
+                match decode_contract_state_path_json(registry, logical_key.as_str(), &get_value) {
                     Ok(value_json) => (Some(value_json), None),
                     Err(err) => (None, Some(err)),
                 }
@@ -10007,7 +10257,7 @@ pub async fn handle_get_contract_state(
             _ => (None, None),
         };
         entries.push(encode_entry(
-            key_str,
+            logical_key.as_str(),
             Some(value),
             true,
             value_json,
@@ -10020,6 +10270,8 @@ pub async fn handle_get_contract_state(
         None
     };
     Ok(JsonBody(ContractStateResponse {
+        contract_address: contract_address_response,
+        contract_alias: contract_alias_response,
         path: None,
         paths: None,
         prefix: Some(prefix_str.to_string()),
@@ -10052,6 +10304,15 @@ mod contract_state_tests {
         bytes
     }
 
+    fn scoped_state_key(
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        logical_path: &str,
+    ) -> Name {
+        let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let scoped = format!("sc/{digest}/{logical_path}");
+        Name::from_str(&scoped).expect("scoped contract state path")
+    }
+
     #[tokio::test]
     async fn contract_state_prefix_empty_on_blank_state() {
         let state = Arc::new(CoreState::new_for_testing(
@@ -10072,6 +10333,91 @@ mod contract_state_tests {
         assert!(response.entries.is_empty());
         assert_eq!(response.offset, 0);
         assert_eq!(response.next_offset, None);
+    }
+
+    #[tokio::test]
+    async fn contract_state_exact_path_can_scope_by_contract_address() {
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        let mut world = World::default();
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/state"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"open".to_owned()).expect("encode state"),
+            ),
+        );
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ContractStateQuery {
+            contract_address: Some(contract_address.to_string()),
+            path: Some("market/by-id/mkt-1/state".to_owned()),
+            ..Default::default()
+        };
+
+        let JsonBody(response) = handle_get_contract_state(state, NoritoQuery(query))
+            .await
+            .expect("handler should succeed");
+
+        assert_eq!(
+            response.contract_address.as_deref(),
+            Some(contract_address.to_string().as_str())
+        );
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].path, "market/by-id/mkt-1/state");
+        assert!(response.entries[0].found);
+    }
+
+    #[tokio::test]
+    async fn contract_state_prefix_can_scope_by_contract_address() {
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        let mut world = World::default();
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/meta"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"meta".to_owned()).expect("encode meta"),
+            ),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/state"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"open".to_owned()).expect("encode state"),
+            ),
+        );
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ContractStateQuery {
+            contract_address: Some(contract_address.to_string()),
+            prefix: Some("market/by-id/mkt-1".to_owned()),
+            ..Default::default()
+        };
+
+        let JsonBody(response) = handle_get_contract_state(state, NoritoQuery(query))
+            .await
+            .expect("handler should succeed");
+
+        let paths = response
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["market/by-id/mkt-1/meta", "market/by-id/mkt-1/state"]
+        );
     }
 
     #[test]
@@ -10126,6 +10472,26 @@ mod contract_state_tests {
             "approval_alias_fqn".into(),
             Value::from(base64::engine::general_purpose::STANDARD.encode("banking@centralbank")),
         );
+        assert_eq!(decoded, Value::Object(expected));
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_unwraps_nested_json_payloads() {
+        let json_value = iroha_primitives::json::Json::from_str_norito(
+            "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
+        )
+        .expect("valid json payload");
+        let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
+        let nested = make_tlv(PointerType::Json, &json_payload);
+        let decoded = decode_contract_state_scalar_json(
+            &make_tlv(PointerType::NoritoBytes, &nested),
+            &ivm::EmbeddedStateType::Json,
+        )
+        .expect("decode json");
+
+        let mut expected = Map::new();
+        expected.insert("marketId".into(), Value::from("mkt-1"));
+        expected.insert("status".into(), Value::from("open"));
         assert_eq!(decoded, Value::Object(expected));
     }
 }
@@ -14604,7 +14970,7 @@ mod multisig_selector_tests {
         .await;
 
         let err = match result {
-            Ok(_) => panic!("partial legacy target must fail"),
+            Ok(_) => panic!("missing canonical contract target must fail"),
             Err(err) => err,
         };
 
@@ -25933,6 +26299,1097 @@ struct TxProjection {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default)]
+struct ContractActivityProjection {
+    authority: Option<String>,
+    timestamp_ms: Option<u64>,
+    entrypoint_hash: String,
+    result_ok: bool,
+    contract_address: String,
+    contract_alias: Option<String>,
+    contract_entrypoint: Option<String>,
+    contract_payload: Option<norito::json::Value>,
+    gas_asset_id: Option<String>,
+    fee_sponsor: Option<String>,
+    gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ContractActivityIndexCacheKey {
+    committed_height: usize,
+    tip_block_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Default, Clone)]
+struct ContractActivityIndex {
+    cache_key: ContractActivityIndexCacheKey,
+    items: Vec<ContractActivityProjection>,
+    by_authority: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_address: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_alias: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_entrypoint: std::collections::HashMap<String, Vec<usize>>,
+    ok_positions: Vec<usize>,
+    error_positions: Vec<usize>,
+}
+
+#[cfg(feature = "app_api")]
+static CONTRACT_ACTIVITY_INDEX: LazyLock<RwLock<Option<Arc<ContractActivityIndex>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default)]
+struct ContractEventProjection {
+    event_id: String,
+    schema_version: u64,
+    provenance: String,
+    authority: Option<String>,
+    timestamp_ms: Option<u64>,
+    tx_hash_hex: String,
+    block_height: u64,
+    block_hash_hex: String,
+    result_ok: bool,
+    contract_address: String,
+    contract_alias: Option<String>,
+    module: String,
+    event_kind: String,
+    participants: Vec<String>,
+    asset_ids: Vec<String>,
+    numeric_fields: Map,
+    payload: Option<norito::json::Value>,
+    gas_asset_id: Option<String>,
+    fee_sponsor: Option<String>,
+    gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ContractEventIndexCacheKey {
+    committed_height: usize,
+    tip_block_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Default, Clone)]
+struct ContractEventIndex {
+    cache_key: ContractEventIndexCacheKey,
+    items: Vec<ContractEventProjection>,
+    by_authority: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_address: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_alias: std::collections::HashMap<String, Vec<usize>>,
+    by_module: std::collections::HashMap<String, Vec<usize>>,
+    by_event_kind: std::collections::HashMap<String, Vec<usize>>,
+    by_participant: std::collections::HashMap<String, Vec<usize>>,
+    by_asset_id: std::collections::HashMap<String, Vec<usize>>,
+    by_provenance: std::collections::HashMap<String, Vec<usize>>,
+    ok_positions: Vec<usize>,
+    error_positions: Vec<usize>,
+}
+
+#[cfg(feature = "app_api")]
+static CONTRACT_EVENT_INDEX: LazyLock<RwLock<Option<Arc<ContractEventIndex>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+enum ContractActivityCandidatePositions<'a> {
+    All,
+    Indexed(std::borrow::Cow<'a, [usize]>),
+    Empty,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+enum ContractEventCandidatePositions<'a> {
+    All,
+    Indexed(std::borrow::Cow<'a, [usize]>),
+    Empty,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndexCacheKey {
+    let committed_height = state.committed_height();
+    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
+        .and_then(|height| state.block_by_height(height))
+        .map(|block| format!("{}", block.hash()));
+    ContractActivityIndexCacheKey {
+        committed_height,
+        tip_block_hash,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheKey {
+    let committed_height = state.committed_height();
+    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
+        .and_then(|height| state.block_by_height(height))
+        .map(|block| format!("{}", block.hash()));
+    ContractEventIndexCacheKey {
+        committed_height,
+        tip_block_hash,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_insert_index(
+    index: &mut std::collections::HashMap<String, Vec<usize>>,
+    key: &str,
+    position: usize,
+) {
+    index.entry(key.to_owned()).or_default().push(position);
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_activity_projection(
+    index: &mut ContractActivityIndex,
+    projection: ContractActivityProjection,
+) {
+    let position = index.items.len();
+    if let Some(authority) = projection.authority.as_deref() {
+        contract_activity_insert_index(&mut index.by_authority, authority, position);
+    }
+    contract_activity_insert_index(
+        &mut index.by_contract_address,
+        &projection.contract_address,
+        position,
+    );
+    if let Some(alias) = projection.contract_alias.as_deref() {
+        contract_activity_insert_index(&mut index.by_contract_alias, alias, position);
+    }
+    if let Some(entrypoint) = projection.contract_entrypoint.as_deref() {
+        contract_activity_insert_index(&mut index.by_contract_entrypoint, entrypoint, position);
+    }
+    if projection.result_ok {
+        index.ok_positions.push(position);
+    } else {
+        index.error_positions.push(position);
+    }
+    index.items.push(projection);
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_event_projection(
+    index: &mut ContractEventIndex,
+    projection: ContractEventProjection,
+) {
+    let position = index.items.len();
+    if let Some(authority) = projection.authority.as_deref() {
+        contract_activity_insert_index(&mut index.by_authority, authority, position);
+    }
+    contract_activity_insert_index(
+        &mut index.by_contract_address,
+        &projection.contract_address,
+        position,
+    );
+    if let Some(alias) = projection.contract_alias.as_deref() {
+        contract_activity_insert_index(&mut index.by_contract_alias, alias, position);
+    }
+    contract_activity_insert_index(&mut index.by_module, &projection.module, position);
+    contract_activity_insert_index(&mut index.by_event_kind, &projection.event_kind, position);
+    for participant in &projection.participants {
+        contract_activity_insert_index(&mut index.by_participant, participant, position);
+    }
+    for asset_id in &projection.asset_ids {
+        contract_activity_insert_index(&mut index.by_asset_id, asset_id, position);
+    }
+    contract_activity_insert_index(&mut index.by_provenance, &projection.provenance, position);
+    if projection.result_ok {
+        index.ok_positions.push(position);
+    } else {
+        index.error_positions.push(position);
+    }
+    index.items.push(projection);
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_projections_for_height_range(
+    state: &CoreState,
+    start_height: usize,
+    end_height: usize,
+) -> Vec<ContractActivityProjection> {
+    if start_height == 0 || start_height > end_height {
+        return Vec::new();
+    }
+
+    let mut projections = Vec::new();
+    for height in start_height..=end_height {
+        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            iroha_logger::warn!(
+                height,
+                "missing block in Kura while extending contract activity index"
+            );
+            continue;
+        };
+        let block_hash = block.hash();
+        let entrypoint_hashes = block.entrypoint_hashes();
+        let entrypoint_proofs = block.entrypoint_proofs();
+        let entrypoints = block.entrypoints_cloned();
+        let result_hashes = block.result_hashes();
+        let result_proofs = block.result_proofs();
+        let results = block.results().cloned();
+
+        projections.extend(
+            entrypoint_hashes
+                .zip(entrypoint_proofs)
+                .zip(entrypoints)
+                .zip(result_hashes)
+                .zip(result_proofs)
+                .zip(results)
+                .filter_map(
+                    |(
+                        (
+                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                            result_proof,
+                        ),
+                        result,
+                    )| {
+                        let tx = iroha_data_model::query::CommittedTransaction {
+                            block_hash,
+                            entrypoint_hash,
+                            entrypoint_proof,
+                            entrypoint,
+                            result_hash,
+                            result_proof,
+                            result,
+                        };
+                        contract_activity_projection_from_tx(&tx)
+                    },
+                ),
+        );
+    }
+    projections
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
+    let source = contract_alias.unwrap_or(contract_address);
+    source
+        .split(|ch: char| matches!(ch, '.' | '/' | ':' | ' '))
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(source)
+        .to_owned()
+}
+
+#[cfg(feature = "app_api")]
+fn participant_hint_key(key: &str) -> bool {
+    matches!(
+        key,
+        "authority"
+            | "account_id"
+            | "account_alias"
+            | "trader"
+            | "controller"
+            | "receiver"
+            | "beneficiary"
+            | "initiator"
+            | "counterparty"
+            | "custodian"
+            | "owner"
+            | "operator"
+            | "manager"
+            | "sponsor"
+    ) || key.ends_with("_account_id")
+        || key.ends_with("_account_alias")
+        || key.ends_with("_authority")
+}
+
+#[cfg(feature = "app_api")]
+fn collect_contract_event_payload_fields(
+    payload: &norito::json::Value,
+) -> (Vec<String>, Vec<String>, Map) {
+    fn walk(
+        value: &norito::json::Value,
+        path: &str,
+        participants: &mut BTreeSet<String>,
+        asset_ids: &mut BTreeSet<String>,
+        numeric_fields: &mut Map,
+    ) {
+        match value {
+            norito::json::Value::Object(object) => {
+                for (key, value) in object {
+                    let child_path = if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    if let norito::json::Value::String(text) = value {
+                        if text.contains('#') {
+                            asset_ids.insert(text.clone());
+                        }
+                        if text.contains('@') || participant_hint_key(key) {
+                            participants.insert(text.clone());
+                        }
+                    }
+                    walk(value, &child_path, participants, asset_ids, numeric_fields);
+                }
+            }
+            norito::json::Value::Array(array) => {
+                for (index, value) in array.iter().enumerate() {
+                    let child_path = if path.is_empty() {
+                        format!("[{index}]")
+                    } else {
+                        format!("{path}[{index}]")
+                    };
+                    if let norito::json::Value::String(text) = value {
+                        if text.contains('#') {
+                            asset_ids.insert(text.clone());
+                        }
+                        if text.contains('@') {
+                            participants.insert(text.clone());
+                        }
+                    }
+                    walk(value, &child_path, participants, asset_ids, numeric_fields);
+                }
+            }
+            norito::json::Value::Number(number) => {
+                if !path.is_empty() {
+                    numeric_fields.insert(path.into(), norito::json::Value::Number(number.clone()));
+                }
+            }
+            norito::json::Value::String(text) => {
+                if text.contains('#') {
+                    asset_ids.insert(text.clone());
+                }
+                if text.contains('@') {
+                    participants.insert(text.clone());
+                }
+            }
+            norito::json::Value::Null | norito::json::Value::Bool(_) => {}
+        }
+    }
+
+    let mut participants = BTreeSet::new();
+    let mut asset_ids = BTreeSet::new();
+    let mut numeric_fields = Map::new();
+    walk(
+        payload,
+        "",
+        &mut participants,
+        &mut asset_ids,
+        &mut numeric_fields,
+    );
+
+    (
+        participants.into_iter().collect(),
+        asset_ids.into_iter().collect(),
+        numeric_fields,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_projection_from_tx(
+    height: usize,
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<ContractEventProjection> {
+    let base = project_tx(tx, &None);
+    let contract_address = tx_metadata_string(tx, "contract_address")?;
+    let contract_alias = tx_metadata_string(tx, "contract_alias");
+    let payload = tx_metadata_json_value(tx, "contract_event_payload")
+        .or_else(|| tx_metadata_json_value(tx, "contract_payload"));
+    let event_kind = tx_metadata_string(tx, "contract_event_kind")
+        .or_else(|| tx_metadata_string(tx, "contract_entrypoint"))
+        .unwrap_or_else(|| "contract_call".to_owned());
+    let schema_version = tx_metadata_u64(tx, "contract_event_schema_version").unwrap_or(1);
+    let provenance =
+        tx_metadata_string(tx, "contract_event_provenance").unwrap_or_else(|| "derived".to_owned());
+    let module = tx_metadata_string(tx, "contract_module")
+        .unwrap_or_else(|| contract_event_module(contract_alias.as_deref(), &contract_address));
+    let gas_asset_id = tx_metadata_string(tx, "gas_asset_id");
+    let fee_sponsor = tx_metadata_string(tx, "fee_sponsor");
+    let gas_limit = tx_metadata_u64(tx, "gas_limit");
+    let (mut participants, mut asset_ids, numeric_fields) = payload
+        .as_ref()
+        .map(collect_contract_event_payload_fields)
+        .unwrap_or_else(|| (Vec::new(), Vec::new(), Map::new()));
+    if let Some(authority) = base.authority.as_ref() {
+        participants.push(authority.clone());
+    }
+    if let Some(fee_sponsor) = fee_sponsor.as_ref() {
+        participants.push(fee_sponsor.clone());
+    }
+    if let Some(gas_asset_id) = gas_asset_id.as_ref() {
+        asset_ids.push(gas_asset_id.clone());
+    }
+    participants.sort();
+    participants.dedup();
+    asset_ids.sort();
+    asset_ids.dedup();
+
+    Some(ContractEventProjection {
+        event_id: format!("{}:0", tx.entrypoint_hash()),
+        schema_version,
+        provenance,
+        authority: base.authority,
+        timestamp_ms: base.timestamp_ms,
+        tx_hash_hex: format!("{}", tx.entrypoint_hash()),
+        block_height: height as u64,
+        block_hash_hex: format!("{}", tx.block_hash),
+        result_ok: base.result_ok,
+        contract_address,
+        contract_alias,
+        module,
+        event_kind,
+        participants,
+        asset_ids,
+        numeric_fields,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_projections_for_height_range(
+    state: &CoreState,
+    start_height: usize,
+    end_height: usize,
+) -> Vec<ContractEventProjection> {
+    if start_height == 0 || start_height > end_height {
+        return Vec::new();
+    }
+
+    let mut projections = Vec::new();
+    for height in start_height..=end_height {
+        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            iroha_logger::warn!(
+                height,
+                "missing block in Kura while extending contract event index"
+            );
+            continue;
+        };
+        let block_hash = block.hash();
+        let entrypoint_hashes = block.entrypoint_hashes();
+        let entrypoint_proofs = block.entrypoint_proofs();
+        let entrypoints = block.entrypoints_cloned();
+        let result_hashes = block.result_hashes();
+        let result_proofs = block.result_proofs();
+        let results = block.results().cloned();
+
+        projections.extend(
+            entrypoint_hashes
+                .zip(entrypoint_proofs)
+                .zip(entrypoints)
+                .zip(result_hashes)
+                .zip(result_proofs)
+                .zip(results)
+                .filter_map(
+                    |(
+                        (
+                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                            result_proof,
+                        ),
+                        result,
+                    )| {
+                        let tx = iroha_data_model::query::CommittedTransaction {
+                            block_hash,
+                            entrypoint_hash,
+                            entrypoint_proof,
+                            entrypoint,
+                            result_hash,
+                            result_proof,
+                            result,
+                        };
+                        contract_event_projection_from_tx(height, &tx)
+                    },
+                ),
+        );
+    }
+    projections
+}
+
+#[cfg(feature = "app_api")]
+fn build_contract_activity_index(
+    state: &CoreState,
+    cache_key: ContractActivityIndexCacheKey,
+) -> ContractActivityIndex {
+    let mut index = ContractActivityIndex {
+        cache_key: cache_key.clone(),
+        ..ContractActivityIndex::default()
+    };
+    for projection in
+        contract_activity_projections_for_height_range(state, 1, cache_key.committed_height)
+    {
+        append_contract_activity_projection(&mut index, projection);
+    }
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn build_contract_event_index(
+    state: &CoreState,
+    cache_key: ContractEventIndexCacheKey,
+) -> ContractEventIndex {
+    let mut index = ContractEventIndex {
+        cache_key: cache_key.clone(),
+        ..ContractEventIndex::default()
+    };
+    for projection in
+        contract_event_projections_for_height_range(state, 1, cache_key.committed_height)
+    {
+        append_contract_event_projection(&mut index, projection);
+    }
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_cache_extends_append_only(
+    existing: &ContractActivityIndex,
+    state: &CoreState,
+    next_key: &ContractActivityIndexCacheKey,
+) -> bool {
+    if next_key.committed_height < existing.cache_key.committed_height {
+        return false;
+    }
+    if next_key.committed_height == existing.cache_key.committed_height {
+        return existing.cache_key == *next_key;
+    }
+    if existing.cache_key.committed_height == 0 {
+        return true;
+    }
+    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
+        return false;
+    };
+    let Some(block) = state.block_by_height(height_nz) else {
+        return false;
+    };
+    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_cache_extends_append_only(
+    existing: &ContractEventIndex,
+    state: &CoreState,
+    next_key: &ContractEventIndexCacheKey,
+) -> bool {
+    if next_key.committed_height < existing.cache_key.committed_height {
+        return false;
+    }
+    if next_key.committed_height == existing.cache_key.committed_height {
+        return existing.cache_key == *next_key;
+    }
+    if existing.cache_key.committed_height == 0 {
+        return true;
+    }
+    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
+        return false;
+    };
+    let Some(block) = state.block_by_height(height_nz) else {
+        return false;
+    };
+    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+}
+
+#[cfg(feature = "app_api")]
+fn extend_contract_activity_index(
+    existing: &ContractActivityIndex,
+    state: &CoreState,
+    next_key: ContractActivityIndexCacheKey,
+) -> ContractActivityIndex {
+    let mut index = existing.clone();
+    let start_height = existing.cache_key.committed_height.saturating_add(1);
+    for projection in contract_activity_projections_for_height_range(
+        state,
+        start_height,
+        next_key.committed_height,
+    ) {
+        append_contract_activity_projection(&mut index, projection);
+    }
+    index.cache_key = next_key;
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn extend_contract_event_index(
+    existing: &ContractEventIndex,
+    state: &CoreState,
+    next_key: ContractEventIndexCacheKey,
+) -> ContractEventIndex {
+    let mut index = existing.clone();
+    let start_height = existing.cache_key.committed_height.saturating_add(1);
+    for projection in
+        contract_event_projections_for_height_range(state, start_height, next_key.committed_height)
+    {
+        append_contract_event_projection(&mut index, projection);
+    }
+    index.cache_key = next_key;
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIndex> {
+    let cache_key = contract_activity_index_cache_key(state);
+    if let Some(existing) = CONTRACT_ACTIVITY_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if existing.cache_key == cache_key {
+            return existing;
+        }
+    }
+
+    let rebuilt = if let Some(existing) = CONTRACT_ACTIVITY_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if contract_activity_cache_extends_append_only(existing.as_ref(), state, &cache_key) {
+            Arc::new(extend_contract_activity_index(
+                existing.as_ref(),
+                state,
+                cache_key.clone(),
+            ))
+        } else {
+            Arc::new(build_contract_activity_index(state, cache_key.clone()))
+        }
+    } else {
+        Arc::new(build_contract_activity_index(state, cache_key.clone()))
+    };
+    if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
+        if let Some(existing) = guard.as_ref() {
+            if existing.cache_key == cache_key {
+                return Arc::clone(existing);
+            }
+        }
+        *guard = Some(Arc::clone(&rebuilt));
+    }
+    rebuilt
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_index_snapshot(state: &CoreState) -> Arc<ContractEventIndex> {
+    let cache_key = contract_event_index_cache_key(state);
+    if let Some(existing) = CONTRACT_EVENT_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if existing.cache_key == cache_key {
+            return existing;
+        }
+    }
+
+    let rebuilt = if let Some(existing) = CONTRACT_EVENT_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if contract_event_cache_extends_append_only(existing.as_ref(), state, &cache_key) {
+            Arc::new(extend_contract_event_index(
+                existing.as_ref(),
+                state,
+                cache_key.clone(),
+            ))
+        } else {
+            Arc::new(build_contract_event_index(state, cache_key.clone()))
+        }
+    } else {
+        Arc::new(build_contract_event_index(state, cache_key.clone()))
+    };
+    if let Ok(mut guard) = CONTRACT_EVENT_INDEX.write() {
+        if let Some(existing) = guard.as_ref() {
+            if existing.cache_key == cache_key {
+                return Arc::clone(existing);
+            }
+        }
+        *guard = Some(Arc::clone(&rebuilt));
+    }
+    rebuilt
+}
+
+#[cfg(feature = "app_api")]
+fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
+    let mut merged = Vec::with_capacity(left.len().min(right.len()));
+    let mut left_index = 0usize;
+    let mut right_index = 0usize;
+
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            std::cmp::Ordering::Less => left_index += 1,
+            std::cmp::Ordering::Greater => right_index += 1,
+            std::cmp::Ordering::Equal => {
+                merged.push(left[left_index]);
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+
+    merged
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_candidate_positions<'a>(
+    index: &'a ContractActivityIndex,
+    params: &ContractActivityGetParams,
+) -> ContractActivityCandidatePositions<'a> {
+    let mut exact_candidates = Vec::new();
+    let mut consider =
+        |candidate: Option<&'a Vec<usize>>| -> Option<ContractActivityCandidatePositions<'a>> {
+            let positions = match candidate {
+                Some(positions) => positions.as_slice(),
+                None => return Some(ContractActivityCandidatePositions::Empty),
+            };
+            exact_candidates.push(positions);
+            None
+        };
+
+    if let Some(authority) = params.authority.as_deref() {
+        if let Some(empty) = consider(index.by_authority.get(authority)) {
+            return empty;
+        }
+    }
+    if let Some(contract_address) = params.contract_address.as_deref() {
+        if let Some(empty) = consider(index.by_contract_address.get(contract_address)) {
+            return empty;
+        }
+    }
+    if let Some(contract_alias) = params.contract_alias.as_deref() {
+        if let Some(empty) = consider(index.by_contract_alias.get(contract_alias)) {
+            return empty;
+        }
+    }
+    if let Some(contract_entrypoint) = params.contract_entrypoint.as_deref() {
+        if let Some(empty) = consider(index.by_contract_entrypoint.get(contract_entrypoint)) {
+            return empty;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        let positions = if result_ok {
+            index.ok_positions.as_slice()
+        } else {
+            index.error_positions.as_slice()
+        };
+        if positions.is_empty() {
+            return ContractActivityCandidatePositions::Empty;
+        }
+        exact_candidates.push(positions);
+    }
+
+    if exact_candidates.is_empty() {
+        return ContractActivityCandidatePositions::All;
+    }
+
+    exact_candidates.sort_by_key(|positions| positions.len());
+    let mut merged = std::borrow::Cow::Borrowed(exact_candidates[0]);
+    for candidate in exact_candidates.into_iter().skip(1) {
+        let intersection = intersect_contract_activity_positions(merged.as_ref(), candidate);
+        if intersection.is_empty() {
+            return ContractActivityCandidatePositions::Empty;
+        }
+        merged = std::borrow::Cow::Owned(intersection);
+    }
+
+    ContractActivityCandidatePositions::Indexed(merged)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_contract_activity_page(
+    index: &ContractActivityIndex,
+    params: &ContractActivityGetParams,
+    pagination: EffectivePagination,
+    fetch_cap: Option<u64>,
+) -> (Vec<ContractActivityProjection>, usize) {
+    let offset_usize = if pagination.offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        pagination.offset as usize
+    };
+    let limit_usize = pagination
+        .limit
+        .filter(|&lim| lim > 0)
+        .map(|lim| lim.min(usize::MAX as u64) as usize);
+    let fetch_cap_usize = fetch_cap
+        .filter(|&cap| cap > 0)
+        .map(|cap| cap.min(usize::MAX as u64) as usize);
+
+    let mut matched: usize = 0;
+    let mut items = Vec::new();
+    let mut additional_after_fill: usize = 0;
+
+    let mut visit = |projection: &ContractActivityProjection| {
+        if !contract_activity_matches(projection, params) {
+            return false;
+        }
+        matched = matched.saturating_add(1);
+        let within_page =
+            matched > offset_usize && limit_usize.map(|lim| items.len() < lim).unwrap_or(true);
+        if within_page {
+            items.push(projection.clone());
+            return false;
+        }
+        if limit_usize.map(|lim| items.len() >= lim).unwrap_or(false) {
+            if let Some(cap) = fetch_cap_usize {
+                additional_after_fill = additional_after_fill.saturating_add(1);
+                if additional_after_fill >= cap {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    match contract_activity_candidate_positions(index, params) {
+        ContractActivityCandidatePositions::All => {
+            for projection in index.items.iter().rev() {
+                if visit(projection) {
+                    break;
+                }
+            }
+        }
+        ContractActivityCandidatePositions::Indexed(positions) => {
+            for position in positions.iter().rev() {
+                if let Some(projection) = index.items.get(*position) {
+                    if visit(projection) {
+                        break;
+                    }
+                }
+            }
+        }
+        ContractActivityCandidatePositions::Empty => {}
+    }
+
+    (items, matched)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_candidate_positions<'a>(
+    index: &'a ContractEventIndex,
+    params: &ContractEventGetParams,
+) -> ContractEventCandidatePositions<'a> {
+    let mut exact_candidates = Vec::new();
+    let mut consider =
+        |candidate: Option<&'a Vec<usize>>| -> Option<ContractEventCandidatePositions<'a>> {
+            let positions = match candidate {
+                Some(positions) => positions.as_slice(),
+                None => return Some(ContractEventCandidatePositions::Empty),
+            };
+            exact_candidates.push(positions);
+            None
+        };
+
+    if let Some(authority) = params.authority.as_deref() {
+        if let Some(empty) = consider(index.by_authority.get(authority)) {
+            return empty;
+        }
+    }
+    if let Some(contract_address) = params.contract_address.as_deref() {
+        if let Some(empty) = consider(index.by_contract_address.get(contract_address)) {
+            return empty;
+        }
+    }
+    if let Some(contract_alias) = params.contract_alias.as_deref() {
+        if let Some(empty) = consider(index.by_contract_alias.get(contract_alias)) {
+            return empty;
+        }
+    }
+    if let Some(module) = params.module.as_deref() {
+        if let Some(empty) = consider(index.by_module.get(module)) {
+            return empty;
+        }
+    }
+    if let Some(event_kind) = params.event_kind.as_deref() {
+        if let Some(empty) = consider(index.by_event_kind.get(event_kind)) {
+            return empty;
+        }
+    }
+    if let Some(participant) = params.participant.as_deref() {
+        if let Some(empty) = consider(index.by_participant.get(participant)) {
+            return empty;
+        }
+    }
+    if let Some(asset_id) = params.asset_id.as_deref() {
+        if let Some(empty) = consider(index.by_asset_id.get(asset_id)) {
+            return empty;
+        }
+    }
+    if let Some(provenance) = params.provenance.as_deref() {
+        if let Some(empty) = consider(index.by_provenance.get(provenance)) {
+            return empty;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        let positions = if result_ok {
+            index.ok_positions.as_slice()
+        } else {
+            index.error_positions.as_slice()
+        };
+        if positions.is_empty() {
+            return ContractEventCandidatePositions::Empty;
+        }
+        exact_candidates.push(positions);
+    }
+
+    if exact_candidates.is_empty() {
+        return ContractEventCandidatePositions::All;
+    }
+
+    exact_candidates.sort_by_key(|positions| positions.len());
+    let mut merged = std::borrow::Cow::Borrowed(exact_candidates[0]);
+    for candidate in exact_candidates.into_iter().skip(1) {
+        let intersection = intersect_contract_activity_positions(merged.as_ref(), candidate);
+        if intersection.is_empty() {
+            return ContractEventCandidatePositions::Empty;
+        }
+        merged = std::borrow::Cow::Owned(intersection);
+    }
+
+    ContractEventCandidatePositions::Indexed(merged)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_matches(
+    projection: &ContractEventProjection,
+    params: &ContractEventGetParams,
+) -> bool {
+    if let Some(expected) = params.authority.as_deref() {
+        if projection.authority.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_address.as_deref() {
+        if projection.contract_address != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_alias.as_deref() {
+        if projection.contract_alias.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.module.as_deref() {
+        if projection.module != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = params.event_kind.as_deref() {
+        if projection.event_kind != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = params.participant.as_deref() {
+        if !projection
+            .participants
+            .iter()
+            .any(|value| value == expected)
+        {
+            return false;
+        }
+    }
+    if let Some(expected) = params.asset_id.as_deref() {
+        if !projection.asset_ids.iter().any(|value| value == expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.provenance.as_deref() {
+        if projection.provenance != expected {
+            return false;
+        }
+    }
+    if let Some(min_ts) = params.since_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts < min_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(max_ts) = params.until_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts > max_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        if projection.result_ok != result_ok {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "app_api")]
+fn collect_contract_event_page(
+    index: &ContractEventIndex,
+    params: &ContractEventGetParams,
+    pagination: EffectivePagination,
+    fetch_cap: Option<u64>,
+) -> (Vec<ContractEventProjection>, usize) {
+    let offset_usize = if pagination.offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        pagination.offset as usize
+    };
+    let limit_usize = pagination
+        .limit
+        .filter(|&lim| lim > 0)
+        .map(|lim| lim.min(usize::MAX as u64) as usize);
+    let fetch_cap_usize = fetch_cap
+        .filter(|&cap| cap > 0)
+        .map(|cap| cap.min(usize::MAX as u64) as usize);
+
+    let mut matched = 0usize;
+    let mut items = Vec::new();
+    let mut additional_after_fill = 0usize;
+
+    let mut visit = |projection: &ContractEventProjection| {
+        if !contract_event_matches(projection, params) {
+            return false;
+        }
+        matched = matched.saturating_add(1);
+        let within_page =
+            matched > offset_usize && limit_usize.map(|lim| items.len() < lim).unwrap_or(true);
+        if within_page {
+            items.push(projection.clone());
+            return false;
+        }
+        if limit_usize.map(|lim| items.len() >= lim).unwrap_or(false) {
+            if let Some(cap) = fetch_cap_usize {
+                additional_after_fill = additional_after_fill.saturating_add(1);
+                if additional_after_fill >= cap {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    match contract_event_candidate_positions(index, params) {
+        ContractEventCandidatePositions::All => {
+            for projection in index.items.iter().rev() {
+                if visit(projection) {
+                    break;
+                }
+            }
+        }
+        ContractEventCandidatePositions::Indexed(positions) => {
+            for position in positions.iter().rev() {
+                if let Some(projection) = index.items.get(*position) {
+                    if visit(projection) {
+                        break;
+                    }
+                }
+            }
+        }
+        ContractEventCandidatePositions::Empty => {}
+    }
+
+    (items, matched)
+}
+
+#[cfg(feature = "app_api")]
 fn tx_field_value(
     tx: &iroha_data_model::query::CommittedTransaction,
     field: &str,
@@ -25994,6 +27451,53 @@ fn tx_field_value(
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_json_value(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    key: &str,
+) -> Option<norito::json::Value> {
+    let name: iroha_data_model::prelude::Name = key.parse().ok()?;
+    let raw = match &tx.entrypoint() {
+        iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
+            signed.metadata().get(&name).map(|json| json.get().clone())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            tx.metadata.get(&name).map(|json| json.get().clone())
+        }
+        _ => None,
+    }?;
+    norito::json::from_str(&raw).ok()
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_string(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    key: &str,
+) -> Option<String> {
+    match tx_metadata_json_value(tx, key)? {
+        norito::json::Value::Null => None,
+        norito::json::Value::String(value) => Some(value),
+        norito::json::Value::Bool(value) => Some(value.to_string()),
+        norito::json::Value::Number(value) => Some(match value {
+            norito::json::native::Number::I64(value) => value.to_string(),
+            norito::json::native::Number::U64(value) => value.to_string(),
+            norito::json::native::Number::F64(value) => value.to_string(),
+        }),
+        value => norito::json::to_json(&value).ok(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_u64(tx: &iroha_data_model::query::CommittedTransaction, key: &str) -> Option<u64> {
+    match tx_metadata_json_value(tx, key)? {
+        norito::json::Value::Number(value) => value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok())),
+        norito::json::Value::String(value) => value.parse::<u64>().ok(),
         _ => None,
     }
 }
@@ -27228,6 +28732,78 @@ fn project_tx(
 }
 
 #[cfg(feature = "app_api")]
+fn contract_activity_projection_from_tx(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<ContractActivityProjection> {
+    let base = project_tx(tx, &None);
+    let contract_address = tx_metadata_string(tx, "contract_address")?;
+    Some(ContractActivityProjection {
+        authority: base.authority,
+        timestamp_ms: base.timestamp_ms,
+        entrypoint_hash: base.entrypoint_hash,
+        result_ok: base.result_ok,
+        contract_address,
+        contract_alias: tx_metadata_string(tx, "contract_alias"),
+        contract_entrypoint: tx_metadata_string(tx, "contract_entrypoint"),
+        contract_payload: tx_metadata_json_value(tx, "contract_payload"),
+        gas_asset_id: tx_metadata_string(tx, "gas_asset_id"),
+        fee_sponsor: tx_metadata_string(tx, "fee_sponsor"),
+        gas_limit: tx_metadata_u64(tx, "gas_limit"),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_matches(
+    projection: &ContractActivityProjection,
+    params: &ContractActivityGetParams,
+) -> bool {
+    if let Some(expected) = params.authority.as_deref() {
+        if projection.authority.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_address.as_deref() {
+        if projection.contract_address != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_alias.as_deref() {
+        if projection.contract_alias.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_entrypoint.as_deref() {
+        if projection.contract_entrypoint.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(min_ts) = params.since_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts < min_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(max_ts) = params.until_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts > max_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        if projection.result_ok != result_ok {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "app_api")]
 fn tx_predicate_from_filter(
     expr: &FilterExpr,
 ) -> iroha_data_model::query::dsl::CompoundPredicate<iroha_data_model::query::CommittedTransaction>
@@ -27563,6 +29139,12 @@ pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_EVENTS_SSE: &str = "/v1/contracts/events/sse";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -29132,6 +30714,146 @@ pub async fn handle_v1_transactions_history_get(
     Ok(resp)
 }
 
+/// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_activity_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+    #[cfg(not(feature = "telemetry"))]
+    let _ = &telemetry;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    let cap = app_query_page_cap(&state);
+    let (items, total) = {
+        let limits = app_query_limits();
+        let index = contract_activity_index_snapshot(state.as_ref());
+        let pagination = enforce_app_pagination(
+            params.limit,
+            params.offset,
+            cap,
+            ENDPOINT_CONTRACTS_ACTIVITY,
+        )?;
+        let fetch_cap = limits
+            .clamp_fetch_size(None)?
+            .map(|value| value.min(pagination.cap));
+        collect_contract_activity_page(index.as_ref(), &params, pagination, fetch_cap)
+    };
+    #[cfg(feature = "telemetry")]
+    let item_count = items.len();
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(0.0);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(total as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(item_count as f64);
+    }
+
+    let items_json = contract_activity_projections_to_json(&items);
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(items_json));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// GET `/v1/contracts/events` — generic contract event feed derived from committed transaction metadata.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_events_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+    #[cfg(not(feature = "telemetry"))]
+    let _ = &telemetry;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    let cap = app_query_page_cap(&state);
+    let (items, total) = {
+        let limits = app_query_limits();
+        let index = contract_event_index_snapshot(state.as_ref());
+        let pagination =
+            enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_CONTRACTS_EVENTS)?;
+        let fetch_cap = limits
+            .clamp_fetch_size(None)?
+            .map(|value| value.min(pagination.cap));
+        collect_contract_event_page(index.as_ref(), &params, pagination, fetch_cap)
+    };
+    #[cfg(feature = "telemetry")]
+    let item_count = items.len();
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
+            .observe(0.0);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
+            .observe(total as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
+            .observe(item_count as f64);
+    }
+
+    let items_json = contract_event_projections_to_json(&items);
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(items_json));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 /// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -29833,7 +31555,7 @@ mod tx_query_filter_tests {
 
     #[test]
     fn explorer_transaction_filters_match_asset_id() {
-        let (authority, keypair) = account_with_key();
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (other_account, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
@@ -31014,12 +32736,19 @@ mod tx_query_integration_smoke {
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude as dm;
+    use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
     // use tower::ServiceExt; // not needed in this module
 
     const TEST_ACCOUNT: &str =
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
+        let kp = KeyPair::random();
+        let account = dm::AccountId::new(kp.public_key().clone());
+        (account, kp)
+    }
 
     #[must_use]
     struct DebugEnvGuard {
@@ -31485,6 +33214,125 @@ mod tx_query_integration_smoke {
             items[0]["entrypoint_hash"].as_str(),
             Some(entry_hash.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
+        use iroha_crypto::Algorithm;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let (authority, keypair) = account_with_key();
+        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "contract_address".parse().unwrap(),
+            dm::Json::new("tairac1fixturedlmmrouter"),
+        );
+        metadata.insert(
+            "contract_alias".parse().unwrap(),
+            dm::Json::new("dlmm_router"),
+        );
+        metadata.insert(
+            "contract_entrypoint".parse().unwrap(),
+            dm::Json::new("route_swap"),
+        );
+        metadata.insert(
+            "contract_payload".parse().unwrap(),
+            dm::Json::new(norito::json!({
+                "amount_in": 100,
+                "min_out": 95
+            })),
+        );
+        metadata.insert(
+            "gas_asset_id".parse().unwrap(),
+            dm::Json::new("xor#universal"),
+        );
+        metadata.insert(
+            "fee_sponsor".parse().unwrap(),
+            dm::Json::new(authority.to_string()),
+        );
+        metadata.insert("gas_limit".parse().unwrap(), dm::Json::new(100_000_u64));
+
+        let mut tx_builder = dm::TransactionBuilder::new(chain_id, authority.clone());
+        tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
+        let signed = tx_builder
+            .with_metadata(metadata)
+            .with_executable(dm::Executable::Instructions(ConstVec::from(Vec::<
+                dm::InstructionBox,
+            >::new(
+            ))))
+            .sign(keypair.private_key());
+        let entry_hash = format!("{}", signed.hash_as_entrypoint());
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let valid = unverified
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let resp = handle_v1_contracts_activity_get(
+            state,
+            crate::NoritoQuery(ContractActivityGetParams {
+                limit: Some(10),
+                offset: 0,
+                authority: Some(authority.to_string()),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                result_ok: Some(true),
+                ..Default::default()
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash.as_str())
+        );
+        assert_eq!(items[0]["contract_alias"].as_str(), Some("dlmm_router"));
+        assert_eq!(items[0]["contract_entrypoint"].as_str(), Some("route_swap"));
+        assert_eq!(
+            items[0]["contract_payload"]["amount_in"].as_u64(),
+            Some(100)
+        );
+        assert_eq!(items[0]["gas_asset_id"].as_str(), Some("xor#universal"));
+        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
     }
 
     #[tokio::test]
@@ -35452,9 +37300,131 @@ mod query_endpoint_tests {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
+pub struct ContractEventsSseParams {
+    /// Filter by canonical I105 authority.
+    pub authority: Option<String>,
+    /// Filter by contract address.
+    pub contract_address: Option<String>,
+    /// Filter by deployed contract alias.
+    pub contract_alias: Option<String>,
+    /// Filter by derived module identifier.
+    pub module: Option<String>,
+    /// Filter by event kind.
+    pub event_kind: Option<String>,
+    /// Filter by participant account/account-alias-like references.
+    pub participant: Option<String>,
+    /// Filter by asset identifier references.
+    pub asset_id: Option<String>,
+    /// Filter by event provenance.
+    pub provenance: Option<String>,
+    /// Filter items whose timestamp is greater than or equal to this value.
+    pub since_timestamp_ms: Option<u64>,
+    /// Filter items whose timestamp is less than or equal to this value.
+    pub until_timestamp_ms: Option<u64>,
+    /// Filter items by execution outcome.
+    pub result_ok: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
 pub struct EventsSseParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_query_from_sse_params(
+    params: &ContractEventsSseParams,
+) -> ContractEventGetParams {
+    ContractEventGetParams {
+        limit: None,
+        offset: 0,
+        authority: params.authority.clone(),
+        contract_address: params.contract_address.clone(),
+        contract_alias: params.contract_alias.clone(),
+        module: params.module.clone(),
+        event_kind: params.event_kind.clone(),
+        participant: params.participant.clone(),
+        asset_id: params.asset_id.clone(),
+        provenance: params.provenance.clone(),
+        since_timestamp_ms: params.since_timestamp_ms,
+        until_timestamp_ms: params.until_timestamp_ms,
+        result_ok: params.result_ok,
+    }
+}
+
+#[cfg(feature = "app_api")]
+struct ContractEventsSseState {
+    rx: tokio::sync::broadcast::Receiver<EventBox>,
+    state: Arc<CoreState>,
+    pending: VecDeque<ContractEventProjection>,
+}
+
+/// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
+#[cfg(feature = "app_api")]
+pub fn handle_v1_contracts_events_sse(
+    events: EventsSender,
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractEventsSseParams>,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    let query = contract_event_query_from_sse_params(&params);
+    let stream = stream::unfold(
+        ContractEventsSseState {
+            rx: events.subscribe(),
+            state,
+            pending: VecDeque::new(),
+        },
+        move |mut state| {
+            let query = query.clone();
+            async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    if let Some(event) = state.pending.pop_front() {
+                        let json_value = contract_event_projection_to_json_value(&event);
+                        let json =
+                            norito::json::to_json(&json_value).unwrap_or_else(|_| "{}".to_owned());
+                        let ev = SseEvent::default()
+                            .event("contract_event")
+                            .id(event.event_id.clone())
+                            .data(json);
+                        return Some((Ok(ev), state));
+                    }
+                    match state.rx.recv().await {
+                        Ok(event_box) => {
+                            let Some(height) = committed_block_height(&event_box) else {
+                                continue;
+                            };
+                            let Ok(height_usize) = usize::try_from(height) else {
+                                iroha_logger::warn!(
+                                    height,
+                                    "failed to emit contract event SSE payload: block height exceeds host pointer width"
+                                );
+                                continue;
+                            };
+                            for projection in contract_event_projections_for_height_range(
+                                state.state.as_ref(),
+                                height_usize,
+                                height_usize,
+                            ) {
+                                if contract_event_matches(&projection, &query) {
+                                    state.pending.push_back(projection);
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(_)) => {
+                            let ev = SseEvent::default().comment("lagged");
+                            return Some((Ok(ev), state));
+                        }
+                        Err(RecvError::Closed) => return None,
+                    }
+                }
+            }
+        },
+    );
+
+    Ok(Sse::new(stream))
 }
 
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
@@ -43510,6 +45480,71 @@ pub struct AccountTransactionsGetParams {
     Debug,
     Clone,
 )]
+pub struct ContractActivityGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Filter by canonical I105 authority.
+    pub authority: Option<String>,
+    /// Filter by contract address.
+    pub contract_address: Option<String>,
+    /// Filter by deployed contract alias.
+    pub contract_alias: Option<String>,
+    /// Filter by contract entrypoint name.
+    pub contract_entrypoint: Option<String>,
+    /// Filter items whose timestamp is greater than or equal to this value.
+    pub since_timestamp_ms: Option<u64>,
+    /// Filter items whose timestamp is less than or equal to this value.
+    pub until_timestamp_ms: Option<u64>,
+    /// Filter items by execution outcome.
+    pub result_ok: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
+pub struct ContractEventGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Filter by canonical I105 authority.
+    pub authority: Option<String>,
+    /// Filter by contract address.
+    pub contract_address: Option<String>,
+    /// Filter by deployed contract alias.
+    pub contract_alias: Option<String>,
+    /// Filter by derived module identifier.
+    pub module: Option<String>,
+    /// Filter by event kind.
+    pub event_kind: Option<String>,
+    /// Filter by participant account/account-alias-like references.
+    pub participant: Option<String>,
+    /// Filter by asset identifier references.
+    pub asset_id: Option<String>,
+    /// Filter by event provenance (`emitted` or `derived`).
+    pub provenance: Option<String>,
+    /// Filter items whose timestamp is greater than or equal to this value.
+    pub since_timestamp_ms: Option<u64>,
+    /// Filter items whose timestamp is less than or equal to this value.
+    pub until_timestamp_ms: Option<u64>,
+    /// Filter items by execution outcome.
+    pub result_ok: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+)]
 pub struct AssetHolderGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -43878,6 +45913,183 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
         .collect()
 }
 
+#[cfg(feature = "app_api")]
+fn contract_activity_projections_to_json(
+    items: &[ContractActivityProjection],
+) -> Vec<norito::json::Value> {
+    items
+        .iter()
+        .map(|it| {
+            let mut m = norito::json::Map::new();
+            if let Some(ref authority_literal) = it.authority {
+                if let Some(display) =
+                    crate::account_literal::display_from_literal(authority_literal)
+                {
+                    m.insert("authority".into(), norito::json::Value::from(display));
+                }
+            }
+            if let Some(ts) = it.timestamp_ms {
+                m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
+            }
+            m.insert(
+                "entrypoint_hash".into(),
+                norito::json::Value::from(it.entrypoint_hash.clone()),
+            );
+            m.insert("result_ok".into(), norito::json::Value::from(it.result_ok));
+            m.insert(
+                "contract_address".into(),
+                norito::json::Value::from(it.contract_address.clone()),
+            );
+            if let Some(alias) = it.contract_alias.as_ref() {
+                m.insert(
+                    "contract_alias".into(),
+                    norito::json::Value::from(alias.clone()),
+                );
+            }
+            if let Some(entrypoint) = it.contract_entrypoint.as_ref() {
+                m.insert(
+                    "contract_entrypoint".into(),
+                    norito::json::Value::from(entrypoint.clone()),
+                );
+            }
+            if let Some(payload) = it.contract_payload.as_ref() {
+                m.insert("contract_payload".into(), payload.clone());
+            }
+            if let Some(gas_asset_id) = it.gas_asset_id.as_ref() {
+                m.insert(
+                    "gas_asset_id".into(),
+                    norito::json::Value::from(gas_asset_id.clone()),
+                );
+            }
+            if let Some(fee_sponsor_literal) = it.fee_sponsor.as_ref() {
+                if let Some(display) =
+                    crate::account_literal::display_from_literal(fee_sponsor_literal)
+                {
+                    m.insert("fee_sponsor".into(), norito::json::Value::from(display));
+                }
+            }
+            if let Some(gas_limit) = it.gas_limit {
+                m.insert("gas_limit".into(), norito::json::Value::from(gas_limit));
+            }
+            norito::json::Value::Object(m)
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_projection_to_json_value(it: &ContractEventProjection) -> norito::json::Value {
+    let mut m = norito::json::Map::new();
+    m.insert(
+        "event_id".into(),
+        norito::json::Value::from(it.event_id.clone()),
+    );
+    m.insert(
+        "schema_version".into(),
+        norito::json::Value::from(it.schema_version),
+    );
+    m.insert(
+        "provenance".into(),
+        norito::json::Value::from(it.provenance.clone()),
+    );
+    if let Some(ref authority_literal) = it.authority {
+        if let Some(display) = crate::account_literal::display_from_literal(authority_literal) {
+            m.insert("authority".into(), norito::json::Value::from(display));
+        }
+    }
+    if let Some(ts) = it.timestamp_ms {
+        m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
+    }
+    m.insert(
+        "tx_hash_hex".into(),
+        norito::json::Value::from(it.tx_hash_hex.clone()),
+    );
+    m.insert(
+        "block_height".into(),
+        norito::json::Value::from(it.block_height),
+    );
+    m.insert(
+        "block_hash_hex".into(),
+        norito::json::Value::from(it.block_hash_hex.clone()),
+    );
+    m.insert("result_ok".into(), norito::json::Value::from(it.result_ok));
+    m.insert(
+        "contract_address".into(),
+        norito::json::Value::from(it.contract_address.clone()),
+    );
+    if let Some(alias) = it.contract_alias.as_ref() {
+        m.insert(
+            "contract_alias".into(),
+            norito::json::Value::from(alias.clone()),
+        );
+    }
+    m.insert(
+        "module".into(),
+        norito::json::Value::from(it.module.clone()),
+    );
+    m.insert(
+        "event_kind".into(),
+        norito::json::Value::from(it.event_kind.clone()),
+    );
+    if !it.participants.is_empty() {
+        m.insert(
+            "participants".into(),
+            norito::json::Value::Array(
+                it.participants
+                    .iter()
+                    .cloned()
+                    .map(norito::json::Value::from)
+                    .collect(),
+            ),
+        );
+    }
+    if !it.asset_ids.is_empty() {
+        m.insert(
+            "asset_ids".into(),
+            norito::json::Value::Array(
+                it.asset_ids
+                    .iter()
+                    .cloned()
+                    .map(norito::json::Value::from)
+                    .collect(),
+            ),
+        );
+    }
+    if !it.numeric_fields.is_empty() {
+        m.insert(
+            "numeric_fields".into(),
+            norito::json::Value::Object(it.numeric_fields.clone()),
+        );
+    }
+    if let Some(payload) = it.payload.as_ref() {
+        m.insert("payload".into(), payload.clone());
+    }
+    if let Some(gas_asset_id) = it.gas_asset_id.as_ref() {
+        m.insert(
+            "gas_asset_id".into(),
+            norito::json::Value::from(gas_asset_id.clone()),
+        );
+    }
+    if let Some(fee_sponsor_literal) = it.fee_sponsor.as_ref() {
+        if let Some(display) = crate::account_literal::display_from_literal(fee_sponsor_literal) {
+            m.insert("fee_sponsor".into(), norito::json::Value::from(display));
+        }
+    }
+    if let Some(gas_limit) = it.gas_limit {
+        m.insert("gas_limit".into(), norito::json::Value::from(gas_limit));
+    }
+    norito::json::Value::Object(m)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_event_projections_to_json(
+    items: &[ContractEventProjection],
+) -> Vec<norito::json::Value> {
+    items
+        .iter()
+        .map(contract_event_projection_to_json_value)
+        .collect()
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
     use iroha_data_model::account::AccountId;
@@ -43940,6 +46152,348 @@ mod tx_projection_display_tests {
             items[0].get("authority").is_none(),
             "invalid non-i105 authority literals must not leak into explorer output"
         );
+    }
+
+    #[test]
+    fn contract_activity_projection_json_preserves_payload_and_fee_fields() {
+        let account: AccountId = ALICE_ID.clone();
+        let projection = ContractActivityProjection {
+            authority: Some(account.to_string()),
+            timestamp_ms: Some(456),
+            entrypoint_hash: "feedface".into(),
+            result_ok: true,
+            contract_address: "tairac1router".into(),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("route_swap".into()),
+            contract_payload: Some(norito::json!({
+                "amount_in": 10,
+                "min_out": 9
+            })),
+            gas_asset_id: Some("xor#universal".into()),
+            fee_sponsor: Some(account.to_string()),
+            gas_limit: Some(100_000),
+        };
+
+        let items = contract_activity_projections_to_json(&[projection]);
+        assert_eq!(items[0]["contract_entrypoint"].as_str(), Some("route_swap"));
+        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
+        assert_eq!(items[0]["contract_payload"]["amount_in"].as_u64(), Some(10));
+        assert!(items[0].get("fee_sponsor").is_some());
+    }
+
+    fn sample_contract_activity_index() -> ContractActivityIndex {
+        let alice: AccountId = ALICE_ID.clone();
+        let bob: AccountId = BOB_ID.clone();
+        let items = vec![
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(100),
+                entrypoint_hash: "hash-1".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(200),
+                entrypoint_hash: "hash-2".into(),
+                result_ok: false,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("cancel_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(bob.to_string()),
+                timestamp_ms: Some(300),
+                entrypoint_hash: "hash-3".into(),
+                result_ok: true,
+                contract_address: "router-b".into(),
+                contract_alias: Some("other_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(400),
+                entrypoint_hash: "hash-4".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+        ];
+        let mut index = ContractActivityIndex::default();
+        for projection in items {
+            append_contract_activity_projection(&mut index, projection);
+        }
+        index
+    }
+
+    #[test]
+    fn contract_activity_index_prefers_smallest_exact_match_set() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_address: Some("router-a".into()),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("cancel_swap".into()),
+            result_ok: Some(false),
+            ..Default::default()
+        };
+
+        match contract_activity_candidate_positions(&index, &params) {
+            ContractActivityCandidatePositions::Indexed(positions) => {
+                assert_eq!(positions.as_ref(), &[1]);
+            }
+            other => panic!("expected indexed candidate set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_activity_index_intersects_exact_match_sets() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_entrypoint: Some("route_swap".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        match contract_activity_candidate_positions(&index, &params) {
+            ContractActivityCandidatePositions::Indexed(positions) => {
+                assert_eq!(positions.as_ref(), &[0, 3]);
+            }
+            other => panic!("expected indexed candidate set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_activity_indexed_pager_respects_filters_and_offset() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_address: Some("router-a".into()),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("route_swap".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        let (items, total) = collect_contract_activity_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            None,
+        );
+
+        assert_eq!(total, 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].entrypoint_hash, "hash-1");
+    }
+
+    #[test]
+    fn contract_event_projection_json_preserves_generic_fields() {
+        let account: AccountId = ALICE_ID.clone();
+        let projection = ContractEventProjection {
+            event_id: "feedface:0".into(),
+            schema_version: 1,
+            provenance: "derived".into(),
+            authority: Some(account.to_string()),
+            timestamp_ms: Some(456),
+            tx_hash_hex: "feedface".into(),
+            block_height: 9,
+            block_hash_hex: "block-feedface".into(),
+            result_ok: true,
+            contract_address: "tairac1router".into(),
+            contract_alias: Some("dlmm_router".into()),
+            module: "dlmm_router".into(),
+            event_kind: "route_swap".into(),
+            participants: vec![account.to_string()],
+            asset_ids: vec!["xor#universal".into()],
+            numeric_fields: norito::json!({ "amount_in": 10 })
+                .as_object()
+                .cloned()
+                .expect("object"),
+            payload: Some(norito::json!({
+                "amount_in": 10,
+                "min_out": 9
+            })),
+            gas_asset_id: Some("xor#universal".into()),
+            fee_sponsor: Some(account.to_string()),
+            gas_limit: Some(100_000),
+        };
+
+        let items = contract_event_projections_to_json(&[projection]);
+        assert_eq!(items[0]["event_kind"].as_str(), Some("route_swap"));
+        assert_eq!(items[0]["block_height"].as_u64(), Some(9));
+        assert_eq!(items[0]["numeric_fields"]["amount_in"].as_u64(), Some(10));
+        assert_eq!(items[0]["asset_ids"][0].as_str(), Some("xor#universal"));
+    }
+
+    fn sample_contract_event_index() -> ContractEventIndex {
+        let alice: AccountId = ALICE_ID.clone();
+        let bob: AccountId = BOB_ID.clone();
+        let items = vec![
+            ContractEventProjection {
+                event_id: "hash-1:0".into(),
+                schema_version: 1,
+                provenance: "derived".into(),
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(100),
+                tx_hash_hex: "hash-1".into(),
+                block_height: 1,
+                block_hash_hex: "block-1".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                module: "swaps".into(),
+                event_kind: "route_swap".into(),
+                participants: vec![alice.to_string()],
+                asset_ids: vec!["xor#universal".into()],
+                numeric_fields: Map::new(),
+                payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractEventProjection {
+                event_id: "hash-2:0".into(),
+                schema_version: 1,
+                provenance: "derived".into(),
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(200),
+                tx_hash_hex: "hash-2".into(),
+                block_height: 2,
+                block_hash_hex: "block-2".into(),
+                result_ok: false,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                module: "swaps".into(),
+                event_kind: "cancel_swap".into(),
+                participants: vec![alice.to_string()],
+                asset_ids: vec!["xor#universal".into()],
+                numeric_fields: Map::new(),
+                payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractEventProjection {
+                event_id: "hash-3:0".into(),
+                schema_version: 1,
+                provenance: "derived".into(),
+                authority: Some(bob.to_string()),
+                timestamp_ms: Some(300),
+                tx_hash_hex: "hash-3".into(),
+                block_height: 3,
+                block_hash_hex: "block-3".into(),
+                result_ok: true,
+                contract_address: "router-b".into(),
+                contract_alias: Some("other_router".into()),
+                module: "perps".into(),
+                event_kind: "open_position".into(),
+                participants: vec![bob.to_string(), alice.to_string()],
+                asset_ids: vec!["usdt#soraswap.universal".into()],
+                numeric_fields: Map::new(),
+                payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractEventProjection {
+                event_id: "hash-4:0".into(),
+                schema_version: 1,
+                provenance: "derived".into(),
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(400),
+                tx_hash_hex: "hash-4".into(),
+                block_height: 4,
+                block_hash_hex: "block-4".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                module: "swaps".into(),
+                event_kind: "route_swap".into(),
+                participants: vec![alice.to_string(), "i105sponsor@universal".into()],
+                asset_ids: vec!["xor#universal".into(), "usdt#soraswap.universal".into()],
+                numeric_fields: Map::new(),
+                payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+        ];
+        let mut index = ContractEventIndex::default();
+        for projection in items {
+            append_contract_event_projection(&mut index, projection);
+        }
+        index
+    }
+
+    #[test]
+    fn contract_event_index_intersects_exact_match_sets() {
+        let index = sample_contract_event_index();
+        let params = ContractEventGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            module: Some("swaps".into()),
+            event_kind: Some("route_swap".into()),
+            asset_id: Some("xor#universal".into()),
+            provenance: Some("derived".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        match contract_event_candidate_positions(&index, &params) {
+            ContractEventCandidatePositions::Indexed(positions) => {
+                assert_eq!(positions.as_ref(), &[0, 3]);
+            }
+            other => panic!("expected indexed candidate set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_event_indexed_pager_respects_participant_filter_and_offset() {
+        let index = sample_contract_event_index();
+        let params = ContractEventGetParams {
+            participant: Some(ALICE_ID.to_string()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        let (items, total) = collect_contract_event_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            None,
+        );
+
+        assert_eq!(total, 3);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].tx_hash_hex, "hash-3");
     }
 }
 

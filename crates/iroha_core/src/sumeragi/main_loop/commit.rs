@@ -3818,20 +3818,35 @@ impl Actor {
                         || now.saturating_duration_since(stats.first_seen) >= dwell_window
                 });
             if !payload_materialized_locally {
-                if request_stalled || self.frontier_slot_lag_window_expired(height, now) {
-                    let _ = self.handle_frontier_slot_event(
+                let lag_window_expired = self.frontier_slot_lag_window_expired(height, now);
+                let mut catchup_advance = FrontierRecoveryAdvance::None;
+                if request_stalled || lag_window_expired {
+                    catchup_advance = self.handle_frontier_slot_event(
                         now,
                         super::FrontierSlotEvent::OnLagWindowExpired {
                             reason: "frontier_stall_reset",
                         },
                     );
                 }
-                if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset") {
+                if matches!(catchup_advance, FrontierRecoveryAdvance::None)
+                    && request_stalled
+                    && self.request_range_pull_from_anchor(
+                        height,
+                        "frontier_stall_reset_fallback",
+                        now,
+                    )
+                {
+                    catchup_advance = FrontierRecoveryAdvance::CatchUp;
+                }
+                if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
+                    || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+                {
                     info!(
                         height,
                         view,
                         block = %block_hash,
                         request_stalled,
+                        catchup_advance = ?catchup_advance,
                         trigger,
                         "routing known-block commit-QC recovery through frontier stall-reset catch-up"
                     );

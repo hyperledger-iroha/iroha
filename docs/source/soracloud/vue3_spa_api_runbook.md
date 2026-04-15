@@ -6,6 +6,7 @@ This runbook covers four production-oriented frontend patterns:
 - a hosted HTTP API with `--template http-service`
 - a root-bound single-service app with `app init --template single-api`
 - a mixed split app with `app init --template split-app`
+- `app init --template nexus-split-app` is an alias for the same split-app scaffold
 
 The single-api path is the recommended workflow for apps that need:
 
@@ -142,17 +143,18 @@ cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/in
 ```
 
 That validation path exercises the real `HttpService + Inrou` runtime, not the
-local `dev.sh` shim. `PortableVm` mounts shared lease storage through
-`virtio-fs` in unprivileged userspace, while the Linux/KVM fast path keeps the
-Firecracker NFS transport adapter behind the same LeaseFs authority. The mixed
-gate is expected to cover one Linux Firecracker host, one non-Linux
-PortableVm host, and one proxy-only validator that publishes zero hosted
-capacity while still proxying routed hosted-HTTP traffic correctly.
+local `dev.sh` shim. `PortableVm` attaches shared lease storage as persistent
+block devices in unprivileged userspace, while the Linux/KVM fast path keeps
+the Firecracker NFS transport adapter. The mixed gate is expected to cover one
+Linux Firecracker host, one non-Linux PortableVm host, and one proxy-only
+validator that publishes zero hosted capacity while still proxying routed
+hosted-HTTP traffic correctly.
 
 Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
-`IROHA_INROU_PORTABLE_INITRD_IMAGE`. Firecracker smoke uses the corresponding
-`IROHA_INROU_LINUX_KVM_*` environment variables.
+`IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional
+`IROHA_INROU_PORTABLE_ACCEL=auto|tcg|kvm|hvf|whpx`. Firecracker smoke uses the
+corresponding `IROHA_INROU_LINUX_KVM_*` environment variables.
 
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,
@@ -301,9 +303,33 @@ Split app:
 
 ```bash
 cd .soracloud-hayahi
+./doctor.sh
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app doctor --manifest ./app_manifest.json
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
+
+`app doctor-workspace` and `app release-workspace` resolve and run the same
+root `doctor.sh` and `release.sh` scripts adjacent to `app_manifest.json`, so
+the split-app happy path stays on the manifest-driven CLI surface.
+
+Those generated root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so local app workspaces
+can target a nearby `iroha_cli` checkout without requiring a globally
+installed wrapper. When you drive the fallback through `IROHA_MANIFEST_PATH`,
+set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
+artifact state isolated from other local builds.
+
+In local dev, the scaffolded Vite proxy strips the shared `/api` prefix before
+forwarding to the live and vault child processes so the dev loop matches the
+same hosted-route semantics Torii uses in production.
 
 The app deploy flow:
 
@@ -313,6 +339,9 @@ The app deploy flow:
 - split-app: returns the published `cid_gateway_url` for CID-only frontends
 - split-app: deploys the hosted `services/live` API
 - split-app: deploys the deterministic `services/vault` API
+- split-app: the recommended scaffolded path is `./doctor.sh` followed by `./release.sh`
+- split-app: the equivalent manifest-driven CLI path is `app doctor-workspace`
+  followed by `app release-workspace`
 - both modes: return the root app `manifest_path`, root `workspace_dir`, root
   `workspace_scripts`, root `hostname`, the top-level app `routes` split, and
   one manifest-derived service entry per app service

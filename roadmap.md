@@ -36,6 +36,95 @@ test is green again on the patched binary.
   - only after that, decide whether the broader grouped `consensus_and_da`
     harness needs another full sweep for signoff.
 
+Latest sync (2026-04-14 Taira rollout now rejects invalid MCP tool schemas before clients hit them):
+the repo-side schema-compatibility work for the reported
+`iroha.connect.session.delete` failure is now fully guarded in-tree. Torii was
+already sanitizing exported MCP `inputSchema` values into OpenAI-compatible
+top-level object schemas, but the rollout path was not enforcing that contract
+against live nodes. `configs/soranexus/taira/check_mcp_rollout.sh` now parses
+`tools/list` and fails if any advertised tool still exposes a top-level
+`anyOf`, `oneOf`, `allOf`, `enum`, or `not`, or if the top-level schema type
+is not `object`. `crates/iroha_torii/tests/mcp_endpoints.rs` also now has a
+full-surface regression that checks every published tool descriptor rather than
+only a few hand-picked aliases, and the public docs/runbook now call the schema
+requirement out explicitly.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/docs/mcp_api.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_connect_session_delete_tools_publish_openai_compatible_schema -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_all_published_tool_schemas_are_openai_compatible_top_level_objects -- --exact --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+- open work after this slice:
+  - keep the rollout guard wired into future public Torii releases so schema
+    drift is caught before Codex or other MCP clients discover it.
+
+Latest sync (2026-04-14 Torii MCP now accepts `notifications/initialized` and exposes a real lifecycle `ping`):
+the repo-side MCP compatibility fix for Codex startup is now in tree.
+`crates/iroha_torii/src/lib.rs` accepts the post-`initialize`
+`notifications/initialized` message as a proper notification and returns
+`HTTP 202 Accepted` with an empty body instead of a `method_not_found`
+JSON-RPC error, while `crates/iroha_torii/src/mcp.rs` now answers `ping`
+with an empty result object. The integration coverage in
+`crates/iroha_torii/tests/mcp_endpoints.rs` locks both lifecycle behaviors in,
+and the Taira rollout smoke + runbook now probe the full initialize ->
+initialized -> tools/list sequence rather than stopping at discovery.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/{lib.rs,mcp.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/docs/mcp_api.md`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/{check_mcp_rollout.sh,README.md}`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all -- crates/iroha_torii/src/lib.rs crates/iroha_torii/src/mcp.rs crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+    now fails for the right reason on the live public host:
+    `POST /v1/mcp notifications/initialized` still returns `200` JSON-RPC
+    `method_not_found` instead of `202` empty
+  - focused `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_ -- --nocapture`
+    is still compiling on the current dirty tree / busy shared workspace
+- open work after this slice:
+  - redeploy the live Taira validator build(s) with this Torii MCP patch so
+    `notifications/initialized` returns `202` on the public host;
+  - rerun `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+    after redeploy and expect it to pass through the full handshake; and
+  - finish the focused `iroha_torii` MCP test run or rerun it on a quieter
+    target dir if wider signoff is needed beyond the live smoke.
+
+Latest sync (2026-04-14 Taira shared-edge MCP ingress no longer dies with one dead validator):
+the shared Taira edge template now stops pinning `taira.sora.org` and the
+explorer's `/status` plus `/v1/*` pass-through routes to validator 1 only.
+`configs/soranexus/taira/taira-explorer.nginx.conf` now defines a shared
+`taira_public_edge_upstream` and enables `proxy_next_upstream ...
+non_idempotent` on those public locations so MCP `initialize` and other POST
+tool calls fail over cleanly when one validator listener is down. The Taira
+runbook now documents that requirement explicitly because the live shared edge
+was returning `502 Bad Gateway` for public MCP while validator 1's local Torii
+listener was absent.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-explorer.nginx.conf`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - live shared-edge reload on the Homebrew nginx host
+  - `curl -sS -D - https://taira.sora.org/v1/mcp`
+  - `curl -sS -D - -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' https://taira.sora.org/v1/mcp`
+  - `curl -sS -D - -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' https://taira.sora.org/v1/mcp`
+  - `curl -sS -D - https://taira-explorer.sora.org/v1/mcp`
+- open work after this slice:
+  - rerun `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root <explicit-public-node> --write-config <runtime-only canary client.toml>` once the runtime-only canary signer file is available on the operator host; and
+  - converge the live Homebrew nginx file onto the checked-in template so future edits do not drift again.
+
 Latest sync (2026-04-14 SCCP destination rollout JSON derive unblocker):
 the temporary SCCP JSON derive regression is closed on the current tree.
 `crates/iroha_sccp/src/lib.rs` now exposes
@@ -130,7 +219,7 @@ features.
   - pin the same public-safe defaults and route limits on the shipped public
     Taira profile without downstream wrapper tuning.
 
-Latest sync (2026-04-14 host-agnostic Inrou redesign now uses strict LeaseFs + virtio-fs and repo-native smoke commands):
+Latest sync (2026-04-14 host-agnostic Inrou redesign now uses block-backed PortableVm lease volumes plus repo-native smoke commands):
 the earlier Inrou storage/harness gap is now materially smaller in-tree. The
 public dual-ISA contract, backend-neutral executor model, `PortableVm`
 userspace QEMU path, Linux/KVM `FirecrackerKvm` preference, authoritative host
@@ -140,7 +229,7 @@ placed-replica routing/status reporting, repo-native backend smoke commands,
 and a mixed-host inventory gate are now all present. The portable smoke/test
 scaffolding also now compiles on Linux, macOS, and Windows hosts instead of
 only Unix hosts. Remaining work is the real multi-host acceptance run plus
-clearing unrelated compile blockers outside the hosted-runtime slice.
+gathering real-host acceptance evidence on publish-grade assets.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/soracloud.rs`
@@ -156,11 +245,19 @@ clearing unrelated compile blockers outside the hosted-runtime slice.
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
   - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test --no-run -p irohad --features embedded-soracloud-runtime --bin irohad`
   - fresh-target exact-test builds completed for:
-    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
   - focused PortableVm runtime tests now pass directly:
-    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact --nocapture`
     - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
+  - grouped Soracloud CLI integration coverage is buildable again after
+    dropping an unnecessary `Debug` derive from `ContractActivityIndex` in
+    `crates/iroha_torii/src/routing.rs`:
+    - `CARGO_TARGET_DIR=/tmp/iroha-integration-tests cargo test --no-run -p integration_tests --message-format short`
+    - `CARGO_TARGET_DIR=/tmp/iroha-core-api-soracloud cargo test --no-run -p integration_tests --test core_api --message-format short`
+    - `CARGO_TARGET_DIR=/tmp/iroha-core-api-soracloud cargo build -p iroha_cli --bin iroha --message-format short`
+    - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHA=/tmp/iroha-core-api-soracloud/debug/iroha /tmp/iroha-core-api-soracloud/debug/deps/core_api-40a16870990ea459 require_torii_url --nocapture`
+      -> `4 passed; 0 failed`
 - open work after this slice:
   - execute `cargo xtask soracloud-inrou-smoke portable` on a real non-Linux
     validator host with publish-grade guest assets;

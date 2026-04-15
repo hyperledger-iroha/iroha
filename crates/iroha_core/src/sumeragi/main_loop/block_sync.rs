@@ -1237,11 +1237,37 @@ impl Actor {
         self.should_drop_future_consensus_message(height, view, "BlockSyncUpdate")
     }
 
-    fn block_sync_update_deferral_reason(&self) -> Option<&'static str> {
+    fn validation_inflight_blocks_block_sync_update(
+        &self,
+        block_height: u64,
+        parent_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        if self.subsystems.validation.inflight.is_empty() {
+            return false;
+        }
+        let contiguous_frontier = block_height
+            == self.committed_height_snapshot().saturating_add(1)
+            && parent_hash == self.state.latest_block_hash_fast();
+        if !contiguous_frontier {
+            return true;
+        }
+        self.subsystems.validation.inflight.keys().any(|hash| {
+            self.pending
+                .pending_blocks
+                .get(hash)
+                .is_none_or(|pending| pending.height <= block_height)
+        })
+    }
+
+    fn block_sync_update_deferral_reason(
+        &self,
+        block_height: u64,
+        parent_hash: Option<HashOf<BlockHeader>>,
+    ) -> Option<&'static str> {
         if self.subsystems.commit.inflight.is_some() {
             return Some("commit_inflight");
         }
-        if !self.subsystems.validation.inflight.is_empty() {
+        if self.validation_inflight_blocks_block_sync_update(block_height, parent_hash) {
             return Some("validation_inflight");
         }
         if self.pending.pending_processing.get().is_some() {
@@ -1467,8 +1493,24 @@ impl Actor {
         let has_commit_votes = !commit_votes.is_empty();
         let has_commit_evidence =
             incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
+        let exact_contiguous_frontier = block_height == local_height.saturating_add(1)
+            && parent_hash == self.state.latest_block_hash_fast();
+        if self.runtime_da_enabled()
+            && exact_contiguous_frontier
+            && !block_known_locally
+            && !requested_missing_block
+        {
+            requested_missing_block = true;
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                "treating exact contiguous frontier block sync update as recovery traffic"
+            );
+        }
         self.prune_frontier_slot_state();
-        let entry_deferral_reason = self.block_sync_update_deferral_reason();
+        let entry_deferral_reason =
+            self.block_sync_update_deferral_reason(block_height, parent_hash);
         let exact_frontier_body_repair = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.block_hash == block_hash && slot.height == block_height && slot.view == block_view
         });

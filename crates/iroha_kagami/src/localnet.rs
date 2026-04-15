@@ -427,6 +427,7 @@ const LOCALNET_TELEMETRY_ENABLED: bool = true;
 const LOCALNET_TELEMETRY_PROFILE: &str = "extended";
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
+const LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV: &str = "IROHA_LOCALNET_ALLOW_UNSAFE_SORA_SINGLE_PEER";
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.
 /// Keep this at 1 so aggregators do not time out before quorum on fast pipelines.
 /// Default max transactions per block for localnet (targets 10k TPS).
@@ -730,11 +731,14 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             "`--mode-activation-height` must be greater than zero"
         ));
     }
+    let allow_single_peer_sora = std::env::var_os(LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV).is_some();
     if opts.sora_profile.is_some() {
         if !opts.build_line.is_iroha3() {
             return Err(eyre!("`--sora-profile` requires `--build-line iroha3`"));
         }
-        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS {
+        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS
+            && !(allow_single_peer_sora && opts.peers.get() == 1)
+        {
             return Err(eyre!(
                 "`--sora-profile` requires at least {LOCALNET_SORA_MIN_PEERS} peers"
             ));
@@ -2274,25 +2278,24 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
         dataspace: DataSpaceId::GLOBAL,
     }
     .into();
-    let mut builder = genesis
-        .into_builder()
-        .append_instruction(Grant::account_permission(
-            enact_governance,
-            ALICE_ID.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            manage_account_alias,
-            client_account_id.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            publish_manifest,
-            client_account_id.clone(),
-        ));
+    let mut seen = BTreeSet::new();
+    let mut grants = Vec::new();
+    let mut push_unique = |permission: Permission, destination: AccountId| {
+        if seen.insert((destination.clone(), permission.clone())) {
+            grants.push((permission, destination));
+        }
+    };
+
+    push_unique(enact_governance, ALICE_ID.clone());
+    push_unique(manage_account_alias, client_account_id.clone());
+    push_unique(publish_manifest, client_account_id.clone());
     if client_account_id != *ALICE_ID {
-        builder = builder.append_instruction(Grant::account_permission(
-            manage_offline_escrow,
-            client_account_id,
-        ));
+        push_unique(manage_offline_escrow, client_account_id);
+    }
+
+    let mut builder = genesis.into_builder();
+    for (permission, destination) in grants {
+        builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
     builder.build_raw()
 }
@@ -3178,6 +3181,50 @@ mod tests {
         assert_eq!(
             total_manage_offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
             "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
+        );
+    }
+
+    #[test]
+    fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("permissioned-offline-escrow-dedup".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let client_account_id = localnet_client_account_id();
+        let expected_explicit_manage_offline_escrow_grants =
+            usize::from(client_account_id != *ALICE_ID);
+        let offline_escrow_grants = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant_permission) => Some(grant_permission),
+                _ => None,
+            })
+            .filter(|grant_permission| grant_permission.destination() == &client_account_id)
+            .filter(|grant_permission| grant_permission.object().name() == "CanManageOfflineEscrow")
+            .count();
+
+        assert_eq!(
+            offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
+            "permissioned localnet genesis must not duplicate the offline escrow manager grant and must skip the redundant Alice bootstrap grant"
         );
     }
 

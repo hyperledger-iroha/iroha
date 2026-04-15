@@ -784,6 +784,22 @@ export interface EventStreamOptions {
   signal?: AbortSignal;
 }
 
+export interface ContractEventStreamOptions {
+  authority?: string;
+  contractAddress?: string;
+  contractAlias?: string;
+  module?: string;
+  eventKind?: string;
+  participant?: string;
+  assetId?: string;
+  provenance?: string;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  resultOk?: boolean;
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
 export interface CanonicalRequestAuth {
   accountId: string;
   privateKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | string | number[];
@@ -808,6 +824,30 @@ export interface AccountAssetListOptions extends IterableListOptions {
 
 export interface AccountTransactionListOptions extends IterableListOptions {
   assetId?: string;
+}
+
+export interface ContractActivityListOptions extends IterableListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contractAlias?: string;
+  contractEntrypoint?: string;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  resultOk?: boolean;
+}
+
+export interface ContractEventListOptions extends IterableListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contractAlias?: string;
+  module?: string;
+  eventKind?: string;
+  participant?: string;
+  assetId?: string;
+  provenance?: string;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  resultOk?: boolean;
 }
 
 export interface AssetHolderListOptions extends IterableListOptions {
@@ -1204,6 +1244,43 @@ export interface ToriiAccountTransactionItem {
   timestamp_ms?: number;
   entrypoint_hash: string;
   result_ok: boolean;
+}
+
+export interface ToriiContractActivityItem {
+  authority?: string;
+  timestamp_ms?: number;
+  entrypoint_hash: string;
+  result_ok: boolean;
+  contract_address: string;
+  contract_alias?: string;
+  contract_entrypoint?: string;
+  contract_payload?: JsonValue;
+  gas_asset_id?: string;
+  fee_sponsor?: string;
+  gas_limit?: number;
+}
+
+export interface ToriiContractEventItem {
+  event_id: string;
+  schema_version: number;
+  provenance: string;
+  authority?: string;
+  timestamp_ms?: number;
+  tx_hash_hex: string;
+  block_height: number;
+  block_hash_hex: string;
+  result_ok: boolean;
+  contract_address: string;
+  contract_alias?: string;
+  module: string;
+  event_kind: string;
+  participants?: ReadonlyArray<string>;
+  asset_ids?: ReadonlyArray<string>;
+  numeric_fields?: JsonValue;
+  payload?: JsonValue;
+  gas_asset_id?: string;
+  fee_sponsor?: string;
+  gas_limit?: number;
 }
 
 export interface ToriiProverReport {
@@ -7327,6 +7404,12 @@ export declare class ToriiClient {
     accountId: string,
     options?: AccountTransactionListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
+  listContractActivity<T = ToriiContractActivityItem>(
+    options?: ContractActivityListOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  listContractEvents<T = ToriiContractEventItem>(
+    options?: ContractEventListOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: IterableQueryOptions,
@@ -7860,6 +7943,9 @@ export declare class ToriiClient {
   streamEvents<T = ToriiEventPayload>(
     options?: EventStreamOptions,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
+  streamContractEvents<T = ToriiContractEventItem>(
+    options?: ContractEventStreamOptions,
+  ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
   streamSumeragiStatus<T = ToriiSumeragiStatus>(
     options?: Omit<EventStreamOptions, "filter">,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
@@ -8128,6 +8214,18 @@ export declare class ToriiClient {
   getOfflineRevocationBundle(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineRevocationBundle>;
+  listOfflineAllowances(
+    options?: OfflineAllowanceListOptions,
+  ): Promise<ToriiOfflineAllowanceListResponse>;
+  queryOfflineAllowances(
+    options?: IterableQueryOptions,
+  ): Promise<ToriiOfflineAllowanceListResponse>;
+  iterateOfflineAllowances(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
+  iterateOfflineAllowancesQuery(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
   listOfflineTransfers(
     options?: OfflineTransferListOptions,
   ): Promise<ToriiOfflineTransferListResponse>;

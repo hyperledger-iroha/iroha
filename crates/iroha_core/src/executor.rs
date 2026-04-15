@@ -2008,6 +2008,8 @@ impl Executor {
             .map_err(map_overlay_error)?;
         }
 
+        let tx_creation_time_ms =
+            u64::try_from(transaction.creation_time().as_millis()).unwrap_or(u64::MAX);
         let (tx_authority, executable) = transaction.into();
         debug_assert_eq!(&tx_authority, authority, "authority mismatch");
 
@@ -2105,6 +2107,10 @@ impl Executor {
                     Arc::clone(&accounts),
                     contract_call_context.args,
                 );
+                // User contract calls execute before the enclosing block has a finalized
+                // creation timestamp, so expose the transaction creation time as the
+                // logical "current time" seen by `current_time_ms()`.
+                host.set_block_time_ms(tx_creation_time_ms);
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
                 host.set_durable_state_snapshot_from_world(&state_transaction.world);

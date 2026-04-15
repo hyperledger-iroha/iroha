@@ -276,7 +276,7 @@ pub mod queue {
     /// Maximum number of transactions accepted per authority (prevents flooding).
     pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(2_usize.pow(16));
     /// Time-to-live for queued transactions before automatic eviction.
-    pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_hours(24);
+    pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
     /// Minimum interval between expired-transaction sweeps.
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
@@ -859,7 +859,7 @@ pub mod network {
     ///
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
-    pub const IDLE_TIMEOUT: Duration = Duration::from_mins(5);
+    pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
     /// Delay outbound peer dials after startup.
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
@@ -869,7 +869,7 @@ pub mod network {
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub const DEFERRED_SEND_MAX_PER_PEER: usize = 256;
     /// Idle timeout before expiring accept throttle buckets.
-    pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
+    pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_secs(10 * 60);
     /// Maximum number of accept throttle buckets to retain.
     pub const MAX_ACCEPT_BUCKETS: NonZeroUsize = nonzero!(4096_usize);
     /// Prefix length used for IPv4 accept prefix buckets.
@@ -946,7 +946,7 @@ pub mod network {
 
     // Optional DNS hostname refresh interval (None disables). Default 5 minutes.
     /// Interval between DNS resolution refreshes for peer hostnames.
-    pub const DNS_REFRESH_INTERVAL: Duration = Duration::from_mins(5);
+    pub const DNS_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
     // Disconnect peers when their per-topic bounded post channel overflows
     /// Whether to disconnect peers that overflow their per-topic queues.
@@ -979,7 +979,7 @@ pub mod network {
     /// Whether to enable TCP_NODELAY for reduced latency.
     pub const TCP_NODELAY: bool = true;
     /// Default TCP keepalive (recommended for long-lived P2P sockets)
-    pub const TCP_KEEPALIVE: Duration = Duration::from_mins(1);
+    pub const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
     /// Require peers to advertise matching SM helper availability (`sm_enabled`) during handshake.
     pub const REQUIRE_SM_HANDSHAKE_MATCH: bool = true;
     /// Require peers to match the OpenSSL preview toggle (`sm_openssl_preview`) during handshake.
@@ -996,7 +996,7 @@ pub mod snapshot {
     pub const STORE_DIR: &str = "./storage/snapshot";
     // 10 mins
     /// Interval between automatic snapshot creation tasks.
-    pub const CREATE_EVERY: Duration = Duration::from_mins(10);
+    pub const CREATE_EVERY: Duration = Duration::from_secs(10 * 60);
     /// Chunk size used for snapshot Merkle metadata (default: 1 MiB).
     pub const MERKLE_CHUNK_SIZE_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
 }
@@ -1262,7 +1262,7 @@ pub mod sorafs {
             /// Maximum requests permitted within the rolling window.
             pub const MAX_REQUESTS: Option<u32> = Some(300);
             /// Rolling window duration (seconds).
-            pub const WINDOW: Duration = Duration::from_mins(1);
+            pub const WINDOW: Duration = Duration::from_secs(60);
             /// Temporary ban duration applied after repeated violations.
             pub const BAN: Option<Duration> = Some(Duration::from_secs(30));
         }
@@ -1278,11 +1278,11 @@ pub mod sorafs {
             }
 
             /// Maximum TTL applied to standard denial entries when `expires_at` is omitted.
-            pub const STANDARD_TTL: Duration = Duration::from_hours(24 * 180);
+            pub const STANDARD_TTL: Duration = Duration::from_secs(24 * 180 * 60 * 60);
             /// Maximum TTL applied to emergency canons.
-            pub const EMERGENCY_TTL: Duration = Duration::from_hours(24 * 30);
+            pub const EMERGENCY_TTL: Duration = Duration::from_secs(24 * 30 * 60 * 60);
             /// Required review window for emergency canons.
-            pub const EMERGENCY_REVIEW_WINDOW: Duration = Duration::from_hours(24 * 7);
+            pub const EMERGENCY_REVIEW_WINDOW: Duration = Duration::from_secs(24 * 7 * 60 * 60);
             /// Permanent entries must cite a governance reference by default.
             pub const REQUIRE_GOVERNANCE_REFERENCE: bool = true;
         }
@@ -1348,11 +1348,11 @@ pub mod sorafs {
                 None
             }
             /// Renewal window applied before certificate expiry (seconds).
-            pub const RENEWAL_WINDOW: Duration = Duration::from_hours(30 * 24);
+            pub const RENEWAL_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
             /// Backoff applied after automation failures (seconds).
-            pub const RETRY_BACKOFF: Duration = Duration::from_mins(30);
+            pub const RETRY_BACKOFF: Duration = Duration::from_secs(30 * 60);
             /// Maximum jitter applied to retry scheduling (seconds).
-            pub const RETRY_JITTER: Duration = Duration::from_mins(5);
+            pub const RETRY_JITTER: Duration = Duration::from_secs(5 * 60);
             /// Solve DNS-01 challenges by default.
             pub const DNS01: bool = true;
             /// Solve TLS-ALPN-01 challenges by default.
@@ -1698,7 +1698,7 @@ pub mod torii {
     /// Burst tokens allowed for pre-authorization attempts per IP.
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
-    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_mins(1);
+    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
     /// Enable app-facing webhook routes and workers. Disabled by default.
     pub const WEBHOOKS_ENABLED: bool = false;
     /// Enable app-facing ZK attachment routes and workers. Disabled by default.
@@ -2124,7 +2124,7 @@ pub mod nexus {
         use std::time::Duration;
 
         /// Poll interval for refreshing manifests and governance bundles.
-        pub const POLL_INTERVAL: Duration = Duration::from_mins(1);
+        pub const POLL_INTERVAL: Duration = Duration::from_secs(60);
     }
 
     /// Shared Hugging Face lease defaults.
@@ -2321,7 +2321,7 @@ pub mod nexus {
             /// Number of audit windows tracked before slashing for insufficient coverage.
             pub const WINDOW_COUNT: u16 = 20;
             /// Interval between audit windows.
-            pub const INTERVAL: Duration = Duration::from_mins(10);
+            pub const INTERVAL: Duration = Duration::from_secs(10 * 60);
         }
 
         /// Recovery deadline defaults for missing DA proofs.
@@ -2329,7 +2329,7 @@ pub mod nexus {
             use std::time::Duration;
 
             /// Deadline for supplying recovery proofs once requested.
-            pub const REQUEST_TIMEOUT: Duration = Duration::from_hours(24);
+            pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
         }
 
         /// Temporal diversity defaults for attester rotation.
