@@ -26,7 +26,7 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
 
 - POST `/v1/contracts/deploy`
   - Accepts base64 `.to` bytecode with authority, private key, and a stable `contract_alias`; verifies the embedded `CNTR` contract interface, computes `code_hash` from the full artifact body after the fixed IVM header, computes `abi_hash` from the enforced ABI policy declared by the verified header, derives a fresh immutable `contract_address`, and binds the alias in the requested dataspace (`universal` by default).
-  - Request body: `DeployContractDto`; response body: `DeployContractResponseDto`.
+  - Request body: `DeployContractDto`; response body: `DeployContractBundleReceiptDto`.
   - Submits a single transaction that registers the manifest, stores the bytecode, activates the fresh address-backed instance, and binds the alias.
   - Reusing an existing `contract_alias` performs an in-place upgrade: the response reports the new `contract_address`, the previous address, and `upgraded = true`.
   - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
@@ -59,7 +59,7 @@ Notes:
 - The handler recomputes the manifest internally; callers do not provide one on this shortcut.
 - The decoded bytecode length must not exceed `max_contract_code_bytes`; exceeding the limit triggers an `InvariantViolation` (`code bytes exceed cap`) during transaction admission.
 
-### DeployContractResponseDto
+### DeployContractBundleReceiptDto
 
 ```jsonc
 {

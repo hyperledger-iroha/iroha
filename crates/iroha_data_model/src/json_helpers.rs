@@ -372,7 +372,9 @@ mod tests {
     use norito::json;
 
     use super::*;
-    use crate::soracloud::{SoraInrouGuestImageV1, SoraInrouGuestIsaV1};
+    use crate::soracloud::{
+        SoraArtifactDistributionPolicyV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1,
+    };
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
@@ -459,6 +461,8 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
                 (
@@ -467,6 +471,8 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
                     },
                 ),
             ]),

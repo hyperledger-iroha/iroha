@@ -61,7 +61,7 @@ Contracts API (deploy)
   - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
   - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractCode`, `RegisterSmartContractBytes`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
   - Redeploying the same `contract_alias` is the public upgrade path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `upgraded = true`.
-  - Response: { "ok": true, "contract_alias": "router::universal", "contract_address": "tairac1…", "previous_contract_address": "tairac1…"? , "upgraded": false, "dataspace": "universal", "deploy_nonce": 0, "tx_hash_hex": "…", "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
     - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`

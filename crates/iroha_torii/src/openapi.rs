@@ -2174,7 +2174,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Deploy a public contract.",
-            "Deploy contract bytecode, derive a canonical contract address, and activate it in the target dataspace (default `universal`).",
+            "Deploy contract bytecode, derive a canonical contract address, activate it in the target dataspace (default `universal`), and return the canonical deploy-bundle receipt with one contract entry.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),

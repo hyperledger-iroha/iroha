@@ -10,16 +10,17 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
+#[cfg(feature = "zk-stark")]
+use iroha_core::zk_stark::{
+    STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
+    synthesize_stark_fri_envelope_bytes,
+};
 use iroha_core::{
     queue,
     smartcontracts::isi::offline::{
         LineageAppleAppAttestVerification, verify_lineage_apple_app_attest,
     },
     state::WorldReadOnly,
-    zk_stark::{
-        STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
-        synthesize_stark_fri_envelope_bytes,
-    },
 };
 use iroha_crypto::{Hash, PrivateKey, Signature};
 use iroha_data_model::{
@@ -58,6 +59,164 @@ use sha2::{Digest, Sha256};
 use x509_parser::{certificate::X509Certificate, prelude::FromDer, time::ASN1Time};
 
 use crate::{AppState, Error, OfflineIssuerSigner, routing};
+
+#[cfg(not(feature = "zk-stark"))]
+mod zk_stark_compat {
+    pub const STARK_HASH_SHA256_V1: u8 = 1;
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct MerklePath {
+        pub dirs: Vec<u8>,
+        pub siblings: Vec<[u8; 32]>,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkFriParamsV1 {
+        pub version: u16,
+        pub n_log2: u8,
+        pub blowup_log2: u8,
+        pub fold_arity: u8,
+        pub queries: u16,
+        pub merkle_arity: u8,
+        pub hash_fn: u8,
+        pub domain_tag: String,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkCommitmentsV1 {
+        pub version: u16,
+        pub roots: Vec<[u8; 32]>,
+        pub comp_root: Option<[u8; 32]>,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkCompositionTermV1 {
+        pub wire_index: u32,
+        pub value: u64,
+        pub coeff: u64,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkCompositionValueV1 {
+        pub leaf: u64,
+        pub constant: u64,
+        pub z_coeff: u64,
+        pub aux_terms: Vec<StarkCompositionTermV1>,
+        pub path: MerklePath,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct FoldDecommitV1 {
+        pub j: u32,
+        pub y0: u64,
+        pub y1: u64,
+        pub path_y0: MerklePath,
+        pub path_y1: MerklePath,
+        pub z: u64,
+        pub path_z: MerklePath,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkProofV1 {
+        pub version: u16,
+        pub commits: StarkCommitmentsV1,
+        pub queries: Vec<Vec<FoldDecommitV1>>,
+        pub comp_values: Option<Vec<StarkCompositionValueV1>>,
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoSerialize,
+        norito::derive::NoritoDeserialize,
+    )]
+    pub struct StarkVerifyEnvelopeV1 {
+        pub params: StarkFriParamsV1,
+        pub proof: StarkProofV1,
+        pub transcript_label: String,
+    }
+
+    pub fn synthesize_stark_fri_envelope_bytes(
+        _params: StarkFriParamsV1,
+        _transcript_label: String,
+    ) -> Result<Vec<u8>, String> {
+        Err("zk-stark feature is disabled".to_owned())
+    }
+}
+
+#[cfg(not(feature = "zk-stark"))]
+use zk_stark_compat::{
+    STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
+    synthesize_stark_fri_envelope_bytes,
+};
 
 const TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
 

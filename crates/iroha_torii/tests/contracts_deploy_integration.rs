@@ -21,6 +21,14 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use tower::ServiceExt as _; // for Router::oneshot
 
+fn deploy_receipt_contract(response: &norito::json::Value) -> &norito::json::Value {
+    response
+        .get("contracts")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|contracts| contracts.first())
+        .expect("single-contract deploy response should include exactly one contract receipt")
+}
+
 #[tokio::test]
 async fn contracts_deploy_and_fetch_code_bytes() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -95,7 +103,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    let ch = v
+    let ch = deploy_receipt_contract(&v)
         .get("code_hash_hex")
         .and_then(|x| x.as_str())
         .expect("code_hash_hex");
@@ -201,32 +209,33 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
     assert_eq!(first_resp.status(), http::StatusCode::OK);
     let first_body = first_resp.into_body().collect().await.unwrap().to_bytes();
     let first_json: norito::json::Value = norito::json::from_slice(&first_body).unwrap();
-    let first_address: iroha_data_model::smart_contract::ContractAddress = first_json
+    let first_contract = deploy_receipt_contract(&first_json);
+    let first_address: iroha_data_model::smart_contract::ContractAddress = first_contract
         .get("contract_address")
         .and_then(norito::json::Value::as_str)
         .expect("first contract address")
         .parse()
         .expect("parse first contract address");
     assert_eq!(
-        first_json
+        first_contract
             .get("contract_alias")
             .and_then(norito::json::Value::as_str),
         Some(alias.as_ref())
     );
     assert_eq!(
-        first_json
+        first_contract
             .get("previous_contract_address")
             .and_then(norito::json::Value::as_str),
         None
     );
     assert_eq!(
-        first_json
+        first_contract
             .get("upgraded")
             .and_then(norito::json::Value::as_bool),
         Some(false)
     );
     assert_eq!(
-        first_json
+        first_contract
             .get("deploy_nonce")
             .and_then(norito::json::Value::as_u64),
         Some(0)
@@ -261,7 +270,8 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
     assert_eq!(second_resp.status(), http::StatusCode::OK);
     let second_body = second_resp.into_body().collect().await.unwrap().to_bytes();
     let second_json: norito::json::Value = norito::json::from_slice(&second_body).unwrap();
-    let second_address: iroha_data_model::smart_contract::ContractAddress = second_json
+    let second_contract = deploy_receipt_contract(&second_json);
+    let second_address: iroha_data_model::smart_contract::ContractAddress = second_contract
         .get("contract_address")
         .and_then(norito::json::Value::as_str)
         .expect("second contract address")
@@ -272,19 +282,19 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
         "redeploy must mint a new immutable address"
     );
     assert_eq!(
-        second_json
+        second_contract
             .get("previous_contract_address")
             .and_then(norito::json::Value::as_str),
         Some(first_address.as_ref())
     );
     assert_eq!(
-        second_json
+        second_contract
             .get("upgraded")
             .and_then(norito::json::Value::as_bool),
         Some(true)
     );
     assert_eq!(
-        second_json
+        second_contract
             .get("deploy_nonce")
             .and_then(norito::json::Value::as_u64),
         Some(1)
@@ -408,12 +418,13 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
     assert_eq!(first_resp.status(), http::StatusCode::OK);
     let first_body = first_resp.into_body().collect().await.unwrap().to_bytes();
     let first_json: norito::json::Value = norito::json::from_slice(&first_body).unwrap();
-    let first_address: iroha_data_model::smart_contract::ContractAddress = first_json
-        .get("contract_address")
-        .and_then(norito::json::Value::as_str)
-        .expect("first contract address")
-        .parse()
-        .expect("parse first contract address");
+    let first_address: iroha_data_model::smart_contract::ContractAddress =
+        deploy_receipt_contract(&first_json)
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str)
+            .expect("first contract address")
+            .parse()
+            .expect("parse first contract address");
 
     let applied_first =
         iroha_torii::test_utils::drain_queue_and_apply_all(&state, &queue, &chain_id, 1);
@@ -471,7 +482,8 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
     assert_eq!(second_resp.status(), http::StatusCode::OK);
     let second_body = second_resp.into_body().collect().await.unwrap().to_bytes();
     let second_json: norito::json::Value = norito::json::from_slice(&second_body).unwrap();
-    let second_address: iroha_data_model::smart_contract::ContractAddress = second_json
+    let second_contract = deploy_receipt_contract(&second_json);
+    let second_address: iroha_data_model::smart_contract::ContractAddress = second_contract
         .get("contract_address")
         .and_then(norito::json::Value::as_str)
         .expect("second contract address")
@@ -479,7 +491,7 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
         .expect("parse second contract address");
     assert_ne!(second_address, first_address);
     assert_eq!(
-        second_json
+        second_contract
             .get("previous_contract_address")
             .and_then(norito::json::Value::as_str),
         Some(stale_address.as_ref())

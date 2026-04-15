@@ -40,15 +40,29 @@ class HttpClientTransportTest {
             body = """
                 {
                   "ok": true,
-                  "contract_alias": "router::universal",
-                  "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                  "previous_contract_address": null,
-                  "upgraded": false,
-                  "dataspace": "router",
-                  "deploy_nonce": 7,
-                  "tx_hash_hex": "${"11".repeat(32)}",
-                  "code_hash_hex": "${"22".repeat(32)}",
-                  "abi_hash_hex": "${"33".repeat(32)}"
+                  "bundle_name": "single-contract-deploy",
+                  "bundle_digest": "mock-bundle-digest",
+                  "chain_fingerprint": "mock-chain@height-0",
+                  "dry_run": false,
+                  "completed_stages": ["plan", "deploy"],
+                  "failure_point": null,
+                  "contracts": [
+                    {
+                      "name": "router::universal",
+                      "contract_alias": "router::universal",
+                      "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                      "previous_contract_address": null,
+                      "upgraded": false,
+                      "dataspace": "router",
+                      "deploy_nonce": 7,
+                      "tx_hash_hex": "${"11".repeat(32)}",
+                      "code_hash_hex": "${"22".repeat(32)}",
+                      "abi_hash_hex": "${"33".repeat(32)}",
+                      "status": "submitted"
+                    }
+                  ],
+                  "init_calls": [],
+                  "assertions": []
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
@@ -67,10 +81,11 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertTrue(parsed.ok)
-        assertEquals("router::universal", parsed.contractAlias)
-        assertEquals("router", parsed.dataspace)
-        assertEquals(7L, parsed.deployNonce)
-        assertEquals("11".repeat(32), parsed.txHashHex)
+        assertEquals("mock-bundle-digest", parsed.bundleDigest)
+        assertEquals("router::universal", parsed.contracts.first().contractAlias)
+        assertEquals("router", parsed.contracts.first().dataspace)
+        assertEquals(7L, parsed.contracts.first().deployNonce)
+        assertEquals("11".repeat(32), parsed.contracts.first().txHashHex)
 
         val request = executor.lastRequest
         assertNotNull(request)

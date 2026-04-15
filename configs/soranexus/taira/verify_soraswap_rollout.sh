@@ -17,6 +17,7 @@ ALLOW_TESTNET_MUTATIONS=0
 SKIP_MCP_CHECK=0
 SKIP_SORAFS_CHECK=0
 SKIP_NESTED_CALL=0
+SKIP_TRADER_APP_API_CHECK=0
 
 usage() {
   cat <<'EOF'
@@ -32,14 +33,16 @@ Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
                                   [--skip-mcp-check]
                                   [--skip-sorafs-check]
                                   [--skip-nested-call]
+                                  [--skip-trader-app-api-check]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
   1. `check_mcp_rollout.sh` on the chosen public node
   2. `check_sorafs_rollout.sh` on the chosen public node
-  3. `make testnet-nested-call-probe` in `../soraswap`
-  4. optional `make deploy-testnet`
-  5. optional signed `make smoke-testnet`
-  6. optional `make release-checklist`
+  3. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
+  4. `make testnet-nested-call-probe` in `../soraswap`
+  5. optional `make deploy-testnet`
+  6. optional signed `make smoke-testnet`
+  7. optional `make release-checklist`
 
 `--run-smoke` implies deploy. `--run-release-checklist` implies both deploy
 and smoke. Mutating smoke requires `--allow-testnet-mutations`.
@@ -124,6 +127,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_NESTED_CALL=1
       shift
       ;;
+    --skip-trader-app-api-check)
+      SKIP_TRADER_APP_API_CHECK=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -149,6 +156,11 @@ if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
     echo "--public-root is required unless both --skip-mcp-check and --skip-sorafs-check are set" >&2
     exit 1
   fi
+fi
+
+if [[ $SKIP_TRADER_APP_API_CHECK -ne 1 && -z "$PUBLIC_TORII_ROOT" ]]; then
+  echo "--public-root is required unless --skip-trader-app-api-check is set" >&2
+  exit 1
 fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
@@ -186,6 +198,41 @@ run_step() {
   "$@"
 }
 
+probe_trader_app_api() {
+  local trader_api_report="$SORASWAP_ROOT/deployments/testnet/trader_api_bundle.latest.json"
+  local content_cid probe_url probe_body probe_http
+
+  if [[ ! -f "$trader_api_report" ]]; then
+    echo "==> trader app-api CID route probe skipped: $trader_api_report not found"
+    return 0
+  fi
+
+  content_cid="$(jq -r '.content_cid // empty' "$trader_api_report")"
+  if [[ -z "$content_cid" ]]; then
+    echo "trader app-api CID route probe failed: $trader_api_report does not include content_cid" >&2
+    exit 1
+  fi
+
+  probe_url="${PUBLIC_TORII_ROOT%/}/v1/app-api/cid/${content_cid}"
+  probe_body="$(mktemp)"
+
+  echo "==> trader app-api CID route probe: ${probe_url}"
+  if ! probe_http="$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' "$probe_url")"; then
+    echo "trader app-api CID route probe failed to reach ${probe_url}" >&2
+    sed -n '1,40p' "$probe_body" >&2 || true
+    rm -f "$probe_body"
+    exit 1
+  fi
+  if [[ "$probe_http" != 2* ]]; then
+    echo "trader app-api CID route probe failed with HTTP ${probe_http}: ${probe_url}" >&2
+    sed -n '1,40p' "$probe_body" >&2 || true
+    rm -f "$probe_body"
+    exit 1
+  fi
+
+  rm -f "$probe_body"
+}
+
 if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
   mcp_cmd=(
     "${SCRIPT_DIR}/check_mcp_rollout.sh"
@@ -213,6 +260,10 @@ if [[ $SKIP_SORAFS_CHECK -ne 1 ]]; then
     sorafs_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
   run_step "public Taira SoraFS + capacity canary" "${sorafs_cmd[@]}"
+fi
+
+if [[ $SKIP_TRADER_APP_API_CHECK -ne 1 ]]; then
+  run_step "SoraSwap trader app-api CID route" probe_trader_app_api
 fi
 
 if [[ $SKIP_NESTED_CALL -ne 1 ]]; then

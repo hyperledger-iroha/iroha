@@ -338,12 +338,18 @@ fn compile_or_load_contract_code(
             let artifact_path = artifact
                 .as_ref()
                 .map(|path| resolve_manifest_path(manifest_dir, path))
-                .unwrap_or(default_contract_artifact_path(manifest_path, &contract.name)?);
+                .unwrap_or(default_contract_artifact_path(
+                    manifest_path,
+                    &contract.name,
+                )?);
             if let Some(parent) = artifact_path.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::write(&artifact_path, &program).wrap_err_with(|| {
-                format!("failed to write compiled artifact `{}`", artifact_path.display())
+                format!(
+                    "failed to write compiled artifact `{}`",
+                    artifact_path.display()
+                )
             })?;
             Ok(program)
         }
@@ -360,8 +366,8 @@ fn compile_or_load_contract_code(
 }
 
 fn load_contract_app_manifest(path: &Path) -> Result<ContractAppManifest> {
-    let body =
-        fs::read_to_string(path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+    let body = fs::read_to_string(path)
+        .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
     toml::from_str(&body).wrap_err_with(|| format!("failed to parse `{}`", path.display()))
 }
 
@@ -384,12 +390,13 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
         }));
     }
 
-    let resolve_alias_ref = |value: &str| -> Result<iroha::data_model::smart_contract::ContractAlias> {
-        if let Some(alias) = alias_by_name.get(value) {
-            return Ok(alias.clone());
-        }
-        resolve_contract_manifest_alias(value, default_dataspace)
-    };
+    let resolve_alias_ref =
+        |value: &str| -> Result<iroha::data_model::smart_contract::ContractAlias> {
+            if let Some(alias) = alias_by_name.get(value) {
+                return Ok(alias.clone());
+            }
+            resolve_contract_manifest_alias(value, default_dataspace)
+        };
 
     let init_calls = manifest
         .init
@@ -466,7 +473,8 @@ impl Run for AppBuildArgs {
         let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
         if let Some(out) = self.out {
             let body = norito::json::to_json_pretty(&bundle)?;
-            fs::write(&out, body).wrap_err_with(|| format!("failed to write `{}`", out.display()))?;
+            fs::write(&out, body)
+                .wrap_err_with(|| format!("failed to write `{}`", out.display()))?;
             context.println(format_args!("Wrote bundle to {}", out.display()))?;
         } else {
             context.print_data(&bundle)?;
@@ -778,7 +786,14 @@ fn extract_submitted_transaction_hash(
 ) -> Result<HashOf<iroha::data_model::transaction::SignedTransaction>> {
     let tx_hash_hex = value
         .as_object()
-        .and_then(|map| map.get("tx_hash_hex"))
+        .and_then(|map| {
+            map.get("tx_hash_hex").or_else(|| {
+                map.get("contracts")
+                    .and_then(norito::json::Value::as_array)
+                    .and_then(|contracts| contracts.first())
+                    .and_then(|contract| contract.get("tx_hash_hex"))
+            })
+        })
         .and_then(norito::json::Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| eyre!("response missing `tx_hash_hex`"))?;
@@ -2438,8 +2453,14 @@ mod tests {
         )
         .expect("parse toml");
         let json = toml_to_json_value(value).expect("convert to json");
-        assert_eq!(json.get("retries").and_then(norito::json::Value::as_i64), Some(2));
-        assert_eq!(json.get("enabled").and_then(norito::json::Value::as_bool), Some(true));
+        assert_eq!(
+            json.get("retries").and_then(norito::json::Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            json.get("enabled").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             json.get("nested")
                 .and_then(|nested| nested.get("label"))
@@ -2452,6 +2473,43 @@ mod tests {
                 .and_then(norito::json::Value::as_array)
                 .map(Vec::len),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn extract_submitted_transaction_hash_prefers_top_level_field() {
+        let value = norito::json!({
+            "tx_hash_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+            "contracts": [
+                {
+                    "tx_hash_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+                }
+            ]
+        });
+
+        let hash = extract_submitted_transaction_hash(&value).expect("extract hash");
+
+        assert_eq!(
+            hash.to_string(),
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn extract_submitted_transaction_hash_falls_back_to_first_contract_receipt() {
+        let value = norito::json!({
+            "contracts": [
+                {
+                    "tx_hash_hex": "3333333333333333333333333333333333333333333333333333333333333333"
+                }
+            ]
+        });
+
+        let hash = extract_submitted_transaction_hash(&value).expect("extract hash");
+
+        assert_eq!(
+            hash.to_string(),
+            "3333333333333333333333333333333333333333333333333333333333333333"
         );
     }
 

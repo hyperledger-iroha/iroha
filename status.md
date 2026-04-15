@@ -26,6 +26,83 @@ Last updated: 2026-04-15
   - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_witness_corruption' -- --exact --nocapture --test-threads=1`
   - `cargo fmt --all`
 
+## 2026-04-15 Follow-up: review fixes aligned the local Taira bootstrap signer model and removed the last stale flattened deploy-response docs
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/bootstrap_kaigi_localnet.sh`,
+  `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/config.toml`, and
+  `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md` now make
+  the localnet bootstrap intent explicit: the local `dist/taira-localnet`
+  overlay still uses one shared signer for both onboarding and the served
+  faucet, while the checked-in public validator template remains render-first
+  and secret-free.
+- The stale flattened `POST /v1/contracts/deploy` response text has been
+  removed from the shipped governance/deployment doc families and replaced with
+  the canonical bundle-receipt wording, including the source docs plus the
+  portal governance mirrors.
+- Added focused regression coverage in `pytests/scripts` so the old flattened
+  deploy-response signature does not reappear in those targeted docs.
+
+## 2026-04-15 Follow-up: canonical contract deploy receipts are now unified across Torii/CLI/SDKs, and the shipped Taira profile no longer carries runtime-only shared secrets
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/openapi.rs` now make
+  `POST /v1/contracts/deploy` return the same
+  `DeployContractBundleReceiptDto` shape as
+  `POST /v1/contracts/deploy-bundle`, with one canonical `contracts[]` entry
+  instead of the old flattened single-contract response. The Torii bundle
+  storage/unit coverage now also proves that persisted bundle receipts are
+  chain-fingerprint scoped, dry-run deploys do not persist receipts, and resume
+  reuses already completed deploy stages.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/contracts_{deploy,call}_integration.rs`
+  now consume the canonical deploy receipt shape through `contracts[0]`, so the
+  route-level integration coverage and the code-bytes / redeploy / call flows
+  are aligned with the new public wire format.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs` now
+  keeps `iroha contract ... --wait` compatible with the canonical receipt by
+  accepting either a top-level `tx_hash_hex` or the first
+  `contracts[0].tx_hash_hex`, and the new direct unit coverage locks both JSON
+  branches in.
+- The Python, Kotlin/JVM, and Java Android Torii clients now normalize the same
+  canonical receipt contract:
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/{client.py,mock.py,__init__.py}`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/{ContractDeployResponse.kt,ContractJsonParser.kt}`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{ContractDeployResponse.java,ContractJsonParser.java}`
+  The deploy helpers now expose bundle-level metadata plus typed
+  contract/init/assertion receipt lists instead of a legacy flattened shape.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/config.toml` is now
+  a true checked-in template for the public Taira deployment instead of a
+  secret-bearing runtime profile. Runtime-only validator/onboarding/faucet/
+  streaming signing material moved to
+  `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/validator_secrets.example.toml`
+  and the render/bootstrap path now injects it from a user-local secrets file:
+  - `/Users/takemiyamakoto/dev/iroha/scripts/render_taira_validator_bundle.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/render_taira_validator_bundle_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  The shipped public profile also now pins its first-release Torii posture in
+  config, including `torii.deploy_rate_per_origin_per_sec = 4`,
+  `torii.deploy_burst_per_origin = 8`,
+  `torii.webhooks_enabled = false`, and
+  `torii.zk_attachments_enabled = false`.
+- Focused validation for this slice:
+  - `cargo test -p iroha_torii --test contracts_deploy_integration -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-receipt cargo test -p iroha_torii contract_bundle_tests --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-cli-hash cargo test -p iroha_cli --bin iroha extract_submitted_transaction_hash_ -- --nocapture`
+  - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m pytest scripts/tests/render_taira_validator_bundle_test.py -q`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'deploy_contract_encodes_alias_first_payload_and_parses_response or contract_bundle_helpers_against_mock_server or governance_contract_helpers_against_mock_server' -q`
+  - `cd /Users/takemiyamakoto/dev/iroha/kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain`
+  - `cd /Users/takemiyamakoto/dev/iroha/java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew -Dandroid.test.mains=org.hyperledger.iroha.android.client.HttpClientTransportTests android:testDebugUnitTest --console=plain`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/build_taira_rollout_bundle.sh`
+  - render smoke with a user-local roster/secrets pair against the sanitized
+    `configs/soranexus/taira/config.toml` template
+- Residual validation note: the exact lib-test rerun
+  `CARGO_TARGET_DIR=/tmp/iroha-contract-receipt cargo test -p iroha_torii contracts_deploy_handler_ok --lib -- --nocapture`
+  is still red on the current dirty tree, but for an in-process alias-activation
+  timeout in the old handler harness (`timed out waiting for alias ... to
+  activate`), not for the canonical receipt shape. The real
+  `contracts_deploy_integration` route test above passes on the patched tree.
+
 ## 2026-04-15 Follow-up: collector plans clamp stale PRF height and lock-convergence waits for QC telemetry catch-up
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
   now derives `/v1/sumeragi/collectors` plan context from the fresher of the

@@ -34,6 +34,7 @@ import {
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
+  buildSetContractAliasInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,

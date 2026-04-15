@@ -3,6 +3,9 @@
 from .client import (
     BallotSubmitResult,
     ContractCallResponse,
+    ContractDeployAssertionReceipt,
+    ContractDeployCallReceipt,
+    ContractDeployContractReceipt,
     ContractDeployResponse,
     CouncilAuditMetadata,
     CouncilCurrentStatus,
@@ -91,6 +94,9 @@ from .client import (
 __all__ = [
     "ToriiClient",
     "ExplorerAccountQr",
+    "ContractDeployContractReceipt",
+    "ContractDeployCallReceipt",
+    "ContractDeployAssertionReceipt",
     "ContractDeployResponse",
     "ContractCallResponse",
     "CouncilMember",

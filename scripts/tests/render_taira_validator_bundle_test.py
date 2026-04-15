@@ -36,6 +36,18 @@ public_address = "https://taira-validator-1.sora.org"
 
 [torii.mcp]
 enabled = true
+
+[torii.onboarding]
+authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
+private_key = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY"
+
+[torii.faucet]
+authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
+private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
+
+[streaming]
+identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
+identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
 """
 
 
@@ -65,7 +77,16 @@ def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: boo
 
 
 def _write_secrets(path: Path, validator_count: int = 4) -> None:
-    validators = []
+    validators = [
+        "[shared]",
+        'torii_onboarding_authority = "bootstrap-authority"',
+        'torii_onboarding_private_key = "bootstrap-private-key"',
+        'torii_faucet_authority = "faucet-authority"',
+        'torii_faucet_private_key = "faucet-private-key"',
+        'streaming_identity_public_key = "streaming-public-key"',
+        'streaming_identity_private_key = "streaming-private-key"',
+        "",
+    ]
     for index in range(1, validator_count + 1):
         validators.extend(
             [
@@ -80,12 +101,16 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
 
 def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
     _write_roster(roster_path)
+    _write_secrets(secrets_path)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
-    written = MODULE.render_bundle(base_config_path, roster_path, output_dir)
+    written = MODULE.render_bundle(
+        base_config_path, roster_path, output_dir, secrets_path=secrets_path
+    )
 
     assert len(written) == 4
     config = (output_dir / "taira-validator-3" / "config.toml").read_text(
@@ -98,6 +123,12 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert '"peer-4-public@taira-validator-4.sora.org:1337"' in config
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
+    assert 'authority = "bootstrap-authority"' in config
+    assert 'private_key = "bootstrap-private-key"' in config
+    assert 'authority = "faucet-authority"' in config
+    assert 'private_key = "faucet-private-key"' in config
+    assert 'identity_public_key = "streaming-public-key"' in config
+    assert 'identity_private_key = "streaming-private-key"' in config
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
@@ -168,6 +199,21 @@ def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
 
     assert validators[0].private_key == "peer-1-private"
     assert validators[-1].private_key == "peer-4-private"
+
+
+def test_render_bundle_rejects_unpopulated_template_placeholders(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    try:
+        MODULE.render_bundle(base_config_path, roster_path, output_dir)
+    except ValueError as error:
+        assert "template placeholder values" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("render_bundle accepted placeholder secrets without a secrets file")
 
 
 def test_main_supports_single_validator_render(tmp_path: Path) -> None:

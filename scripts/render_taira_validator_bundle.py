@@ -37,6 +37,26 @@ class RosterDefaults:
     torii_public_address: str | None
 
 
+@dataclass(frozen=True)
+class SharedSecrets:
+    """Runtime-only shared secret material injected into rendered configs."""
+
+    torii_onboarding_authority: str | None = None
+    torii_onboarding_private_key: str | None = None
+    torii_faucet_authority: str | None = None
+    torii_faucet_private_key: str | None = None
+    streaming_identity_public_key: str | None = None
+    streaming_identity_private_key: str | None = None
+
+
+@dataclass(frozen=True)
+class SecretMaterial:
+    """User-local validator and shared secrets used during rendering."""
+
+    validators: dict[str, str]
+    shared: SharedSecrets
+
+
 def _load_toml(path: Path) -> dict[str, Any]:
     try:
         import tomllib
@@ -79,6 +99,22 @@ def _load_validator_tables(payload: dict[str, Any], context: str) -> list[dict[s
     return validators
 
 
+def _load_optional_validator_tables(
+    payload: dict[str, Any], context: str
+) -> list[dict[str, Any]]:
+    validators_raw = payload.get("validators")
+    if validators_raw is None:
+        return []
+    if not isinstance(validators_raw, list):
+        raise ValueError(f"{context} must define a `validators` array of tables")
+    validators: list[dict[str, Any]] = []
+    for index, raw in enumerate(validators_raw, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"{context} validator entry #{index} must be a TOML table")
+        validators.append(raw)
+    return validators
+
+
 def _load_defaults(payload: dict[str, Any]) -> RosterDefaults:
     values = {
         "network_address": payload.get("network_address", DEFAULT_NETWORK_ADDRESS),
@@ -104,11 +140,20 @@ def _load_defaults(payload: dict[str, Any]) -> RosterDefaults:
     )
 
 
-def load_secret_keys(path: Path) -> dict[str, str]:
-    """Load per-validator private keys from a user-local secrets file."""
+def _optional_string(payload: dict[str, Any], key: str, context: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} field `{key}` must be a non-empty string")
+    return value.strip()
+
+
+def load_secret_material(path: Path) -> SecretMaterial:
+    """Load per-validator private keys plus shared runtime-only secret material."""
 
     payload = _load_toml(path)
-    validators_raw = _load_validator_tables(payload, f"secrets file {path}")
+    validators_raw = _load_optional_validator_tables(payload, f"secrets file {path}")
     secrets: dict[str, str] = {}
     for raw in validators_raw:
         slug = _require_string(raw, "slug", f"secrets file `{path}`")
@@ -116,7 +161,38 @@ def load_secret_keys(path: Path) -> dict[str, str]:
         if slug in secrets:
             raise ValueError(f"secrets file `{path}` duplicates validator slug `{slug}`")
         secrets[slug] = private_key
-    return secrets
+    shared_raw = payload.get("shared", {})
+    if not isinstance(shared_raw, dict):
+        raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
+    return SecretMaterial(
+        validators=secrets,
+        shared=SharedSecrets(
+            torii_onboarding_authority=_optional_string(
+                shared_raw, "torii_onboarding_authority", f"secrets file `{path}`"
+            ),
+            torii_onboarding_private_key=_optional_string(
+                shared_raw, "torii_onboarding_private_key", f"secrets file `{path}`"
+            ),
+            torii_faucet_authority=_optional_string(
+                shared_raw, "torii_faucet_authority", f"secrets file `{path}`"
+            ),
+            torii_faucet_private_key=_optional_string(
+                shared_raw, "torii_faucet_private_key", f"secrets file `{path}`"
+            ),
+            streaming_identity_public_key=_optional_string(
+                shared_raw, "streaming_identity_public_key", f"secrets file `{path}`"
+            ),
+            streaming_identity_private_key=_optional_string(
+                shared_raw, "streaming_identity_private_key", f"secrets file `{path}`"
+            ),
+        ),
+    )
+
+
+def load_secret_keys(path: Path) -> dict[str, str]:
+    """Load per-validator private keys from a user-local secrets file."""
+
+    return load_secret_material(path).validators
 
 
 def _render_trusted_peers(validators: list[ValidatorEntry]) -> list[str]:
@@ -141,7 +217,11 @@ def _render_trusted_peers_pop(validators: list[ValidatorEntry]) -> list[str]:
     return lines
 
 
-def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorEntry]:
+def load_roster(
+    path: Path,
+    secrets_path: Path | None = None,
+    secrets: SecretMaterial | None = None,
+) -> list[ValidatorEntry]:
     """Load and validate Taira validator material."""
 
     payload = _load_toml(path)
@@ -151,7 +231,9 @@ def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorE
         raise ValueError(
             f"roster must define at least {MIN_VALIDATORS} validators for Taira"
         )
-    secrets_by_slug = load_secret_keys(secrets_path) if secrets_path is not None else {}
+    if secrets is None and secrets_path is not None:
+        secrets = load_secret_material(secrets_path)
+    secrets_by_slug = secrets.validators if secrets is not None else {}
 
     validators: list[ValidatorEntry] = []
     seen_slugs: set[str] = set()
@@ -224,7 +306,10 @@ def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorE
 
 
 def render_validator_config(
-    template_text: str, validator: ValidatorEntry, validators: list[ValidatorEntry]
+    template_text: str,
+    validator: ValidatorEntry,
+    validators: list[ValidatorEntry],
+    shared_secrets: SharedSecrets | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
 
@@ -233,6 +318,7 @@ def render_validator_config(
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
+    shared = shared_secrets or SharedSecrets()
 
     for raw_line in template_text.splitlines():
         stripped = raw_line.strip()
@@ -276,12 +362,70 @@ def render_validator_config(
                 f'public_address = {_quote_toml(validator.torii_public_address)}'
             )
             continue
+        if (
+            current_section == "[torii.onboarding]"
+            and stripped.startswith("authority = ")
+            and shared.torii_onboarding_authority is not None
+        ):
+            rendered.append(
+                f'authority = {_quote_toml(shared.torii_onboarding_authority)}'
+            )
+            continue
+        if (
+            current_section == "[torii.onboarding]"
+            and stripped.startswith("private_key = ")
+            and shared.torii_onboarding_private_key is not None
+        ):
+            rendered.append(
+                f'private_key = {_quote_toml(shared.torii_onboarding_private_key)}'
+            )
+            continue
+        if (
+            current_section == "[torii.faucet]"
+            and stripped.startswith("authority = ")
+            and shared.torii_faucet_authority is not None
+        ):
+            rendered.append(f'authority = {_quote_toml(shared.torii_faucet_authority)}')
+            continue
+        if (
+            current_section == "[torii.faucet]"
+            and stripped.startswith("private_key = ")
+            and shared.torii_faucet_private_key is not None
+        ):
+            rendered.append(
+                f'private_key = {_quote_toml(shared.torii_faucet_private_key)}'
+            )
+            continue
+        if (
+            current_section == "[streaming]"
+            and stripped.startswith("identity_public_key = ")
+            and shared.streaming_identity_public_key is not None
+        ):
+            rendered.append(
+                f'identity_public_key = {_quote_toml(shared.streaming_identity_public_key)}'
+            )
+            continue
+        if (
+            current_section == "[streaming]"
+            and stripped.startswith("identity_private_key = ")
+            and shared.streaming_identity_private_key is not None
+        ):
+            rendered.append(
+                f'identity_private_key = {_quote_toml(shared.streaming_identity_private_key)}'
+            )
+            continue
 
         rendered.append(raw_line)
 
     rendered_text = "\n".join(rendered)
     if not rendered_text.endswith("\n"):
         rendered_text += "\n"
+    if "REPLACE_WITH_" in rendered_text:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` still contains template placeholder "
+            "values; provide the matching validator/shared secrets in the roster or "
+            "--secrets file before rendering"
+        )
     return rendered_text
 
 
@@ -294,7 +438,10 @@ def render_bundle(
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
-    validators = load_roster(roster_path, secrets_path=secrets_path)
+    secret_material = (
+        load_secret_material(secrets_path) if secrets_path is not None else None
+    )
+    validators = load_roster(roster_path, secrets=secret_material)
     template_text = base_config_path.read_text(encoding="utf-8")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -306,7 +453,12 @@ def render_bundle(
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / "config.toml"
         target_path.write_text(
-            render_validator_config(template_text, validator, validators),
+            render_validator_config(
+                template_text,
+                validator,
+                validators,
+                shared_secrets=secret_material.shared if secret_material else None,
+            ),
             encoding="utf-8",
         )
         written.append(target_path)

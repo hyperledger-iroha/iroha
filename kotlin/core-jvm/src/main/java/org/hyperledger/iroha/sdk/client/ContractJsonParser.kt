@@ -9,19 +9,73 @@ object ContractJsonParser {
     @JvmStatic
     fun parseDeployResponse(payload: ByteArray): ContractDeployResponse {
         val root = expectObject(parse(payload, "contract deploy response"), "contract deploy response")
+        val contracts = requiredList(root["contracts"], "contract deploy response.contracts")
+        val initCalls = requiredList(root["init_calls"], "contract deploy response.init_calls")
+        val assertions = requiredList(root["assertions"], "contract deploy response.assertions")
         return ContractDeployResponse(
             ok = root["ok"] == true,
-            contractAlias = optionalString(root["contract_alias"]),
-            contractAddress = optionalString(root["contract_address"]),
-            previousContractAddress = optionalString(root["previous_contract_address"]),
-            upgraded = root["upgraded"] == true,
-            dataspace = optionalString(root["dataspace"]),
-            deployNonce = if (root.containsKey("deploy_nonce")) asOptionalLong(root["deploy_nonce"], "contract deploy response.deploy_nonce") else null,
-            txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
-                HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "contract deploy response.tx_hash_hex"), "txHashHex")
-            else null,
-            codeHashHex = HttpClientTransport.normalizeHex32(requiredString(root["code_hash_hex"], "contract deploy response.code_hash_hex"), "codeHashHex"),
-            abiHashHex = HttpClientTransport.normalizeHex32(requiredString(root["abi_hash_hex"], "contract deploy response.abi_hash_hex"), "abiHashHex"),
+            bundleName = requiredString(root["bundle_name"], "contract deploy response.bundle_name"),
+            bundleDigest = requiredString(root["bundle_digest"], "contract deploy response.bundle_digest"),
+            chainFingerprint = requiredString(root["chain_fingerprint"], "contract deploy response.chain_fingerprint"),
+            dryRun = root["dry_run"] == true,
+            completedStages = requiredStringList(root["completed_stages"], "contract deploy response.completed_stages"),
+            failurePoint = optionalString(root["failure_point"]),
+            contracts = contracts.mapIndexed { index, item ->
+                val contract = expectObject(item, "contract deploy response.contracts[$index]")
+                ContractDeployResponseContract(
+                    name = requiredString(contract["name"], "contract deploy response.contracts[$index].name"),
+                    contractAlias = optionalString(contract["contract_alias"]),
+                    contractAddress = optionalString(contract["contract_address"]),
+                    previousContractAddress = optionalString(contract["previous_contract_address"]),
+                    upgraded = contract["upgraded"] == true,
+                    dataspace = optionalString(contract["dataspace"]),
+                    deployNonce = if (contract.containsKey("deploy_nonce")) {
+                        asOptionalLong(contract["deploy_nonce"], "contract deploy response.contracts[$index].deploy_nonce")
+                    } else null,
+                    txHashHex = if (contract.containsKey("tx_hash_hex") && contract["tx_hash_hex"] != null) {
+                        HttpClientTransport.normalizeHex32(
+                            requiredString(contract["tx_hash_hex"], "contract deploy response.contracts[$index].tx_hash_hex"),
+                            "txHashHex",
+                        )
+                    } else null,
+                    codeHashHex = HttpClientTransport.normalizeHex32(
+                        requiredString(contract["code_hash_hex"], "contract deploy response.contracts[$index].code_hash_hex"),
+                        "codeHashHex",
+                    ),
+                    abiHashHex = HttpClientTransport.normalizeHex32(
+                        requiredString(contract["abi_hash_hex"], "contract deploy response.contracts[$index].abi_hash_hex"),
+                        "abiHashHex",
+                    ),
+                    status = requiredString(contract["status"], "contract deploy response.contracts[$index].status"),
+                )
+            },
+            initCalls = initCalls.mapIndexed { index, item ->
+                val call = expectObject(item, "contract deploy response.init_calls[$index]")
+                ContractDeployResponseInitCall(
+                    id = requiredString(call["id"], "contract deploy response.init_calls[$index].id"),
+                    contractAlias = optionalString(call["contract_alias"]),
+                    entrypoint = optionalString(call["entrypoint"]),
+                    txHashHex = if (call.containsKey("tx_hash_hex") && call["tx_hash_hex"] != null) {
+                        HttpClientTransport.normalizeHex32(
+                            requiredString(call["tx_hash_hex"], "contract deploy response.init_calls[$index].tx_hash_hex"),
+                            "txHashHex",
+                        )
+                    } else null,
+                    status = requiredString(call["status"], "contract deploy response.init_calls[$index].status"),
+                )
+            },
+            assertions = assertions.mapIndexed { index, item ->
+                val assertion = expectObject(item, "contract deploy response.assertions[$index]")
+                ContractDeployResponseAssertion(
+                    id = requiredString(assertion["id"], "contract deploy response.assertions[$index].id"),
+                    contractAlias = optionalString(assertion["contract_alias"]),
+                    entrypoint = optionalString(assertion["entrypoint"]),
+                    status = requiredString(assertion["status"], "contract deploy response.assertions[$index].status"),
+                    actualResult = assertion["actual_result"],
+                    expectedResult = assertion["expected_result"],
+                    error = optionalString(assertion["error"]),
+                )
+            },
         )
     }
 
@@ -92,6 +146,18 @@ object ContractJsonParser {
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
         return asLong(value, path)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun requiredList(value: Any?, path: String): List<Any?> {
+        check(value is List<*>) { "$path must be an array" }
+        return value as List<Any?>
+    }
+
+    private fun requiredStringList(value: Any?, path: String): List<String> {
+        return requiredList(value, path).mapIndexed { index, item ->
+            requiredString(item, "$path[$index]")
+        }
     }
 
     private fun optionalBase64(value: Any?, path: String): String? {
