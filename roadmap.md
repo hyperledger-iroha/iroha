@@ -1,6 +1,32 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
+
+Latest sync (2026-04-15 collector endpoint and lock-convergence regressions are green):
+the two reported `consensus_and_da` failures are addressed on the current tree.
+`crates/iroha_torii/src/routing.rs` now clamps `/v1/sumeragi/collectors`
+planning to at least the committed chain height when PRF telemetry lags, so
+the endpoint cannot keep advertising a stale height after the chain advances.
+`integration_tests/tests/sumeragi_lock_convergence.rs` no longer waits on the
+600-second transaction confirmation path after stopping the leader; it submits
+the tick transaction, waits explicitly for height progress, then waits
+boundedly for locked-QC telemetry across the remaining peers to converge before
+asserting equality.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing/consensus.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_lock_convergence.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii collector_plan_context_ -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_prf_collectors::npos_prf_collectors_track_endpoint' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_lock_convergence::sumeragi_view_change_lock_convergence' -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - run the full `cargo test --workspace` only when a several-hour validation
+    window is available.
 
 Latest sync (2026-04-14 stale-view certified frontier recovery stays authoritative during restart catch-up):
 the restarted-peer commit-QC recovery gap is closed on the current tree.

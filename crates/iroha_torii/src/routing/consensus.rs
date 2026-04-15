@@ -836,18 +836,19 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
+    let prefer_snapshot_seed = snap.prf_height >= chain_height;
+    let mut epoch_seed = if prefer_snapshot_seed {
+        snap.prf_epoch_seed.or(seed_from_mode)
+    } else {
+        seed_from_mode.or(snap.prf_epoch_seed)
+    };
     if epoch_seed.is_none() {
         epoch_seed = world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed());
     }
-    let plan_height = if snap.prf_height > 0 {
-        snap.prf_height
-    } else {
-        chain_height
-    };
-    let plan_view = snap.prf_view;
+    let (plan_height, plan_view) =
+        collector_plan_context(snap.prf_height, snap.prf_view, chain_height);
     let collectors = sumeragi::collectors::deterministic_collectors(
         &topology,
         mode,
@@ -897,6 +898,18 @@ pub async fn handle_v1_sumeragi_collectors(
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+fn collector_plan_context(
+    snapshot_height: u64,
+    snapshot_view: u64,
+    chain_height: u64,
+) -> (u64, u64) {
+    if snapshot_height >= chain_height {
+        (snapshot_height, snapshot_view)
+    } else {
+        (chain_height, 0)
+    }
 }
 
 /// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
