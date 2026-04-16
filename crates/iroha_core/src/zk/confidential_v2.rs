@@ -2160,7 +2160,9 @@ pub fn build_confidential_unshield_proof_v3(
         return Err("confidential unshield v3 supports one or two inputs".to_owned());
     }
     if outputs.len() > 1 {
-        return Err("confidential unshield v3 supports at most one private change output".to_owned());
+        return Err(
+            "confidential unshield v3 supports at most one private change output".to_owned(),
+        );
     }
     let computed_root = compute_confidential_root_v2(tree_commitments)?;
     if computed_root != root_hint {

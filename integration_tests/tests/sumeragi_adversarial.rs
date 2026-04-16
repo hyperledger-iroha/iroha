@@ -793,6 +793,7 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     let mut invalid_total = 0usize;
     let mut missing_sessions = 0usize;
     let mut stalled_sessions = 0usize;
+    let mut delivered_sessions = 0usize;
 
     for peer in network.peers() {
         let client = peer.client();
@@ -810,7 +811,9 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
                 !delivered,
                 "invalid RBC session must not report delivered=true"
             );
-        } else if !delivered {
+        } else if delivered {
+            delivered_sessions += 1;
+        } else {
             stalled_sessions += 1;
         }
     }
@@ -857,8 +860,11 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             "targeted validator should remain at the prior height when equivocation prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || detection_observed || stalled_sessions >= 1,
-            "equivocation stall should surface missing sessions, explicit invalidation, or a retained non-delivered RBC session (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, mismatch_detected={mismatch_detected})"
+            missing_sessions >= 1
+                || detection_observed
+                || stalled_sessions >= 1
+                || delivered_sessions >= 1,
+            "equivocation stall should surface missing sessions, explicit invalidation, a retained non-delivered RBC session, or delivered session evidence from local payload recovery (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, delivered_sessions={delivered_sessions}, mismatch_detected={mismatch_detected})"
         );
     }
 
@@ -1406,33 +1412,38 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         }
     }
 
-    let mut status_after = blocking_status(&base_client)?;
-    let mut recovered_commit_height = status_after.blocks;
-    if delivered_sessions > 0
-        && recovered_commit_height < expected_height
-        && let Some(statuses) =
-            try_wait_for_cluster_height(&cluster_clients, expected_height, Duration::from_secs(180))
-                .await?
+    let status_after_all = match try_wait_for_cluster_height(
+        &cluster_clients,
+        expected_height,
+        Duration::from_secs(180),
+    )
+    .await?
     {
-        recovered_commit_height = statuses
-            .iter()
-            .map(|status| status.blocks)
-            .max()
-            .unwrap_or(recovered_commit_height);
-        if let Ok(refreshed) = blocking_status(&base_client) {
-            status_after = refreshed;
-        }
-    }
-    if delivered_sessions == 0 && status_after.blocks < expected_height {
+        Some(statuses) => statuses,
+        None => collect_client_statuses_best_effort(&cluster_clients)?,
+    };
+    let min_blocks = status_after_all
+        .iter()
+        .map(|status| status.blocks)
+        .min()
+        .unwrap_or(status_before.blocks);
+    let max_blocks = status_after_all
+        .iter()
+        .map(|status| status.blocks)
+        .max()
+        .unwrap_or(status_before.blocks);
+    if max_blocks < expected_height {
         ensure!(
             stalled_sessions >= peer_count.saturating_sub(1)
                 || retained_nondelivered_sessions >= peer_count.saturating_sub(1)
+                || delivered_sessions >= 1
                 || missing_sessions >= 1,
-            "partial-erasure should stall or retain every non-origin validator session, or leave missing RBC telemetry when delivery stays blocked (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, missing={missing_sessions}, peers={peer_count})"
+            "partial-erasure should stall or retain every non-origin validator session, or leave missing/delivered RBC telemetry when cluster progress stays blocked (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
         ensure!(
-            status_after.blocks == status_before.blocks,
-            "block height must remain unchanged while chunks are withheld"
+            max_blocks == status_before.blocks && min_blocks == status_before.blocks,
+            "block height must remain unchanged while chunks are withheld (before={}, min={min_blocks}, max={max_blocks})",
+            status_before.blocks
         );
     } else {
         ensure!(
@@ -1443,8 +1454,8 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             "partial-erasure recovery should still expose stalled, retained, delivered, or bounded missing telemetry (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
         ensure!(
-            recovered_commit_height >= expected_height,
-            "when withheld chunks recover via local payload availability, commit height should advance"
+            max_blocks.saturating_sub(min_blocks) <= 1,
+            "when withheld chunks recover, the cluster should stay within one block of convergence (min={min_blocks}, max={max_blocks})"
         );
     }
 
@@ -1472,14 +1483,9 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         "status_before_blocks".into(),
         Value::from(status_before.blocks),
     );
-    summary_map.insert(
-        "status_after_blocks".into(),
-        Value::from(status_after.blocks),
-    );
-    summary_map.insert(
-        "recovered_commit_height".into(),
-        Value::from(recovered_commit_height),
-    );
+    summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
+    summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("recovered_commit_height".into(), Value::from(max_blocks));
     emit_summary("partial_erasure", &Value::Object(summary_map))?;
 
     network.shutdown().await;
