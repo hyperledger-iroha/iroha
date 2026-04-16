@@ -7,6 +7,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -65,6 +66,9 @@ const CHUNK_LOSS_RBC_VISIBILITY_TTL_MS: i64 = 10 * 60 * 1_000;
 const STRESS_PEERS_ENV: &str = "SUMERAGI_NPOS_STRESS_PEERS";
 const STRESS_COLLECTORS_K_ENV: &str = "SUMERAGI_NPOS_STRESS_COLLECTORS_K";
 const STRESS_REDUNDANT_SEND_R_ENV: &str = "SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R";
+const SUBMIT_CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
+
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 fn env_parse<T>(key: &str) -> Option<T>
 where
@@ -91,6 +95,123 @@ fn stress_collectors_k(default: u16, peers: usize) -> u16 {
 
 fn stress_redundant_send_r(default: u8) -> u8 {
     env_parse::<u8>(STRESS_REDUNDANT_SEND_R_ENV).unwrap_or(default)
+}
+
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+fn submit_client_for_network(
+    network: &sandbox::SerializedNetwork,
+    _probe: &iroha::client::Client,
+) -> iroha::client::Client {
+    let peer_count = network.peers().len();
+    let status = network.peers().iter().find_map(|peer| {
+        if !peer.is_running() {
+            return None;
+        }
+        peer.client().get_status().ok()
+    });
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    let selected_index = pick_submit_peer_index(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    );
+    network
+        .peers()
+        .get(selected_index)
+        .unwrap_or_else(|| {
+            network
+                .peers()
+                .first()
+                .expect("network should have at least one peer")
+        })
+        .client()
+}
+
+async fn wait_for_submit_connectivity(
+    network: &sandbox::SerializedNetwork,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let expected = min_connected_peers_for_submit(network.peers().len());
+    let mut last_snapshot = Vec::new();
+
+    loop {
+        let peer_counts = network
+            .peers()
+            .iter()
+            .filter_map(|peer| peer.client().get_status().ok().map(|status| status.peers))
+            .collect::<Vec<_>>();
+        if !peer_counts.is_empty() {
+            last_snapshot.clone_from(&peer_counts);
+            if peer_counts.iter().all(|count| *count >= expected) {
+                return Ok(());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?}",
+                timeout
+            );
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
 }
 
 fn npos_custom_parameter(collectors_k: u16, redundant_send_r: u8) -> Parameter {
@@ -154,6 +275,34 @@ fn rbc_session_has_missing_chunks(entry: &Value) -> bool {
         .and_then(Value::as_u64)
         .unwrap_or_default();
     total > 0 && received < total
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +407,9 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
     };
 
     network.ensure_blocks(1).await?;
+    wait_for_submit_connectivity(&network, SUBMIT_CONNECTIVITY_TIMEOUT)
+        .await
+        .wrap_err("submit connectivity not ready before baseline sampling")?;
 
     let client = network.client();
     let status_before = client
@@ -266,16 +418,14 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
     let seed_start = start_non_empty.saturating_add(1);
-    let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        for offset in 0..SAMPLE_BLOCKS {
-            let message = format!("npos baseline seed {}", seed_start + offset);
-            submit_client.submit(Log::new(Level::INFO, message))?;
-        }
-        Ok(())
-    })
-    .await
-    .wrap_err("submit baseline log transactions")??;
+    for offset in 0..SAMPLE_BLOCKS {
+        let submit_client = submit_client_for_network(&network, &client);
+        let message = format!("npos baseline seed {}", seed_start + offset);
+        tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, message)))
+            .await
+            .wrap_err("join baseline log submission")?
+            .wrap_err("submit baseline log transaction")?;
+    }
 
     let http = reqwest::Client::new();
     let metrics_url = client

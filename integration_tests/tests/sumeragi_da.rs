@@ -7,6 +7,7 @@ use std::{
     io::ErrorKind,
     num::NonZeroU64,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -37,6 +38,8 @@ use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
 use tokio::time::{sleep, timeout};
 use toml::Table;
+
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -860,6 +863,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             .first()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let store_dir = peer.kura_store_dir();
+        let store_roots = peers
+            .iter()
+            .map(NetworkPeer::kura_store_dir)
+            .collect::<Vec<_>>();
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
@@ -903,12 +910,13 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 continue;
             }
 
-            let da_files = collect_da_block_files(&store_dir).wrap_err("collect DA block files")?;
+            let da_files = collect_da_block_files_from_roots(&store_roots)
+                .wrap_err("collect DA block files")?;
             evicted_da_path = pick_lowest_da_height(da_files);
         }
 
         if evicted_da_path.is_none() {
-            let da_files = wait_for_da_block_files(store_dir.clone(), Duration::from_secs(30))
+            let da_files = wait_for_da_block_files_any(store_roots.clone(), Duration::from_secs(30))
                 .await
                 .wrap_err("wait for DA-backed Kura eviction files")?;
             evicted_da_path = pick_lowest_da_height(da_files);
@@ -3621,7 +3629,9 @@ async fn submit_log_to_any_peer(
         return Err(eyre!("no peers available for submission"));
     }
     let mut errors = Vec::new();
-    for peer in peers {
+    let preferred_index = preferred_submit_peer_index(peers);
+    for offset in 0..peers.len() {
+        let peer = &peers[(preferred_index + offset) % peers.len()];
         if !peer.is_running() {
             continue;
         }
@@ -3642,10 +3652,118 @@ async fn submit_log_to_any_peer(
     ))
 }
 
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+fn preferred_submit_peer_index(peers: &[NetworkPeer]) -> usize {
+    if peers.is_empty() {
+        return 0;
+    }
+    let status = peers
+        .iter()
+        .filter(|peer| peer.is_running())
+        .find_map(|peer| {
+            let client = peer.client();
+            client.get_status().ok()
+        });
+    let peer_count = peers.len();
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = peers
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    pick_submit_peer_index(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn submit_log_to_any_peer_errors_without_peers() {
     let result = submit_log_to_any_peer(&[], "payload".to_string()).await;
     assert!(result.is_err());
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
+}
+
+#[test]
+fn preferred_submit_peer_index_returns_zero_without_peers() {
+    assert_eq!(preferred_submit_peer_index(&[]), 0);
 }
 
 fn collect_da_block_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -3693,23 +3811,56 @@ fn collect_da_block_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn collect_da_block_files_from_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for root in roots {
+        files.extend(collect_da_block_files(root)?);
+    }
+    Ok(files)
+}
+
+#[test]
+fn collect_da_block_files_from_roots_merges_nested_da_directories() {
+    let root_a = tempfile::tempdir().expect("root A tempdir");
+    let root_b = tempfile::tempdir().expect("root B tempdir");
+    let da_dir = root_b.path().join("blocks/lane_000_default/da_blocks");
+    fs::create_dir_all(&da_dir).expect("create DA directory");
+    let da_path = da_dir.join("00000000000000000002.norito");
+    fs::write(&da_path, b"payload").expect("write DA payload");
+
+    let files = collect_da_block_files_from_roots(&[
+        root_a.path().to_path_buf(),
+        root_b.path().to_path_buf(),
+    ])
+    .expect("collect DA block files");
+
+    assert_eq!(files, vec![da_path]);
+}
+
 fn da_block_height(path: &Path) -> Option<u64> {
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .and_then(|stem| stem.parse::<u64>().ok())
 }
 
-async fn wait_for_da_block_files(root: PathBuf, timeout: Duration) -> Result<Vec<PathBuf>> {
+async fn wait_for_da_block_files_any(
+    roots: Vec<PathBuf>,
+    timeout: Duration,
+) -> Result<Vec<PathBuf>> {
     let start = Instant::now();
     loop {
-        let files = collect_da_block_files(&root)?;
+        let files = collect_da_block_files_from_roots(&roots)?;
         if !files.is_empty() {
             return Ok(files);
         }
         if start.elapsed() > timeout {
+            let roots = roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(eyre!(
-                "timed out waiting for DA-evicted blocks under {}",
-                root.display()
+                "timed out waiting for DA-evicted blocks under [{roots}]"
             ));
         }
         sleep(Duration::from_millis(200)).await;
@@ -4256,7 +4407,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
         configure_runtime_da(&client).await?;
-        let kura_root = primary_peer.kura_store_dir();
+        let kura_roots = peers
+            .iter()
+            .map(NetworkPeer::kura_store_dir)
+            .collect::<Vec<_>>();
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
@@ -4297,12 +4451,12 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 continue;
             }
 
-            let da_files = collect_da_block_files(&kura_root)?;
+            let da_files = collect_da_block_files_from_roots(&kura_roots)?;
             evicted_da_path = pick_lowest_da_height(da_files);
         }
 
         if evicted_da_path.is_none() {
-            let da_files = wait_for_da_block_files(kura_root.clone(), Duration::from_secs(30))
+            let da_files = wait_for_da_block_files_any(kura_roots.clone(), Duration::from_secs(30))
                 .await
                 .wrap_err("wait for DA-evicted block files")?;
             evicted_da_path = pick_lowest_da_height(da_files);
