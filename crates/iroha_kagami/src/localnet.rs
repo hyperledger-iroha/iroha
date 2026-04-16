@@ -2340,7 +2340,8 @@ fn append_localnet_contract_permissions(
     };
 
     push_unique(enact_governance, ALICE_ID.clone());
-    push_unique(manage_verifying_keys, genesis_account_id.clone());
+    push_unique(manage_verifying_keys.clone(), genesis_account_id.clone());
+    push_unique(manage_verifying_keys, client_account_id.clone());
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
     if client_account_id != *ALICE_ID {
@@ -3242,7 +3243,9 @@ mod tests {
         let mut has_manifest_publish = false;
         let mut manage_offline_escrow_grants = 0usize;
         let mut total_manage_offline_escrow_grants = 0usize;
-        let mut manage_verifying_keys_grants = 0usize;
+        let mut genesis_manage_verifying_keys_grants = 0usize;
+        let mut client_manage_verifying_keys_grants = 0usize;
+        let mut total_manage_verifying_keys_grants = 0usize;
         for instruction in manifest.instructions() {
             let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
                 continue;
@@ -3255,10 +3258,15 @@ mod tests {
                 total_manage_offline_escrow_grants =
                     total_manage_offline_escrow_grants.saturating_add(1);
             }
+            if permission_name == "CanManageVerifyingKeys" {
+                total_manage_verifying_keys_grants =
+                    total_manage_verifying_keys_grants.saturating_add(1);
+            }
             if permission_name == "CanManageVerifyingKeys"
                 && grant_permission.destination() == &genesis_account_id
             {
-                manage_verifying_keys_grants = manage_verifying_keys_grants.saturating_add(1);
+                genesis_manage_verifying_keys_grants =
+                    genesis_manage_verifying_keys_grants.saturating_add(1);
             }
             if grant_permission.destination() != &client_account_id {
                 continue;
@@ -3267,6 +3275,10 @@ mod tests {
                 "CanManageAccountAlias" => has_alias_manage = true,
                 "CanManageOfflineEscrow" => {
                     manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
+                }
+                "CanManageVerifyingKeys" => {
+                    client_manage_verifying_keys_grants =
+                        client_manage_verifying_keys_grants.saturating_add(1);
                 }
                 "CanPublishSpaceDirectoryManifest" => has_manifest_publish = true,
                 _ => {}
@@ -3289,8 +3301,22 @@ mod tests {
             "localnet genesis must not emit duplicate explicit CanManageOfflineEscrow grants"
         );
         assert_eq!(
-            manage_verifying_keys_grants, 1,
+            genesis_manage_verifying_keys_grants, 1,
             "localnet genesis must grant CanManageVerifyingKeys to the genesis signer exactly once"
+        );
+        assert_eq!(
+            client_manage_verifying_keys_grants, 1,
+            "localnet genesis must grant CanManageVerifyingKeys to the maintenance client signer exactly once"
+        );
+        let expected_total_manage_verifying_keys_grants = if client_account_id == genesis_account_id
+        {
+            1
+        } else {
+            2
+        };
+        assert_eq!(
+            total_manage_verifying_keys_grants, expected_total_manage_verifying_keys_grants,
+            "localnet genesis must not emit duplicate CanManageVerifyingKeys grants"
         );
     }
 

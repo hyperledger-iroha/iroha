@@ -39,6 +39,15 @@ need_cmd() {
 }
 
 load_taira_authority() {
+  if [[ -n "${IROHA_TAIRA_AUTHORITY:-}" && -n "${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-}" && -n "${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-}" ]]; then
+    TAIRA_TORII_MAX_CONTENT_LEN="$IROHA_TAIRA_TORII_MAX_CONTENT_LEN"
+    TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-64}"
+    TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-3600}"
+    TAIRA_AUTHORITY="$IROHA_TAIRA_AUTHORITY"
+    TAIRA_AUTHORITY_PRIVATE_KEY="$IROHA_TAIRA_AUTHORITY_PRIVATE_KEY"
+    return
+  fi
+
   local values=()
   local line
   while IFS= read -r line; do
@@ -94,10 +103,12 @@ load_localnet_genesis_signer_config() {
 import os
 import re
 import sys
-import tomllib
 
-peer_cfg = tomllib.load(open(sys.argv[1], 'rb'))
-print(peer_cfg['genesis']['public_key'])
+peer_cfg = open(sys.argv[1], encoding='utf-8').read()
+match = re.search(r'(?m)^public_key\s*=\s*"([^"]+)"', peer_cfg)
+if not match:
+    raise SystemExit("missing genesis public_key")
+print(match.group(1))
 seed = os.environ.get('LOCALNET_BASE_SEED_OVERRIDE', '')
 if not seed:
     try:

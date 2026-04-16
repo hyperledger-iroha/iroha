@@ -26597,7 +26597,9 @@ impl Torii {
                 .route(
                     "/v1/controls/asset-transfer/get",
                     post(handler_post_asset_transfer_control_get),
-                );
+                )
+                .route("/v1/zk/vk/register", post(handler_post_vk_register))
+                .route("/v1/zk/vk/update", post(handler_post_vk_update));
             #[cfg(not(feature = "app_api"))]
             let group = group;
 

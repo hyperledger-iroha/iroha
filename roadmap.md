@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Taira public-root contract and operator guidance aligned):
+the active Taira operator/docs/plugin contract is now internally consistent.
+The repo guidance treats `https://taira.sora.org` as the current primary public
+Torii/API origin and `https://taira.sora.org/v1/mcp` as its MCP endpoint,
+while still requiring rollout scripts to take an explicit `--public-root` so
+operators validate the exact public edge under test. Historical roadmap items
+that assumed publicly resolvable per-validator hostnames or treated
+`taira.sora.org` as convenience-only are now superseded. The active guidance
+also distinguishes public-node symptoms from validator-set facts and forbids
+using `/status.peers` as validator-set size.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/skills/sora-taira-testnet/SKILL.md`
+  - `/Users/takemiyamakoto/.codex/skills/sora-taira-testnet/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/.mcp.json`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/skills/iroha-live-network/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/AGENTS.md`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/check_codex_plugin_manifests.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/check_codex_plugin_manifests_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/taira_faucet_canary.py`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `python3 /Users/takemiyamakoto/dev/iroha/scripts/check_codex_plugin_manifests.py --repo-root /Users/takemiyamakoto/dev/iroha`
+  - `python3 -m pytest /Users/takemiyamakoto/dev/iroha/scripts/tests/check_codex_plugin_manifests_test.py`
+  - `bash /Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout_mock_test.sh`
+- open work after this slice:
+  - record a fresh signed public write-canary result against
+    `https://taira.sora.org` or the operator-provided alternate public Torii
+    root once chain health is stable, including paired `/status` and
+    `/v1/sumeragi/status` samples in the operator notes
+  - keep historical status/roadmap notes from drifting back into live operator
+    guidance; the skill, plugin docs, README, and rollout scripts are now the
+    primary runbook surface for this deployment
+
 Latest sync (2026-04-16 Soracloud/Torii integration response compatibility restored):
 the reported Soracloud/Torii integration failures were narrowed to response and
 partial-config compatibility gaps rather than consensus or contract execution.
@@ -422,9 +460,11 @@ leaving that posture implicit or wrapper-local.
   - `bash -n configs/soranexus/taira/build_taira_rollout_bundle.sh`
   - sanitized-template render smoke with a user-local roster/secrets pair
 - open work after this slice:
-  - rerun the live Taira rollout/write canary against the deployed direct
-    validator hostnames using a runtime-only signer file, then update the
-    operator runbook with the exact public results;
+  - rerun the live Taira rollout/write canary against the deployed public
+    Torii root using a runtime-only signer file, then update the operator
+    runbook with the exact public results. The current default public root is
+    `https://taira.sora.org`; use an alternate public root only when the
+    operator explicitly provides one for the deployment under test;
   - finish the sibling-repo SCCP first-release work (destination-native
     immutable verifiers / verifier-identity binding in `../sora2-network` and
     matching consumer/release metadata in `../soraswap`) instead of leaving the
@@ -2488,22 +2528,23 @@ both `http://127.0.0.1:29080` and `https://taira.sora.org`, with
     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --write-config dist/taira-localnet/client.toml --write-target public --iroha-bin ./target/release/iroha`
 - open work for this slice now remains:
-  - publish real per-validator DNS/TLS hostnames and make at least one direct
-    public node resolvable from outside the operator host;
-  - move public operator validation and app smokes off the convenience
-    `https://taira.sora.org` host and onto those direct per-node hostnames; and
-  - finish the true public XOR-stake cutover so the live convenience deployment
+  - keep the signed rollout/write canary green on the actual public Torii root
+    for the deployment under test, currently `https://taira.sora.org`, rather
+    than assuming separate public per-validator hostnames exist;
+  - if operators later expose additional direct validator or alternate public
+    roots, treat them as optional operator diagnostics, not as the default
+    public app/API surface; and
+  - finish the true public XOR-stake cutover so the live public deployment
     stops depending on the localnet-style fee/stake bootstrap assets.
 
 Latest sync (2026-04-04 Taira public-node hardening landed in repo tooling/docs):
-the repo-side Taira rollout contract no longer treats
-`https://taira.sora.org` as the canonical public API. The rollout smoke now
-requires an explicit direct node URL and fails on missing SCCP, ZK, bridge,
-validator-set, public-lane, and contract routes; the validator bundle renderer
-now requires per-validator `torii_public_address` values; the checked-in Taira
-config now declares stake-snapshot roster mode plus explicit public-lane XOR
-staking config; and the repo plugin/skill/operator guidance now treats
-`taira.sora.org` as convenience-only instead of the default committed MCP host.
+the repo-side Taira rollout contract tightened route-parity checks, validator
+bundle rendering, and public-lane staking config in-tree. That hardening work
+remains valid, but the public-root guidance from this historical slice is now
+superseded: the rollout smoke still requires an explicit `--public-root`, yet
+the active repo guidance treats `https://taira.sora.org` as the current
+primary public API/MCP root unless an operator explicitly gives a different
+public Torii endpoint for the environment under test.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
@@ -2526,18 +2567,16 @@ staking config; and the repo plugin/skill/operator guidance now treats
   - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py`
   - `python3 scripts/render_taira_validator_bundle.py --base-config configs/soranexus/taira/config.toml --roster configs/soranexus/taira/validator_roster.example.toml --secrets configs/soranexus/taira/validator_secrets.example.toml --output-dir /tmp/taira-render-test-hardening`
   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --skip-write-canary` (expected failure: local `/v1/sccp/capabilities` still `404`)
-  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary` (expected failure: public convenience ingress still `404` on `/v1/sccp/capabilities`)
-  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira-validator-1.sora.org --skip-write-canary` (expected failure: direct validator hostname does not resolve yet)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary` (historical April 4 failure on `/v1/sccp/capabilities`; later rollout fixes changed the public result)
 - open work for this slice now remains:
-  - publish real per-validator DNS/TLS hostnames and make at least one direct
-    public node resolvable from outside the operator host;
-  - redeploy the public node binaries/configs so the stronger route-parity
-    contract passes on direct ingress, especially `/v1/sccp/capabilities`,
+  - keep the stronger route-parity contract green on the actual public Torii
+    root under test, especially `/v1/sccp/capabilities`,
     `/v1/sccp/manifests`, `/v1/bridge/messages`, and the contract routes; and
-  - once direct ingress is live, rerun the strengthened public canary with
-    `--public-root https://<taira-node> --write-config /run/secrets/taira-canary-client.toml`
-    plus follow-up app smokes (`deploy_testnet.sh`, `smoke_testnet.sh`,
-    wallet, and SoraSwap bridge) against that same per-node hostname.
+  - rerun the strengthened public canary with
+    `--public-root https://taira.sora.org --write-config /run/secrets/taira-canary-client.toml`
+    or the operator-provided alternate public root, plus follow-up app smokes
+    (`deploy_testnet.sh`, `smoke_testnet.sh`, wallet, and SoraSwap bridge)
+    against that same public endpoint.
 
 Latest sync (2026-04-04 Taira reset + explorer redeploy after repo update):
 the Taira/testnet reset slice is green again after refreshing the local/public

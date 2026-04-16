@@ -2973,21 +2973,7 @@ mod sorafs_tests {
         .expect("register capacity declaration");
 
         let telemetry = CapacityTelemetryRecord::new(
-            provider,
-            0,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-            10_000,
-            10_000,
-            0,
-            0,
-            0,
-            0,
-            0,
+            provider, 0, 1, 1, 1, 1, 0, 0, 10_000, 10_000, 0, 0, 0, 0, 0,
         )
         .with_nonce(1);
 
