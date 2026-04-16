@@ -107,7 +107,12 @@ class UrlConnectionTransportExecutor(
         private fun responseStream(connection: HttpURLConnection, status: Int): InputStream? {
             if (status >= 400) {
                 val error = connection.errorStream
-                return error ?: connection.inputStream
+                if (error != null) return error
+                return try {
+                    connection.inputStream
+                } catch (_: IOException) {
+                    null
+                }
             }
             return connection.inputStream
         }

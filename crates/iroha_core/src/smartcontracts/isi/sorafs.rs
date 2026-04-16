@@ -1433,8 +1433,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanDeclareSorafsCapacity")?;
-
         let mut record: CapacityDeclarationRecord = self.record;
         let provider_id = record.provider_id;
         let provider_hex = hex::encode(provider_id.as_bytes());
@@ -1527,8 +1525,6 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanSubmitSorafsTelemetry")?;
-
         let record: CapacityTelemetryRecord = self.record;
         let provider_id = record.provider_id;
         let policy = &state_transaction.gov.sorafs_telemetry;
@@ -2947,7 +2943,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn capacity_declaration_requires_permission() {
+    fn capacity_declaration_is_permissionless_for_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -2959,51 +2955,31 @@ mod sorafs_tests {
         let err = RegisterCapacityDeclaration {
             record: declaration,
         }
-        .execute(&alice(), &mut stx)
-        .expect_err("permissionless declaration must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanDeclareSorafsCapacity")
-        ));
+        .execute(&alice(), &mut stx);
+        assert!(err.is_ok(), "ordinary provider owner should be allowed");
     }
 
     #[test]
-    fn capacity_telemetry_requires_permission() {
+    fn capacity_telemetry_is_permissionless_for_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         remove_permission(&mut stx, "CanSubmitSorafsTelemetry");
+        let (provider, declaration) = sample_capacity_record();
+        RegisterCapacityDeclaration {
+            record: declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register capacity declaration");
 
         let telemetry = CapacityTelemetryRecord::new(
-            ProviderId::new([0xAA; 32]),
-            0,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-            10_000,
-            10_000,
-            0,
-            0,
-            0,
-            0,
-            0,
+            provider, 0, 1, 1, 1, 1, 0, 0, 10_000, 10_000, 0, 0, 0, 0, 0,
         )
         .with_nonce(1);
 
-        let err = RecordCapacityTelemetry { record: telemetry }
+        RecordCapacityTelemetry { record: telemetry }
             .execute(&alice(), &mut stx)
-            .expect_err("permissionless telemetry must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanSubmitSorafsTelemetry")
-        ));
+            .expect("ordinary provider owner should be allowed");
     }
 
     #[test]

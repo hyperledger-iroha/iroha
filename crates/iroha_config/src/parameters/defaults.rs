@@ -3110,10 +3110,6 @@ pub mod governance {
             .expect("default governance account literal")
     }
 
-    fn account_literal_from_public_key(public_key: &str) -> String {
-        account_literal_from_account_id(&account_id_from_public_key(public_key))
-    }
-
     fn default_governance_account_id() -> AccountId {
         account_id_from_public_key(BOND_ESCROW_PUBLIC_KEY)
     }
@@ -3382,12 +3378,8 @@ pub mod governance {
 
     /// Default authentication and validation policy for SoraFS telemetry.
     pub mod sorafs_telemetry {
-        /// Default telemetry submitter public key (development profile).
-        pub const DEFAULT_SUBMITTER_PUBLIC_KEY: &str =
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
-
         /// Require telemetry submissions to originate from an authorised submitter list.
-        pub const REQUIRE_SUBMITTER: bool = true;
+        pub const REQUIRE_SUBMITTER: bool = false;
         /// Require telemetry windows to carry a nonce for replay protection.
         /// Windows without a nonce are accepted only when this is false, but provided nonces
         /// are still checked for replay regardless.
@@ -3397,11 +3389,10 @@ pub mod governance {
         /// Reject telemetry that reports zero capacity to avoid zero-fee windows.
         pub const REJECT_ZERO_CAPACITY: bool = true;
 
-        /// Default authorised submitter accounts (development only).
+        /// Default authorised submitter accounts. The default policy is self-service, so the
+        /// allow-list starts empty unless operators opt back into `require_submitter = true`.
         pub fn submitters() -> Vec<String> {
-            vec![super::account_literal_from_public_key(
-                DEFAULT_SUBMITTER_PUBLIC_KEY,
-            )]
+            Vec::new()
         }
     }
 

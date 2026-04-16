@@ -3300,6 +3300,20 @@ fn build_direct_service_mutation_output(
     if uses_api_token {
         notes.push("API token was forwarded to the Torii control plane".to_owned());
     }
+    let current_version = response
+        .get("current_version")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let rollout_handle = response
+        .get("rollout_handle")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let rollout_stage = response.get("rollout_stage").cloned();
+    let stage = response.get("stage").cloned();
+    let traffic_percent = response
+        .get("traffic_percent")
+        .and_then(norito::json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok());
 
     ServiceMutationOutput {
         service_name: plan.service_name,
@@ -3325,6 +3339,11 @@ fn build_direct_service_mutation_output(
         uses_api_token,
         routes: plan.routes,
         published_public_discovery,
+        current_version,
+        rollout_handle,
+        rollout_stage,
+        stage,
+        traffic_percent,
         response,
         notes,
     }
@@ -7464,6 +7483,21 @@ struct ServiceMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    current_version: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_handle: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    rollout_stage: Option<norito::json::Value>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    stage: Option<norito::json::Value>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    traffic_percent: Option<u8>,
     response: norito::json::Value,
     #[norito(default)]
     notes: Vec<String>,
@@ -22918,6 +22952,73 @@ mod tests {
                 "recent_audit_events": []
             }
         })
+    }
+
+    #[test]
+    fn direct_service_mutation_output_hoists_authoritative_status_fields() {
+        let response = norito::json!({
+            "service_name": "echo_console",
+            "current_version": "1.1.0",
+            "rollout_handle": "echo_console:rollout:2",
+            "rollout_stage": { "stage": "Canary" },
+            "stage": { "stage": "Canary" },
+            "traffic_percent": 25
+        });
+        let output = build_direct_service_mutation_output(
+            Path::new("container_manifest.json"),
+            Path::new("service_manifest.json"),
+            ServiceWorkspacePlan {
+                service_name: "echo_console".to_owned(),
+                execution_plane: "HttpService".to_owned(),
+                runtime: "Inrou".to_owned(),
+                route_host: Some("example.test".to_owned()),
+                route_path_prefix: Some("/api/v1".to_owned()),
+                route_visibility: Some("Public".to_owned()),
+                replica_count: 2,
+                state_binding_count: 1,
+                lease_volume_count: 0,
+                handler_count: 0,
+                routes: Vec::new(),
+                workspace_dir: ".".to_owned(),
+                workspace_scripts: ServiceWorkspaceScriptsOutput {
+                    local_dev: None,
+                    build_and_sync: None,
+                    doctor: None,
+                    release: None,
+                    deploy: None,
+                    upgrade: None,
+                },
+                notes: Vec::new(),
+            },
+            MutationMode::Upgrade,
+            "http://127.0.0.1:8080",
+            false,
+            None,
+            response,
+        );
+
+        assert_eq!(output.current_version.as_deref(), Some("1.1.0"));
+        assert_eq!(
+            output.rollout_handle.as_deref(),
+            Some("echo_console:rollout:2")
+        );
+        assert_eq!(output.traffic_percent, Some(25));
+        assert_eq!(
+            output
+                .rollout_stage
+                .as_ref()
+                .and_then(|stage| stage.get("stage"))
+                .and_then(norito::json::Value::as_str),
+            Some("Canary")
+        );
+        assert_eq!(
+            output
+                .stage
+                .as_ref()
+                .and_then(|stage| stage.get("stage"))
+                .and_then(norito::json::Value::as_str),
+            Some("Canary")
+        );
     }
 
     fn mock_hf_status_path(

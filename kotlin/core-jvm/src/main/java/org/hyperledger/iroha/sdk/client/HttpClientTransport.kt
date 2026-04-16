@@ -118,6 +118,12 @@ class HttpClientTransport(
 
     fun resolveIdentifier(policyId: String, input: String?, encryptedInputHex: String?): CompletableFuture<Optional<IdentifierResolutionReceipt>> = resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex))
 
+    override fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
+        val normalizedAlias = normalizeNonBlank(alias, "alias")
+        val body = encodeJsonBody(linkedMapOf("alias" to normalizedAlias))
+        return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/aliases/resolve", body), AccountAliasJsonParser::parseResolution, "account alias resolve")
+    }
+
     fun issueIdentifierClaimReceipt(accountId: String, requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
         val normalizedAccountId = normalizeNonBlank(accountId, "accountId")
         val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.input, requestBody.encryptedInputHex))
