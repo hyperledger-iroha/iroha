@@ -80,7 +80,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Add a `TODO:` comment explaining any temporary or incomplete implementation.
 - Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
 - Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally, fix any build issues, and ensure it passes. Do this for the entire repository, not just a specific crate.
+- Run `cargo test` locally for the default top-level smoke set, fix any build issues, and ensure it passes. Use `cargo test -p <crate>` for focused crate suites and `cargo test --workspace` for the entire repository.
 - Optionally run `cargo clippy -- -D warnings` for additional lint checks.
 
 ## Documentation

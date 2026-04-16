@@ -437,6 +437,16 @@ const LOCALNET_ALLOW_SINGLE_PEER_SORA_ENV: &str = "IROHA_LOCALNET_ALLOW_UNSAFE_S
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
+const LOCALNET_FAUCET_AUTHORITY_BALANCE: u64 = 1_000_000;
+const LOCALNET_FAUCET_AMOUNT: &str = "1000";
+const LOCALNET_FAUCET_POW_DIFFICULTY_BITS: i64 = 8;
+const LOCALNET_FAUCET_POW_SCRYPT_LOG_N: i64 = 13;
+const LOCALNET_FAUCET_POW_SCRYPT_R: i64 = 8;
+const LOCALNET_FAUCET_POW_SCRYPT_P: i64 = 1;
+const LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS: i64 = 6;
+const LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS: i64 = 64;
+const LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT: i64 = 4;
+const LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS: i64 = 2;
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
@@ -1945,6 +1955,60 @@ fn render_peer_config(
     onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
     torii.insert("onboarding".into(), Value::Table(onboarding));
 
+    let mut faucet = Table::new();
+    faucet.insert("enabled".into(), Value::Boolean(true));
+    faucet.insert(
+        "authority".into(),
+        Value::String(localnet_client_account.clone()),
+    );
+    faucet.insert(
+        "private_key".into(),
+        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    );
+    faucet.insert(
+        "asset_definition_id".into(),
+        Value::String(localnet_fee_asset_literal()),
+    );
+    faucet.insert(
+        "amount".into(),
+        Value::String(LOCALNET_FAUCET_AMOUNT.to_owned()),
+    );
+    faucet.insert(
+        "pow_difficulty_bits".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_DIFFICULTY_BITS),
+    );
+    faucet.insert(
+        "pow_scrypt_log_n".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_LOG_N),
+    );
+    faucet.insert(
+        "pow_scrypt_r".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_R),
+    );
+    faucet.insert(
+        "pow_scrypt_p".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_P),
+    );
+    faucet.insert(
+        "pow_max_anchor_age_blocks".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS),
+    );
+    faucet.insert(
+        "pow_adaptive_lookback_blocks".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS),
+    );
+    faucet.insert(
+        "pow_adaptive_claims_per_extra_bit".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT),
+    );
+    faucet.insert(
+        "pow_adaptive_max_extra_bits".into(),
+        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
+    );
+    // Local generated networks do not have finalized public Taira VRF seed material.
+    faucet.insert("pow_vrf_seed_enabled".into(), Value::Boolean(false));
+    torii.insert("faucet".into(), Value::Table(faucet));
+
     let mut offline_lineage_policy = Table::new();
     offline_lineage_policy.insert(
         "max_balance".into(),
@@ -2518,7 +2582,7 @@ fn append_localnet_npos_bootstrap(
         registrations.accounts.insert(client_account_id.clone());
     }
     builder = builder.append_instruction(Mint::asset_numeric(
-        stake_amount,
+        LOCALNET_FAUCET_AUTHORITY_BALANCE,
         AssetId::new(fee_asset_id, client_account_id),
     ));
 
@@ -5205,6 +5269,74 @@ mod tests {
         assert!(
             contents.contains(&expected_mint),
             "generated genesis should fund the client signer fee asset"
+        );
+        assert!(
+            contents.contains(&LOCALNET_FAUCET_AUTHORITY_BALANCE.to_string()),
+            "generated genesis should give the reused local faucet signer enough XOR for repeated claims"
+        );
+    }
+
+    #[test]
+    fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-faucet-config".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
+        )
+        .expect("parse peer config");
+        let faucet = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("faucet"))
+            .and_then(toml::Value::as_table)
+            .expect("torii faucet table");
+        assert_eq!(
+            faucet.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        let expected_authority = localnet_client_account_literal(None);
+        let expected_fee_asset = localnet_fee_asset_literal();
+        assert_eq!(
+            faucet.get("authority").and_then(toml::Value::as_str),
+            Some(expected_authority.as_str())
+        );
+        assert_eq!(
+            faucet
+                .get("asset_definition_id")
+                .and_then(toml::Value::as_str),
+            Some(expected_fee_asset.as_str())
+        );
+        assert_eq!(
+            faucet.get("amount").and_then(toml::Value::as_str),
+            Some(LOCALNET_FAUCET_AMOUNT)
+        );
+        assert_eq!(
+            faucet
+                .get("pow_vrf_seed_enabled")
+                .and_then(toml::Value::as_bool),
+            Some(false)
         );
     }
 
