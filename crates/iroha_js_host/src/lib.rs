@@ -1211,7 +1211,10 @@ pub fn derive_confidential_keyset(spend_key: Uint8Array) -> napi::Result<JsConfi
 /// Derive the confidential v2 owner tag from a 32-byte spend key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
-pub fn derive_confidential_owner_tag_v2(spend_key: Uint8Array) -> napi::Result<Buffer> {
+pub fn derive_confidential_owner_tag_v2(
+    spend_key: Uint8Array,
+    diversifier_hex: Option<String>,
+) -> napi::Result<Buffer> {
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
         return Err(napi::Error::new(
@@ -1219,9 +1222,60 @@ pub fn derive_confidential_owner_tag_v2(spend_key: Uint8Array) -> napi::Result<B
             "confidential spend key must be 32 bytes",
         ));
     }
+    let diversifier =
+        parse_optional_confidential_diversifier_hex("diversifier_hex", diversifier_hex.as_deref())?;
     Ok(Buffer::from(
-        confidential_v2::derive_confidential_owner_tag_v2(spend_key).to_vec(),
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?
+            .to_vec(),
     ))
+}
+
+/// Derive a canonical confidential v2 note diversifier from seed material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_diversifier_v2(seed: Uint8Array) -> napi::Result<Buffer> {
+    let seed = seed.as_ref();
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential diversifier seed must not be empty",
+        ));
+    }
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_diversifier_v2(seed).to_vec(),
+    ))
+}
+
+/// Derive a diversified confidential v2 receive address from a spend key and seed.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_receive_address_v2(
+    spend_key: Uint8Array,
+    diversifier_seed: Uint8Array,
+) -> napi::Result<JsConfidentialReceiveAddressV2> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let seed = diversifier_seed.as_ref();
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential diversifier seed must not be empty",
+        ));
+    }
+    let diversifier = confidential_v2::derive_confidential_diversifier_v2(seed);
+    let owner_tag =
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialReceiveAddressV2 {
+        owner_tag_hex: hex::encode(owner_tag),
+        diversifier_hex: hex::encode(diversifier),
+    })
 }
 
 /// Derive a confidential v2 note commitment from note material.
@@ -8186,6 +8240,8 @@ pub struct JsConfidentialTransferInputV2 {
     pub amount: String,
     /// Note rho rendered as 32-byte hexadecimal.
     pub rho_hex: String,
+    /// Note diversifier rendered as 32-byte hexadecimal; omitted legacy notes use the default tag.
+    pub diversifier_hex: Option<String>,
     /// Current note leaf index inside the confidential tree.
     pub leaf_index: u32,
 }
@@ -8200,6 +8256,15 @@ pub struct JsConfidentialTransferOutputV2 {
     pub rho_hex: String,
     /// Recipient owner tag rendered as 32-byte hexadecimal.
     pub owner_tag_hex: String,
+}
+
+/// Diversified confidential v2 payment address material.
+#[napi(object)]
+pub struct JsConfidentialReceiveAddressV2 {
+    /// Recipient owner tag rendered as 32-byte hexadecimal.
+    pub owner_tag_hex: String,
+    /// Note diversifier rendered as 32-byte hexadecimal.
+    pub diversifier_hex: String,
 }
 
 /// Result of building a confidential transfer v2 proof envelope.
@@ -8415,6 +8480,16 @@ fn parse_confidential_tree_commitments(
         .collect()
 }
 
+fn parse_optional_confidential_diversifier_hex(
+    context: &str,
+    value: Option<&str>,
+) -> napi::Result<[u8; 32]> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => parse_fixed_32_hex(context, value),
+        None => Ok(confidential_v2::default_confidential_diversifier_v2()),
+    }
+}
+
 fn parse_confidential_transfer_inputs_v2(
     inputs: Vec<JsConfidentialTransferInputV2>,
 ) -> napi::Result<Vec<ConfidentialTransferInputV2>> {
@@ -8428,6 +8503,10 @@ fn parse_confidential_transfer_inputs_v2(
                     &input.amount,
                 )?,
                 rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                diversifier: parse_optional_confidential_diversifier_hex(
+                    &format!("inputs[{index}].diversifier_hex"),
+                    input.diversifier_hex.as_deref(),
+                )?,
                 leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
                     napi::Error::new(
                         napi::Status::InvalidArg,
@@ -8452,6 +8531,10 @@ fn parse_confidential_unshield_inputs_v2(
                     &input.amount,
                 )?,
                 rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                diversifier: parse_optional_confidential_diversifier_hex(
+                    &format!("inputs[{index}].diversifier_hex"),
+                    input.diversifier_hex.as_deref(),
+                )?,
                 leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
                     napi::Error::new(
                         napi::Status::InvalidArg,

@@ -5180,6 +5180,46 @@ export interface ConfidentialKeyset {
   asHex(): Record<string, string>;
 }
 
+export interface ConfidentialReceiveAddressV2 {
+  ownerTag: Buffer;
+  ownerTagHex: string;
+  diversifier: Buffer;
+  diversifierHex: string;
+}
+
+export interface ConfidentialTransferProofInputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+  diversifierHex?: string;
+  diversifier_hex?: string;
+  diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  leafIndex?: number;
+  leaf_index?: number;
+}
+
+export interface ConfidentialTransferProofOutputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+  ownerTagHex?: string;
+  owner_tag_hex?: string;
+  ownerTag?: ArrayBufferView | ArrayBuffer | Buffer;
+}
+
+export interface ConfidentialTransferProofResultV2 {
+  nullifiers: Buffer[];
+  outputCommitments: Buffer[];
+  root: Buffer;
+  proof: Buffer;
+}
+
+export interface ConfidentialUnshieldProofResultV2 {
+  nullifiers: Buffer[];
+  root: Buffer;
+  proof: Buffer;
+}
+
 export interface KaigiRosterJoinProof {
   commitment: Buffer;
   nullifier: Buffer;
@@ -8401,6 +8441,43 @@ export function deriveConfidentialKeyset(
 
 export function deriveConfidentialKeysetFromHex(spendKeyHex: string): ConfidentialKeyset;
 
+export function deriveConfidentialOwnerTagV2(
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: {
+    diversifierHex?: string;
+    diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  },
+): Buffer;
+
+export function deriveConfidentialDiversifierV2(
+  seed: ArrayBufferView | ArrayBuffer | Buffer | string,
+): {
+  diversifier: Buffer;
+  diversifierHex: string;
+};
+
+export function deriveConfidentialReceiveAddressV2(input: {
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  diversifierSeed: ArrayBufferView | ArrayBuffer | Buffer | string;
+}): ConfidentialReceiveAddressV2;
+
+export function deriveConfidentialNoteV2(input: {
+  assetDefinitionId: string;
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+  ownerTagHex?: string;
+  ownerTag?: ArrayBufferView | ArrayBuffer | Buffer;
+}): { commitment: Buffer; commitmentHex: string };
+
+export function deriveConfidentialNullifierV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+}): { nullifier: Buffer; nullifierHex: string };
+
 export interface Sm2Fixture {
   distid: string;
   seedHex: string;
@@ -9053,6 +9130,28 @@ export function buildCreateKaigiTransaction(
 export function buildPrivateKaigiFeeSpend(
   input: PrivateKaigiFeeSpendInput,
 ): PrivateKaigiFeeSpendResult;
+
+export function buildConfidentialTransferProofV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  treeCommitments: ReadonlyArray<string | ArrayBufferView | ArrayBuffer | Buffer>;
+  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  outputs: ReadonlyArray<ConfidentialTransferProofOutputV2>;
+  rootHintHex: string;
+  verifyingKey: Record<string, unknown>;
+}): ConfidentialTransferProofResultV2;
+
+export function buildConfidentialUnshieldProofV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  treeCommitments: ReadonlyArray<string | ArrayBufferView | ArrayBuffer | Buffer>;
+  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  publicAmount: NumericLike;
+  rootHintHex: string;
+  verifyingKey: Record<string, unknown>;
+}): ConfidentialUnshieldProofResultV2;
 export function buildPrivateCreateKaigiTransaction(
   input: PrivateCreateKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;

@@ -9,7 +9,10 @@ use halo2_proofs::{
         ff::{Field as _, PrimeField as _},
         pasta::{EqAffine as Curve, Fp as Scalar},
     },
-    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk},
+    plonk::{
+        Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk,
+        keygen_vk,
+    },
     poly::{
         Rotation,
         ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
@@ -17,22 +20,28 @@ use halo2_proofs::{
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use iroha_crypto::Hash as CryptoHash;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_data_model::{
     ChainId,
-    proof::{ProofBox, VerifyingKeyBox},
+    confidential::ConfidentialStatus,
+    proof::{ProofBox, VerifyingKeyBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use rand_core_06::OsRng;
 
 pub const CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID: &str =
-    "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon";
+    "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
-    "halo2/pasta/ipa/anon-unshield-merkle16-poseidon";
+    "halo2/pasta/ipa/anon-unshield-merkle16-poseidon-diversified";
+pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
+pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","root","public_amount","asset_tag","chain_tag"]}"#;
+const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ConfidentialMerklePathV2 {
@@ -47,6 +56,7 @@ pub struct ConfidentialMerklePathV2 {
 pub struct ConfidentialTransferInputV2 {
     pub amount: u128,
     pub rho: [u8; 32],
+    pub diversifier: [u8; 32],
     pub leaf_index: usize,
 }
 
@@ -72,6 +82,7 @@ pub struct ConfidentialTransferProofV2 {
 pub struct ConfidentialUnshieldInputV2 {
     pub amount: u128,
     pub rho: [u8; 32],
+    pub diversifier: [u8; 32],
     pub leaf_index: usize,
 }
 
@@ -103,6 +114,93 @@ pub fn is_confidential_transfer_v2_circuit_id(raw: &str) -> bool {
 
 pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
     normalize_confidential_circuit_id(raw) == CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn build_confidential_v2_vk_box<C>(k: u32, circuit: &C) -> Result<VerifyingKeyBox, String>
+where
+    C: Circuit<Scalar>,
+{
+    let params = super::pasta_params_new(k);
+    let vk = keygen_vk(&params, circuit)
+        .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
+    let mut bytes = super::zk1::wrap_start();
+    super::zk1::wrap_append_ipa_k(&mut bytes, k);
+    super::zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(
+        super::ZK_BACKEND_HALO2_IPA.to_owned(),
+        bytes,
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
+    build_confidential_v2_vk_box(
+        CONFIDENTIAL_TRANSFER_V2_IPA_K,
+        &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_unshield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
+    build_confidential_v2_vk_box(
+        CONFIDENTIAL_UNSHIELD_V2_IPA_K,
+        &ConfidentialUnshieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_v2_vk_record(
+    name: &str,
+    version: u32,
+    circuit_id: &str,
+    public_inputs_schema: &[u8],
+    vk_box: VerifyingKeyBox,
+) -> Result<VerifyingKeyRecord, String> {
+    let mut record = VerifyingKeyRecord::new(
+        version,
+        circuit_id,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        CryptoHash::new(public_inputs_schema).into(),
+        super::hash_vk(&vk_box),
+    );
+    record.vk_len = u32::try_from(vk_box.bytes.len())
+        .map_err(|_| "confidential v2 verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = CONFIDENTIAL_V2_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = name.to_owned();
+    Ok(record)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_transfer_v2_vk_record(
+    name: &str,
+    version: u32,
+) -> Result<VerifyingKeyRecord, String> {
+    confidential_v2_vk_record(
+        name,
+        version,
+        CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        confidential_transfer_v2_vk_box()?,
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn confidential_unshield_v2_vk_record(
+    name: &str,
+    version: u32,
+) -> Result<VerifyingKeyRecord, String> {
+    confidential_v2_vk_record(
+        name,
+        version,
+        CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+        CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        confidential_unshield_v2_vk_box()?,
+    )
 }
 
 pub fn parse_transfer_public_inputs(
@@ -257,8 +355,38 @@ fn leaf_scalar_from_commitment(commitment: [u8; 32]) -> Scalar {
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn derive_confidential_owner_tag_v2(spend_key: &[u8]) -> [u8; 32] {
+    derive_confidential_owner_tag_v2_with_diversifier(
+        spend_key,
+        default_confidential_diversifier_v2(),
+    )
+    .expect("default confidential diversifier is canonical")
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn default_confidential_diversifier_v2() -> [u8; 32] {
+    scalar_to_repr_bytes(Scalar::ONE)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_confidential_diversifier_v2(seed: &[u8]) -> [u8; 32] {
+    scalar_to_repr_bytes(hash_to_scalar(
+        b"iroha.confidential.v2.diversifier",
+        &[seed],
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_confidential_owner_tag_v2_with_diversifier(
+    spend_key: &[u8],
+    diversifier: [u8; 32],
+) -> Result<[u8; 32], String> {
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
-    scalar_to_repr_bytes(poseidon_pair(spend_scalar, Scalar::ONE))
+    let diversifier_scalar = scalar_from_repr(diversifier)
+        .ok_or_else(|| "diversifier must be a canonical Pasta scalar".to_owned())?;
+    Ok(scalar_to_repr_bytes(poseidon_pair(
+        spend_scalar,
+        diversifier_scalar,
+    )))
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -430,6 +558,8 @@ struct ConfidentialTransferWitnessV2 {
     output_0_rho: [u8; 32],
     output_1_rho: [u8; 32],
     spend_scalar: [u8; 32],
+    input_0_diversifier: [u8; 32],
+    input_1_diversifier: [u8; 32],
     output_0_owner_tag: [u8; 32],
     output_1_owner_tag: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
@@ -438,7 +568,7 @@ struct ConfidentialTransferWitnessV2 {
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
-struct ConfidentialTransferCircuitV2<const DEPTH: usize> {
+pub(super) struct ConfidentialTransferCircuitV2<const DEPTH: usize> {
     witness: Option<ConfidentialTransferWitnessV2>,
 }
 
@@ -456,6 +586,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_rho
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_rho
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // spend_scalar
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_diversifier
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_diversifier
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_owner_tag
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_owner_tag
         [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
@@ -486,6 +618,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
         let output_0_rho = meta.advice_column();
         let output_1_rho = meta.advice_column();
         let spend_scalar = meta.advice_column();
+        let input_0_diversifier = meta.advice_column();
+        let input_1_diversifier = meta.advice_column();
         let output_0_owner_tag = meta.advice_column();
         let output_1_owner_tag = meta.advice_column();
         let input_0_siblings = std::array::from_fn(|_| meta.advice_column());
@@ -509,6 +643,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             let out0_rho = meta.query_advice(output_0_rho, Rotation::cur());
             let out1_rho = meta.query_advice(output_1_rho, Rotation::cur());
             let sk = meta.query_advice(spend_scalar, Rotation::cur());
+            let in0_diversifier = meta.query_advice(input_0_diversifier, Rotation::cur());
+            let in1_diversifier = meta.query_advice(input_1_diversifier, Rotation::cur());
             let out0_owner = meta.query_advice(output_0_owner_tag, Rotation::cur());
             let out1_owner = meta.query_advice(output_1_owner_tag, Rotation::cur());
             let cm_in0 = meta.query_instance(instances[0], Rotation::cur());
@@ -554,10 +690,12 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                     ),
                 )
             };
-            let owner_tag = poseidon_pair_expr(sk.clone(), one.clone());
+            let input_0_owner_tag = poseidon_pair_expr(sk.clone(), in0_diversifier);
+            let input_1_owner_tag = poseidon_pair_expr(sk.clone(), in1_diversifier);
             let in0_commit_expr =
-                note_commit_expr(in0_amt.clone(), in0_rho.clone(), owner_tag.clone());
-            let in1_commit_raw = note_commit_expr(in1_amt.clone(), in1_rho.clone(), owner_tag);
+                note_commit_expr(in0_amt.clone(), in0_rho.clone(), input_0_owner_tag);
+            let in1_commit_raw =
+                note_commit_expr(in1_amt.clone(), in1_rho.clone(), input_1_owner_tag);
             let out0_commit_expr = note_commit_expr(out0_amt.clone(), out0_rho.clone(), out0_owner);
             let out1_commit_raw = note_commit_expr(out1_amt.clone(), out1_rho.clone(), out1_owner);
             let nf0_expr = nullifier_expr(in0_rho.clone());
@@ -624,6 +762,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             output_0_rho,
             output_1_rho,
             spend_scalar,
+            input_0_diversifier,
+            input_1_diversifier,
             output_0_owner_tag,
             output_1_owner_tag,
             input_0_siblings,
@@ -655,6 +795,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             output_0_rho,
             output_1_rho,
             spend_scalar,
+            input_0_diversifier,
+            input_1_diversifier,
             output_0_owner_tag,
             output_1_owner_tag,
             input_0_siblings,
@@ -793,6 +935,20 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                 )?;
                 super::assign_advice_compat(
                     &mut region,
+                    || "input_0_diversifier",
+                    input_0_diversifier,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_0_diversifier)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_diversifier",
+                    input_1_diversifier,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_1_diversifier)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
                     || "output_0_owner_tag",
                     output_0_owner_tag,
                     0,
@@ -896,19 +1052,23 @@ struct ConfidentialUnshieldWitnessV2 {
     input_0_rho: [u8; 32],
     input_1_rho: [u8; 32],
     spend_scalar: [u8; 32],
+    input_0_diversifier: [u8; 32],
+    input_1_diversifier: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
-struct ConfidentialUnshieldCircuitV2<const DEPTH: usize> {
+pub(super) struct ConfidentialUnshieldCircuitV2<const DEPTH: usize> {
     witness: Option<ConfidentialUnshieldWitnessV2>,
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH> {
     type Config = (
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
@@ -938,6 +1098,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
         let input_0_rho = meta.advice_column();
         let input_1_rho = meta.advice_column();
         let spend_scalar = meta.advice_column();
+        let input_0_diversifier = meta.advice_column();
+        let input_1_diversifier = meta.advice_column();
         let input_0_siblings = std::array::from_fn(|_| meta.advice_column());
         let input_0_directions = std::array::from_fn(|_| meta.advice_column());
         let input_0_witness_nodes = std::array::from_fn(|_| meta.advice_column());
@@ -954,6 +1116,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
             let in0_rho = meta.query_advice(input_0_rho, Rotation::cur());
             let in1_rho = meta.query_advice(input_1_rho, Rotation::cur());
             let sk = meta.query_advice(spend_scalar, Rotation::cur());
+            let in0_diversifier = meta.query_advice(input_0_diversifier, Rotation::cur());
+            let in1_diversifier = meta.query_advice(input_1_diversifier, Rotation::cur());
             let cm_in0 = meta.query_instance(instances[0], Rotation::cur());
             let cm_in1 = meta.query_instance(instances[1], Rotation::cur());
             let nf0 = meta.query_instance(instances[2], Rotation::cur());
@@ -977,16 +1141,13 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                         + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64))
                             * (rhs_fourth * rhs)
                 };
-            let owner_tag = poseidon_pair_expr(sk.clone(), one.clone());
             let note_commit_expr =
                 |amount: halo2_proofs::plonk::Expression<Scalar>,
-                 rho: halo2_proofs::plonk::Expression<Scalar>| {
+                 rho: halo2_proofs::plonk::Expression<Scalar>,
+                 owner_tag: halo2_proofs::plonk::Expression<Scalar>| {
                     poseidon_pair_expr(
                         amount,
-                        poseidon_pair_expr(
-                            rho,
-                            poseidon_pair_expr(owner_tag.clone(), asset_tag.clone()),
-                        ),
+                        poseidon_pair_expr(rho, poseidon_pair_expr(owner_tag, asset_tag.clone())),
                     )
                 };
             let nullifier_expr = |rho: halo2_proofs::plonk::Expression<Scalar>| {
@@ -998,8 +1159,12 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                     ),
                 )
             };
-            let in0_commit_expr = note_commit_expr(in0_amt.clone(), in0_rho.clone());
-            let in1_commit_raw = note_commit_expr(in1_amt.clone(), in1_rho.clone());
+            let input_0_owner_tag = poseidon_pair_expr(sk.clone(), in0_diversifier);
+            let input_1_owner_tag = poseidon_pair_expr(sk.clone(), in1_diversifier);
+            let in0_commit_expr =
+                note_commit_expr(in0_amt.clone(), in0_rho.clone(), input_0_owner_tag);
+            let in1_commit_raw =
+                note_commit_expr(in1_amt.clone(), in1_rho.clone(), input_1_owner_tag);
             let nf0_expr = nullifier_expr(in0_rho.clone());
             let nf1_raw = nullifier_expr(in1_rho.clone());
             let mut constraints = vec![
@@ -1055,6 +1220,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
             input_0_rho,
             input_1_rho,
             spend_scalar,
+            input_0_diversifier,
+            input_1_diversifier,
             input_0_siblings,
             input_0_directions,
             input_0_witness_nodes,
@@ -1079,6 +1246,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
             input_0_rho,
             input_1_rho,
             spend_scalar,
+            input_0_diversifier,
+            input_1_diversifier,
             input_0_siblings,
             input_0_directions,
             input_0_witness_nodes,
@@ -1169,6 +1338,20 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                     spend_scalar,
                     0,
                     || scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_diversifier",
+                    input_0_diversifier,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_0_diversifier)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_diversifier",
+                    input_1_diversifier,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_1_diversifier)),
                 )?;
                 for index in 0..DEPTH {
                     super::assign_advice_compat(
@@ -1353,7 +1536,6 @@ pub fn build_confidential_transfer_proof_v2(
     let (params, parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
     let spend_scalar_bytes = scalar_to_repr_bytes(spend_scalar);
-    let owner_tag = derive_confidential_owner_tag_v2(spend_key);
     let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
     let chain_tag = derive_confidential_chain_tag_v2(chain_id.as_str());
     let input_0 = inputs
@@ -1366,9 +1548,17 @@ pub fn build_confidential_transfer_proof_v2(
         .cloned()
         .ok_or_else(|| "missing transfer output".to_owned())?;
     let output_1 = outputs.get(1).cloned();
-    let input_0_commitment =
-        derive_confidential_note_v2(asset_definition_id, input_0.amount, input_0.rho, owner_tag)?;
+    let input_0_owner_tag =
+        derive_confidential_owner_tag_v2_with_diversifier(spend_key, input_0.diversifier)?;
+    let input_0_commitment = derive_confidential_note_v2(
+        asset_definition_id,
+        input_0.amount,
+        input_0.rho,
+        input_0_owner_tag,
+    )?;
     let input_1_commitment = if let Some(note) = input_1.as_ref() {
+        let owner_tag =
+            derive_confidential_owner_tag_v2_with_diversifier(spend_key, note.diversifier)?;
         derive_confidential_note_v2(asset_definition_id, note.amount, note.rho, owner_tag)?
     } else {
         [0u8; 32]
@@ -1437,6 +1627,10 @@ pub fn build_confidential_transfer_proof_v2(
         output_0_rho: output_0.rho,
         output_1_rho: output_1.as_ref().map_or([0u8; 32], |note| note.rho),
         spend_scalar: spend_scalar_bytes,
+        input_0_diversifier: input_0.diversifier,
+        input_1_diversifier: input_1
+            .as_ref()
+            .map_or_else(default_confidential_diversifier_v2, |note| note.diversifier),
         output_0_owner_tag: output_0.owner_tag,
         output_1_owner_tag: output_1.as_ref().map_or([0u8; 32], |note| note.owner_tag),
         input_0_path,
@@ -1520,7 +1714,6 @@ pub fn build_confidential_unshield_proof_v2(
         return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     let (params, parsed_vk) = parse_vk_for_unshield(circuit_id, vk_box)?;
-    let owner_tag = derive_confidential_owner_tag_v2(spend_key);
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
     let spend_scalar_bytes = scalar_to_repr_bytes(spend_scalar);
     let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
@@ -1530,9 +1723,17 @@ pub fn build_confidential_unshield_proof_v2(
         .cloned()
         .ok_or_else(|| "missing unshield input".to_owned())?;
     let input_1 = inputs.get(1).cloned();
-    let input_0_commitment =
-        derive_confidential_note_v2(asset_definition_id, input_0.amount, input_0.rho, owner_tag)?;
+    let input_0_owner_tag =
+        derive_confidential_owner_tag_v2_with_diversifier(spend_key, input_0.diversifier)?;
+    let input_0_commitment = derive_confidential_note_v2(
+        asset_definition_id,
+        input_0.amount,
+        input_0.rho,
+        input_0_owner_tag,
+    )?;
     let input_1_commitment = if let Some(note) = input_1.as_ref() {
+        let owner_tag =
+            derive_confidential_owner_tag_v2_with_diversifier(spend_key, note.diversifier)?;
         derive_confidential_note_v2(asset_definition_id, note.amount, note.rho, owner_tag)?
     } else {
         [0u8; 32]
@@ -1585,6 +1786,10 @@ pub fn build_confidential_unshield_proof_v2(
         input_0_rho: input_0.rho,
         input_1_rho: input_1.as_ref().map_or([0u8; 32], |note| note.rho),
         spend_scalar: spend_scalar_bytes,
+        input_0_diversifier: input_0.diversifier,
+        input_1_diversifier: input_1
+            .as_ref()
+            .map_or_else(default_confidential_diversifier_v2, |note| note.diversifier),
         input_0_path,
         input_1_path,
     };
