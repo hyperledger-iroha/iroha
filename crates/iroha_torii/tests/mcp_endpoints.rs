@@ -2031,7 +2031,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
     let app = build_router(cfg);
     for (id, tool_name) in [
         (10401, "iroha.contracts.deploy"),
-        (10402, "iroha.contracts.call"),
+        (10402, "iroha.contracts.deploy_bundle"),
+        (10403, "iroha.contracts.call"),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -2176,6 +2177,44 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_has
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
         "expected invalid code hash to be rejected by contract code-bytes alias"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_contracts_deploy_bundles_get_accepts_digest_shortcut() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10410,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.contracts.deploy_bundles.get",
+                "arguments": {
+                    "digest": "not-a-bundle-digest"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid deploy bundle digest should be marked as MCP tool error"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid deploy bundle digest to be rejected by deploy-bundle receipt alias"
     );
 }
 
@@ -2640,6 +2679,18 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names.iter().any(|name| name == "iroha.contracts.deploy"),
         "expected agent-friendly contract deploy MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.contracts.deploy_bundle"),
+        "expected agent-friendly contract deploy-bundle MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.contracts.deploy_bundles.get"),
+        "expected agent-friendly contract deploy-bundle receipt MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.contracts.call"),

@@ -506,9 +506,9 @@ pub mod nexus {
 pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -574,14 +574,7 @@ pub mod sorafs {
         executor: &mut V,
         isi: &RegisterCapacityDeclaration,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanDeclareSorafsCapacity.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS capacity declaration");
+        execute!(executor, isi);
     }
 
     /// Record a capacity telemetry snapshot when permitted.
@@ -589,14 +582,7 @@ pub mod sorafs {
         executor: &mut V,
         isi: &RecordCapacityTelemetry,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanSubmitSorafsTelemetry.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't record SoraFS capacity telemetry");
+        execute!(executor, isi);
     }
 
     /// File a capacity dispute when permitted.
@@ -1090,7 +1076,7 @@ pub mod account {
         executor: &mut V,
         isi: &ReplaceAccountController,
     ) {
-        let account_id = &isi.account;
+        let account_id = isi.account();
 
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
@@ -1110,7 +1096,7 @@ pub mod account {
         executor: &mut V,
         isi: &SetAccountRecoveryPolicy,
     ) {
-        let account_id = &isi.account;
+        let account_id = isi.account();
 
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
@@ -1130,7 +1116,7 @@ pub mod account {
         executor: &mut V,
         isi: &ClearAccountRecoveryPolicy,
     ) {
-        let account_id = &isi.account;
+        let account_id = isi.account();
 
         if executor.context().curr_block.is_genesis()
             || is_account_owner(account_id, &executor.context().authority, executor.host())
@@ -2896,9 +2882,9 @@ mod sorafs_permission_tests {
     };
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -3218,19 +3204,21 @@ mod sorafs_permission_tests {
         sorafs::visit_bind_manifest_alias
     );
 
-    sorafs_permission_case!(
-        register_capacity_declaration_requires_permission,
-        register_capacity_declaration(),
-        CanDeclareSorafsCapacity,
-        sorafs::visit_register_capacity_declaration
-    );
+    #[test]
+    fn register_capacity_declaration_is_public() {
+        assert_allowed_without_permission(
+            register_capacity_declaration(),
+            sorafs::visit_register_capacity_declaration,
+        );
+    }
 
-    sorafs_permission_case!(
-        record_capacity_telemetry_requires_permission,
-        record_capacity_telemetry(),
-        CanSubmitSorafsTelemetry,
-        sorafs::visit_record_capacity_telemetry
-    );
+    #[test]
+    fn record_capacity_telemetry_is_public() {
+        assert_allowed_without_permission(
+            record_capacity_telemetry(),
+            sorafs::visit_record_capacity_telemetry,
+        );
+    }
 
     sorafs_permission_case!(
         record_capacity_dispute_requires_permission,

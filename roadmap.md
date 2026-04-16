@@ -154,14 +154,64 @@ invalidate the staged activation block.
     multi-hour window exists, `cargo test --workspace`) after the remaining
     unrelated dirty-tree work is either merged or isolated.
 
+Latest sync (2026-04-16 Taira local 4-validator Docker proof and slim prebuilt image path):
+the Taira Docker slice is no longer limited to a one-node smoke. The repo now
+has a renderer that turns `kagami localnet` output into four container-ready
+peer configs/env files with canonical `addr:...#CRC16` literals, the plain
+`taira-validator-container.sh` wrapper can place those peers on a shared
+Docker bridge via `TAIRA_DOCKER_NETWORK`, the repo rollout script passes
+against that local 4-validator cluster, and the public read-only rollout smoke
+also passes against `https://taira.sora.org`. The prebuilt release-image path
+is now practical locally because `scripts/build_release_image.sh
+--use-target-prebuilt` stages a tiny temporary Docker context and writes its
+manifest with `python3`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/scripts/render_taira_localnet_container_bundle.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/render_taira_localnet_container_bundle_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/taira_validator_container_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.compose.env.example`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/docker_build.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test scripts.tests.render_taira_localnet_container_bundle_test`
+  - `python3 scripts/render_taira_localnet_container_bundle.py --bundle-dir dist/taira-localnet-smoke --output-dir dist/taira-localnet-cluster`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:28080 --skip-write-canary`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+  - `scripts/build_release_image.sh --profile iroha3 --config taira --use-target-prebuilt --tag local/taira-validator:deploy --artifacts-dir dist/taira-release-image`
+- remaining work:
+  - publish the first official `taira-*` image tags from a committed ref or a
+    clean publish runner; this machine has registry credentials, but the
+    current source tree is dirty and should not be used to push opaque official
+    artifacts
+  - if a full local signed canary proof is required for the 4-node cluster,
+    seed the local fee asset path or use a pre-funded local signer; the
+    read-only rollout gate already passes once the cluster publishes
+    `commit_qc_validator_set_len = 4`
+  - run broader repository validation (`cargo build --workspace`, then the
+    multi-hour `cargo test --workspace`) once this Docker slice is isolated
+    from the unrelated dirty-tree work
+
 Latest sync (2026-04-16 Taira validator image and manual publish workflow landed):
 the repo now has a dedicated `CONFIG_PROFILE=taira` runtime image path, a
 Taira-aware default Docker entrypoint, and a manual GitHub Actions workflow for
 publishing validator-ready images to Docker Hub and Soramitsu Harbor. The
 image now ships the checked-in static Taira bundle under
-`/opt/iroha/configs/soranexus/taira`, expects per-validator runtime config to
-be mounted at `/config/config.toml`, and keeps validator secrets out of the
-artifact. The remaining work is operational rather than structural.
+`/opt/iroha/configs/soranexus/taira`, the bundled rANS tables under
+`/opt/iroha/codec/rans/tables`, expects per-validator runtime config to be
+mounted at `/config/config.toml`, and keeps validator secrets out of the
+artifact. The entrypoint also accepts `IROHA_TAIRA_SIGNED_GENESIS` for
+disconnected/local smoke boots and rewrites the copied runtime config so
+`genesis.file` points at the mounted payload. A one-node local smoke now boots
+successfully from a fresh `kagami localnet` bundle and serves `/health`,
+`/status`, and `/v1/mcp`; the remaining work is operational rather than
+structural.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/Dockerfile`
@@ -183,10 +233,15 @@ artifact. The remaining work is operational rather than structural.
   - `bash -n scripts/docker_entrypoint.sh`
   - `bash -n scripts/build_release_image.sh`
   - `bash -n configs/soranexus/taira/taira-validator-container.sh`
-  - `python3 -m unittest scripts.tests.docker_entrypoint_test`
-  - `python3 -m unittest scripts.tests.taira_validator_container_test`
+  - `python3 -m unittest scripts.tests.docker_entrypoint_test scripts.tests.taira_validator_container_test`
   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/publish_taira_validator.yml"); puts "yaml ok"'`
   - `ruby -e 'require "yaml"; YAML.load_file("configs/soranexus/taira/docker-compose.validator.yml"); puts "yaml ok"'`
+  - `IROHA_LOCALNET_CHAIN_ID=iroha3-taira target/debug/kagami localnet --build-line iroha3 --sora-profile nexus --consensus-mode npos --peers 4 --base-api-port 8080 --base-p2p-port 1337 --out-dir dist/taira-localnet-smoke`
+  - minimal-context `docker build --build-arg CONFIG_PROFILE=taira --build-arg USE_PREBUILT=1 --build-arg BINARIES=irohad --tag local/taira-validator:prebuilt ...`
+  - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /Users/takemiyamakoto/dev/iroha/dist/taira-localnet-smoke.env up`
+  - `curl -sf http://127.0.0.1:28080/health`
+  - `curl -sf http://127.0.0.1:28080/status`
+  - `curl -sf http://127.0.0.1:28080/v1/mcp`
   - tracked-files-only Docker rebuilds now keep the required `artifacts/offline_poseidon` snapshot in a clean ~512 MB context; local Colima still OOM-kills the deploy-profile Rust compile even with `CARGO_BUILD_JOBS=4`, so final image proof still needs a better-provisioned builder
   - `docker manifest inspect` confirms neither `hyperledger/iroha:taira-latest` nor `docker.soramitsu.co.jp/iroha3/iroha:taira-latest` exists yet, so the host-side deployment path cannot boot a real published Taira image until the first manual publish succeeds
 - open work after this slice:
@@ -194,7 +249,8 @@ artifact. The remaining work is operational rather than structural.
     credentials to push the first `taira-*` tags to Docker Hub and Harbor;
   - after the first publish, run a real host smoke with either
     `taira-validator-container.sh ... up` or `docker compose ... up -d` against
-    the published image and prove local `/status` plus `/v1/mcp`;
+    the published image and prove the full rollout checks against at least
+    4 live validators, not only the disconnected one-node smoke;
   - let the clean-context Taira image build finish on a publish-grade host if a
     full pre-push compile proof is required beyond the entrypoint/script
     validation above; and

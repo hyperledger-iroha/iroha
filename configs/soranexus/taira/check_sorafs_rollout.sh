@@ -5,9 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
 IROHA_BIN="${IROHA_BIN:-}"
 SORAFS_MANIFEST_STUB_BIN="${SORAFS_MANIFEST_STUB_BIN:-}"
 SORAFS_TX_STDIN_BUILDER_BIN="${SORAFS_TX_STDIN_BUILDER_BIN:-}"
+ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
+ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
+ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
 DECLARATION_VALID_BLOCKS="${DECLARATION_VALID_BLOCKS:-10000}"
@@ -43,8 +47,10 @@ The check fails unless:
   - a deterministic capacity declaration lands through `iroha ledger transaction stdin`
   - the declaration is visible in /v1/sorafs/capacity/state
 
-Without --write-config, signed canary checks are rejected unless
---skip-write-canary is provided explicitly for read-only validation.
+When `--write-config` is omitted, the script bootstraps
+`/run/secrets/taira-canary-client.toml` automatically, onboarding a fresh
+ordinary account on Taira before running the capacity declaration canary.
+Use `--skip-write-canary` only for read-only validation.
 EOF
 }
 
@@ -152,8 +158,7 @@ done
 }
 
 if [[ -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
-  echo "signed SoraFS rollout validation requires --write-config; use --skip-write-canary only for read-only checks" >&2
-  exit 1
+  WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
 fi
 
 normalize_root_url() {
@@ -271,8 +276,10 @@ build_write_canary_config() {
   local source_config="$1"
   local target_torii_url="$2"
   local output_config="$3"
+  local time_to_live_ms="$4"
+  local status_timeout_ms="$5"
 
-  python3 - "$source_config" "$target_torii_url" "$output_config" <<'PY'
+  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" <<'PY'
 import sys
 
 try:
@@ -285,7 +292,7 @@ except ModuleNotFoundError:
             "python3 must provide tomllib (Python 3.11+) or tomli to load the canary config"
         ) from error
 
-source_path, target_torii_url, output_path = sys.argv[1:]
+source_path, target_torii_url, output_path, time_to_live_ms, status_timeout_ms = sys.argv[1:]
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
@@ -297,9 +304,9 @@ chain_discriminant = account.get("chain_discriminant")
 domain = account.get("domain", "wonderland.universal")
 basic_auth = source.get("basic_auth")
 transaction = source.get("transaction") or {}
-time_to_live_ms = transaction.get("time_to_live_ms", 120000)
-status_timeout_ms = transaction.get("status_timeout_ms", 120000)
 nonce = transaction.get("nonce", False)
+time_to_live_ms = int(time_to_live_ms)
+status_timeout_ms = int(status_timeout_ms)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
@@ -313,10 +320,6 @@ if not isinstance(domain, str) or not domain:
     domain = "wonderland.universal"
 elif "." not in domain:
     domain = f"{domain}.universal"
-if not isinstance(time_to_live_ms, int):
-    raise SystemExit("write canary config `transaction.time_to_live_ms` must be an integer when present")
-if not isinstance(status_timeout_ms, int):
-    raise SystemExit("write canary config `transaction.status_timeout_ms` must be an integer when present")
 if not isinstance(nonce, bool):
     raise SystemExit("write canary config `transaction.nonce` must be a boolean when present")
 
@@ -365,6 +368,26 @@ lines.extend(
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines))
 PY
+}
+
+ensure_write_canary_config() {
+  local target_url="$1"
+  local bootstrap_cmd=(
+    python3
+    "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
+    --torii-root "$target_url"
+    --output-config "$WRITE_CONFIG"
+    --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
+    --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
+    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  )
+
+  if [[ -n "$IROHA_BIN" ]]; then
+    bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+
+  echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
+  "${bootstrap_cmd[@]}" >&2
 }
 
 ensure_iroha_bin() {
@@ -711,17 +734,20 @@ run_write_canary() {
   ensure_iroha_bin
   ensure_sorafs_manifest_stub_bin
   ensure_sorafs_tx_stdin_builder_bin
-  [[ -f "$WRITE_CONFIG" ]] || {
-    echo "write canary config does not exist: $WRITE_CONFIG" >&2
-    exit 1
-  }
+  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  ensure_write_canary_config "$target_url"
 
   local temp_config work_dir request_path tx_stdin_path spec_path output_file account_id private_key current_blocks provider_id_hex
   temp_config="$(mktemp)"
   work_dir="$(mktemp -d)"
   output_file="$(mktemp)"
-  trap 'rm -f "$temp_config" "$output_file"; rm -rf "$work_dir"; cleanup' EXIT
-  build_write_canary_config "$WRITE_CONFIG" "$target_url" "$temp_config"
+  trap 'rm -f "${temp_config:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
+  build_write_canary_config \
+    "$WRITE_CONFIG" \
+    "$target_url" \
+    "$temp_config" \
+    "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
+    "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 
   account_id="$(resolve_canary_account_id "$temp_config")"
   private_key="$(resolve_canary_private_key "$temp_config")"

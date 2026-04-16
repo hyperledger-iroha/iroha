@@ -77,6 +77,7 @@ EOT
 COPY --from=builder /outbin/ $BIN_PATH
 COPY scripts/docker_entrypoint.sh $BIN_PATH
 COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
+COPY codec/rans/tables $APP_DIR/codec/rans/tables
 COPY defaults /tmp/defaults
 RUN set -eu; \
   case "${CONFIG_PROFILE}" in \
