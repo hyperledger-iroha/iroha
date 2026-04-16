@@ -219,6 +219,12 @@ Last updated: 2026-04-16
   probes `/v1/mcp` through the new default entrypoint, caps Cargo parallelism
   with `CARGO_BUILD_JOBS=4`, and then pushes the image to DockerHub plus the
   `docker.soramitsu.co.jp/iroha3/iroha` Harbor namespace.
+- `/Users/takemiyamakoto/dev/iroha/.github/workflows/publish_custom.yml`
+  now also supports `image_type=iroha3-taira`, the same Taira smoke-then-push
+  flow, and correct checked-out ref metadata for manual runs. This gives the
+  repo a dispatchable `main`-branch publish entrypoint for Taira images via
+  `checkout_ref=<branch|tag|sha>` instead of depending only on the dedicated
+  branch-local workflow file.
 - `/Users/takemiyamakoto/dev/iroha/.dockerignore` now excludes additional
   generated workspace directories (`.git`, `build`, `tmp`, `target-*`,
   `localnet-*`, nested `node_modules` / `.build`, etc.) so dirty self-hosted
@@ -308,7 +314,9 @@ Last updated: 2026-04-16
     `docker manifest inspect docker.soramitsu.co.jp/iroha3/iroha:taira-latest`
     both currently return `no such manifest`, so the new host-side runtime path
     is structurally validated and locally test-covered, but cannot boot a real
-    published Taira image until the first manual publish run succeeds.
+    published Taira image until the first manual publish run succeeds. The
+    preferred repo-side trigger is now `Publish (custom)` with
+    `image_type=iroha3-taira` from `main`.
 
 ## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
 - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

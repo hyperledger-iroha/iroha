@@ -768,7 +768,8 @@ response.rejectCode().ifPresent(code -> {
 `HttpClientTransport.resolveAccountAlias(...)` posts to `/v1/aliases/resolve` and
 returns an `Optional<AccountAliasResolution>`. An `Optional.empty()` value
 indicates the node responded with HTTP 404 for an unknown alias; other failures
-complete the future exceptionally.
+complete the future exceptionally. `AccountAliasResolution.index()` is optional
+and may be `null` when the alias backend does not expose a deterministic index.
 
 ```java
 Optional<AccountAliasResolution> resolved =

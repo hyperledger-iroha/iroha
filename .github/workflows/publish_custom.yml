@@ -11,12 +11,22 @@ on:
           - profiling
           - glibc
           - alpine
+          - iroha3-taira
         default: glibc
       checkout_ref:
         description: "The branch, tag or SHA to checkout"
         required: true
         type: string
         default: main
+      tag_suffix:
+        description: "Optional image tag suffix for the Taira image. Defaults to the checked-out short SHA."
+        required: false
+        type: string
+      push_latest:
+        description: "Also push the rolling `taira-latest` tags for the Taira image"
+        required: false
+        type: boolean
+        default: false
 
 env:
   DEFAULTS_DIR: defaults
@@ -24,6 +34,7 @@ env:
 
 jobs:
   build_wasm_libs:
+    if: ${{ inputs.image_type != 'iroha3-taira' }}
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -43,6 +54,7 @@ jobs:
 
   image:
     needs: build_wasm_libs
+    if: ${{ inputs.image_type != 'iroha3-taira' }}
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -50,6 +62,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
+      - name: Resolve checkout metadata
+        id: checkout_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          if git_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
+            echo "tag=$git_tag" >>"$GITHUB_OUTPUT"
+          fi
       - name: Download wasm libs
         uses: actions/download-artifact@v4
         with:
@@ -81,15 +102,21 @@ jobs:
         if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:glibc-${{ github.sha }}
-          labels: commit=${{ github.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:glibc-${{ steps.checkout_meta.outputs.sha }}
+          labels: commit=${{ steps.checkout_meta.outputs.sha }}
           context: .
 
       # Profiling
       - name: Get the release tag
         if: ${{ inputs.image_type == 'profiling' }}
+        shell: bash
         run: |
-          RELEASE_VERSION=${{ github.ref_name }}
+          set -euo pipefail
+          RELEASE_VERSION="${{ steps.checkout_meta.outputs.tag }}"
+          if [[ -z "$RELEASE_VERSION" ]]; then
+            RELEASE_VERSION="${{ github.event.inputs.checkout_ref }}"
+          fi
+          RELEASE_VERSION="${RELEASE_VERSION#refs/tags/}"
           PREFIX='v'
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
@@ -98,8 +125,8 @@ jobs:
         if: ${{ inputs.image_type == 'profiling' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:profiling-${{ env.TAG }}-${{ github.sha }}
-          labels: commit=${{ github.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:profiling-${{ env.TAG }}-${{ steps.checkout_meta.outputs.sha }}
+          labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
             "PROFILE=profiling"
             "RUSTFLAGS=-C force-frame-pointers=on"
@@ -113,7 +140,158 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ github.sha }}
-          labels: commit=${{ github.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
+          labels: commit=${{ steps.checkout_meta.outputs.sha }}
           file: Dockerfile.musl
           context: .
+
+  taira_image:
+    if: ${{ inputs.image_type == 'iroha3-taira' }}
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.checkout_ref }}
+
+      - name: Resolve checkout metadata
+        id: checkout_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short=12 HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to Soramitsu Harbor
+        id: harbor_login
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: docker.soramitsu.co.jp
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_TOKEN }}
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+          install: true
+
+      - name: Resolve Taira image tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw_suffix="${{ inputs.tag_suffix }}"
+          if [[ -z "$raw_suffix" ]]; then
+            raw_suffix="${{ steps.checkout_meta.outputs.short_sha }}"
+          fi
+
+          suffix="$(printf '%s' "$raw_suffix" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
+          if [[ -z "$suffix" ]]; then
+            echo "resolved tag suffix is empty" >&2
+            exit 1
+          fi
+
+          {
+            echo "dockerhub_tags<<EOF"
+            echo "hyperledger/iroha:taira-$suffix"
+            if [[ "${{ inputs.push_latest }}" == "true" ]]; then
+              echo "hyperledger/iroha:taira-latest"
+            fi
+            echo "EOF"
+            echo "harbor_tags<<EOF"
+            echo "docker.soramitsu.co.jp/iroha3/iroha:taira-$suffix"
+            if [[ "${{ inputs.push_latest }}" == "true" ]]; then
+              echo "docker.soramitsu.co.jp/iroha3/iroha:taira-latest"
+            fi
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build local Taira smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: local/taira-validator:smoke
+          build-args: |
+            "CONFIG_PROFILE=taira"
+            "FEATURES=embedded-soracloud-runtime"
+            "CARGO_BUILD_JOBS=1"
+            "BINARIES=irohad"
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke Taira image default entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cid="$(docker run -d --rm \
+            --name taira-validator-smoke \
+            -e IROHA_TAIRA_GENESIS=/config/genesis.json \
+            -v "$PWD/defaults/kagami/iroha3-taira/config.toml:/config/config.toml:ro" \
+            -v "$PWD/defaults/kagami/iroha3-taira/genesis.json:/config/genesis.json:ro" \
+            local/taira-validator:smoke)"
+
+          cleanup() {
+            local status=$?
+            if [[ $status -ne 0 ]]; then
+              docker logs "$cid" || true
+            fi
+            docker stop "$cid" >/dev/null || true
+            return $status
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if docker exec "$cid" curl -fsS http://127.0.0.1:8080/v1/mcp >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "timed out waiting for /v1/mcp on smoke container" >&2
+          exit 1
+
+      - name: Build and push Taira validator image to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.dockerhub_tags }}
+          labels: commit=${{ steps.checkout_meta.outputs.sha }}
+          build-args: |
+            "CONFIG_PROFILE=taira"
+            "FEATURES=embedded-soracloud-runtime"
+            "CARGO_BUILD_JOBS=1"
+            "BINARIES=irohad"
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Taira validator image to Harbor
+        if: ${{ steps.harbor_login.outcome == 'success' }}
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.harbor_tags }}
+          labels: commit=${{ steps.checkout_meta.outputs.sha }}
+          build-args: |
+            "CONFIG_PROFILE=taira"
+            "FEATURES=embedded-soracloud-runtime"
+            "CARGO_BUILD_JOBS=1"
+            "BINARIES=irohad"
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
