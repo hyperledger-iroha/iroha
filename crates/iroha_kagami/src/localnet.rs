@@ -448,6 +448,10 @@ const LOCALNET_OFFLINE_CASH_ASSET_NAME: &str = "usd";
 const LOCALNET_OFFLINE_CASH_ASSET_ALIAS: &str = "usd#wonderland";
 const LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
+/// Minimum faucet reserve before startup auto-mints a replenishment.
+const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
+/// Target faucet reserve restored by the startup wrapper when the floor is crossed.
+const LOCALNET_FEE_ASSET_RESERVE_TARGET: u128 = 10_000_000_000_000_000_000_000_000;
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 /// Default localnet client status timeout (ms); must stay <= TTL.
@@ -1100,7 +1104,16 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Peer configs written");
 
     tui::status("Writing start/stop scripts");
-    write_scripts(&out_dir, opts.peers.get(), build_line, nexus_enabled)?;
+    let client_account_literal = localnet_client_account_literal(chain_discriminant);
+    let fee_asset_definition_id = localnet_fee_asset_literal();
+    write_scripts(
+        &out_dir,
+        opts.peers.get(),
+        build_line,
+        nexus_enabled,
+        &client_account_literal,
+        &fee_asset_definition_id,
+    )?;
 
     tui::status("Copying rANS tables");
     copy_rans_tables(&out_dir)?;
@@ -2649,10 +2662,24 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
     )
 }
 
-fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: bool) -> Result<()> {
+fn write_scripts(
+    out_dir: &Path,
+    peers: u16,
+    build_line: BuildLine,
+    sora_mode: bool,
+    client_account_literal: &str,
+    fee_asset_definition_id: &str,
+) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
-    write_start_script(&start, peers, build_line, sora_mode)?;
+    write_start_script(
+        &start,
+        peers,
+        build_line,
+        sora_mode,
+        client_account_literal,
+        fee_asset_definition_id,
+    )?;
     write_stop_script(&stop)?;
 
     #[cfg(unix)]
@@ -2673,8 +2700,12 @@ fn write_start_script(
     peers: u16,
     build_line: BuildLine,
     sora_mode: bool,
+    client_account_literal: &str,
+    fee_asset_definition_id: &str,
 ) -> Result<()> {
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
+    let default_iroha_debug = default_irohad_debug.with_file_name("iroha");
+    let default_iroha_release = default_irohad_release.with_file_name("iroha");
     let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_mode { "--sora " } else { "" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
@@ -2696,6 +2727,16 @@ fn write_start_script(
         "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
         default_irohad_release.display()
     )?;
+    writeln!(
+        start_file,
+        "DEFAULT_IROHA_CLI_DEBUG=\"{}\"",
+        default_iroha_debug.display()
+    )?;
+    writeln!(
+        start_file,
+        "DEFAULT_IROHA_CLI_RELEASE=\"{}\"",
+        default_iroha_release.display()
+    )?;
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
     writeln!(
         start_file,
@@ -2715,6 +2756,46 @@ fn write_start_script(
     writeln!(
         start_file,
         "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\ncommand -v \"$IROHAD_BIN\" >/dev/null 2>&1 || {{ echo \"irohad binary not executable: $IROHAD_BIN\" >&2; exit 1; }}"
+    )?;
+    writeln!(start_file, "IROHA_CLI=\"${{IROHA_CLI:-}}\"")?;
+    writeln!(start_file, "if [ -z \"$IROHA_CLI\" ]; then")?;
+    writeln!(
+        start_file,
+        "  if [ -x \"$DEFAULT_IROHA_CLI_RELEASE\" ]; then"
+    )?;
+    writeln!(start_file, "    IROHA_CLI=\"$DEFAULT_IROHA_CLI_RELEASE\"")?;
+    writeln!(
+        start_file,
+        "  elif [ -x \"$DEFAULT_IROHA_CLI_DEBUG\" ]; then"
+    )?;
+    writeln!(start_file, "    IROHA_CLI=\"$DEFAULT_IROHA_CLI_DEBUG\"")?;
+    writeln!(start_file, "  fi")?;
+    writeln!(start_file, "fi")?;
+    writeln!(
+        start_file,
+        "if [ -n \"$IROHA_CLI\" ] && [ ! -x \"$IROHA_CLI\" ]; then"
+    )?;
+    writeln!(
+        start_file,
+        "  echo \"iroha CLI not executable: $IROHA_CLI\" >&2"
+    )?;
+    writeln!(start_file, "  exit 1")?;
+    writeln!(start_file, "fi")?;
+    writeln!(start_file, "FAUCET_ACCOUNT=\"{}\"", client_account_literal)?;
+    writeln!(
+        start_file,
+        "FAUCET_ASSET_DEFINITION_ID=\"{}\"",
+        fee_asset_definition_id
+    )?;
+    writeln!(
+        start_file,
+        "FAUCET_RESERVE_MIN=\"{}\"",
+        LOCALNET_FEE_ASSET_RESERVE_MIN
+    )?;
+    writeln!(
+        start_file,
+        "FAUCET_RESERVE_TARGET=\"{}\"",
+        LOCALNET_FEE_ASSET_RESERVE_TARGET
     )?;
     writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
     writeln!(
@@ -2747,6 +2828,49 @@ fn write_start_script(
     writeln!(start_file, "  echo $! > \"$PIDFILE\"")?;
     writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     writeln!(start_file, "done")?;
+    writeln!(start_file, "ensure_faucet_reserve() {{")?;
+    writeln!(
+        start_file,
+        "  [ -n \"$IROHA_CLI\" ] || {{ echo \"Skipping faucet reserve check: iroha CLI unavailable\" >&2; return 0; }}"
+    )?;
+    writeln!(start_file, "  for _ in $(seq 1 90); do")?;
+    writeln!(
+        start_file,
+        "    if asset_json=\"$($IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
+    )?;
+    writeln!(
+        start_file,
+        "      current_value=\"$(printf '%s' \"$asset_json\" | python3 -c 'import json, sys; print(json.load(sys.stdin)[\"value\"])')\""
+    )?;
+    writeln!(
+        start_file,
+        "      mint_amount=\"$(python3 -c 'from decimal import Decimal; import sys; current = Decimal(sys.argv[1]); minimum = Decimal(sys.argv[2]); target = Decimal(sys.argv[3]); print(\"\" if current >= minimum else format(target - current, \"f\"))' \"$current_value\" \"$FAUCET_RESERVE_MIN\" \"$FAUCET_RESERVE_TARGET\")\""
+    )?;
+    writeln!(start_file, "      if [ -z \"$mint_amount\" ]; then")?;
+    writeln!(
+        start_file,
+        "        echo \"Faucet reserve healthy at $current_value\" >&2"
+    )?;
+    writeln!(start_file, "        return 0")?;
+    writeln!(start_file, "      fi")?;
+    writeln!(
+        start_file,
+        "      echo \"Faucet reserve $current_value below floor $FAUCET_RESERVE_MIN; minting $mint_amount to restore $FAUCET_RESERVE_TARGET\" >&2"
+    )?;
+    writeln!(
+        start_file,
+        "      $IROHA_CLI --machine -c \"$DIR/client.toml\" --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
+    )?;
+    writeln!(start_file, "      return 0")?;
+    writeln!(start_file, "    fi")?;
+    writeln!(start_file, "    sleep 1")?;
+    writeln!(start_file, "  done")?;
+    writeln!(
+        start_file,
+        "  echo \"Skipping faucet reserve check: Torii did not become readable in time\" >&2"
+    )?;
+    writeln!(start_file, "}}")?;
+    writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
 
@@ -6063,7 +6187,17 @@ mod tests {
     #[test]
     fn start_and_stop_scripts_are_executable() {
         let temp = tempfile::tempdir().expect("tmp dir");
-        write_scripts(temp.path(), 1, BuildLine::Iroha3, false).expect("write scripts");
+        let client_account_literal = localnet_client_account_literal(None);
+        let fee_asset_definition_id = localnet_fee_asset_literal();
+        write_scripts(
+            temp.path(),
+            1,
+            BuildLine::Iroha3,
+            false,
+            &client_account_literal,
+            &fee_asset_definition_id,
+        )
+        .expect("write scripts");
 
         let start_path = temp.path().join("start.sh");
         let stop_path = temp.path().join("stop.sh");
@@ -6107,6 +6241,19 @@ mod tests {
             "start script should fall back to the debug irohad when no release binary exists"
         );
         assert!(
+            start_contents.contains("DEFAULT_IROHA_CLI_RELEASE="),
+            "start script should also wire the iroha CLI defaults"
+        );
+        assert!(
+            start_contents.contains("FAUCET_RESERVE_TARGET="),
+            "start script should declare a faucet reserve target"
+        );
+        assert!(
+            start_contents
+                .contains("ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\""),
+            "start script should mint the fee asset back to the faucet when reserve is low"
+        );
+        assert!(
             start_contents
                 .lines()
                 .any(|line| line == "export IROHA_BUILD_LINE=\"iroha3\""),
@@ -6139,7 +6286,17 @@ mod tests {
     #[test]
     fn start_script_includes_sora_flag_when_enabled() {
         let temp = tempfile::tempdir().expect("tmp dir");
-        write_scripts(temp.path(), 1, BuildLine::Iroha3, true).expect("write scripts");
+        let client_account_literal = localnet_client_account_literal(None);
+        let fee_asset_definition_id = localnet_fee_asset_literal();
+        write_scripts(
+            temp.path(),
+            1,
+            BuildLine::Iroha3,
+            true,
+            &client_account_literal,
+            &fee_asset_definition_id,
+        )
+        .expect("write scripts");
         let start_contents =
             fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
         assert!(

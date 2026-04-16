@@ -214,12 +214,29 @@ echo "unexpected iroha invocation: $*" >&2
 exit 1
 SH
 
+  cat >"${root}/mockbin/cargo" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p "${MOCK_STATE_DIR:?}"
+: > "${MOCK_STATE_DIR}/cargo_seen"
+
+if [[ "$*" == *"-p iroha_cli --bin iroha --"* && "$*" == *"ledger transaction ping"* ]]; then
+  : > "${MOCK_STATE_DIR}/ping_seen"
+  exit 0
+fi
+
+echo "unexpected cargo invocation: $*" >&2
+exit 1
+SH
+
   chmod +x \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
     "${root}/scripts/taira_bootstrap_canary.py" \
     "${root}/scripts/taira_faucet_canary.py" \
     "${root}/mockbin/curl" \
-    "${root}/mockbin/iroha"
+    "${root}/mockbin/iroha" \
+    "${root}/mockbin/cargo"
 }
 
 run_case() {
@@ -284,5 +301,27 @@ if PATH="${root}/mockbin:${PATH}" \
   exit 1
 fi
 grep -q 'write canary failed: transaction expired' "${root}/resolve-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+rm -f "${root}/mockbin/iroha"
+mkdir -p "${root}/tmp"
+if ! PATH="${root}/mockbin:/usr/bin:/bin" \
+    TMPDIR="${root}/tmp/" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    WRITE_CONFIG_DEFAULT="${root}/tmp/taira-canary-client.toml" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      >"${root}/cargo-output.log" 2>&1; then
+  echo "cargo fallback case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/cargo-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' "${root}/cargo-output.log"
+test -f "${root}/state/cargo_seen"
+test -f "${root}/tmp/taira-canary-client.toml"
 
 echo "check_mcp_rollout mock tests passed."
