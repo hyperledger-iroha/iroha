@@ -2054,13 +2054,11 @@ fn minimal_config_snapshot() {
                     max_penalty_nano: 1000000000,
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {
-                    require_submitter: true,
+                    require_submitter: false,
                     require_nonce: true,
                     max_window_gap: 21600s,
                     reject_zero_capacity: true,
-                    submitters: [
-                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr,
-                    ],
+                    submitters: [],
                     per_provider_submitters: {},
                 },
                 sorafs_provider_owners: {},
@@ -3280,7 +3278,7 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
     assert_eq!(penalty.cooldown_window_secs(1_800), 5_400);
 
     let telemetry = &config.gov.sorafs_telemetry;
-    assert!(telemetry.require_submitter);
+    assert!(!telemetry.require_submitter);
     assert!(telemetry.require_nonce);
     assert!(telemetry.reject_zero_capacity);
     assert_eq!(telemetry.max_window_gap, Duration::from_secs(7_200));

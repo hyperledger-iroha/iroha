@@ -54,27 +54,79 @@ class DockerEntrypointTest(unittest.TestCase):
 
     def test_defaults_to_taira_boot_command(self) -> None:
         config_path = self.temp_path / "config.toml"
+        runtime_config_path = self.temp_path / "runtime-config.toml"
         genesis_path = self.temp_path / "genesis.json"
-        config_path.write_text("# config\n", encoding="utf-8")
+        config_path.write_text("# config\nchain = \"taira\"\n", encoding="utf-8")
         genesis_path.write_text("{}\n", encoding="utf-8")
 
         result = self._run(
             env={
                 "IROHA_IMAGE_CONFIG_PROFILE": "taira",
                 "IROHA_TAIRA_CONFIG": str(config_path),
+                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
                 "IROHA_TAIRA_GENESIS": str(genesis_path),
             }
         )
 
         self.assertEqual(result.returncode, 0)
+        self.assertEqual(runtime_config_path.read_text(encoding="utf-8"), config_path.read_text(encoding="utf-8"))
         self.assertEqual(
             result.stdout.splitlines(),
             [
                 str(self.irohad_path),
                 "--sora",
                 "--config",
-                str(config_path),
-                "--genesis",
+                str(runtime_config_path),
+                "--genesis-manifest-json",
+                str(genesis_path),
+            ],
+        )
+
+    def test_signed_genesis_override_updates_runtime_config(self) -> None:
+        config_path = self.temp_path / "config.toml"
+        runtime_config_path = self.temp_path / "runtime-config.toml"
+        genesis_path = self.temp_path / "genesis.json"
+        signed_genesis_path = self.temp_path / "genesis.signed.nrt"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "chain = \"taira\"",
+                    "",
+                    "[genesis]",
+                    "public_key = \"ed0120DEADBEEF\"",
+                    "",
+                    "[logger]",
+                    "level = \"info\"",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        genesis_path.write_text("{}\n", encoding="utf-8")
+        signed_genesis_path.write_bytes(b"norito")
+
+        result = self._run(
+            env={
+                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
+                "IROHA_TAIRA_CONFIG": str(config_path),
+                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
+                "IROHA_TAIRA_GENESIS": str(genesis_path),
+                "IROHA_TAIRA_SIGNED_GENESIS": str(signed_genesis_path),
+            }
+        )
+
+        self.assertEqual(result.returncode, 0)
+        rendered = runtime_config_path.read_text(encoding="utf-8")
+        self.assertIn(f'file = "{signed_genesis_path}"', rendered)
+        self.assertIn('public_key = "ed0120DEADBEEF"', rendered)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                str(self.irohad_path),
+                "--sora",
+                "--config",
+                str(runtime_config_path),
+                "--genesis-manifest-json",
                 str(genesis_path),
             ],
         )
