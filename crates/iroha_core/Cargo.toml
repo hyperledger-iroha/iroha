@@ -52,8 +52,8 @@ expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable portable SIMD acceleration for small-set helpers.
 simd = []
 profiling = []
-# Marker feature for functions used in benchmarks
-bench = []
+# Marker feature for functions and dependencies used only by benchmarks.
+bench = ["dep:criterion"]
 # Enable IDs-only query projections
 ids_projection = ["iroha_data_model/ids_projection"]
 # Enable fast DSL payload support when encoding iterable queries.
@@ -182,12 +182,12 @@ yasna = "0.5.2"
 uuid = { version = "1.18.1", features = ["v4"] }
 indexmap = "2.12.0"
 arc-swap = "1.7.1"
+criterion = { workspace = true, optional = true }
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 
-criterion = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
 expect-test = { workspace = true }
@@ -197,10 +197,12 @@ rcgen = "0.14.5"
 [[bench]]
 name = "validation"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "kura"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "apply_blocks"
@@ -212,20 +214,28 @@ required-features = ["bench"]
 name = "validate_blocks"
 harness = false
 path = "benches/blocks/validate_blocks_benchmark.rs"
+required-features = ["bench"]
 
 [[bench]]
 name = "zk_poseidon"
 harness = false
-required-features = ["zk-halo2", "zk-halo2-ipa", "zk-halo2-ipa-poseidon"]
+required-features = ["bench", "zk-halo2", "zk-halo2-ipa", "zk-halo2-ipa-poseidon"]
 
 [[bench]]
 name = "isi_gas_calibration"
 path = "benches/isi_gas_calibration.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "queries"
 harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "queries_client"
+harness = false
+required-features = ["bench"]
 
 [[example]]
 name = "apply_blocks"
@@ -237,6 +247,7 @@ required-features = ["bench"]
 name = "validate_blocks"
 harness = false
 path = "benches/blocks/validate_blocks_oneshot.rs"
+required-features = ["bench"]
 
 [package.metadata.cargo-all-features]
 denylist = [

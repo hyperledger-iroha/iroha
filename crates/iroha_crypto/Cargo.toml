@@ -24,7 +24,9 @@ sm = ["sm-ccm", "dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979", "dep:sm4_gcm", "
 sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
-sm_proptest = []
+sm_proptest = ["dep:proptest"]
+crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
+bench = ["dep:criterion"]
 # Enable support for BLS signatures. Disabled by default due to long compile times.
 # Backend selection:
 # - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
@@ -106,6 +108,9 @@ sm4_gcm = { package = "sm4-gcm", version = "0.1.2", optional = true, default-fea
 sm4-neon = { path = "../sm4_neon", optional = true }
 sm3-neon = { path = "../sm3_neon", optional = true }
 openssl = { version = "0.10.75", optional = true, default-features = false, features = ["vendored"] }
+proptest = { version = "1.9.0", optional = true, default-features = false, features = ["std"] }
+amcl = { version = "0.2.0", optional = true, default-features = false, features = ["secp256k1"] }
+secp256k1 = { version = "0.31.1", optional = true, features = ["rand"] }
 
 
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
@@ -113,6 +118,7 @@ arrayref = { version = "0.3.9", default-features = false }
 
 aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
+criterion = { workspace = true, optional = true }
 
 elliptic-curve = { version = "0.13.8", default-features = false, features = ["std"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
@@ -125,14 +131,6 @@ pqcrypto-traits = { version = "0.3.5" }
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
-
-# these crypto libraries are not used to implement actual crypto algorithms
-# but to test some of the primitives against them
-amcl = { version = "0.2.0", default-features = false, features = ["secp256k1"] }
-secp256k1 = { version = "0.31.1", features = ["rand"] }
-openssl = { version = "0.10.75", features = ["vendored"] }
-criterion = { version = "0.7.0" }
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"
@@ -160,13 +158,14 @@ required-features = ["sm"]
 [[bench]]
 name = "gost_sign"
 harness = false
-required-features = ["gost"]
+required-features = ["bench", "gost"]
 
 [[bench]]
 name = "sm_perf"
 harness = false
-required-features = ["sm"]
+required-features = ["bench", "sm"]
 
 [[bench]]
 name = "soranet_handshake"
 harness = false
+required-features = ["bench"]
