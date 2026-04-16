@@ -1744,6 +1744,12 @@ fn render_peer_config(
     confidential.insert("assume_valid".into(), Value::Boolean(false));
     root.insert("confidential".into(), Value::Table(confidential));
 
+    let mut halo2 = Table::new();
+    halo2.insert("enabled".into(), Value::Boolean(true));
+    let mut zk = Table::new();
+    zk.insert("halo2".into(), Value::Table(halo2));
+    root.insert("zk".into(), Value::Table(zk));
+
     let mut genesis = Table::new();
     genesis.insert(
         "file".into(),
@@ -5091,6 +5097,22 @@ mod tests {
         };
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
+        )
+        .expect("parse peer config");
+        assert_eq!(
+            peer_cfg
+                .get("zk")
+                .and_then(toml::Value::as_table)
+                .and_then(|zk| zk.get("halo2"))
+                .and_then(toml::Value::as_table)
+                .and_then(|halo2| halo2.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(true),
+            "generated TAIRA configs must enable Halo2 verification for shielded sends"
+        );
 
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
         let raw_genesis = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))

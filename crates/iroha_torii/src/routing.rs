@@ -168,6 +168,7 @@ use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
+    core::DecodeFromSlice,
     json::{self, Map, Value},
     to_bytes,
 };
@@ -34158,6 +34159,28 @@ mod tx_query_integration_smoke {
         dm::Log::new(dm::Level::INFO, "test".to_string()).into()
     }
 
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn confidential_relay_decodes_bare_norito_signed_transaction() {
+        let (authority, keypair) = account_with_key();
+        let chain: dm::ChainId = "test-chain".parse().unwrap();
+        let tx = dm::TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
+            .sign(keypair.private_key());
+        let bytes = norito::to_bytes(&tx).expect("encode signed transaction");
+        let raw_bytes = norito::codec::Encode::encode(&tx);
+
+        let decoded = decode_relay_signed_transaction(&hex::encode(bytes))
+            .expect("decode bare norito signed transaction");
+        let raw_decoded = decode_relay_signed_transaction(&hex::encode(raw_bytes))
+            .expect("decode raw encoded signed transaction");
+
+        assert_eq!(decoded.chain(), &chain);
+        assert_eq!(decoded.authority(), &authority);
+        assert_eq!(raw_decoded.chain(), &chain);
+        assert_eq!(raw_decoded.authority(), &authority);
+    }
+
     #[tokio::test]
     async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
         // Minimal in-memory state: no blocks yet
@@ -51972,10 +51995,30 @@ fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
     {
         return Ok(tx);
     }
+    if let Ok((tx, used)) = SignedTransaction::decode_from_slice(&bytes) {
+        if used == bytes.len() {
+            return Ok(tx);
+        }
+    }
+    if let Ok(tx) = norito::decode_from_bytes::<SignedTransaction>(&bytes) {
+        return Ok(tx);
+    }
     if let Ok(TransactionEntrypoint::External(tx)) =
         <TransactionEntrypoint as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
             &bytes,
         )
+    {
+        return Ok(tx);
+    }
+    if let Ok((TransactionEntrypoint::External(tx), used)) =
+        TransactionEntrypoint::decode_from_slice(&bytes)
+    {
+        if used == bytes.len() {
+            return Ok(tx);
+        }
+    }
+    if let Ok(TransactionEntrypoint::External(tx)) =
+        norito::decode_from_bytes::<TransactionEntrypoint>(&bytes)
     {
         return Ok(tx);
     }
