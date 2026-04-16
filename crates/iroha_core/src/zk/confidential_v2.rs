@@ -11,13 +11,20 @@ use halo2_proofs::{
     },
     plonk::{
         Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk,
-        keygen_vk,
+        keygen_vk, verify_proof,
     },
     poly::{
         Rotation,
-        ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+        ipa::{
+            commitment::IPACommitmentScheme, multiopen::ProverIPA,
+            strategy::SingleStrategy as SingleVerifier,
+        },
+        VerificationStrategy as _,
     },
-    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    transcript::{
+        Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer as _,
+        TranscriptWriterBuffer as _,
+    },
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_crypto::Hash as CryptoHash;
@@ -140,6 +147,7 @@ fn build_confidential_v2_vk_box<C>(k: u32, circuit: &C) -> Result<VerifyingKeyBo
 where
     C: Circuit<Scalar>,
 {
+    super::ensure_halo2_max_degree(1024);
     let params = super::pasta_params_new(k);
     let vk = keygen_vk(&params, circuit)
         .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
@@ -2055,6 +2063,7 @@ pub fn build_confidential_transfer_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, String> {
+    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential transfer v2 supports one or two inputs".to_owned());
     }
@@ -2203,12 +2212,33 @@ pub fn build_confidential_transfer_proof_v2(
         &mut transcript,
     )
     .map_err(|err| format!("failed to create confidential transfer proof: {err}"))?;
+    let proof_raw = transcript.finalize();
+    {
+        let mut verify_transcript =
+            Blake2bRead::<_, Curve, Challenge255<Curve>>::init(std::io::Cursor::new(
+                proof_raw.as_slice(),
+            ));
+        let strategy = SingleVerifier::new(&params);
+        let proofs_instances = [&instance_refs[..]];
+        verify_proof(
+            &params,
+            &parsed_vk,
+            strategy,
+            &proofs_instances,
+            &mut verify_transcript,
+        )
+        .map_err(|err| {
+            format!(
+                "generated confidential transfer proof failed local self-verification: {err}"
+            )
+        })?;
+    }
     let proof = encode_halo2_envelope(
         CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         &instance_columns,
-        transcript.finalize(),
+        proof_raw,
     )?;
     Ok(ConfidentialTransferProofV2 {
         nullifiers: if input_1.is_some() {
@@ -2238,6 +2268,7 @@ pub fn build_confidential_unshield_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, String> {
+    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential unshield v2 supports one or two inputs".to_owned());
     }
@@ -2390,6 +2421,7 @@ pub fn build_confidential_unshield_proof_v3(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, String> {
+    super::ensure_halo2_max_degree(1024);
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential unshield v3 supports one or two inputs".to_owned());
     }
@@ -2605,9 +2637,12 @@ mod tests {
         let output_0_owner_tag =
             super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_0_diversifier)
                 .expect("owner tag");
-        let output_1_owner_tag =
-            super::derive_confidential_owner_tag_v2_with_diversifier(&[0x44_u8; 32], [0x55_u8; 32])
-                .expect("recipient owner tag");
+        let recipient_diversifier = super::derive_confidential_diversifier_v2(b"recipient");
+        let output_1_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &[0x44_u8; 32],
+            recipient_diversifier,
+        )
+        .expect("recipient owner tag");
 
         let input_0_commitment = super::derive_confidential_note_v2(
             asset_definition_id,
@@ -2709,7 +2744,6 @@ mod tests {
         let tree_commitments = vec![input_commitment];
         let root_hint =
             super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
-
         let vk_record =
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");

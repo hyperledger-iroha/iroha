@@ -849,9 +849,8 @@ From `../iroha2-block-explorer-web`:
      Connect session or token handling rather than nginx.
 
 The Explorer runtime config should target an explicit public node URL. The
-checked-in example uses `https://taira-validator-1.sora.org`, so both UI reads
-and `/v1/*` proxy traffic follow that direct Taira Torii endpoint unless you
-override it at deploy time.
+checked-in example now uses `https://taira.sora.org`, while deployments that
+want a direct-validator Explorer path can still override it at deploy time.
 
 ## Local Kaigi bootstrap
 

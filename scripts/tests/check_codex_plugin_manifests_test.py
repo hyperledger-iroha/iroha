@@ -52,8 +52,8 @@ def _write_valid_repo(root: Path) -> None:
             "mcpServers": {
                 "iroha-taira": {
                     "type": "http",
-                    "url": "https://<taira-node-hostname>/v1/mcp",
-                    "note": "Replace <taira-node-hostname> with the direct public Torii hostname you want to use. https://taira.sora.org/v1/mcp is convenience-only.",
+                    "url": "https://taira.sora.org/v1/mcp",
+                    "note": "Current primary public Taira MCP endpoint. If your deployment or operator gives you a different public Torii root, override it in local Codex config instead of editing the repo copy.",
                 }
             }
         },
@@ -92,14 +92,16 @@ def _write_valid_repo(root: Path) -> None:
             [
                 "---",
                 "name: sora-taira-testnet",
-                'description: "Use https://<taira-node>/v1/mcp and keep authority/private_key runtime-only."',
+                'description: "Use https://taira.sora.org/v1/mcp and keep authority/private_key runtime-only."',
                 "---",
                 "",
                 "# SORA Taira Testnet",
                 "",
-                "Use https://<taira-node>/v1/mcp.",
+                "Use https://taira.sora.org/v1/mcp.",
                 "",
-                "Treat https://taira.sora.org/v1/mcp as a convenience endpoint only.",
+                "Treat https://taira.sora.org as the primary public Torii/API origin on the current deployment.",
+                "",
+                "Do not infer validator-set size from /status.peers.",
                 "",
                 "- Use iroha.transactions.submit_and_wait.",
                 "- Keep authority and private_key runtime-only.",
