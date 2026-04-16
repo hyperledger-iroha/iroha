@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Musubi package-manager foundation):
+Musubi now has a typed package identity model and a standalone local CLI
+workflow for Kotodama source packages. Package references use
+`namespace/package@version` with no leading `@`, and package namespaces share
+the same `<dataspace>` or `<domain>.<dataspace>` suffix shape as Kotodama dapp
+contract aliases.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/bin/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model musubi --lib -- --nocapture`
+  - `cargo test -p iroha_cli --bin musubi -- --nocapture`
+- open work after this slice:
+  - add chain-side Musubi registry ISIs and queries for publish, yank, release
+    lookup, and curated short aliases
+  - enforce namespace publish authority through the same ownership/delegation
+    model used for Kotodama dapp namespaces
+  - wire SoraFS upload/pin registration into `musubi publish`
+  - add compiler-level source-library import resolution and export checking
+  - decide whether to split the `musubi` binary into a publishable `musubi`
+    crate once `Cargo.lock` churn is acceptable
+
 Latest sync (2026-04-16 root `cargo test` dependency graph reduction):
 plain root `cargo test` is now a top-level `iroha` smoke build instead of an
 implicit sweep over every heavy core crate test suite. Full coverage is still
@@ -11,6 +41,9 @@ suites with `cargo test -p <crate>`.
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/src/{client.rs,config.rs}`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/tests/tx_ttl.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/README.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
@@ -18,10 +51,14 @@ suites with `cargo test -p <crate>`.
 - verified in this slice:
   - `cargo check -p iroha_core --all-targets`
   - `cargo test --no-run` with the final top-level default set
+  - `cargo test --lib`
+  - `cargo test`
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha/src/config.rs crates/iroha/tests/tx_ttl.rs crates/iroha_data_model/src/musubi.rs`
   - `cargo metadata --locked --format-version 1 --no-deps`
   - `cargo tree --target aarch64-apple-darwin --edges normal,build,dev`
   - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
   - `python3 scripts/check_dependency_budget.py`
+  - `git diff --check`
 - open work after this slice:
   - split or gate the SoraFS QUIC proxy path so `quinn` does not have to appear
     in the default client graph unless that transport is requested

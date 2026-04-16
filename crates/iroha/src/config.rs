@@ -301,7 +301,7 @@ mod tests {
             password = "ilovetea"
 
             [account]
-            domain = "wonderland"
+            domain = "wonderland.universal"
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
@@ -389,6 +389,10 @@ mod tests {
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
             .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
+            .set(
+                "ACCOUNT_CHAIN_DISCRIMINANT",
+                iroha_config::parameters::defaults::common::chain_discriminant().to_string(),
+            )
             .set("ACCOUNT_DOMAIN", "land.universal")
             .set(
                 "ACCOUNT_PRIVATE_KEY",
