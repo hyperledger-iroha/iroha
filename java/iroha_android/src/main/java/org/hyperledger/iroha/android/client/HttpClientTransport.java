@@ -446,6 +446,17 @@ public final class HttpClientTransport implements IrohaClient {
         "governance contract");
   }
 
+  /** Resolves an account alias via `POST /v1/aliases/resolve`. */
+  @Override
+  public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
+      final String alias) {
+    final String normalizedAlias = normalizeNonBlank(alias, "alias");
+    final byte[] body = encodeJsonBody(Map.of("alias", normalizedAlias));
+    final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, AccountAliasJsonParser::parseResolution, "account alias resolve");
+  }
+
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
   public static HttpClientTransport createDefault(final ClientConfig config) {
     return new HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config);
