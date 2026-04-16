@@ -8,22 +8,31 @@ RUN apt-get update -y && \
     apt-get install -y build-essential mold
 
 COPY . .
+COPY dist/ /prebuilt-dist/
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="irohad iroha kagami"
+ARG USE_PREBUILT="0"
 RUN set -e; \
-    set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
-    for bin in ${BINARIES}; do \
-        set -- "$@" --bin "$bin"; \
-    done; \
-    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run "$@"; \
     mkdir -p /outbin; \
-    for bin in ${BINARIES}; do \
-        cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
-    done
+    if [ "${USE_PREBUILT}" = "1" ]; then \
+        for bin in ${BINARIES}; do \
+            cp "/prebuilt-dist/docker-bin/${bin}" "/outbin/${bin}"; \
+            chmod 755 "/outbin/${bin}"; \
+        done; \
+    else \
+        set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
+        for bin in ${BINARIES}; do \
+            set -- "$@" --bin "$bin"; \
+        done; \
+        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run "$@"; \
+        for bin in ${BINARIES}; do \
+            cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
+        done; \
+    fi
 
 # final image
 FROM debian:bookworm-slim

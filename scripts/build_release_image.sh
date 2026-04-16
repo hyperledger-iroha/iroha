@@ -11,6 +11,7 @@ Options:
   --features <list>       Optional comma-separated Cargo feature list passed to the Docker build.
   --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
   --binaries "<list>"     Optional space-separated binary list passed as BINARIES.
+  --use-target-prebuilt   Package existing target/deploy binaries instead of compiling them in Docker.
   --tag <tag>             Docker image tag (default: hyperledger/iroha:<profile>-<version>).
   --artifacts-dir <dir>   Output directory for saved images/manifests (default: dist).
   --signing-key <path>    Optional PEM private key for signing the saved image tarball.
@@ -28,6 +29,7 @@ config=""
 features=""
 cargo_build_jobs=""
 binaries=""
+use_target_prebuilt="0"
 image_tag=""
 artifacts_dir="dist"
 signing_key=""
@@ -54,6 +56,10 @@ while (($#)); do
         --binaries)
             binaries="${2:-}"
             shift 2
+            ;;
+        --use-target-prebuilt)
+            use_target_prebuilt="1"
+            shift 1
             ;;
         --tag)
             image_tag="${2:-}"
@@ -149,6 +155,23 @@ docker_build_args=(
     --build-arg "FEATURES=${features}"
     --build-arg "CONFIG_PROFILE=${config_profile}"
 )
+
+if [[ "$use_target_prebuilt" == "1" ]]; then
+    prebuilt_dir="${repo_root}/dist/docker-bin"
+    mkdir -p "$prebuilt_dir"
+    for bin in $binaries; do
+        source_path="${repo_root}/target/deploy/${bin}"
+        target_path="${prebuilt_dir}/${bin}"
+        if [[ ! -f "$source_path" ]]; then
+            printf 'missing prebuilt binary: %s\n' "$source_path" >&2
+            printf 'build it first so target/deploy/%s exists before using --use-target-prebuilt\n' "$bin" >&2
+            exit 1
+        fi
+        cp "$source_path" "$target_path"
+        chmod 755 "$target_path"
+    done
+    docker_build_args+=(--build-arg USE_PREBUILT=1)
+fi
 
 if [[ -n "$cargo_build_jobs" ]]; then
     docker_build_args+=(--build-arg "CARGO_BUILD_JOBS=${cargo_build_jobs}")
