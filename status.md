@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: NPoS liveness, baseline telemetry, and stake-activation regressions rerun cleanly
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  now builds a single signed seed transaction and fans that same hash out to
+  the ordered candidate peers for each progress attempt. The liveness harness
+  still waits on converged heights, but it no longer depends on one early
+  submit path being the only route that forwards startup traffic.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  now waits for submit connectivity before driving stake-activation heights and
+  advances one block at a time instead of flooding progress logs every 200 ms.
+  Progress transactions are also replicated across the ordered candidate peers,
+  which restores `npos_entity_correlation_limits_validator_set`.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  now keeps only one baseline seed transaction outstanding while metrics are
+  sampled. That removes the artificial startup queue burst that was timing out
+  `npos_baseline_1s_k3_captures_metrics` and inflating the baseline phase EMAs.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposlive.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.fixed2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1` (pass)
+  - `cargo test` (pass)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: Musubi package-manager foundation landed
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
   now defines the first Musubi registry data model: canonical

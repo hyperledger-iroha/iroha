@@ -13,7 +13,8 @@ use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha::data_model::{
     Level,
-    isi::{InstructionBox, Log, SetParameter},
+    isi::{Log, SetParameter},
+    metadata::Metadata,
     parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
@@ -306,7 +307,36 @@ fn pick_submit_peer_index(
     }
 }
 
-async fn submit_client_for_network(network: &Network, probe: &Client) -> Client {
+fn ordered_submit_peer_indices(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> Vec<usize> {
+    if block_totals.is_empty() {
+        return Vec::new();
+    }
+
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    let mut ordered = Vec::with_capacity(block_totals.len());
+    if leader_connected
+        && let Some(leader_index) = leader_index
+        && leader_index < block_totals.len()
+    {
+        ordered.push(leader_index);
+    }
+
+    for offset in 0..block_totals.len() {
+        let idx = (fallback + offset) % block_totals.len();
+        if !ordered.contains(&idx) {
+            ordered.push(idx);
+        }
+    }
+
+    ordered
+}
+
+async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
     let status = tokio::task::spawn_blocking({
         let client = probe.clone();
@@ -333,35 +363,50 @@ async fn submit_client_for_network(network: &Network, probe: &Client) -> Client 
         })
         .collect::<Vec<_>>();
     let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
-    let selected_index = pick_submit_peer_index(
+    ordered_submit_peer_indices(
         leader_index,
         leader_is_connected,
         &fallback_totals,
         fallback_seed,
-    );
-    network
-        .peers()
-        .get(selected_index)
-        .unwrap_or_else(|| {
-            network
-                .peers()
-                .first()
-                .expect("network should have at least one peer")
-        })
-        .client()
+    )
 }
 
 async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> Result<()> {
-    let submit_client = submit_client_for_network(network, probe).await;
-    tokio::task::spawn_blocking(move || {
-        // Submit without waiting for tx confirmation. The height wait below is the actual
-        // success criterion, and confirmation streams are much flakier on restart-heavy tests.
-        submit_client.submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+    let candidate_indices = submit_peer_indices_for_network(network, probe).await;
+    let transaction = tokio::task::spawn_blocking({
+        let client = probe.clone();
+        let message = message.clone();
+        move || {
+            client
+                .build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default())
+        }
     })
     .await
-    .wrap_err("join seed submit task")?
-    .map(|_| ())
-    .wrap_err("submit seed log")
+    .wrap_err("join seed transaction build task")?;
+
+    let mut accepted = false;
+    let mut errors = Vec::new();
+    for idx in candidate_indices {
+        let Some(peer) = network.peers().get(idx) else {
+            continue;
+        };
+        let peer_name = peer.mnemonic().to_owned();
+        let submit_client = peer.client();
+        let transaction = transaction.clone();
+        match tokio::task::spawn_blocking(move || submit_client.submit_transaction(&transaction))
+            .await
+        {
+            Ok(Ok(_)) => accepted = true,
+            Ok(Err(err)) => errors.push(format!("{peer_name}: {err:?}")),
+            Err(err) => errors.push(format!("{peer_name}: submit join error: {err}")),
+        }
+    }
+
+    ensure!(
+        accepted,
+        "submit seed log was not accepted by any candidate peer; errors={errors:?}"
+    );
+    Ok(())
 }
 
 async fn drive_network_to_height(
@@ -496,6 +541,24 @@ fn pick_submit_peer_index_prefers_connected_leader() {
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
+}
+
+#[test]
+fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), true, &totals, 0),
+        vec![3, 1, 2, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), false, &totals, 0),
+        vec![1, 2, 3, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(None, true, &totals, 1),
+        vec![2, 3, 0, 1]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
