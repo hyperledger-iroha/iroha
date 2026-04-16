@@ -21,6 +21,7 @@ Environment:
   MOCHI_WORKSPACE_ROOT         Workspace root for .env.local and .mochi/generated/* (default: current directory)
   MOCHI_PROFILE                Preset profile slug (single-peer|four-peer-bft)
   MOCHI_PROFILE_SLUG           Explicit sandbox slug override when MOCHI_PROFILE is custom
+  MOCHI_CARGO_TARGET_DIR       Cargo target dir for `cargo run`/auto-builds (default: <workspace>/.mochi/build-target)
   MOCHI_START_TIMEOUT_SECONDS  Seconds to wait for session.json readiness (default: 1200)
 
 All other MOCHI_* variables supported by `mochi sandbox serve` are forwarded to the child process.
@@ -59,6 +60,17 @@ resolve_sandbox_root() {
   local workspace_root="$1"
   local profile_slug="$2"
   printf '%s/.mochi/sandbox/%s\n' "$workspace_root" "$profile_slug"
+}
+
+resolve_cargo_target_dir() {
+  local workspace_root="$1"
+  local root="${MOCHI_CARGO_TARGET_DIR:-${workspace_root}/.mochi/build-target}"
+  python3 - "$root" <<'PY'
+import os
+import sys
+
+print(os.path.abspath(sys.argv[1]))
+PY
 }
 
 shell_quote() {
@@ -190,15 +202,18 @@ tail_log_excerpt() {
 }
 
 cmd_up() {
-  local workspace_root profile_slug sandbox_root pid_file log_file session_file
+  local workspace_root profile_slug profile_arg sandbox_root cargo_target_dir pid_file log_file session_file
   workspace_root="$(resolve_workspace_root)"
   profile_slug="$(resolve_profile_slug)"
+  profile_arg="${MOCHI_PROFILE:-$DEFAULT_PROFILE}"
   sandbox_root="$(resolve_sandbox_root "$workspace_root" "$profile_slug")"
+  cargo_target_dir="$(resolve_cargo_target_dir "$workspace_root")"
   pid_file="${sandbox_root}/serve.pid"
   log_file="${sandbox_root}/serve.log"
   session_file="${sandbox_root}/session.json"
 
   mkdir -p "$sandbox_root"
+  mkdir -p "$cargo_target_dir"
   cleanup_stale_pid "$pid_file"
 
   local pid=""
@@ -211,13 +226,11 @@ cmd_up() {
   rm -f "$session_file"
   : >"$log_file"
 
-  local -a cmd=(cargo run -p mochi-ui -- sandbox serve --build-binaries --workspace-root "$workspace_root")
-  if [[ -n "${MOCHI_PROFILE:-}" ]]; then
-    cmd+=(--profile "${MOCHI_PROFILE}")
-  fi
+  local -a cmd=(cargo run -p mochi-ui -- sandbox serve --build-binaries --workspace-root "$workspace_root" --profile "$profile_arg")
 
   (
     cd "$REPO_ROOT"
+    export CARGO_TARGET_DIR="$cargo_target_dir"
     exec "${cmd[@]}"
   ) >"$log_file" 2>&1 &
   pid=$!

@@ -45,6 +45,7 @@ const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
+const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
 const SMOKE_ACCOUNT_DOMAIN: &str = "wonderland";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
@@ -455,6 +456,41 @@ fn default_iroha_cli_entry() -> (PathBuf, bool, BinarySource) {
     default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha_cli")
 }
 
+fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
+    for bin in ["iroha3", "iroha", "iroha2"] {
+        let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
+
+        if let Ok(current) = env::current_exe()
+            && let Some(dir) = current.parent()
+        {
+            let candidate = dir.join(&exe_name);
+            if is_executable_file(&candidate) {
+                return Some((candidate, BinarySource::CurrentExeNeighbor));
+            }
+        }
+
+        let target_root = env::var_os("CARGO_TARGET_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| workspace_root().map(|workspace| workspace.join("target")));
+
+        if let Some(target_root) = target_root {
+            for profile in ["debug", "release"] {
+                let candidate = target_root.join(profile).join(&exe_name);
+                if is_executable_file(&candidate) {
+                    return Some((candidate, BinarySource::WorkspaceTarget(profile.to_owned())));
+                }
+            }
+        }
+
+        if let Some(resolved) = resolve_name_on_path(OsStr::new(bin)) {
+            return Some((resolved, BinarySource::PathSearch));
+        }
+    }
+
+    None
+}
+
 impl BinaryPaths {
     /// Override the path to the `irohad` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
@@ -715,6 +751,13 @@ impl BinaryPaths {
             return Ok(&self.iroha_cli);
         }
 
+        if let Some((resolved, source)) = resolve_iroha_cli_alias() {
+            self.iroha_cli = resolved;
+            self.iroha_cli_verified = true;
+            self.iroha_cli_source = source;
+            return Ok(&self.iroha_cli);
+        }
+
         if self.allow_builds && self.iroha_cli_auto && !self.iroha_cli_build_attempted {
             self.iroha_cli_build_attempted = true;
             if let Some(workspace) = workspace_root() {
@@ -859,6 +902,17 @@ fn is_executable_file(path: &Path) -> bool {
         Ok(meta) => meta.is_file(),
         Err(_) => false,
     }
+}
+
+fn socket_addr_literal(value: &str, parameter: &str) -> Result<String> {
+    value
+        .parse::<iroha_primitives::addr::SocketAddr>()
+        .map(|addr| addr.to_literal())
+        .map_err(|err| {
+            SupervisorError::Config(format!(
+                "failed to render `{parameter}` as a socket address literal from `{value}`: {err}"
+            ))
+        })
 }
 
 fn resolve_name_on_path(name: &OsStr) -> Option<PathBuf> {
@@ -1291,7 +1345,18 @@ impl SupervisorBuilder {
             self.chain_id.clone()
         };
         let mut nexus_config = self.nexus_config.clone();
+        if nexus_config.is_none() {
+            set_table_bool(&mut nexus_config, "enabled", false);
+        }
         let mut sumeragi_config = self.sumeragi_config.clone();
+        set_table_string(
+            &mut sumeragi_config,
+            "consensus_mode",
+            match self.profile.consensus_mode {
+                SumeragiConsensusMode::Permissioned => "permissioned",
+                SumeragiConsensusMode::Npos => "npos",
+            },
+        );
         let mut torii_config = self.torii_config.clone();
         normalize_peer_config_overrides(
             &mut nexus_config,
@@ -1303,6 +1368,18 @@ impl SupervisorBuilder {
             sumeragi: sumeragi_config,
             torii: torii_config,
         };
+
+        let nexus_enabled = peer_config_overrides
+            .nexus
+            .as_ref()
+            .and_then(|table| table.get("enabled"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
+        if nexus_enabled && self.profile.consensus_mode != SumeragiConsensusMode::Npos {
+            return Err(SupervisorError::Config(
+                "nexus.enabled = true requires sumeragi.consensus_mode = \"npos\"".to_owned(),
+            ));
+        }
 
         if self.genesis_profile.is_some() {
             binaries.ensure_irohad_ready()?;
@@ -1372,6 +1449,11 @@ fn set_table_bool(target: &mut Option<toml::Table>, key: &str, value: bool) {
 fn set_table_u32(target: &mut Option<toml::Table>, key: &str, value: u32) {
     let table = target.get_or_insert_with(toml::Table::new);
     table.insert(key.to_owned(), toml::Value::Integer(i64::from(value)));
+}
+
+fn set_table_string(target: &mut Option<toml::Table>, key: &str, value: impl Into<String>) {
+    let table = target.get_or_insert_with(toml::Table::new);
+    table.insert(key.to_owned(), toml::Value::String(value.into()));
 }
 
 fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
@@ -1850,6 +1932,11 @@ impl Supervisor {
         &self.genesis.manifest_path
     }
 
+    /// Path to the generated signed genesis wire file consumed by `irohad`.
+    pub fn genesis_block_file(&self) -> &Path {
+        &self.genesis.block_path
+    }
+
     /// Optional verification report emitted by `kagami verify` when a profile is selected.
     pub fn genesis_verify_report(&self) -> Option<&KagamiVerifyReport> {
         self.genesis.verify_report.as_ref()
@@ -2259,7 +2346,17 @@ impl Supervisor {
                 self.genesis_manifest().display()
             )));
         }
+        if !self.genesis_block_file().exists() {
+            return Err(SupervisorError::Config(format!(
+                "missing signed genesis file `{}`; cannot export snapshot",
+                self.genesis_block_file().display()
+            )));
+        }
         fs::copy(self.genesis_manifest(), genesis_dir.join(GENESIS_FILE_NAME))?;
+        fs::copy(
+            self.genesis_block_file(),
+            genesis_dir.join(GENESIS_SIGNED_FILE_NAME),
+        )?;
 
         let genesis_hash = Hash::new(fs::read(self.genesis_manifest())?);
 
@@ -2348,9 +2445,16 @@ impl Supervisor {
         }
 
         let genesis_src = snapshot_root.join("genesis").join(GENESIS_FILE_NAME);
+        let genesis_block_src = snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME);
         if !genesis_src.exists() {
             return Err(SupervisorError::Config(format!(
                 "snapshot `{}` missing `genesis/{GENESIS_FILE_NAME}`",
+                snapshot_root.display()
+            )));
+        }
+        if !genesis_block_src.exists() {
+            return Err(SupervisorError::Config(format!(
+                "snapshot `{}` missing `genesis/{GENESIS_SIGNED_FILE_NAME}`",
                 snapshot_root.display()
             )));
         }
@@ -2358,6 +2462,12 @@ impl Supervisor {
             return Err(SupervisorError::Config(format!(
                 "supervisor is missing genesis manifest `{}`",
                 self.genesis_manifest().display()
+            )));
+        }
+        if !self.genesis_block_file().exists() {
+            return Err(SupervisorError::Config(format!(
+                "supervisor is missing signed genesis file `{}`",
+                self.genesis_block_file().display()
             )));
         }
         let snapshot_genesis_hash = Hash::new(fs::read(&genesis_src)?);
@@ -2427,6 +2537,10 @@ impl Supervisor {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&genesis_src, self.genesis_manifest())?;
+        if let Some(parent) = self.genesis_block_file().parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&genesis_block_src, self.genesis_block_file())?;
 
         if was_running {
             self.start_all()?;
@@ -3064,6 +3178,8 @@ impl PeerSpec {
         let (public_key, private_key) = key_pair.into_parts();
         let pop = bls_normal_pop_prove(&private_key)
             .map_err(|err| std::io::Error::other(err.to_string()))?;
+        let identity_key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (identity_public_key, identity_private_key) = identity_key_pair.into_parts();
 
         Ok(Self {
             alias,
@@ -3077,6 +3193,8 @@ impl PeerSpec {
             keys: PeerKeys {
                 public_key,
                 private_key: ExposedPrivateKey(private_key),
+                identity_public_key,
+                identity_private_key: ExposedPrivateKey(identity_private_key),
                 pop,
             },
         })
@@ -3123,22 +3241,19 @@ impl PeerSpec {
             .collect();
         root.insert("trusted_peers_pop".into(), toml::Value::Array(trusted_pops));
 
+        let network_bind = socket_addr_literal(&self.p2p_bind, "network.address")?;
+        let network_public = socket_addr_literal(&self.p2p_public, "network.public_address")?;
         let mut network = toml::Table::new();
-        network.insert("address".into(), toml::Value::String(self.p2p_bind.clone()));
-        network.insert(
-            "public_address".into(),
-            toml::Value::String(self.p2p_public.clone()),
-        );
+        network.insert("address".into(), toml::Value::String(network_bind));
+        network.insert("public_address".into(), toml::Value::String(network_public));
         root.insert("network".into(), toml::Value::Table(network));
 
+        let torii_bind = socket_addr_literal(&self.torii_bind, "torii.address")?;
         let mut torii = toml::Table::new();
         if let Some(overrides) = config_overrides.torii.as_ref() {
             merge_table(&mut torii, overrides);
         }
-        torii.insert(
-            "address".into(),
-            toml::Value::String(self.torii_bind.clone()),
-        );
+        torii.insert("address".into(), toml::Value::String(torii_bind));
         let torii_dir = self.storage_dir.join("torii");
         torii.insert(
             "data_dir".into(),
@@ -3165,6 +3280,17 @@ impl PeerSpec {
         }
         root.insert("torii".into(), toml::Value::Table(torii));
 
+        let mut streaming = toml::Table::new();
+        streaming.insert(
+            "identity_public_key".into(),
+            toml::Value::String(self.keys.identity_public_key.to_string()),
+        );
+        streaming.insert(
+            "identity_private_key".into(),
+            toml::Value::String(self.keys.identity_private_key.to_string()),
+        );
+        root.insert("streaming".into(), toml::Value::Table(streaming));
+
         let mut genesis_table = toml::Table::new();
         genesis_table.insert(
             "public_key".into(),
@@ -3172,6 +3298,10 @@ impl PeerSpec {
         );
         genesis_table.insert(
             "file".into(),
+            toml::Value::String(genesis.block_path.display().to_string()),
+        );
+        genesis_table.insert(
+            "manifest_json".into(),
             toml::Value::String(genesis.manifest_path.display().to_string()),
         );
         root.insert("genesis".into(), toml::Value::Table(genesis_table));
@@ -3189,6 +3319,10 @@ impl PeerSpec {
             toml::Value::String(self.snapshot_dir.display().to_string()),
         );
         root.insert("snapshot".into(), toml::Value::Table(snapshot));
+
+        let mut confidential = toml::Table::new();
+        confidential.insert("enabled".into(), toml::Value::Boolean(true));
+        root.insert("confidential".into(), toml::Value::Table(confidential));
 
         if let Some(table) = config_overrides.sumeragi.as_ref()
             && !table.is_empty()
@@ -3254,6 +3388,8 @@ impl PeerSpec {
 struct PeerKeys {
     public_key: PublicKey,
     private_key: ExposedPrivateKey,
+    identity_public_key: PublicKey,
+    identity_private_key: ExposedPrivateKey,
     pop: Vec<u8>,
 }
 
@@ -3261,6 +3397,7 @@ struct PeerKeys {
 struct GenesisMaterial {
     key_pair: KeyPair,
     manifest_path: PathBuf,
+    block_path: PathBuf,
     profile: Option<GenesisProfile>,
     vrf_seed_hex: Option<String>,
     verify_report: Option<KagamiVerifyReport>,
@@ -3280,6 +3417,7 @@ impl GenesisMaterial {
         let genesis_dir = paths.genesis_dir();
         fs::create_dir_all(&genesis_dir)?;
         let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);
+        let block_path = genesis_dir.join(GENESIS_SIGNED_FILE_NAME);
 
         let key_pair = KeyPair::random();
         let manifest = Self::generate_manifest(
@@ -3298,6 +3436,11 @@ impl GenesisMaterial {
         let manifest = genesis::with_topology(manifest, topology);
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
+        let genesis_block = manifest.clone().build_and_sign(&key_pair)?;
+        let framed = genesis_block.0.encode_wire().map_err(|err| {
+            SupervisorError::Config(format!("failed to encode signed genesis wire: {err}"))
+        })?;
+        fs::write(&block_path, framed)?;
 
         let verify_report = if let Some(profile) = genesis_profile {
             Some(Self::verify_manifest_with_kagami(
@@ -3321,6 +3464,7 @@ impl GenesisMaterial {
         Ok(Self {
             key_pair,
             manifest_path,
+            block_path,
             profile: genesis_profile,
             vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
             verify_report,
@@ -3390,12 +3534,10 @@ impl GenesisMaterial {
         if let Some(profile) = genesis_profile {
             command.arg("--profile").arg(profile.as_kagami_arg());
         }
-        if consensus_mode != SumeragiConsensusMode::Permissioned {
-            command.arg("--consensus-mode").arg(match consensus_mode {
-                SumeragiConsensusMode::Permissioned => "permissioned",
-                SumeragiConsensusMode::Npos => "npos",
-            });
-        }
+        command.arg("--consensus-mode").arg(match consensus_mode {
+            SumeragiConsensusMode::Permissioned => "permissioned",
+            SumeragiConsensusMode::Npos => "npos",
+        });
         if let Some(seed) = vrf_seed_hex {
             command.arg("--vrf-seed-hex").arg(seed);
         }
@@ -4267,6 +4409,24 @@ JSON
         }
     }
 
+    fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
+        let manifest_path = paths.genesis_dir().join(GENESIS_FILE_NAME);
+        let block_path = paths.genesis_dir().join(GENESIS_SIGNED_FILE_NAME);
+        fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
+        fs::write(&manifest_path, b"{}").expect("write manifest");
+        fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
+
+        GenesisMaterial {
+            key_pair: KeyPair::random(),
+            manifest_path,
+            block_path,
+            profile: None,
+            vrf_seed_hex: None,
+            verify_report: None,
+            consensus_fingerprint: None,
+        }
+    }
+
     #[test]
     fn binary_paths_default_respects_env_override() {
         let temp = tempfile::NamedTempFile::new().expect("temp file");
@@ -4386,6 +4546,56 @@ JSON
 
     #[cfg(unix)]
     #[test]
+    fn binary_paths_resolve_iroha_cli_alias_without_building() {
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let empty_target_dir = temp.path().join("target");
+        fs::create_dir_all(&empty_target_dir).expect("create target dir");
+        let path_dir = temp.path().join("bin");
+        fs::create_dir_all(&path_dir).expect("create bin dir");
+        let iroha_stub_script = write_version_stub(&path_dir, "iroha", "iroha3");
+        let iroha_stub = path_dir.join(format!("iroha{}", env::consts::EXE_SUFFIX));
+        fs::copy(&iroha_stub_script, &iroha_stub).expect("copy iroha alias stub");
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&iroha_stub)
+                .expect("iroha alias metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&iroha_stub, perms).expect("set iroha alias permissions");
+        }
+        let cargo_stub = write_cargo_failure_stub(temp.path());
+        let _cargo_guard = RestoringEnvVarGuard::set("CARGO", cargo_stub.as_os_str());
+        let _target_guard =
+            RestoringEnvVarGuard::set("CARGO_TARGET_DIR", empty_target_dir.as_os_str());
+        let _path_guard = RestoringEnvVarGuard::set("PATH", path_dir.as_os_str());
+
+        let mut binaries = BinaryPaths::default().allow_auto_builds(true);
+        binaries.iroha_cli = PathBuf::from("iroha_cli");
+        binaries.iroha_cli_verified = false;
+        binaries.iroha_cli_build_attempted = false;
+        binaries.iroha_cli_auto = true;
+        binaries.iroha_cli_source = BinarySource::AutoDefault;
+
+        assert_eq!(
+            resolve_name_on_path(OsStr::new("iroha")).as_deref(),
+            Some(iroha_stub.as_path())
+        );
+        let (alias_path, alias_source) =
+            resolve_iroha_cli_alias().expect("iroha alias should be discoverable");
+        assert_eq!(alias_path, iroha_stub);
+        assert_eq!(alias_source, BinarySource::PathSearch);
+
+        let resolved = binaries
+            .ensure_iroha_cli_ready()
+            .expect("iroha alias should resolve without cargo build");
+        assert_eq!(resolved, iroha_stub.as_path());
+        assert_eq!(binaries.iroha_cli_source, BinarySource::PathSearch);
+        assert!(!binaries.iroha_cli_build_attempted);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn binary_paths_rejects_build_line_mismatch() {
         let _env = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
@@ -4436,6 +4646,14 @@ JSON
         let config_path = supervisor.peers()[0].config_path().to_path_buf();
         let contents = fs::read_to_string(config_path).expect("config readable");
         let value: toml::Table = toml::from_str(&contents).expect("valid toml");
+        let expected_torii = "0.0.0.0:9000"
+            .parse::<iroha_primitives::addr::SocketAddr>()
+            .expect("torii addr literal")
+            .to_literal();
+        let expected_public = "127.0.0.1:19000"
+            .parse::<iroha_primitives::addr::SocketAddr>()
+            .expect("public addr literal")
+            .to_literal();
 
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
@@ -4443,11 +4661,27 @@ JSON
         );
         assert_eq!(
             value
+                .get("sumeragi")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("consensus_mode"))
+                .and_then(toml::Value::as_str),
+            Some("permissioned")
+        );
+        assert_eq!(
+            value
+                .get("confidential")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
                 .get("torii")
                 .and_then(toml::Value::as_table)
                 .and_then(|table| table.get("address"))
                 .and_then(toml::Value::as_str),
-            Some("0.0.0.0:9000")
+            Some(expected_torii.as_str())
         );
         assert_eq!(
             value
@@ -4455,7 +4689,31 @@ JSON
                 .and_then(toml::Value::as_table)
                 .and_then(|table| table.get("public_address"))
                 .and_then(toml::Value::as_str),
-            Some("127.0.0.1:19000")
+            Some(expected_public.as_str())
+        );
+        let streaming = value
+            .get("streaming")
+            .and_then(toml::Value::as_table)
+            .expect("streaming config");
+        let identity_public = streaming
+            .get("identity_public_key")
+            .and_then(toml::Value::as_str)
+            .expect("identity public key");
+        let identity_private = streaming
+            .get("identity_private_key")
+            .and_then(toml::Value::as_str)
+            .expect("identity private key");
+        assert!(
+            identity_public
+                .parse::<PublicKey>()
+                .expect("identity public key should parse")
+                .algorithm()
+                == Algorithm::Ed25519,
+            "expected Ed25519 identity public key, got {identity_public}"
+        );
+        assert!(
+            !identity_private.is_empty(),
+            "identity private key should be populated"
         );
     }
 
@@ -4648,6 +4906,10 @@ JSON
         assert!(
             log.contains("--genesis-public-key"),
             "expected kagami invocation to record genesis public key argument"
+        );
+        assert!(
+            log.contains("--consensus-mode") && log.contains("permissioned"),
+            "expected permissioned consensus mode to be pinned for kagami: {log}"
         );
     }
 
@@ -4882,9 +5144,14 @@ JSON
         }
 
         let genesis_copy = snapshot_root.join("genesis").join(GENESIS_FILE_NAME);
+        let signed_genesis_copy = snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME);
         assert!(
             genesis_copy.exists(),
             "snapshot should include the current genesis manifest"
+        );
+        assert!(
+            signed_genesis_copy.exists(),
+            "snapshot should include the signed genesis wire file"
         );
     }
 
@@ -4988,8 +5255,9 @@ JSON
                 .and_then(toml::Value::as_str)
                 .expect("network address");
             for addr in [torii_addr, network_addr] {
-                let port = addr
-                    .parse::<std::net::SocketAddr>()
+                let body = norito::literal::parse("addr", addr).expect("valid addr literal");
+                let port = body
+                    .parse::<iroha_primitives::addr::SocketAddr>()
                     .map(|socket| socket.port())
                     .expect("address contains a port");
                 assert!(
@@ -5085,6 +5353,7 @@ JSON
         let config_path = peer.config_path().to_path_buf();
         let log_path = peer.log_path().to_path_buf();
         let genesis_path = supervisor.genesis_manifest().to_path_buf();
+        let genesis_block_path = supervisor.genesis_block_file().to_path_buf();
 
         fs::write(storage_dir.join("marker.txt"), b"snapshot-data").expect("write storage marker");
         fs::write(snapshot_dir.join("inner.txt"), b"snapshot-inner").expect("write snapshot file");
@@ -5128,6 +5397,11 @@ JSON
             fs::read(&genesis_path).expect("read restored genesis"),
             fs::read(snapshot_root.join("genesis").join(GENESIS_FILE_NAME))
                 .expect("read snapshot genesis")
+        );
+        assert_eq!(
+            fs::read(&genesis_block_path).expect("read restored signed genesis"),
+            fs::read(snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME))
+                .expect("read snapshot signed genesis")
         );
 
         let snapshot_name = snapshot_root
@@ -5548,6 +5822,52 @@ JSON
     }
 
     #[test]
+    fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
+        if !ports_available("supervisor_defaults_nexus_disabled_for_local_permissioned_profiles") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let _stub = KagamiStub::install(temp.path());
+
+        let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path())
+            .build()
+            .expect("build supervisor");
+
+        let nexus = supervisor
+            .nexus_config_overrides()
+            .expect("default nexus overrides");
+        assert!(matches!(
+            nexus.get("enabled"),
+            Some(toml::Value::Boolean(false))
+        ));
+    }
+
+    #[test]
+    fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
+        if !ports_available("supervisor_rejects_enabled_nexus_without_npos_consensus") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let _stub = KagamiStub::install(temp.path());
+
+        let err = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path())
+            .nexus_enabled(true)
+            .build()
+            .expect_err("permissioned localnet should reject nexus");
+        match err {
+            SupervisorError::Config(message) => assert!(
+                message.contains("sumeragi.consensus_mode = \"npos\""),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected SupervisorError::Config, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn supervisor_exposes_config_overrides() {
         if !ports_available("supervisor_exposes_config_overrides") {
             return;
@@ -5636,18 +5956,7 @@ JSON
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
         let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
-
-        let manifest_path = paths.genesis_dir().join("genesis.json");
-        fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
-        fs::write(&manifest_path, b"{}").expect("write manifest");
-        let genesis = GenesisMaterial {
-            key_pair: KeyPair::random(),
-            manifest_path: manifest_path.clone(),
-            profile: None,
-            vrf_seed_hex: None,
-            verify_report: None,
-            consensus_fingerprint: None,
-        };
+        let genesis = test_genesis_material(&paths);
 
         let mut nexus = toml::Table::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
@@ -5739,18 +6048,7 @@ JSON
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
         let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
-
-        let manifest_path = paths.genesis_dir().join("genesis.json");
-        fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
-        fs::write(&manifest_path, b"{}").expect("write manifest");
-        let genesis = GenesisMaterial {
-            key_pair: KeyPair::random(),
-            manifest_path: manifest_path.clone(),
-            profile: None,
-            vrf_seed_hex: None,
-            verify_report: None,
-            consensus_fingerprint: None,
-        };
+        let genesis = test_genesis_material(&paths);
 
         let mut sumeragi = toml::Table::new();
         sumeragi.insert("da_enabled".into(), toml::Value::Boolean(false));
@@ -5782,18 +6080,7 @@ JSON
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
         let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
-
-        let manifest_path = paths.genesis_dir().join("genesis.json");
-        fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
-        fs::write(&manifest_path, b"{}").expect("write manifest");
-        let genesis = GenesisMaterial {
-            key_pair: KeyPair::random(),
-            manifest_path: manifest_path.clone(),
-            profile: None,
-            vrf_seed_hex: None,
-            verify_report: None,
-            consensus_fingerprint: None,
-        };
+        let genesis = test_genesis_material(&paths);
 
         let mut sumeragi = toml::Table::new();
         sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
@@ -5848,18 +6135,7 @@ JSON
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("paths");
         let spec = PeerSpec::new(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
-
-        let manifest_path = paths.genesis_dir().join("genesis.json");
-        fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
-        fs::write(&manifest_path, b"{}").expect("write manifest");
-        let genesis = GenesisMaterial {
-            key_pair: KeyPair::random(),
-            manifest_path: manifest_path.clone(),
-            profile: None,
-            vrf_seed_hex: None,
-            verify_report: None,
-            consensus_fingerprint: None,
-        };
+        let genesis = test_genesis_material(&paths);
 
         let mut lane0 = toml::Table::new();
         lane0.insert("alias".into(), toml::Value::String("Core Lane".into()));

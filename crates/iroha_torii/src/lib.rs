@@ -11985,6 +11985,42 @@ fn should_skip_singleton_routed_query_route_error(response: &Response) -> bool {
         || torii_response_has_reject_code(response, "route_unavailable")
 }
 
+fn collect_routed_singular_query_outputs<T>(
+    results: impl IntoIterator<Item = Result<T, Response>>,
+) -> Result<Vec<T>, Response> {
+    let mut outputs = Vec::new();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for result in results {
+        match result {
+            Ok(output) => outputs.push(output),
+            Err(response) if should_skip_singleton_routed_query_route_error(&response) => {
+                if torii_response_has_reject_code(&response, "route_unavailable") {
+                    last_route_unavailable = Some(response);
+                } else {
+                    last_not_found = Some(response);
+                }
+            }
+            Err(response) => return Err(response),
+        }
+    }
+
+    if outputs.is_empty() {
+        return Err(last_route_unavailable.unwrap_or_else(|| {
+            last_not_found.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "query result was not found in any dataspace",
+                )
+            })
+        }));
+    }
+
+    Ok(outputs)
+}
+
 #[cfg(feature = "app_api")]
 async fn collect_torii_singleton_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -12481,44 +12517,35 @@ async fn execute_torii_query_via_fanout_for_routes(
     let routed_by = routed_by_for_routes(app, &routes);
     match &verified_query.request {
         iroha_data_model::query::QueryRequest::Singular(_) => {
-            let mut last_not_found = None;
-            let mut successes = Vec::new();
+            let mut results = Vec::new();
             for route in routes {
-                match execute_torii_verified_query_exhaustive_for_route(
+                let result = match execute_torii_verified_query_exhaustive_for_route(
                     app,
                     clone_verified_query_request(&verified_query),
                     route,
                 )
                 .await
                 {
-                    Ok(iroha_data_model::query::QueryResponse::Singular(output)) => {
-                        successes.push(output);
-                    }
-                    Ok(other) => {
-                        return torii_proxy_error_response(
-                            StatusCode::CONFLICT,
-                            "query_conflict",
-                            format!(
-                                "routed singular query returned incompatible response {other:?}"
-                            ),
-                        );
-                    }
-                    Err(response) if response.status() == StatusCode::NOT_FOUND => {
-                        last_not_found = Some(response);
-                    }
-                    Err(response) => return response,
-                }
+                    Ok(iroha_data_model::query::QueryResponse::Singular(output)) => Ok(output),
+                    Ok(other) => Err(torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "query_conflict",
+                        format!("routed singular query returned incompatible response {other:?}"),
+                    )),
+                    Err(response) => Err(response),
+                };
+                results.push(result);
             }
 
-            let Some(first) = successes.first().cloned() else {
-                return last_not_found.unwrap_or_else(|| {
-                    torii_proxy_error_response(
-                        StatusCode::NOT_FOUND,
-                        "not_found",
-                        "query result was not found in any dataspace",
-                    )
-                });
+            let successes = match collect_routed_singular_query_outputs(results) {
+                Ok(successes) => successes,
+                Err(response) => return response,
             };
+
+            let first = successes
+                .first()
+                .cloned()
+                .expect("singular routed query outputs should contain at least one success");
             if successes.iter().skip(1).any(|output| output != &first) {
                 return torii_proxy_error_response(
                     StatusCode::CONFLICT,
@@ -13535,6 +13562,47 @@ mod torii_routed_read_tests {
         assert!(!should_skip_singleton_routed_query_route_error(
             &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
         ));
+    }
+
+    #[test]
+    fn collect_routed_singular_query_outputs_skips_route_unavailable_until_success() {
+        let outputs = collect_routed_singular_query_outputs([
+            Err(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "authoritative peers offline",
+            )),
+            Ok(42_u32),
+        ])
+        .expect("healthy singular output should survive route_unavailable on another route");
+
+        assert_eq!(outputs, vec![42_u32]);
+    }
+
+    #[test]
+    fn collect_routed_singular_query_outputs_returns_route_unavailable_when_no_route_succeeds() {
+        let response = collect_routed_singular_query_outputs::<u32>([
+            Err(torii_proxy_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "missing",
+            )),
+            Err(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "authoritative peers offline",
+            )),
+        ])
+        .expect_err("all singular routes failing should surface the last route_unavailable");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
     }
 
     #[cfg(feature = "app_api")]
