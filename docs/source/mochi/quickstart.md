@@ -93,11 +93,18 @@ scripts/mochi_local_sandbox.sh mcp-add-command
 
 `up` backgrounds `cargo run -p mochi-ui -- sandbox serve`, waits for `/status` readiness plus local
 MCP validation, writes `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes
-`.env.local` plus `.mochi/generated/*`. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator
-rehearsal or `MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another
-workspace. The repo-shared Codex guidance for this flow lives at
+`.env.local` plus `.mochi/generated/*`. By default the helper uses
+`<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup isolated from
+other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a different cache
+location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
+`MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another workspace. The
+repo-shared Codex guidance for this flow lives at
 `skills/mochi-local-sandbox/`; install or symlink it into
 `$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to use it.
+
+Local validator configs now pin `nexus.enabled = false`, `confidential.enabled = true`, and the
+same `sumeragi.consensus_mode` that Mochi asked Kagami to use for genesis. Enabling Nexus requires
+an NPoS profile; Mochi rejects `nexus.enabled = true` on permissioned presets before peers launch.
 
 After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
 

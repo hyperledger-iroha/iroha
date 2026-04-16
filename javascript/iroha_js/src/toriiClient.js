@@ -8994,7 +8994,12 @@ export class ToriiClient {
     if (this._isAbortError(error)) {
       return timedOut;
     }
-    if (error && (error.name === "TypeError" || error.code === "ECONNRESET")) {
+    if (
+      error &&
+      (error.name === "TypeError" ||
+        error.code === "ECONNRESET" ||
+        error.code === "EPIPE")
+    ) {
       return true;
     }
     return false;
