@@ -312,7 +312,6 @@ mod test {
         ecdsa::EcdsaSig,
         nid::Nid,
     };
-    #[cfg(feature = "crypto-parity-tests")]
     use sha2::Digest;
 
     use super::*;
