@@ -219,6 +219,77 @@ class HttpClientTransportTest {
         assertEquals(0, request.body.size)
     }
 
+    @Test
+    fun resolveAccountAliasParsesSuccessfulResponse() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "alias": "alice@universal",
+                  "account_id": "aid:alice-123",
+                  "index": 42,
+                  "source": "directory"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.resolveAccountAlias("alice@universal").join()
+
+        assertTrue(response.isPresent)
+        val parsed = response.get()
+        assertEquals("alice@universal", parsed.alias)
+        assertEquals("aid:alice-123", parsed.accountId)
+        assertEquals(42L, parsed.index)
+        assertEquals("directory", parsed.source)
+
+        val request = executor.lastRequest
+        assertNotNull(request)
+        assertEquals("POST", request.method)
+        assertEquals("https://torii.example/api/v1/aliases/resolve", request.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
+        assertEquals("alice@universal", payload["alias"])
+        assertEquals(1, payload.size)
+    }
+
+    @Test
+    fun resolveAccountAliasReturnsEmptyOnNotFound() {
+        val executor = StubResponseExecutor(
+            statusCode = 404,
+            body = byteArrayOf(),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.resolveAccountAlias("missing@universal").join()
+
+        assertFalse(response.isPresent)
+        assertNull(response.orElse(null))
+    }
+
+    @Test
+    fun resolveAccountAliasPropagatesMalformedJson() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = "not a json object".toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.ExecutionException> {
+            transport.resolveAccountAlias("alice@universal").get()
+        }
+        assertNotNull(error.cause)
+    }
+
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
 
