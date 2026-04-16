@@ -54,7 +54,7 @@ enabled = true
 authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
 private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
 asset_definition_id = "xor#universal"
-amount = "25000"
+amount = "1000"
 pow_difficulty_bits = 8
 pow_scrypt_log_n = 13
 pow_scrypt_r = 8
@@ -111,6 +111,20 @@ enabled = false
 
 [confidential]
 enabled = true
+
+[pipeline.gas]
+# `gas_asset_id` transaction metadata is canonicalized to the Base58 asset
+# definition id before execution. The live XOR alias `xor#universal` resolves to
+# this id on Taira.
+accepted_assets = ["6TEAJqbb8oEPmLncoNiMRbLEK6tw"]
+[[pipeline.gas.units_per_gas]]
+asset = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+# Nexus fees already charge gas via [nexus.fees].per_gas_unit_fee; this admits
+# explicit gas metadata without applying a second pipeline gas transfer.
+units_per_gas = 0
+twap_local_per_xor = "1"
+liquidity_profile = "tier1"
+volatility_class = "stable"
 
 [sumeragi.npos]
 use_stake_snapshot_roster = true

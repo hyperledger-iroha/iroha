@@ -17,16 +17,14 @@
     "sm2_distid_default": "1234567812345678"
   },
   "executor": null,
-  "ivm_dir": [
-    "."
-  ],
+  "ivm_dir": ".",
   "transactions": [
     {
       "instructions": [
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -72,7 +70,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
               "metadata": {
                 
@@ -108,7 +106,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "universal",
+              "id": "universal.universal",
               "logo": null,
               "metadata": {
                 
@@ -126,7 +124,7 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "xor#universal",
+              "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
               "metadata": {
                 
@@ -139,9 +137,16 @@
           }
         },
         {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#universal",
+            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "lease_expiry_ms": null
+          }
+        },
+        {
           "Register": {
             "Domain": {
-              "id": "sora",
+              "id": "sora.universal",
               "logo": null,
               "metadata": {
                 
@@ -162,7 +167,7 @@
         {
           "Register": {
             "AssetDefinition": {
-              "id": "xor#sora",
+              "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
               "metadata": {
                 
@@ -172,6 +177,13 @@
                 "scale": null
               }
             }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#sora",
+            "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "lease_expiry_ms": null
           }
         }
       ],
@@ -242,7 +254,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "13"
             }
           }
@@ -250,7 +262,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "44"
             }
           }
@@ -258,7 +270,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed32000601000000000000d1ebb7a9c61afa19005a00000000000000000000004e0000000000000046000000000000006564303132303133324533323039433445433843384534464345374433354632434546363235333441353541433139373838414134454642393941353938364535324631324690000000000000000100000000000000670100000000000000250100000000000000e201000000000000006f0100000000000000170100000000000000d201000000000000004c0100000000000000900100000000000000a90100000000000000170100000000000000ad01000000000000007f010000000000000013010000000000000035010000000000000044010000000000000072040000000000000000000000",
+              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
               "object": "250000000"
             }
           }
@@ -268,7 +280,7 @@
             "AssetDefinition": {
               "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "source": "testuロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
             }
           }
         },
@@ -276,8 +288,8 @@
           "Transfer": {
             "Domain": {
               "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-              "object": "wonderland",
-              "source": "testuロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "object": "wonderland.universal",
+              "source": "testuロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
             }
           }
         },
@@ -310,13 +322,30 @@
           "ivm_gas_limit_per_block": {
             "id": "ivm_gas_limit_per_block",
             "payload": 1680000
+          },
+          "ivm_gas_accepted_assets": {
+            "id": "ivm_gas_accepted_assets",
+            "payload": [
+              "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            ]
+          },
+          "ivm_gas_units_per_gas": {
+            "id": "ivm_gas_units_per_gas",
+            "payload": [
+              {
+                "asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                "units_per_gas": 0,
+                "twap_local_per_xor": "1",
+                "liquidity_profile": "tier1",
+                "volatility_class": "stable"
+              }
+            ]
           }
         },
         "sumeragi": {
           "block_time_ms": 100,
           "commit_time_ms": 100,
-          "min_finality_ms": 100,
-          "next_mode": "Npos"
+          "min_finality_ms": 100
         }
       },
       "topology": [
