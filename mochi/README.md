@@ -59,7 +59,15 @@ workspace.
 
 `up` backgrounds `cargo run -p mochi-ui -- sandbox serve`, waits for Torii readiness and local MCP
 validation, writes `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes
-`.env.local` plus `.mochi/generated/*` under the workspace.
+`.env.local` plus `.mochi/generated/*` under the workspace. The helper now isolates its Cargo
+artifacts under `<workspace>/.mochi/build-target` by default (override with
+`MOCHI_CARGO_TARGET_DIR`) so local sandbox startup does not contend with unrelated workspace builds.
+
+Generated local validator configs now pin the runtime-critical defaults Mochi depends on:
+`nexus.enabled = false` unless explicitly enabled, `confidential.enabled = true`, and
+`sumeragi.consensus_mode` always matches the genesis block consensus mode that Mochi asked Kagami to
+generate. If you do enable Nexus, Mochi now fails fast unless the profile uses
+`sumeragi.consensus_mode = "npos"`.
 
 ## Repo-Shared Skill
 

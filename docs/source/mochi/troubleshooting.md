@@ -15,6 +15,9 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    layout is `<workspace>/.mochi/sandbox/<profile-slug>`; custom workspace and
    data-root overrides appear in the UI title bar and via
    `cargo run -p mochi-ui -- sandbox serve --workspace-root ...`.
+   When you use `scripts/mochi_local_sandbox.sh`, the helper also uses
+   `<workspace>/.mochi/build-target` as its default Cargo target dir unless
+   `MOCHI_CARGO_TARGET_DIR` overrides it.
 2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
    UI, and integration crates before you begin modifying configs.
 3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
@@ -78,6 +81,11 @@ typing the flags repeatedly. When debugging bundle builds, compare the
 `BundleConfig` in `mochi/mochi-ui-egui/src/config.rs` against the paths in
 `target/mochi-bundle`.
 
+For helper-script runs, check whether another process is holding the shared repo
+`target/` lock. Current Mochi helpers default to an isolated
+`<workspace>/.mochi/build-target`, so lock contention usually means
+`MOCHI_CARGO_TARGET_DIR` was pointed back at a busy directory.
+
 ### Port collisions
 
 `PortAllocator` probes the loopback interface before writing configs. If you see
@@ -116,6 +124,18 @@ If Kagami exits before emitting a manifest, peers will crash immediately. Check
 For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
 button (covered below) instead of deleting folders by hand; it recreates the
 peer directories and snapshot roots before restarting processes.
+
+If startup fails during config integrity checks, compare the rendered peer
+config with the validator-safe defaults Mochi now pins automatically:
+
+- `nexus.enabled = false` for local permissioned profiles unless you explicitly
+  enable Nexus.
+- `confidential.enabled = true` for validator peers.
+- `sumeragi.consensus_mode` must match the genesis block consensus mode Mochi
+  asked Kagami to generate.
+
+When you explicitly enable Nexus, Mochi now rejects permissioned profiles before
+launch and requires `sumeragi.consensus_mode = "npos"`.
 
 ### Tuning automatic restarts
 
