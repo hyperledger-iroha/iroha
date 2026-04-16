@@ -257,6 +257,33 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun resolveAccountAliasParsesSuccessfulResponseWithoutIndex() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "alias": "banking@centralbank.universal",
+                  "account_id": "aid:banking-123",
+                  "source": "rekey_record"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.resolveAccountAlias("banking@centralbank.universal").join()
+
+        assertTrue(response.isPresent)
+        val parsed = response.get()
+        assertEquals("banking@centralbank.universal", parsed.alias)
+        assertEquals("aid:banking-123", parsed.accountId)
+        assertNull(parsed.index)
+        assertEquals("rekey_record", parsed.source)
+    }
+
+    @Test
     fun resolveAccountAliasReturnsEmptyOnNotFound() {
         val executor = StubResponseExecutor(
             statusCode = 404,
@@ -271,6 +298,29 @@ class HttpClientTransportTest {
 
         assertFalse(response.isPresent)
         assertNull(response.orElse(null))
+    }
+
+    @Test
+    fun resolveAccountAliasRejectsNonIntegerIndex() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "alias": "alice@universal",
+                  "account_id": "aid:alice-123",
+                  "index": 3.5
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.ExecutionException> {
+            transport.resolveAccountAlias("alice@universal").get()
+        }
+        assertNotNull(error.cause)
     }
 
     @Test
