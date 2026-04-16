@@ -7207,6 +7207,51 @@ async fn handler_confidential_asset_transitions(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_confidential_notes(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<crate::routing::ConfidentialNotesQuery>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        check_access(&app, &headers, Some(remote_ip), "v1/confidential/notes").await?;
+    }
+    routing::handle_v1_confidential_notes(app.state.clone(), AxQuery(query)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_confidential_relay_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::ConfidentialRelaySubmitRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = token_hdr.unwrap_or_else(|| remote.ip().to_string());
+    if !app.tx_rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let telemetry = app.telemetry.clone();
+    routing::handle_v1_confidential_relay_submit(app, NoritoJson(request), telemetry).await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_domains_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -27173,6 +27218,11 @@ impl Torii {
                 .route(
                     "/v1/confidential/assets/{definition_id}/transitions",
                     get(handler_confidential_asset_transitions),
+                )
+                .route("/v1/confidential/notes", get(handler_confidential_notes))
+                .route(
+                    "/v1/confidential/relay/submit",
+                    post(handler_confidential_relay_submit),
                 )
                 // NFTs listing
                 .route("/v1/nfts", get(handler_nfts_list))
