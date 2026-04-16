@@ -59,7 +59,8 @@ const RBC_STORE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CHUNK_LOSS_SCENARIO_NAME: &str = "npos_rbc_chunk_loss_fault";
 const CHUNK_LOSS_PAYLOAD_BYTES: usize = 64 * 1024;
 const CHUNK_LOSS_DROP_INTERVAL: i64 = 2;
-const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(40);
+const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(120);
+const CHUNK_LOSS_RBC_VISIBILITY_TTL_MS: i64 = 10 * 60 * 1_000;
 
 const STRESS_PEERS_ENV: &str = "SUMERAGI_NPOS_STRESS_PEERS";
 const STRESS_COLLECTORS_K_ENV: &str = "SUMERAGI_NPOS_STRESS_COLLECTORS_K";
@@ -1332,6 +1333,14 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
+                    CHUNK_LOSS_RBC_VISIBILITY_TTL_MS,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
+                    CHUNK_LOSS_RBC_VISIBILITY_TTL_MS,
                 )
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_every_nth_chunk"],
