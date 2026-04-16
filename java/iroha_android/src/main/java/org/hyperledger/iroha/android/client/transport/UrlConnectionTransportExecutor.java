@@ -149,7 +149,14 @@ public final class UrlConnectionTransportExecutor
       throws IOException {
     if (status >= 400) {
       final InputStream error = connection.getErrorStream();
-      return error != null ? error : connection.getInputStream();
+      if (error != null) {
+        return error;
+      }
+      try {
+        return connection.getInputStream();
+      } catch (final IOException ignored) {
+        return null;
+      }
     }
     return connection.getInputStream();
   }

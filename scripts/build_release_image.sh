@@ -101,6 +101,16 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+build_context="$repo_root"
+temp_build_context=""
+
+cleanup() {
+    if [[ -n "$temp_build_context" && -d "$temp_build_context" ]]; then
+        rm -rf "$temp_build_context"
+    fi
+}
+
+trap cleanup EXIT
 
 version="$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)"
 commit="$(git rev-parse --short HEAD)"
@@ -170,6 +180,21 @@ if [[ "$use_target_prebuilt" == "1" ]]; then
         cp "$source_path" "$target_path"
         chmod 755 "$target_path"
     done
+
+    temp_build_context="$(mktemp -d "${TMPDIR:-/tmp}/iroha-image-context.XXXXXX")"
+    build_context="$temp_build_context"
+    mkdir -p \
+        "${build_context}/scripts" \
+        "${build_context}/configs/soranexus" \
+        "${build_context}/dist" \
+        "${build_context}/defaults" \
+        "${build_context}/codec/rans"
+    cp "${repo_root}/Dockerfile" "${build_context}/Dockerfile"
+    cp "${repo_root}/scripts/docker_entrypoint.sh" "${build_context}/scripts/docker_entrypoint.sh"
+    cp -R "${repo_root}/configs/soranexus/taira" "${build_context}/configs/soranexus/taira"
+    cp -R "${repo_root}/dist/docker-bin" "${build_context}/dist/docker-bin"
+    cp -R "${repo_root}/defaults/." "${build_context}/defaults/"
+    cp -R "${repo_root}/codec/rans/tables" "${build_context}/codec/rans/tables"
     docker_build_args+=(--build-arg USE_PREBUILT=1)
 fi
 
@@ -184,8 +209,8 @@ fi
 docker build \
     "${docker_build_args[@]}" \
     --tag "${image_tag}" \
-    --file Dockerfile \
-    .
+    --file "${build_context}/Dockerfile" \
+    "${build_context}"
 
 tarball="${bundle_root}/${profile}-${version}-${os_tag}-image.tar"
 log "Saving image ${image_tag} -> $(basename "$tarball")"
@@ -217,7 +242,7 @@ fi
 
 image_id="$(docker image inspect "${image_tag}" --format '{{.Id}}')"
 
-python - <<PY
+python3 - <<PY
 import json
 from pathlib import Path
 

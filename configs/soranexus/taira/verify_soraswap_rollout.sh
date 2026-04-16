@@ -9,6 +9,7 @@ SORASWAP_CLIENT_CONFIG="${SORASWAP_CLIENT_CONFIG:-}"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
 IROHA_BIN="${IROHA_BIN:-}"
 TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
 TRADER_APP_API_PROBE_INTERVAL_SECS="${TRADER_APP_API_PROBE_INTERVAL_SECS:-1}"
@@ -167,8 +168,7 @@ fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
   if [[ -z "$WRITE_CONFIG" ]]; then
-    echo "--write-config is required unless both --skip-mcp-check and --skip-sorafs-check are set" >&2
-    exit 1
+    WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
   fi
 fi
 

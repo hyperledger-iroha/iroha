@@ -152,6 +152,24 @@ val tunedManager = IrohaKeyManager.withDefaultProviders(
 and is software-only in this SDK pass, so hardware/StrongBox preferences fail
 fast instead of silently downgrading.
 
+## Resolving Account Aliases
+
+`HttpClientTransport.resolveAccountAlias` posts to Torii's `/v1/aliases/resolve`
+endpoint and returns the mapped account id. Unknown aliases surface as
+`Optional.empty()` without throwing:
+
+```kotlin
+val client = HttpClientTransport.createDefault(config)
+
+val resolved = client.resolveAccountAlias("some_alias@universal").join()
+if (resolved.isPresent) {
+    val record = resolved.get()
+    println("account_id=${record.accountId} source=${record.source}")
+} else {
+    println("alias not found")
+}
+```
+
 ## Motivation
 
 `core-jvm` now ships typed builders for the first dedicated RWA instruction

@@ -37,8 +37,8 @@ pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
-pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 10;
-pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 10;
+pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
+pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
@@ -615,6 +615,8 @@ struct ConfidentialTransferWitnessV2 {
     input_1_diversifier: [u8; 32],
     output_0_owner_tag: [u8; 32],
     output_1_owner_tag: [u8; 32],
+    asset_tag: [u8; 32],
+    chain_tag: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
@@ -643,6 +645,13 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_diversifier
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_owner_tag
         halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_owner_tag
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_derived_owner_tag
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_derived_owner_tag
+        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 4], // note_owner_asset
+        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 4], // note_rho_owner_asset
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_asset_chain
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_0_rho_asset_chain
+        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_1_rho_asset_chain
         [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
         [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
         [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
@@ -675,6 +684,13 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
         let input_1_diversifier = meta.advice_column();
         let output_0_owner_tag = meta.advice_column();
         let output_1_owner_tag = meta.advice_column();
+        let input_0_derived_owner_tag = meta.advice_column();
+        let input_1_derived_owner_tag = meta.advice_column();
+        let note_owner_asset = std::array::from_fn(|_| meta.advice_column());
+        let note_rho_owner_asset = std::array::from_fn(|_| meta.advice_column());
+        let nullifier_asset_chain = meta.advice_column();
+        let nullifier_0_rho_asset_chain = meta.advice_column();
+        let nullifier_1_rho_asset_chain = meta.advice_column();
         let input_0_siblings = std::array::from_fn(|_| meta.advice_column());
         let input_0_directions = std::array::from_fn(|_| meta.advice_column());
         let input_0_witness_nodes = std::array::from_fn(|_| meta.advice_column());
@@ -700,6 +716,21 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             let in1_diversifier = meta.query_advice(input_1_diversifier, Rotation::cur());
             let out0_owner = meta.query_advice(output_0_owner_tag, Rotation::cur());
             let out1_owner = meta.query_advice(output_1_owner_tag, Rotation::cur());
+            let in0_owner = meta.query_advice(input_0_derived_owner_tag, Rotation::cur());
+            let in1_owner = meta.query_advice(input_1_derived_owner_tag, Rotation::cur());
+            let note_owner_asset_exprs = note_owner_asset
+                .iter()
+                .map(|column| meta.query_advice(*column, Rotation::cur()))
+                .collect::<Vec<_>>();
+            let note_rho_owner_asset_exprs = note_rho_owner_asset
+                .iter()
+                .map(|column| meta.query_advice(*column, Rotation::cur()))
+                .collect::<Vec<_>>();
+            let asset_chain_expr = meta.query_advice(nullifier_asset_chain, Rotation::cur());
+            let nf0_rho_asset_chain =
+                meta.query_advice(nullifier_0_rho_asset_chain, Rotation::cur());
+            let nf1_rho_asset_chain =
+                meta.query_advice(nullifier_1_rho_asset_chain, Rotation::cur());
             let cm_in0 = meta.query_instance(instances[0], Rotation::cur());
             let cm_in1 = meta.query_instance(instances[1], Rotation::cur());
             let nf0 = meta.query_instance(instances[2], Rotation::cur());
@@ -725,40 +756,59 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                         + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64))
                             * (rhs_fourth * rhs)
                 };
-            let note_commit_expr =
-                |amount: halo2_proofs::plonk::Expression<Scalar>,
-                 rho: halo2_proofs::plonk::Expression<Scalar>,
-                 owner_tag: halo2_proofs::plonk::Expression<Scalar>| {
-                    poseidon_pair_expr(
-                        amount,
-                        poseidon_pair_expr(rho, poseidon_pair_expr(owner_tag, asset_tag.clone())),
-                    )
-                };
-            let nullifier_expr = |rho: halo2_proofs::plonk::Expression<Scalar>| {
-                poseidon_pair_expr(
-                    sk.clone(),
-                    poseidon_pair_expr(
-                        rho,
-                        poseidon_pair_expr(asset_tag.clone(), chain_tag.clone()),
-                    ),
-                )
-            };
-            let input_0_owner_tag = poseidon_pair_expr(sk.clone(), in0_diversifier);
-            let input_1_owner_tag = poseidon_pair_expr(sk.clone(), in1_diversifier);
             let in0_commit_expr =
-                note_commit_expr(in0_amt.clone(), in0_rho.clone(), input_0_owner_tag);
+                poseidon_pair_expr(in0_amt.clone(), note_rho_owner_asset_exprs[0].clone());
             let in1_commit_raw =
-                note_commit_expr(in1_amt.clone(), in1_rho.clone(), input_1_owner_tag);
-            let out0_commit_expr = note_commit_expr(out0_amt.clone(), out0_rho.clone(), out0_owner);
-            let out1_commit_raw = note_commit_expr(out1_amt.clone(), out1_rho.clone(), out1_owner);
-            let nf0_expr = nullifier_expr(in0_rho.clone());
-            let nf1_raw = nullifier_expr(in1_rho.clone());
+                poseidon_pair_expr(in1_amt.clone(), note_rho_owner_asset_exprs[1].clone());
+            let out0_commit_expr =
+                poseidon_pair_expr(out0_amt.clone(), note_rho_owner_asset_exprs[2].clone());
+            let out1_commit_raw =
+                poseidon_pair_expr(out1_amt.clone(), note_rho_owner_asset_exprs[3].clone());
+            let nf0_expr = poseidon_pair_expr(sk.clone(), nf0_rho_asset_chain.clone());
+            let nf1_raw = poseidon_pair_expr(sk.clone(), nf1_rho_asset_chain.clone());
             let mut constraints = vec![
                 enabled.clone() * in1_present.clone() * (in1_present.clone() - one.clone()),
                 enabled.clone() * out1_present.clone() * (out1_present.clone() - one.clone()),
                 enabled.clone()
                     * (in0_amt.clone() + in1_present.clone() * in1_amt.clone()
                         - (out0_amt.clone() + out1_present.clone() * out1_amt.clone())),
+                enabled.clone()
+                    * (in0_owner.clone() - poseidon_pair_expr(sk.clone(), in0_diversifier)),
+                enabled.clone()
+                    * (in1_owner.clone() - poseidon_pair_expr(sk.clone(), in1_diversifier)),
+                enabled.clone()
+                    * (note_owner_asset_exprs[0].clone()
+                        - poseidon_pair_expr(in0_owner.clone(), asset_tag.clone())),
+                enabled.clone()
+                    * (note_owner_asset_exprs[1].clone()
+                        - poseidon_pair_expr(in1_owner.clone(), asset_tag.clone())),
+                enabled.clone()
+                    * (note_owner_asset_exprs[2].clone()
+                        - poseidon_pair_expr(out0_owner, asset_tag.clone())),
+                enabled.clone()
+                    * (note_owner_asset_exprs[3].clone()
+                        - poseidon_pair_expr(out1_owner, asset_tag.clone())),
+                enabled.clone()
+                    * (note_rho_owner_asset_exprs[0].clone()
+                        - poseidon_pair_expr(in0_rho.clone(), note_owner_asset_exprs[0].clone())),
+                enabled.clone()
+                    * (note_rho_owner_asset_exprs[1].clone()
+                        - poseidon_pair_expr(in1_rho.clone(), note_owner_asset_exprs[1].clone())),
+                enabled.clone()
+                    * (note_rho_owner_asset_exprs[2].clone()
+                        - poseidon_pair_expr(out0_rho, note_owner_asset_exprs[2].clone())),
+                enabled.clone()
+                    * (note_rho_owner_asset_exprs[3].clone()
+                        - poseidon_pair_expr(out1_rho, note_owner_asset_exprs[3].clone())),
+                enabled.clone()
+                    * (asset_chain_expr.clone()
+                        - poseidon_pair_expr(asset_tag.clone(), chain_tag.clone())),
+                enabled.clone()
+                    * (nf0_rho_asset_chain.clone()
+                        - poseidon_pair_expr(in0_rho.clone(), asset_chain_expr.clone())),
+                enabled.clone()
+                    * (nf1_rho_asset_chain.clone()
+                        - poseidon_pair_expr(in1_rho.clone(), asset_chain_expr)),
                 enabled.clone() * (in0_commit_expr.clone() - cm_in0.clone()),
                 enabled.clone() * (cm_in1.clone() - in1_present.clone() * in1_commit_raw),
                 enabled.clone() * (out0_commit_expr - cm_out0.clone()),
@@ -819,6 +869,13 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             input_1_diversifier,
             output_0_owner_tag,
             output_1_owner_tag,
+            input_0_derived_owner_tag,
+            input_1_derived_owner_tag,
+            note_owner_asset,
+            note_rho_owner_asset,
+            nullifier_asset_chain,
+            nullifier_0_rho_asset_chain,
+            nullifier_1_rho_asset_chain,
             input_0_siblings,
             input_0_directions,
             input_0_witness_nodes,
@@ -852,6 +909,13 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             input_1_diversifier,
             output_0_owner_tag,
             output_1_owner_tag,
+            input_0_derived_owner_tag,
+            input_1_derived_owner_tag,
+            note_owner_asset,
+            note_rho_owner_asset,
+            nullifier_asset_chain,
+            nullifier_0_rho_asset_chain,
+            nullifier_1_rho_asset_chain,
             input_0_siblings,
             input_0_directions,
             input_0_witness_nodes,
@@ -880,6 +944,50 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                     value
                         .map(|flag| if flag { Scalar::ONE } else { Scalar::ZERO })
                         .map_or(Value::unknown(), Value::known)
+                };
+                let poseidon_bytes = |lhs: [u8; 32], rhs: [u8; 32]| {
+                    let lhs = scalar_from_repr(lhs)?;
+                    let rhs = scalar_from_repr(rhs)?;
+                    Some(scalar_to_repr_bytes(poseidon_pair(lhs, rhs)))
+                };
+                let rho_scalar_bytes = |rho: [u8; 32]| {
+                    scalar_to_repr_bytes(hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&rho]))
+                };
+                let derived_owner_tag =
+                    |value: &ConfidentialTransferWitnessV2, diversifier: [u8; 32]| {
+                        poseidon_bytes(value.spend_scalar, diversifier)
+                    };
+                let owner_tag_for_note =
+                    |value: &ConfidentialTransferWitnessV2, index: usize| match index {
+                        0 => derived_owner_tag(value, value.input_0_diversifier),
+                        1 => derived_owner_tag(value, value.input_1_diversifier),
+                        2 => Some(value.output_0_owner_tag),
+                        3 => Some(value.output_1_owner_tag),
+                        _ => None,
+                    };
+                let rho_for_note =
+                    |value: &ConfidentialTransferWitnessV2, index: usize| -> Option<[u8; 32]> {
+                        match index {
+                            0 => Some(value.input_0_rho),
+                            1 => Some(value.input_1_rho),
+                            2 => Some(value.output_0_rho),
+                            3 => Some(value.output_1_rho),
+                            _ => None,
+                        }
+                    };
+                let note_owner_asset_value =
+                    |value: &ConfidentialTransferWitnessV2, index: usize| {
+                        poseidon_bytes(owner_tag_for_note(value, index)?, value.asset_tag)
+                    };
+                let note_rho_owner_asset_value =
+                    |value: &ConfidentialTransferWitnessV2, index: usize| {
+                        poseidon_bytes(
+                            rho_scalar_bytes(rho_for_note(value, index)?),
+                            note_owner_asset_value(value, index)?,
+                        )
+                    };
+                let nullifier_asset_chain_value = |value: &ConfidentialTransferWitnessV2| {
+                    poseidon_bytes(value.asset_tag, value.chain_tag)
                 };
                 super::assign_advice_compat(
                     &mut region,
@@ -1013,6 +1121,95 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                     output_1_owner_tag,
                     0,
                     || scalar_or_unknown(witness.as_ref().map(|value| value.output_1_owner_tag)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_derived_owner_tag",
+                    input_0_derived_owner_tag,
+                    0,
+                    || {
+                        scalar_or_unknown(
+                            witness.as_ref().and_then(|value| {
+                                derived_owner_tag(value, value.input_0_diversifier)
+                            }),
+                        )
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_derived_owner_tag",
+                    input_1_derived_owner_tag,
+                    0,
+                    || {
+                        scalar_or_unknown(
+                            witness.as_ref().and_then(|value| {
+                                derived_owner_tag(value, value.input_1_diversifier)
+                            }),
+                        )
+                    },
+                )?;
+                for note_index in 0..4 {
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("note_owner_asset_{note_index}"),
+                        note_owner_asset[note_index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness
+                                    .as_ref()
+                                    .and_then(|value| note_owner_asset_value(value, note_index)),
+                            )
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("note_rho_owner_asset_{note_index}"),
+                        note_rho_owner_asset[note_index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness.as_ref().and_then(|value| {
+                                    note_rho_owner_asset_value(value, note_index)
+                                }),
+                            )
+                        },
+                    )?;
+                }
+                super::assign_advice_compat(
+                    &mut region,
+                    || "nullifier_asset_chain",
+                    nullifier_asset_chain,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().and_then(nullifier_asset_chain_value)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "nullifier_0_rho_asset_chain",
+                    nullifier_0_rho_asset_chain,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().and_then(|value| {
+                            poseidon_bytes(
+                                rho_scalar_bytes(value.input_0_rho),
+                                nullifier_asset_chain_value(value)?,
+                            )
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "nullifier_1_rho_asset_chain",
+                    nullifier_1_rho_asset_chain,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().and_then(|value| {
+                            poseidon_bytes(
+                                rho_scalar_bytes(value.input_1_rho),
+                                nullifier_asset_chain_value(value)?,
+                            )
+                        }))
+                    },
                 )?;
                 for index in 0..DEPTH {
                     super::assign_advice_compat(
@@ -2165,6 +2362,8 @@ pub fn build_confidential_transfer_proof_v2(
             .map_or_else(default_confidential_diversifier_v2, |note| note.diversifier),
         output_0_owner_tag: output_0.owner_tag,
         output_1_owner_tag: output_1.as_ref().map_or([0u8; 32], |note| note.owner_tag),
+        asset_tag,
+        chain_tag,
         input_0_path,
         input_1_path,
     };
@@ -2592,8 +2791,8 @@ mod tests {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
-    fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
-        use halo2_proofs::halo2curves::ff::Field as _;
+    fn generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk() {
+        use halo2_proofs::halo2curves::{ff::Field as _, pasta::Fp};
         use iroha_data_model::ChainId;
 
         let chain_id: ChainId = "809574f5-fee7-5e69-bfcf-52451e42d50f"
@@ -2620,19 +2819,23 @@ mod tests {
             output_diversifier,
         )
         .expect("output owner tag");
-        let transfer_vk = super::confidential_transfer_v2_vk_record("vk_transfer", 1)
-            .expect("transfer vk");
+        let transfer_vk =
+            super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let transfer_key = transfer_vk.key.as_ref().expect("inline transfer vk");
         let input_path =
             super::compute_confidential_merkle_path_v2(&tree_commitments, 0).expect("input path");
-        let empty_path = super::compute_confidential_merkle_path_v2(
-            &tree_commitments,
-            tree_commitments.len(),
+        let empty_path =
+            super::compute_confidential_merkle_path_v2(&tree_commitments, tree_commitments.len())
+                .expect("empty input path");
+        let output_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            7,
+            output_rho,
+            output_owner_tag,
         )
-        .expect("empty input path");
-        let output_commitment =
-            super::derive_confidential_note_v2(asset_definition_id, 7, output_rho, output_owner_tag)
-                .expect("output commitment");
+        .expect("output commitment");
+        let asset_tag = super::derive_confidential_asset_tag_v2(asset_definition_id);
+        let chain_tag = super::derive_confidential_chain_tag_v2(chain_id.as_str());
         let nullifier = super::derive_confidential_nullifier_v2(
             chain_id.as_str(),
             asset_definition_id,
@@ -2658,30 +2861,24 @@ mod tests {
             input_1_diversifier: super::default_confidential_diversifier_v2(),
             output_0_owner_tag: output_owner_tag,
             output_1_owner_tag: [0u8; 32],
+            asset_tag,
+            chain_tag,
             input_0_path: input_path,
             input_1_path: empty_path,
         };
-        let circuit = super::ConfidentialTransferCircuitV2::<
-            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
-        > {
+        let circuit = super::ConfidentialTransferCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }> {
             witness: Some(witness),
         };
         let instance_columns = vec![
             vec![super::scalar_from_repr(input_commitment).expect("input commitment")],
-            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![Fp::ZERO],
             vec![super::scalar_from_repr(nullifier).expect("nullifier")],
-            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![Fp::ZERO],
             vec![super::scalar_from_repr(output_commitment).expect("output commitment")],
-            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![Fp::ZERO],
             vec![super::scalar_from_repr(root).expect("root")],
-            vec![super::scalar_from_repr(super::derive_confidential_asset_tag_v2(
-                asset_definition_id,
-            ))
-            .expect("asset tag")],
-            vec![super::scalar_from_repr(super::derive_confidential_chain_tag_v2(
-                chain_id.as_str(),
-            ))
-            .expect("chain tag")],
+            vec![super::scalar_from_repr(asset_tag).expect("asset tag")],
+            vec![super::scalar_from_repr(chain_tag).expect("chain tag")],
         ];
         halo2_proofs::dev::MockProver::run(
             super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
@@ -2713,10 +2910,174 @@ mod tests {
         )
         .expect("transfer proof");
 
-        assert!(crate::zk::verify_backend(
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            &proof.proof,
-            Some(transfer_key),
-        ));
+        assert!(
+            crate::zk::verify_backend(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                &proof.proof,
+                Some(transfer_key),
+            ),
+            "generated one-input one-output confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0x11_u8; 32];
+        let input_0_rho = [0x21_u8; 32];
+        let input_1_rho = [0x22_u8; 32];
+        let output_0_rho = [0x31_u8; 32];
+        let output_1_rho = [0x32_u8; 32];
+        let input_0_diversifier = super::default_confidential_diversifier_v2();
+        let input_1_diversifier = super::derive_confidential_diversifier_v2(b"input-1");
+        let output_0_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &spend_key,
+            input_0_diversifier,
+        )
+        .expect("owner tag");
+        let output_1_diversifier = super::derive_confidential_diversifier_v2(b"recipient-1");
+        let output_1_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &[0x44_u8; 32],
+            output_1_diversifier,
+        )
+        .expect("recipient owner tag");
+
+        let input_0_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            7,
+            input_0_rho,
+            output_0_owner_tag,
+        )
+        .expect("input 0 commitment");
+        let input_1_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &spend_key,
+            input_1_diversifier,
+        )
+        .expect("input 1 owner tag");
+        let input_1_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            5,
+            input_1_rho,
+            input_1_owner_tag,
+        )
+        .expect("input 1 commitment");
+
+        let mut tree_commitments = Vec::new();
+        tree_commitments.push(input_0_commitment);
+        tree_commitments.push([0x99_u8; 32]);
+        tree_commitments.push(input_1_commitment);
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+
+        let vk_record =
+            super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
+        let vk_box = vk_record.key.clone().expect("inline transfer vk");
+        let proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[
+                super::ConfidentialTransferInputV2 {
+                    amount: 7,
+                    rho: input_0_rho,
+                    diversifier: input_0_diversifier,
+                    leaf_index: 0,
+                },
+                super::ConfidentialTransferInputV2 {
+                    amount: 5,
+                    rho: input_1_rho,
+                    diversifier: input_1_diversifier,
+                    leaf_index: 2,
+                },
+            ],
+            &[
+                super::ConfidentialTransferOutputV2 {
+                    amount: 8,
+                    rho: output_0_rho,
+                    owner_tag: output_0_owner_tag,
+                },
+                super::ConfidentialTransferOutputV2 {
+                    amount: 4,
+                    rho: output_1_rho,
+                    owner_tag: output_1_owner_tag,
+                },
+            ],
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build transfer proof");
+
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_transfer_v2_one_input_two_outputs_verifies_against_generated_vk() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-one-input-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0x61_u8; 32];
+        let input_rho = [0x71_u8; 32];
+        let recipient_output_rho = [0x81_u8; 32];
+        let change_output_rho = [0x82_u8; 32];
+        let input_diversifier = super::default_confidential_diversifier_v2();
+        let sender_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_diversifier)
+                .expect("sender owner tag");
+        let recipient_diversifier = super::derive_confidential_diversifier_v2(b"recipient");
+        let recipient_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &[0x72_u8; 32],
+            recipient_diversifier,
+        )
+        .expect("recipient owner tag");
+        let input_commitment =
+            super::derive_confidential_note_v2(asset_definition_id, 2, input_rho, sender_owner_tag)
+                .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+
+        let vk_record =
+            super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
+        let vk_box = vk_record.key.clone().expect("inline transfer vk");
+        let proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialTransferInputV2 {
+                amount: 2,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[
+                super::ConfidentialTransferOutputV2 {
+                    amount: 1,
+                    rho: recipient_output_rho,
+                    owner_tag: recipient_owner_tag,
+                },
+                super::ConfidentialTransferOutputV2 {
+                    amount: 1,
+                    rho: change_output_rho,
+                    owner_tag: sender_owner_tag,
+                },
+            ],
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build transfer proof");
+
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated one-input confidential transfer v2 proof should verify against the generated VK"
+        );
     }
 }
