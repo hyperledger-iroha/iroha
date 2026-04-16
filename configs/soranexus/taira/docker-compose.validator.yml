@@ -11,6 +11,8 @@ services:
       RUST_LOG: ${TAIRA_RUST_LOG:-info}
       # Uncomment when mounting a custom genesis file below.
       # IROHA_TAIRA_GENESIS: /config/genesis.json
+      # Uncomment when mounting an explicit signed genesis payload below.
+      # IROHA_TAIRA_SIGNED_GENESIS: /config/genesis.signed.nrt
       # Uncomment when mounting explicit SoraFS host bindings below.
       # IROHA_SORAFS_SITE_BINDINGS_FILE: /config/sorafs_sites.json
     ports:
@@ -21,6 +23,8 @@ services:
       - "${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}:/storage"
       # Uncomment to override the bundled public genesis.
       # - "${TAIRA_GENESIS_PATH:-/etc/iroha/taira-validator-1/genesis.json}:/config/genesis.json:ro"
+      # Uncomment to inject a signed genesis block for disconnected/local smoke boots.
+      # - "${TAIRA_SIGNED_GENESIS_PATH:-/etc/iroha/taira-validator-1/genesis.signed.nrt}:/config/genesis.signed.nrt:ro"
       # Uncomment to expose explicit host bindings from the validator container.
       # - "${TAIRA_SORAFS_SITE_BINDINGS_PATH:-/etc/iroha/taira-validator-1/sorafs_sites.json}:/config/sorafs_sites.json:ro"
     healthcheck:

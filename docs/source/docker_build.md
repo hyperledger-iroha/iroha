@@ -93,13 +93,22 @@ The Taira image automatically includes `embedded-soracloud-runtime` and uses a
 Taira-aware entrypoint. With no command override it starts:
 
 ```bash
-irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json
+irohad --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json
 ```
 
 Keep validator-specific runtime material out of the image. Generate
-`/config/config.toml` with
+`/config/config.toml` with a read-only bind mount; the image entrypoint copies
+it to `/storage/runtime-config.toml` before starting `irohad`.
 `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
 and mount it into the container together with persistent `/storage`.
+The runtime image also carries the bundled rANS tables under
+`/opt/iroha/codec/rans/tables`, matching the default
+`streaming.codec.rans_tables_path`.
+
+For disconnected or one-node smoke starts, mount both a manifest JSON and a
+signed genesis payload. The entrypoint accepts `IROHA_TAIRA_SIGNED_GENESIS` and
+rewrites the copied runtime config so `genesis.file` points at the mounted
+payload path before `irohad` starts.
 
 For a host-side Taira validator deployment, use the checked-in examples under
 `configs/soranexus/taira/`:
