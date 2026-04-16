@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: grouped `consensus_and_da` exact regressions no longer depend on one startup attempt, one submit peer, or one balance reader
+- `/home/mtakemiya/dev/iroha/integration_tests/src/sandbox.rs` now gives
+  retryable serialized localnet startups one more chance before failing the
+  scenario. The shared async network bootstrap attempts increased from 2 to 3,
+  which absorbs the observed single-peer startup miss in
+  `sumeragi_adversarial_partial_chunk_withholding_stalls_delivery` without
+  masking hard failures.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs` now
+  searches every peer's Kura root when waiting for DA-evicted block bodies
+  instead of assuming the first peer is the authoritative store to inspect.
+  The DA/NPoS helpers in that file also gained focused filesystem coverage for
+  merged multi-root `da_blocks` discovery.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  and `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  now submit progress-driving transactions through the connected leader or a
+  best-height fallback peer instead of pinning all submissions to peer 0.
+  The performance harness also waits for submit connectivity before seeding
+  its sample window.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  now treats quorum-observed final balances as the authoritative end-state in
+  the combined downtime+timeout restart-pressure scenario, which matches the
+  test's existing tolerance for one lagging restarted peer.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.partialfix.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.daevict2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_da_eviction_rehydrates_block_bodies' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.zkcombo.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet' -- --exact --nocapture --test-threads=1`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: Soracloud/Torii integration response compatibility restored
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now applies Norito defaults to partial `soracloud_runtime.hf` config tables.

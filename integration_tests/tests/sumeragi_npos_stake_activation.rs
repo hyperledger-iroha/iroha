@@ -4,6 +4,7 @@
 
 use std::{
     str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -48,10 +49,93 @@ const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
 const STAKE_ASSET_NAME: &str = "NPOS Stake";
 const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
 
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Clone, Copy)]
 enum StakeActivationProfile {
     MinStakeFilter,
     EntityCorrelationCap,
+}
+
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+fn submit_client_for_network(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
+    let peer_count = network.peers().len();
+    let status = network
+        .peers()
+        .iter()
+        .find_map(|peer| peer.client().get_status().ok())
+        .or_else(|| probe.get_status().ok());
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    let selected_index = pick_submit_peer_index(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    );
+    network
+        .peers()
+        .get(selected_index)
+        .unwrap_or_else(|| {
+            network
+                .peers()
+                .first()
+                .expect("network should have at least one peer")
+        })
+        .client()
 }
 
 fn validator_account_id_for_index(index: usize) -> AccountId {
@@ -81,6 +165,34 @@ fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
 
 fn nexus_fee_asset_id_literal() -> String {
     nexus_fee_asset_definition_id().to_string()
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
 
 #[test]
@@ -199,7 +311,7 @@ fn stake_genesis_post_topology_transactions(
 }
 
 async fn advance_to_height(
-    _network: &sandbox::SerializedNetwork,
+    network: &sandbox::SerializedNetwork,
     client: &Client,
     target_height: u64,
     log_prefix: &str,
@@ -216,7 +328,8 @@ async fn advance_to_height(
             return Ok(());
         }
         if Instant::now() >= next_submit {
-            client.submit(Log::new(Level::INFO, format!("{log_prefix} {tick}")))?;
+            let submit_client = submit_client_for_network(network, client);
+            submit_client.submit(Log::new(Level::INFO, format!("{log_prefix} {tick}")))?;
             tick = tick.saturating_add(1);
             next_submit = Instant::now() + HEIGHT_ADVANCE_POLL;
         }
