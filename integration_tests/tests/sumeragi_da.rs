@@ -420,6 +420,9 @@ const DA_RBC_SESSION_TIMEOUT_SECS: u64 = 240;
 const DA_VIEW_CHANGE_TIMEOUT_SECS: u64 = 300;
 const DA_PAYLOAD_LOSS_COMMIT_TIMEOUT_SECS: u64 = 240;
 const DA_KURA_EVICTION_PROGRESS_WAIT_SECS: u64 = 45;
+const DA_LANE_TEU_MIN_BYTES: usize = 256 * 1024;
+const DA_LANE_TEU_HEADROOM_BYTES: usize = 64 * 1024;
+const DA_FUSION_FLOOR_TEU_MIN: i64 = 128 * 1024;
 
 fn generate_incompressible_payload(tag: &str, payload_bytes: usize) -> String {
     use std::hash::{Hash, Hasher};
@@ -442,6 +445,23 @@ fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let with_headroom = payload_bytes.saturating_add(TORII_CONTENT_HEADROOM_BYTES);
     let target = inflated.max(with_headroom);
     i64::try_from(target).unwrap_or(i64::MAX)
+}
+
+/// Keep the historical small-payload ceiling, but scale the lane budget once
+/// overlay + RBC accounting for a single large payload can exceed 256 KiB.
+fn da_lane_teu_capacity_for_payload(payload_bytes: usize) -> i64 {
+    let target = payload_bytes
+        .saturating_mul(2)
+        .saturating_add(DA_LANE_TEU_HEADROOM_BYTES)
+        .max(DA_LANE_TEU_MIN_BYTES);
+    i64::try_from(target).unwrap_or(i64::MAX)
+}
+
+fn da_fusion_floor_teu_for_payload(payload_bytes: usize) -> i64 {
+    let capacity = da_lane_teu_capacity_for_payload(payload_bytes);
+    (capacity / 2)
+        .max(DA_FUSION_FLOOR_TEU_MIN)
+        .min(capacity.saturating_sub(1))
 }
 
 fn locate_blocks_dir(store_dir: &Path) -> Result<PathBuf> {
@@ -703,6 +723,8 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
+    let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
     let stake_amount = SumeragiNposParameters::default().min_self_bond();
 
     let mut config_table = toml::Table::new();
@@ -762,7 +784,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let mut metadata = toml::map::Map::new();
     metadata.insert(
         "scheduler.teu_capacity".into(),
-        toml::Value::String("262144".into()),
+        toml::Value::String(lane_teu_capacity.to_string()),
     );
     lane.insert("metadata".into(), toml::Value::Table(metadata));
     nexus.insert(
@@ -771,8 +793,8 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     );
 
     let mut fusion = toml::map::Map::new();
-    fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
-    fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
+    fusion.insert("floor_teu".into(), toml::Value::Integer(fusion_floor_teu));
+    fusion.insert("exit_teu".into(), toml::Value::Integer(lane_teu_capacity));
     nexus.insert("fusion".into(), toml::Value::Table(fusion));
 
     let da_sample = 1_i64;
@@ -2613,6 +2635,8 @@ where
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
+    let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
     let stake_amount = SumeragiNposParameters::default().min_self_bond();
     let mut config_table = toml::Table::new();
     {
@@ -2690,7 +2714,7 @@ where
     let mut metadata = toml::map::Map::new();
     metadata.insert(
         "scheduler.teu_capacity".into(),
-        toml::Value::String("262144".into()),
+        toml::Value::String(lane_teu_capacity.to_string()),
     );
     lane.insert("metadata".into(), toml::Value::Table(metadata));
     nexus.insert(
@@ -2699,8 +2723,8 @@ where
     );
 
     let mut fusion = toml::map::Map::new();
-    fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
-    fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
+    fusion.insert("floor_teu".into(), toml::Value::Integer(fusion_floor_teu));
+    fusion.insert("exit_teu".into(), toml::Value::Integer(lane_teu_capacity));
     nexus.insert("fusion".into(), toml::Value::Table(fusion));
 
     let da_sample = 1_i64;
@@ -3427,6 +3451,25 @@ fn torii_max_content_len_saturates_on_overflow() {
 }
 
 #[test]
+fn da_lane_teu_budget_preserves_legacy_small_payload_defaults() {
+    assert_eq!(da_lane_teu_capacity_for_payload(1024), 262_144);
+    assert_eq!(da_fusion_floor_teu_for_payload(1024), 131_072);
+}
+
+#[test]
+fn da_lane_teu_budget_scales_above_double_payload_for_large_da_blocks() {
+    let payload = 128 * 1024;
+    let capacity = da_lane_teu_capacity_for_payload(payload);
+    let doubled_payload = i64::try_from(payload.saturating_mul(2)).expect("payload fits in i64");
+    let floor = da_fusion_floor_teu_for_payload(payload);
+
+    assert!(capacity > doubled_payload);
+    assert!(capacity > 262_144);
+    assert!(floor >= 131_072);
+    assert!(floor < capacity);
+}
+
+#[test]
 fn da_commit_wait_timeout_is_reasonable() {
     assert_eq!(
         da_commit_wait_timeout(),
@@ -4062,6 +4105,8 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
+    let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
+    let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
     let stake_amount = SumeragiNposParameters::default().min_self_bond();
 
     let mut config_table = toml::Table::new();
@@ -4130,7 +4175,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let mut metadata = toml::map::Map::new();
     metadata.insert(
         "scheduler.teu_capacity".into(),
-        toml::Value::String("262144".into()),
+        toml::Value::String(lane_teu_capacity.to_string()),
     );
     lane.insert("metadata".into(), toml::Value::Table(metadata));
     nexus.insert(
@@ -4139,8 +4184,8 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     );
 
     let mut fusion = toml::map::Map::new();
-    fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
-    fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
+    fusion.insert("floor_teu".into(), toml::Value::Integer(fusion_floor_teu));
+    fusion.insert("exit_teu".into(), toml::Value::Integer(lane_teu_capacity));
     nexus.insert("fusion".into(), toml::Value::Table(fusion));
 
     let da_sample = 1_i64;

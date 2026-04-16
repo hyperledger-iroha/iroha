@@ -3,11 +3,11 @@
 Last updated: 2026-04-15
 
 ## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
-- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now keeps committed/old frontier slots out of active-round selection, prunes
   frontier slot state after commit, and lets idle view-change repair ignore
   stale exact-body repair state from older views.
-- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
   now treats stale same-height recovery payloads with commit-vote or QC evidence
   as authoritative over a live frontier owner when the local validator has not
   cast a conflicting vote. A local conflicting same-height vote still keeps the
@@ -18,7 +18,7 @@ Last updated: 2026-04-15
   strong as the conflict. Superseded vote-backed payloads are retained so exact
   body fetch can still recover the lower branch.
 - Focused regression coverage was added in
-  `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
   for stale vote-backed recovery, same-height conflict deferral, retained
   superseded payload fetch, frontier pruning, and exact repair view rotation.
 - Focused validation for this slice:
@@ -33,6 +33,23 @@ Last updated: 2026-04-15
   - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
 - `cargo test --workspace` was not run in this focused slice because the
   repository notes document it as a multi-hour run.
+
+## 2026-04-15 Follow-up: DA eviction harness now scales lane TEU budget for large payload blocks
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now derives `nexus.lane_catalog[*].metadata["scheduler.teu_capacity"]`
+  plus `nexus.fusion.{floor_teu,exit_teu}` from the scenario payload size.
+  The helper preserves the historical 256 KiB / 128 KiB defaults for the
+  lightweight DA tests, but raises the 128 KiB eviction scenarios above the
+  observed overlay + RBC accounting footprint so height 2 can commit instead of
+  stalling at `blocks=1`, `queue_size>0`, and `commit_signatures_present=0`.
+- The same file now locks that regression in with
+  `da_lane_teu_budget_preserves_legacy_small_payload_defaults` and
+  `da_lane_teu_budget_scales_above_double_payload_for_large_da_blocks`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
 
 ## 2026-04-15 Follow-up: stale prior-height frontier slots no longer hijack exact-frontier recovery, and the reported `consensus_and_da` reds rerun cleanly
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
