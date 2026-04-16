@@ -30,7 +30,7 @@ MOCHI yangi `/mochi` katalogida joylashgan ikkita asosiy qutiga bo'lingan (qaran
 Qurilish va foydalanish ko'rsatmalari uchun [MOCHI Quickstart](mochi/quickstart.md):
 
 1. `mochi-core`: konfiguratsiya shablonlari, kalit va genezis materiallarini yaratish, bolalar jarayonlarini nazorat qilish, Torii mijozlarini boshqarish va fayl tizimi holatini boshqarish uchun mas'ul bo'lgan boshsiz kutubxona.
-2. `mochi-ui-egui`: `egui`/`eframe` asosida qurilgan ish stoli ilovasi, u foydalanuvchi interfeysini taqdim etadi va `mochi-core` API orqali barcha orkestrlarni topshiradi.
+2. `mochi-ui`: `egui`/`eframe` asosida qurilgan ish stoli ilovasi, u foydalanuvchi interfeysini taqdim etadi va `mochi-core` API orqali barcha orkestrlarni topshiradi.
 
 Qo'shimcha old qismlar (masalan, Tauri qobig'i) keyinchalik nazoratchi mantig'ini qayta ishlamasdan `mochi-core` ga ulanishi mumkin.
 
@@ -49,7 +49,7 @@ Qo'shimcha old qismlar (masalan, Tauri qobig'i) keyinchalik nazoratchi mantig'in
 - **Transaction Composer**: zarb qilish/o‘tkazish yo‘riqnomasi qoralamalarini sahnalashtiring, ularni imzolangan tranzaktsiyalarga to‘plang, Norito foydali yukini ko‘rib chiqing, `/transaction` orqali yuboring va natijada sodir bo‘lgan voqealarni kuzatib boring; tonoz imzolash ilgaklari kelajakdagi iteratsiya bo'lib qolmoqda.
 - **Snapshots va Re-Genesis**: Kura snapshotlarini eksport/import qilish, doʻkonlarni oʻchirish va tez tiklash uchun genezis materialini qayta tiklash.
 
-## UI qatlami (`mochi-ui-egui`)
+## UI qatlami (`mochi-ui`)
 
 - Tashqi ish vaqtlarisiz bitta mahalliy bajariladigan faylni yuborish uchun `egui`/`eframe` dan foydalanadi.
 - Tartibga quyidagilar kiradi:

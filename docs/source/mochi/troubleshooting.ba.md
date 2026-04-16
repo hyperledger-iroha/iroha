@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. Мәғлүмәттәр тамырын тотоп, тип MOCHI ҡуллана. Ғәҙәттәгесә эҙләй
    `$TMPDIR/mochi/<profile-slug>`; заказ буйынса юлдар UI титул һыҙығында барлыҡҡа килә һәм
-   `cargo run -p mochi-ui-egui -- --data-root ...` аша.
+   `cargo run -p mochi-ui -- --data-root ...` аша.
 2. Эш урыны тамырынан `./ci/check_mochi.sh` йүгерергә. Был ядро ​​раҫлай,
    UI, һәм интеграция йәшниктәре һеҙ үҙгәртә башлағансы конфигурациялар.
 3. Иғтибар итегеҙ, алдан ҡуйылған (`single-peer` йәки `four-peer-bft`). генерацияланған топология
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 билдәле-яҡшы бинарҙарҙа:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 асыҡ базалар менән:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Төҙөүсе был базаларҙан эҙмә-эҙлекле порттарҙы вентиляторлай, шуға күрә диапазонды запас
@@ -119,14 +119,14 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - һаҡланған CLI/мөхит менән тиҫтерҙәрен яңынан башлай.
 3. Әгәр ҙә һеҙ быны ҡул менән эшләргә тейешһегеҙ икән:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```
    Һуңынан MOCHI шулай `NetworkPaths::ensure` перезапуск ағасты яңынан тыуҙыра.
 
 Һәр ваҡыт архив ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli

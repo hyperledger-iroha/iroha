@@ -25,7 +25,7 @@ nəzarətçi davranışlarını çevirərək yol xəritəsi elementi "Sənədlə
 
 1. MOCHI-nin istifadə etdiyi məlumat kökünü çəkin. Defolt aşağıdakı kimidir
    `$TMPDIR/mochi/<profile-slug>`; xüsusi yollar UI başlıq çubuğunda görünür və
-   `cargo run -p mochi-ui-egui -- --data-root ...` vasitəsilə.
+   `cargo run -p mochi-ui -- --data-root ...` vasitəsilə.
 2. İş sahəsinin kökündən `./ci/check_mochi.sh`-i işə salın. Bu, əsası təsdiqləyir,
    Konfiqurasiyaları dəyişdirməyə başlamazdan əvvəl UI və inteqrasiya qutuları.
 3. Əvvəlcədən təyini qeyd edin (`single-peer` və ya `four-peer-bft`). Yaradılmış topologiya
@@ -68,7 +68,7 @@ UI "prosesin yayılması uğursuz oldu" və ya "icazə rədd edildi" hesabatı v
 tanınmış ikili sistemlərdə:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ proses artıq standart diapazonda dinləyir (8080/1337). MOCHI-ni yenidən işə
 aydın əsaslarla:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Qurucu bu bazalardan ardıcıl portları çıxaracaq, buna görə də bir sıra rezerv edin
@@ -119,7 +119,7 @@ tez uğursuz olmalı olan CI işləri üçün yenidən cəhd pəncərəsini bər
    - qorunub saxlanılan CLI/mühit ləğvetmələri ilə həmyaşıdları yenidən başladın.
 3. Bunu əl ilə etməlisinizsə:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

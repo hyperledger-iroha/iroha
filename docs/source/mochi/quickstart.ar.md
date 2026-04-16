@@ -41,7 +41,7 @@ translator: machine-google-reviewed
 من جذر المستودع:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 ينشئ هذا الأمر كلا من `mochi-core` والواجهة الأمامية لـ egui. لإنتاج حزمة قابلة للتوزيع، قم بتشغيل:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 قم بتشغيل واجهة المستخدم مباشرة من البضائع:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 افتراضيًا، تقوم MOCHI بإنشاء إعداد مسبق لنظير واحد في دليل بيانات مؤقت:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 استخدم علامات CLI لتجاوز الإعدادات الافتراضية عند التشغيل:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ cargo run -p mochi-ui-egui -- \
 ./ci/check_mochi.sh
 ```
 
-يقوم المساعد بتنفيذ `cargo check`/`cargo test` لـ `mochi-core` و`mochi-ui-egui` و
+يقوم المساعد بتنفيذ `cargo check`/`cargo test` لـ `mochi-core` و`mochi-ui` و
 `mochi-integration`، الذي يلتقط انجراف التركيبات (التقاطات الكتلة/الحدث الأساسية) وتسخير egui
 التراجعات في طلقة واحدة. إذا أبلغ البرنامج النصي عن تركيبات قديمة، فأعد تشغيل اختبارات التجديد التي تم تجاهلها،
 على سبيل المثال:

@@ -459,6 +459,102 @@ pub struct ReadinessSmokeOutcome {
     pub status: Option<ToriiStatusSnapshot>,
 }
 
+/// Summary of a local Torii MCP probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalMcpProbeResult {
+    /// MCP protocol version advertised by `initialize`.
+    pub protocol_version: String,
+    /// Optional server toolset version hash returned by `tools/list`.
+    pub toolset_version: Option<String>,
+    /// Number of visible tools in the local MCP catalog.
+    pub tool_count: usize,
+    /// Visible tool names returned by `tools/list`.
+    pub tool_names: Vec<String>,
+}
+
+impl LocalMcpProbeResult {
+    fn from_documents(
+        capabilities: &json::Value,
+        initialize: &json::Value,
+        tools_list: &json::Value,
+    ) -> ToriiResult<Self> {
+        if !capabilities.is_object() {
+            return Err(decode_error(
+                "mcp capabilities",
+                "GET /v1/mcp must return a JSON object",
+            ));
+        }
+
+        let init_result = initialize
+            .as_object()
+            .and_then(|doc| doc.get("result"))
+            .and_then(json::Value::as_object)
+            .ok_or_else(|| decode_error("mcp initialize", "missing result object"))?;
+        let protocol_version =
+            parse_required_string(init_result, &["protocolVersion"], "mcp initialize result")?;
+
+        let tools_result = tools_list
+            .as_object()
+            .and_then(|doc| doc.get("result"))
+            .and_then(json::Value::as_object)
+            .ok_or_else(|| decode_error("mcp tools/list", "missing result object"))?;
+        let tools = tools_result
+            .get("tools")
+            .and_then(json::Value::as_array)
+            .ok_or_else(|| decode_error("mcp tools/list result", "missing tools array"))?;
+        let mut tool_names = Vec::with_capacity(tools.len());
+        for (index, tool) in tools.iter().enumerate() {
+            let tool_obj = tool.as_object().ok_or_else(|| {
+                decode_error(
+                    "mcp tools/list result.tools",
+                    format!("tool {index} must be an object"),
+                )
+            })?;
+            tool_names.push(parse_required_string(
+                tool_obj,
+                &["name"],
+                "mcp tools/list result.tools[].name",
+            )?);
+        }
+
+        if !tool_names.iter().any(|name| name.starts_with("iroha.")) {
+            return Err(decode_error(
+                "mcp tools/list result",
+                "expected curated iroha.* tools to be exposed",
+            ));
+        }
+        if tool_names.iter().any(|name| name.starts_with("torii.")) {
+            return Err(decode_error(
+                "mcp tools/list result",
+                "raw torii.* tools must stay hidden for local Mochi sandboxes",
+            ));
+        }
+        for required in [
+            "iroha.status",
+            "iroha.sumeragi.status",
+            "iroha.transactions.submit",
+            "iroha.transactions.submit_and_wait",
+        ] {
+            if !tool_names.iter().any(|name| name == required) {
+                return Err(decode_error(
+                    "mcp tools/list result",
+                    format!("missing required curated tool `{required}`"),
+                ));
+            }
+        }
+
+        Ok(Self {
+            protocol_version,
+            toolset_version: tools_result
+                .get("toolsetVersion")
+                .and_then(json::Value::as_str)
+                .map(str::to_owned),
+            tool_count: tool_names.len(),
+            tool_names,
+        })
+    }
+}
+
 const SMOKE_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 
@@ -2066,6 +2162,11 @@ impl ToriiClient {
         self.http_endpoint("metrics")
     }
 
+    /// URL of the native `/v1/mcp` endpoint.
+    pub fn mcp_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/mcp")
+    }
+
     /// URL of the `/v1/blocks` Explorer endpoint.
     pub fn blocks_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/blocks")
@@ -2385,6 +2486,21 @@ impl ToriiClient {
     pub async fn fetch_configuration(&self) -> ToriiResult<json::Value> {
         let url = self.configuration_endpoint()?;
         self.fetch_json(url).await
+    }
+
+    /// Fetch the native MCP capabilities payload.
+    pub async fn fetch_mcp_capabilities(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        self.fetch_json(url).await
+    }
+
+    /// Run the local Mochi MCP smoke sequence against `/v1/mcp`.
+    pub async fn validate_local_mcp(&self) -> ToriiResult<LocalMcpProbeResult> {
+        let capabilities = self.fetch_mcp_capabilities().await?;
+        let initialize = self.mcp_initialize().await?;
+        self.mcp_initialized().await?;
+        let tools = self.mcp_tools_list().await?;
+        LocalMcpProbeResult::from_documents(&capabilities, &initialize, &tools)
     }
 
     /// Apply a Nexus lane lifecycle plan via Torii.
@@ -2864,6 +2980,90 @@ impl ToriiClient {
         }
         let bytes = response.bytes().await?;
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
+    }
+
+    async fn post_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
+        let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let response = self
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
+    }
+
+    async fn post_notification(&self, url: Url, payload: &json::Value) -> ToriiResult<()> {
+        let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let response = self
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        if !bytes.is_empty() {
+            return Err(decode_error(
+                "mcp notifications/initialized",
+                "expected an empty response body",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn mcp_initialize(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "mochi-local-sandbox",
+                    "version": "1"
+                }
+            }
+        });
+        self.post_json(url, &payload).await
+    }
+
+    async fn mcp_initialized(&self) -> ToriiResult<()> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        self.post_notification(url, &payload).await
+    }
+
+    async fn mcp_tools_list(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        });
+        self.post_json(url, &payload).await
     }
 
     async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
@@ -4800,6 +5000,201 @@ mod tests {
         assert_eq!(
             client.nexus_lifecycle_endpoint().unwrap().as_str(),
             "http://127.0.0.1:8080/v1/nexus/lifecycle"
+        );
+    }
+
+    #[test]
+    fn composes_mcp_endpoint() {
+        let client = ToriiClient::new("http://127.0.0.1:8080").expect("valid url");
+        assert_eq!(
+            client.mcp_endpoint().unwrap().as_str(),
+            "http://127.0.0.1:8080/v1/mcp"
+        );
+    }
+
+    fn mock_json_body(value: norito::json::Value) -> String {
+        norito::json::to_string(&value).expect("serialize mock json body")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn validate_local_mcp_accepts_curated_iroha_tools() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let capabilities = server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "capabilities": {
+                        "tools": {
+                            "count": 4
+                        }
+                    }
+                })));
+        });
+        let initialize = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {
+                            "tools": {
+                                "count": 4
+                            }
+                        }
+                    }
+                })));
+        });
+        let initialized = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                })));
+            then.status(202);
+        });
+        let tools_list = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "toolsetVersion": "demo-v1",
+                        "tools": [
+                            { "name": "iroha.status" },
+                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.transactions.submit" },
+                            { "name": "iroha.transactions.submit_and_wait" }
+                        ]
+                    }
+                })));
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let result = client.validate_local_mcp().await.expect("mcp probe");
+        assert_eq!(result.protocol_version, "2025-06-18");
+        assert_eq!(result.toolset_version.as_deref(), Some("demo-v1"));
+        assert_eq!(result.tool_count, 4);
+        assert!(
+            result
+                .tool_names
+                .iter()
+                .all(|name| name.starts_with("iroha."))
+        );
+
+        capabilities.assert();
+        initialize.assert();
+        initialized.assert();
+        tools_list.assert();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn validate_local_mcp_rejects_raw_torii_tools() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({ "capabilities": {} })));
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": { "protocolVersion": "2025-06-18" }
+                })));
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                })));
+            then.status(202);
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "tools": [
+                            { "name": "iroha.status" },
+                            { "name": "torii.get_v1_accounts" },
+                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.transactions.submit" },
+                            { "name": "iroha.transactions.submit_and_wait" }
+                        ]
+                    }
+                })));
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let err = client
+            .validate_local_mcp()
+            .await
+            .expect_err("raw torii tools should fail");
+        assert!(
+            err.to_string().contains("torii.* tools"),
+            "unexpected error: {err}"
         );
     }
 

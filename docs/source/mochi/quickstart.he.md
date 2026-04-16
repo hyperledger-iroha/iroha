@@ -45,7 +45,7 @@ MOCHI מריץ את בינארי ה‑CLI דרך shell. ודאו שהם נגיש
 משורש הריפו:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 פקודה זו בונה גם את `mochi-core` וגם את ה‑frontend של egui. כדי להפיק חבילת
@@ -63,7 +63,7 @@ cargo xtask mochi-bundle
 הריצו את ה‑UI ישירות דרך cargo:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 ברירת המחדל של MOCHI יוצרת preset של peer יחיד בספריית נתונים זמנית:
@@ -75,7 +75,7 @@ cargo run -p mochi-ui-egui
 השתמשו בדגלי CLI כדי לעקוף את ברירות המחדל בעת ההפעלה:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -175,7 +175,7 @@ peers והוראות נפוצות בלי לעזוב את ה‑UI. תצוגת Pee
 ./ci/check_mochi.sh
 ```
 
-העזר מריץ `cargo check`/`cargo test` עבור `mochi-core`, `mochi-ui-egui`,
+העזר מריץ `cargo check`/`cargo test` עבור `mochi-core`, `mochi-ui`,
 ו‑`mochi-integration`, וכך מזהה סטייה ב‑fixtures (לכידות בלוקים/אירועים קנוניות)
 ורגרסיות ב‑egui. אם הסקריפט מדווח על fixtures מיושנים, הריצו מחדש את בדיקות
 ה‑regeneration המושתקות, למשל:

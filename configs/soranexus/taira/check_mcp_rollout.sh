@@ -9,7 +9,7 @@ LOCAL_MCP_URL="${LOCAL_MCP_URL:-}"
 PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
-WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 WRITE_TARGET="${WRITE_TARGET:-}"
 WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
@@ -57,12 +57,17 @@ When diagnosing public write failures, prefer `/status` fields such as
 is the queried node's current remote-peer count.
 
 For final public rollout, use a runtime-only canary signer config. When
-`--write-config` is omitted, the script bootstraps
-`/run/secrets/taira-canary-client.toml` automatically, onboarding a fresh
-ordinary account on Taira and attempting an initial faucet claim before the
-signed write canary. The write canary still retries the faucet lane on
-`Failed to find asset` so a saturated queue does not require manual signer
+`--write-config` is omitted, the script bootstraps a runtime-only canary config
+automatically, preferring `/run/secrets/taira-canary-client.toml` when that
+directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
+onboards a fresh ordinary account on Taira and attempts an initial faucet claim
+before the signed write canary. The write canary still retries the faucet lane
+on `Failed to find asset` so a saturated queue does not require manual signer
 preparation. Use `--skip-write-canary` only for read-only validation.
+
+When `--iroha-bin` is omitted, the script first reuses a repo-local
+`bin/iroha`, `target/debug/iroha`, or `target/release/iroha` if present, and
+otherwise falls back to `cargo run -p iroha_cli --bin iroha -- ...`.
 
 Public checks intentionally require an explicit public node URL
 (`--public-root https://<public-torii-root>` or
@@ -71,6 +76,23 @@ Public checks intentionally require an explicit public node URL
 still requires an explicit URL so operators do not accidentally validate the
 wrong edge or validator hostname.
 EOF
+}
+
+default_write_config_path() {
+  if [[ -n "$WRITE_CONFIG_DEFAULT" ]]; then
+    printf '%s\n' "$WRITE_CONFIG_DEFAULT"
+    return 0
+  fi
+
+  local linux_secret_path="/run/secrets/taira-canary-client.toml"
+  local linux_secret_dir="${linux_secret_path%/*}"
+  if [[ -d "$linux_secret_dir" && -w "$linux_secret_dir" ]]; then
+    printf '%s\n' "$linux_secret_path"
+    return 0
+  fi
+
+  local temp_root="${TMPDIR:-/tmp}"
+  printf '%s\n' "${temp_root%/}/taira-canary-client.toml"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -174,7 +196,7 @@ if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
 fi
 
 if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
-  WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  WRITE_CONFIG="$(default_write_config_path)"
 fi
 
 if [[ -z "$IROHA_BIN" ]]; then
@@ -184,8 +206,6 @@ if [[ -z "$IROHA_BIN" ]]; then
     IROHA_BIN="${REPO_ROOT}/target/debug/iroha"
   elif [[ -x "${REPO_ROOT}/target/release/iroha" ]]; then
     IROHA_BIN="${REPO_ROOT}/target/release/iroha"
-  else
-    IROHA_BIN="iroha"
   fi
 fi
 
@@ -1017,7 +1037,7 @@ run_write_canary() {
   local output_file temp_config write_msg
 
   ensure_iroha_bin
-  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   ensure_write_canary_config "$target_url"
 
   temp_config="$(mktemp)"

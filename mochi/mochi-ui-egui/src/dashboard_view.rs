@@ -65,10 +65,27 @@ impl MochiApp {
         Some(BootstrapInputs {
             api_base: Self::peer_api_base(peer),
             torii_url: peer.torii.clone(),
+            mcp_url: ToriiClient::new(&peer.torii)
+                .ok()
+                .and_then(|client| client.mcp_endpoint().ok())
+                .map(|url| url.to_string()),
             chain_id: self.effective_chain_id_recipe(supervisor),
             account_id,
             private_key,
         })
+    }
+
+    fn local_mcp_add_command(
+        &self,
+        supervisor: &Supervisor,
+        peer_rows: &[PeerRow],
+    ) -> Option<String> {
+        let inputs = self.bootstrap_inputs(supervisor, peer_rows)?;
+        let mcp_url = inputs.mcp_url?;
+        Some(format!(
+            "codex mcp add mochi-local --url {}",
+            shell_quote(&mcp_url)
+        ))
     }
 
     fn write_bootstrap_files(&mut self, supervisor: &Supervisor, peer_rows: &[PeerRow]) {
@@ -115,7 +132,11 @@ impl MochiApp {
 
         let running = supervisor.is_any_running();
         let workspace_root = self.effective_workspace_recipe(supervisor);
+        let sandbox_root = self.effective_sandbox_recipe(supervisor);
         let snapshot = self.dashboard_snapshot.clone();
+        let mcp_url = self
+            .bootstrap_inputs(supervisor, peer_rows)
+            .and_then(|inputs| inputs.mcp_url);
 
         Frame::new()
             .fill(Color32::from_rgb(31, 37, 51))
@@ -131,11 +152,15 @@ impl MochiApp {
                         );
                         ui.add_space(8.0);
                         ui.small(format!(
-                            "Workspace: {} • Peers running: {} • Latest height: {}",
+                            "Workspace: {} • Sandbox: {} • Peers running: {} • Latest height: {}",
                             workspace_root,
+                            sandbox_root,
                             metrics.peers_label(),
                             metrics.latest_height_text()
                         ));
+                        if let Some(mcp_url) = &mcp_url {
+                            ui.small(format!("Local MCP: {mcp_url}"));
+                        }
                     });
                     ui.with_layout(Layout::right_to_left(egui::Align::TOP), |ui| {
                         if ui.button("Refresh").clicked() {
@@ -170,6 +195,13 @@ impl MochiApp {
                     {
                         Self::copy_text(ui, inputs.render_shell_exports());
                         self.last_info = Some("Copied local app bootstrap exports.".to_owned());
+                    }
+                    if let Some(command) = self.local_mcp_add_command(supervisor, peer_rows)
+                        && ui.button("Copy MCP add command").clicked()
+                    {
+                        Self::copy_text(ui, command);
+                        self.last_info =
+                            Some("Copied the Codex MCP add command for this sandbox.".to_owned());
                     }
                     if ui.button("Write bootstrap files").clicked() {
                         self.write_bootstrap_files(supervisor, peer_rows);

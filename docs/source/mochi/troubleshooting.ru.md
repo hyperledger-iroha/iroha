@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. Запишите корень данных, который использует MOCHI. По умолчанию следует
    `$TMPDIR/mochi/<profile-slug>`; пользовательские пути отображаются в строке заголовка пользовательского интерфейса и
-   через `cargo run -p mochi-ui-egui -- --data-root ...`.
+   через `cargo run -p mochi-ui -- --data-root ...`.
 2. Запустите `./ci/check_mochi.sh` из корня рабочей области. Это подтверждает ядро,
    Пользовательский интерфейс и ящики интеграции, прежде чем вы начнете изменять конфигурации.
 3. Запишите предустановку (`single-peer` или `four-peer-bft`). Сгенерированная топология
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 в заведомо исправных двоичных файлах:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 с явными основаниями:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Сборщик будет распределять последовательные порты от этих баз, поэтому зарезервируйте диапазон
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - перезапустить одноранговые узлы с сохраненными переопределениями CLI/среды.
 3. Если вам необходимо сделать это вручную:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

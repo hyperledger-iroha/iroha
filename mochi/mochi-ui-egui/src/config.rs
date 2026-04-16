@@ -15,7 +15,8 @@ use std::{
 
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use mochi_core::{
-    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder, supervisor::RestartPolicy,
+    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
+    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
 };
 
 const DEFAULT_RESTART_MAX_RESTARTS: usize = 3;
@@ -36,6 +37,8 @@ pub struct BinaryOverrides {
 /// Parsed configuration extracted from `config/local.toml`.
 #[derive(Debug, Default, Clone)]
 pub struct BundleConfig {
+    /// Optional workspace root where bootstrap files are written and the default sandbox lives.
+    pub workspace_root: Option<PathBuf>,
     /// Optional override for the data root directory.
     pub data_root: Option<PathBuf>,
     /// Optional profile override (preset or custom) for the supervised topology.
@@ -83,6 +86,8 @@ impl BundleConfig {
     pub fn apply_to(&self, mut builder: SupervisorBuilder) -> SupervisorBuilder {
         if let Some(root) = self.data_root.as_ref() {
             builder = builder.data_root(root.clone());
+        } else if let Some(root) = self.workspace_root.as_ref() {
+            builder = builder.data_root(sandbox_root_for_workspace(root));
         }
         if let Some(profile) = self.profile.as_ref() {
             builder = builder.set_profile(profile.clone());
@@ -133,6 +138,10 @@ impl BundleConfig {
         self.data_root = value;
     }
 
+    pub fn set_workspace_root(&mut self, value: Option<PathBuf>) {
+        self.workspace_root = value;
+    }
+
     pub fn set_profile(&mut self, value: Option<NetworkProfile>) {
         self.profile = value;
     }
@@ -179,6 +188,17 @@ impl BundleConfig {
             .and_then(Value::as_table)
             .cloned()
             .unwrap_or_default();
+        match self.workspace_root.as_ref() {
+            Some(root_path) => {
+                supervisor.insert(
+                    "workspace_root".into(),
+                    Value::String(root_path.display().to_string()),
+                );
+            }
+            None => {
+                supervisor.remove("workspace_root");
+            }
+        }
         match self.data_root.as_ref() {
             Some(root_path) => {
                 supervisor.insert(
@@ -502,6 +522,12 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
     let mut config = BundleConfig::default();
     if let Some(supervisor) = table.get("supervisor").and_then(Value::as_table) {
         let mut profile_genesis = None;
+        if let Some(workspace_root) = supervisor.get("workspace_root").and_then(Value::as_str) {
+            let workspace_root = workspace_root.trim();
+            if !workspace_root.is_empty() {
+                config.workspace_root = Some(resolve_path(base, workspace_root));
+            }
+        }
         if let Some(data_root) = supervisor.get("data_root").and_then(Value::as_str) {
             let data_root = data_root.trim();
             if !data_root.is_empty() {
@@ -1052,6 +1078,24 @@ iroha_cli = "./tools/iroha_cli"
     }
 
     #[test]
+    fn parse_workspace_root_resolves_relative_path() {
+        let (dir, path) = temp_file(
+            r#"
+[supervisor]
+workspace_root = "./app"
+"#,
+        );
+
+        let config =
+            parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
+        assert_eq!(
+            config.workspace_root.as_deref(),
+            Some(dir.path().join("app").as_path())
+        );
+        assert!(config.data_root.is_none());
+    }
+
+    #[test]
     fn parse_rejects_invalid_profile() {
         let (_dir, path) = temp_file(
             r#"
@@ -1274,6 +1318,7 @@ data_root = "./env-data"
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("config/local.toml");
         let mut config = BundleConfig::default();
+        config.set_workspace_root(Some(temp.path().join("workspace")));
         config.set_data_root(Some(temp.path().join("data")));
         config.set_profile(Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer)));
         config.set_chain_id(Some("local-test".to_owned()));
@@ -1321,6 +1366,7 @@ data_root = "./env-data"
 
         let contents = fs::read_to_string(&path).expect("read config back");
         let parsed = parse_bundle_config(&path, &contents).expect("parse written config");
+        assert_eq!(parsed.workspace_root, config.workspace_root);
         assert_eq!(parsed.data_root, config.data_root);
         assert_eq!(parsed.profile, config.profile);
         assert_eq!(parsed.chain_id, config.chain_id);

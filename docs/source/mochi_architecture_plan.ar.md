@@ -32,7 +32,7 @@ MOCHI is split into two primary crates housed in a new `/mochi` directory (see t
 [MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
 
 1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+2. `mochi-ui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
 
 Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
 
@@ -53,7 +53,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 - **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
 - **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
 
-## UI Layer (`mochi-ui-egui`)
+## UI Layer (`mochi-ui`)
 
 - Uses `egui`/`eframe` to ship a single native executable without external runtimes.
 - Layout includes:

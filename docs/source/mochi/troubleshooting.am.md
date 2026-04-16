@@ -25,7 +25,7 @@ loopን እንደገና ያስጀምሩ ወይም የማገድ/ክስተት/ሁ�
 
 1. MOCHI እየተጠቀመበት ያለውን የውሂብ ስር ይያዙ. ነባሪው ይከተላል
    `$TMPDIR/mochi/<profile-slug>`; ብጁ ዱካዎች በዩአይ ርዕስ አሞሌ ውስጥ ይታያሉ እና
-   በ `cargo run -p mochi-ui-egui -- --data-root ...` በኩል.
+   በ `cargo run -p mochi-ui -- --data-root ...` በኩል.
 2. `./ci/check_mochi.sh` ን ከስራ ቦታ ስር ያሂዱ. ይህ ዋናውን ያረጋግጣል ፣
    አወቃቀሮችን ማስተካከል ከመጀመርዎ በፊት UI፣ እና የውህደት ሳጥኖች።
 3. ቅድመ-ቅምጥ (`single-peer` ወይም `four-peer-bft`) አስተውል። የተፈጠረው ቶፖሎጂ
@@ -68,7 +68,7 @@ UI ሪፖርት ከሆነ "ሂደትን መፍጠር አልቻለም" ወይም 
 በሚታወቁ-ጥሩ ሁለትዮሽዎች:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 ግልጽ ከሆኑ መሠረቶች ጋር;
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 ገንቢው ተከታታይ ወደቦችን ከነዚያ መሰረቶች ያስወጣል፣ ስለዚህ ክልል ያስይዙ
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - በተጠበቁ CLI/አካባቢ መሻሮች እኩዮችን እንደገና ያስጀምሩ።
 3. ይህንን በእጅዎ ማድረግ ካለብዎት፡-
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

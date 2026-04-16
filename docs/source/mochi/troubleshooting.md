@@ -11,13 +11,19 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 
 ## 1. First responder checklist
 
-1. Capture the data root that MOCHI is using. The default follows
-   `$TMPDIR/mochi/<profile-slug>`; custom paths appear in the UI title bar and
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
+1. Capture the workspace root and sandbox root that MOCHI is using. The default
+   layout is `<workspace>/.mochi/sandbox/<profile-slug>`; custom workspace and
+   data-root overrides appear in the UI title bar and via
+   `cargo run -p mochi-ui -- sandbox serve --workspace-root ...`.
 2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
    UI, and integration crates before you begin modifying configs.
 3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the data root.
+   determines how many peer folders/logs you should expect under the sandbox
+   root.
+4. If you are using the shell helper, capture:
+   - `scripts/mochi_local_sandbox.sh status`
+   - `<workspace>/.mochi/sandbox/<profile>/serve.log`
+   - `<workspace>/.mochi/sandbox/<profile>/session.json`
 
 ## 2. Collect logs & telemetry evidence
 
@@ -25,11 +31,13 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 layout:
 
 ```
-<data_root>/<profile>/
+<sandbox_root>/
   peers/<alias>/...
   logs/<alias>.log
   genesis/
   snapshots/
+  session.json
+  serve.log
 ```
 
 Follow these steps before making changes:
@@ -37,6 +45,9 @@ Follow these steps before making changes:
 - Use the **Logs** tab or open `logs/<alias>.log` directly to capture the last
   200 lines for each peer. The supervisor tails stdout/stderr/system channels
   via `PeerLogStream`, so these files match the UI output.
+- For headless `sandbox serve` runs, capture `serve.log` as well. It holds the
+  parent Mochi process output, including startup-stage failures before a peer
+  log exists.
 - Export a snapshot via **Maintenance → Export snapshot** (or call
   `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
   logs into `snapshots/<timestamp>-<label>/`.
@@ -56,7 +67,7 @@ If the UI reports “failed to spawn process” or “permission denied”, poin
 at known-good binaries:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -64,7 +75,7 @@ cargo run -p mochi-ui-egui -- \
 
 You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
 typing the flags repeatedly. When debugging bundle builds, compare the
-`BundleConfig` in `mochi/mochi-ui-egui/src/config/` against the paths in
+`BundleConfig` in `mochi/mochi-ui-egui/src/config.rs` against the paths in
 `target/mochi-bundle`.
 
 ### Port collisions
@@ -75,11 +86,27 @@ process is already listening on the default range (8080/1337). Relaunch MOCHI
 with explicit bases:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 The builder will fan out sequential ports from those bases, so reserve a range
 sized for your preset (`peer_count` peers → `peer_count` ports per transport).
+
+### Local MCP failed after peers started
+
+`sandbox serve` now validates the local Torii MCP surface after `/status`
+readiness. If startup reaches `serve.log` output such as `failed while
+validating local MCP`, confirm:
+
+- the active peer responds on `GET <torii>/v1/mcp`;
+- `tools/list` exposes curated `iroha.*` tools such as
+  `iroha.status`, `iroha.sumeragi.status`,
+  `iroha.transactions.submit`, and
+  `iroha.transactions.submit_and_wait`; and
+- raw `torii.*` tools are not leaking through the local curated surface.
+
+The helper script will not mark the sandbox ready until both `ready` and
+`mcp_ready` are `true` in `session.json`.
 
 ### Genesis and storage corruption
 
@@ -109,9 +136,7 @@ to tighten the retry window for CI jobs that must fail fast.
    - restart peers with the preserved CLI/environment overrides.
 3. If you must do this manually:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
-   # Note the actual root printed above, then:
-   rm -rf /tmp/mochi/four-peer-bft
+   MOCHI_WORKSPACE_ROOT=/tmp/mochi-app MOCHI_PROFILE=four-peer-bft scripts/mochi_local_sandbox.sh reset
    ```
    Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
 

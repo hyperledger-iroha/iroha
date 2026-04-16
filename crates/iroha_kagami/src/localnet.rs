@@ -2699,14 +2699,14 @@ fn write_start_script(
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
     writeln!(
         start_file,
-        "  if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"
-    )?;
-    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_DEBUG\"")?;
-    writeln!(
-        start_file,
-        "  elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"
+        "  if [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"
     )?;
     writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
+    writeln!(
+        start_file,
+        "  elif [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"
+    )?;
+    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_DEBUG\"")?;
     writeln!(
         start_file,
         "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN_DEBUG or $DEFAULT_IROHAD_BIN_RELEASE) not found; build irohad or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
@@ -6097,6 +6097,14 @@ mod tests {
         assert!(
             start_contents.lines().any(|line| line == expected_release),
             "start script should set release default"
+        );
+        assert!(
+            start_contents.contains("if [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"),
+            "start script should prefer the release irohad when both binaries exist"
+        );
+        assert!(
+            start_contents.contains("elif [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"),
+            "start script should fall back to the debug irohad when no release binary exists"
         );
         assert!(
             start_contents

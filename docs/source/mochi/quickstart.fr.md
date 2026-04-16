@@ -41,7 +41,7 @@ ci-dessous ou disponible sur le PATH :
 Depuis la racine du référentiel :
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Cette commande crée à la fois `mochi-core` et l'interface egui. Pour produire un bundle distribuable, exécutez :
@@ -57,7 +57,7 @@ La tâche bundle assemble les fichiers binaires, le manifeste et les stubs de co
 Exécutez l'interface utilisateur directement depuis cargo :
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Par défaut, MOCHI crée un préréglage unique dans un répertoire de données temporaire :
@@ -69,7 +69,7 @@ Par défaut, MOCHI crée un préréglage unique dans un répertoire de données 
 Utilisez les indicateurs CLI pour remplacer les valeurs par défaut lors du lancement :
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ caisses :
 ./ci/check_mochi.sh
 ```
 
-L'assistant exécute `cargo check`/`cargo test` pour `mochi-core`, `mochi-ui-egui` et
+L'assistant exécute `cargo check`/`cargo test` pour `mochi-core`, `mochi-ui` et
 `mochi-integration`, qui capture la dérive du luminaire (captures de blocs canoniques/d'événements) et le faisceau egui
 régressions d’un seul coup. Si le script signale des appareils obsolètes, réexécutez les tests de régénération ignorés,
 par exemple :

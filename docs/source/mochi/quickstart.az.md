@@ -41,7 +41,7 @@ aşağıda və ya PATH-də mövcuddur:
 Repozitor kökündən:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Bu əmr həm `mochi-core`, həm də egui frontendini qurur. Paylana bilən paket yaratmaq üçün aşağıdakıları yerinə yetirin:
@@ -57,7 +57,7 @@ Paket tapşırığı `target/mochi-bundle` altında ikili faylları, manifestlə
 UI-ni birbaşa yükdən işə salın:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Varsayılan olaraq MOCHI müvəqqəti məlumat qovluğunda tək bərabərli ilkin təyinat yaradır:
@@ -69,7 +69,7 @@ Varsayılan olaraq MOCHI müvəqqəti məlumat qovluğunda tək bərabərli ilki
 Başladıqda defoltları ləğv etmək üçün CLI bayraqlarından istifadə edin:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ yeşiklər:
 ./ci/check_mochi.sh
 ```
 
-Köməkçi `cargo check`/`cargo test`, `mochi-core`, `mochi-ui-egui` və
+Köməkçi `cargo check`/`cargo test`, `mochi-core`, `mochi-ui` və
 `mochi-integration`, armatur sürüşməsini (kanonik blok/hadisə çəkilişləri) və egui qoşqularını tutan
 bir atışda reqressiyalar. Skript köhnəlmiş qurğular haqqında məlumat verirsə, nəzərə alınmayan bərpa testlərini yenidən həyata keçirin,
 məsələn:

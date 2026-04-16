@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. დააფიქსირეთ მონაცემთა ფესვი, რომელსაც MOCHI იყენებს. ნაგულისხმევი მოყვება
    `$TMPDIR/mochi/<profile-slug>`; მორგებული ბილიკები გამოჩნდება ინტერფეისის სათაურის ზოლში და
-   `cargo run -p mochi-ui-egui -- --data-root ...`-ის საშუალებით.
+   `cargo run -p mochi-ui -- --data-root ...`-ის საშუალებით.
 2. გაუშვით `./ci/check_mochi.sh` სამუშაო სივრცის ფესვიდან. ეს ადასტურებს ბირთვს,
    UI და ინტეგრაციის ყუთები, სანამ კონფიგურაციის შეცვლას დაიწყებთ.
 3. გაითვალისწინეთ წინასწარ დაყენება (`single-peer` ან `four-peer-bft`). გენერირებული ტოპოლოგია
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 ცნობილ-კარგ ბინარებში:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 აშკარა საფუძვლებით:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 მშენებელი ამოიღებს თანმიმდევრულ პორტებს ამ ბაზებიდან, ამიტომ შეინახეთ დიაპაზონი
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - გადატვირთეთ თანატოლები შენახული CLI/გარემოს უგულებელყოფით.
 3. თუ ეს უნდა გააკეთოთ ხელით:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

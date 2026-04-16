@@ -65,7 +65,7 @@ tikinti:
   çox platformalı quruluşlar artefaktları birinə yerləşdirə biləcək bir quruluş kataloqu
   əlavə skript olmadan yer.
 
-Komanda `mochi-ui-egui`, `kagami`, `LICENSE`, nümunəni kopyalayır
+Komanda `mochi-ui`, `kagami`, `LICENSE`, nümunəni kopyalayır
 konfiqurasiya və `mochi/BUNDLE_README.md` paketə daxil edin. Bir deterministik
 `manifest.json` ikili fayllarla birlikdə yaradılır, beləliklə CI işləri faylı izləyə bilər
 hash və ölçülər.

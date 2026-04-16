@@ -65,7 +65,7 @@ qurilish:
   ko'p platformali tuzilmalar artefaktlarni bittasiga joylashtirishi mumkin bo'lgan sahnalash katalogi
   qo'shimcha skriptsiz joylashuv.
 
-Buyruq `mochi-ui-egui`, `kagami`, `LICENSE`, namunani nusxalaydi
+Buyruq `mochi-ui`, `kagami`, `LICENSE`, namunani nusxalaydi
 konfiguratsiya va `mochi/BUNDLE_README.md` to'plamga. Deterministik
 `manifest.json` ikkilik fayllar bilan birga yaratilgan, shuning uchun CI ishlari faylni kuzatishi mumkin
 xeshlar va o'lchamlar.

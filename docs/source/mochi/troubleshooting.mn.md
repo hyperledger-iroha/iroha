@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. MOCHI-ийн ашиглаж байгаа өгөгдлийн үндэсийг ав. Анхдагч нь дараах болно
    `$TMPDIR/mochi/<profile-slug>`; өөрчлөн замууд UI гарчгийн мөрөнд гарч ирэх ба
-   `cargo run -p mochi-ui-egui -- --data-root ...`-ээр дамжуулан.
+   `cargo run -p mochi-ui -- --data-root ...`-ээр дамжуулан.
 2. Ажлын талбарын үндэсээс `./ci/check_mochi.sh`-г ажиллуул. Энэ нь цөмийг баталгаажуулж,
    Тохиргоог өөрчилж эхлэхээс өмнө UI болон нэгтгэх хайрцаг.
 3. Урьдчилсан тохиргоог анхаарна уу (`single-peer` эсвэл `four-peer-bft`). Үүсгэсэн топологи
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 сайн мэддэг хоёртын файлууд дээр:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 тодорхой үндэслэлтэй:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Барилгачин тэдгээр баазаас дараалсан портуудыг гаргах тул хүрээг нөөцөл
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - Хадгалсан CLI/орчны хүчингүйд тооцогдох нөхцлүүдийг дахин эхлүүлнэ үү.
 3. Хэрэв та үүнийг гараар хийх шаардлагатай бол:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

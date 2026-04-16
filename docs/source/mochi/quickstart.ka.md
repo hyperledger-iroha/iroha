@@ -41,7 +41,7 @@ MOCHI გადადის CLI ბინარებში. დარწმუ�
 საცავის ფესვიდან:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 ეს ბრძანება აშენებს როგორც `mochi-core`-ს, ასევე egui frontend-ს. გასანაწილებელი პაკეტის შესაქმნელად, გაუშვით:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 გაუშვით UI პირდაპირ ტვირთიდან:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 ნაგულისხმევად MOCHI ქმნის ერთჯერადი წინასწარ დაყენებას დროებით მონაცემთა დირექტორიაში:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 გამოიყენეთ CLI დროშები ნაგულისხმევი პარამეტრების გადასაფარად გაშვებისას:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS პინი ვლინდება და მმართველო�
 ./ci/check_mochi.sh
 ```
 
-დამხმარე ახორციელებს `cargo check`/`cargo test` `mochi-core`, `mochi-ui-egui` და
+დამხმარე ახორციელებს `cargo check`/`cargo test` `mochi-core`, `mochi-ui` და
 `mochi-integration`, რომელიც იჭერს სამაგრის დრიფტს (კანონიკური ბლოკის/მოვლენის აღბეჭდვა) და egui აღკაზმულობას
 რეგრესია ერთ კადრში. თუ სკრიპტი იტყობინება მოძველებულ მოწყობილობებს, ხელახლა გაუშვით იგნორირებული რეგენერაციის ტესტები,
 მაგალითად:

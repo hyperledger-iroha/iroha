@@ -30,7 +30,10 @@ pub use compose::{
     compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
     drafts_to_pretty_json, mint_numeric_preview,
 };
-pub use config::{GenesisProfile, NetworkProfile, NetworkTopology, ProfilePreset};
+pub use config::{
+    GenesisProfile, NetworkProfile, NetworkTopology, ProfilePreset,
+    infer_workspace_root_from_sandbox_root, sandbox_root_for_workspace,
+};
 pub use dashboard::{
     DashboardAccountCard, DashboardAssetBalance, DashboardRecentBlock, DashboardSnapshot,
     fetch_dashboard_snapshot,
@@ -45,15 +48,17 @@ pub use state::{
 pub use supervisor::{
     BinaryPaths, BinaryVersionInfo, CompatibilityReport, KagamiVerifyReport, PeerHandle, PeerState,
     Result as SupervisorResult, Supervisor, SupervisorBuilder, SupervisorError,
+    SupervisorSessionInfo,
 };
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,
-    EventSummary, ManagedBlockStream, ManagedEventStream, ManagedStatusStream, ReadinessOptions,
-    ReadinessSmokeBuildError, ReadinessSmokeOutcome, ReadinessSmokePlan, SmokeCommitOptions,
-    SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent, ToriiClient, ToriiError, ToriiErrorInfo,
-    ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult, ToriiStatusSnapshot, TriggerListPage,
-    TriggerListQuery, TriggerRecord, WsFrame, WsSubscription, decode_norito_with_alignment,
+    EventSummary, LocalMcpProbeResult, ManagedBlockStream, ManagedEventStream, ManagedStatusStream,
+    ReadinessOptions, ReadinessSmokeBuildError, ReadinessSmokeOutcome, ReadinessSmokePlan,
+    SmokeCommitOptions, SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent, ToriiClient,
+    ToriiError, ToriiErrorInfo, ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult,
+    ToriiStatusSnapshot, TriggerListPage, TriggerListQuery, TriggerRecord, WsFrame, WsSubscription,
+    decode_norito_with_alignment,
 };
 pub use vault::{SIGNERS_FILE_NAME, SignerVault, SignerVaultError};
 

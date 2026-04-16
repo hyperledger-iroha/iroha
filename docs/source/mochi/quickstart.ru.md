@@ -41,7 +41,7 @@ MOCHI использует двоичные файлы CLI. Убедитесь, 
 Из корня репозитория:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Эта команда собирает как `mochi-core`, так и интерфейс egui. Чтобы создать распространяемый пакет, запустите:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 Запустите пользовательский интерфейс непосредственно из груза:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 По умолчанию MOCHI создает одноранговую предустановку во временном каталоге данных:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 Используйте флаги CLI, чтобы переопределить значения по умолчанию при запуске:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ Desktop в конвейеры CI, обратитесь к руководству
 ./ci/check_mochi.sh
 ```
 
-Помощник выполняет `cargo check`/`cargo test` для `mochi-core`, `mochi-ui-egui` и
+Помощник выполняет `cargo check`/`cargo test` для `mochi-core`, `mochi-ui` и
 `mochi-integration`, который улавливает дрейф прибора (канонический захват блоков/событий) и жгут проводов egui.
 регрессии за один раз. Если сценарий сообщает об устаревших приборах, повторно запустите проигнорированные тесты регенерации.
 например:

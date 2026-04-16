@@ -14,12 +14,11 @@ use halo2_proofs::{
         keygen_vk, verify_proof,
     },
     poly::{
-        Rotation,
+        Rotation, VerificationStrategy as _,
         ipa::{
             commitment::IPACommitmentScheme, multiopen::ProverIPA,
             strategy::SingleStrategy as SingleVerifier,
         },
-        VerificationStrategy as _,
     },
     transcript::{
         Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer as _,
@@ -2413,10 +2412,9 @@ pub fn build_confidential_transfer_proof_v2(
     .map_err(|err| format!("failed to create confidential transfer proof: {err}"))?;
     let proof_raw = transcript.finalize();
     {
-        let mut verify_transcript =
-            Blake2bRead::<_, Curve, Challenge255<Curve>>::init(std::io::Cursor::new(
-                proof_raw.as_slice(),
-            ));
+        let mut verify_transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
+            std::io::Cursor::new(proof_raw.as_slice()),
+        );
         let strategy = SingleVerifier::new(&params);
         let proofs_instances = [&instance_refs[..]];
         verify_proof(
@@ -2427,9 +2425,7 @@ pub fn build_confidential_transfer_proof_v2(
             &mut verify_transcript,
         )
         .map_err(|err| {
-            format!(
-                "generated confidential transfer proof failed local self-verification: {err}"
-            )
+            format!("generated confidential transfer proof failed local self-verification: {err}")
         })?;
     }
     let proof = encode_halo2_envelope(

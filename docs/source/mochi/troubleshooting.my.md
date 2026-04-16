@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. MOCHI အသုံးပြုနေသည့် ဒေတာအမြစ်ကို ဖမ်းယူပါ။ ပုံသေမှာ အောက်ပါအတိုင်းဖြစ်သည်။
    `$TMPDIR/mochi/<profile-slug>`; စိတ်ကြိုက်လမ်းကြောင်းများသည် UI ခေါင်းစဉ်ဘားနှင့် ပေါ်လာသည်။
-   `cargo run -p mochi-ui-egui -- --data-root ...` မှတဆင့်
+   `cargo run -p mochi-ui -- --data-root ...` မှတဆင့်
 2. `./ci/check_mochi.sh` ကို workspace root မှ run ပါ။ ဒီအချက်က အမာခံကို သက်သေပြပြီး၊
    configs မွမ်းမံခြင်းများကို သင်မစတင်မီ UI နှင့် ပေါင်းစပ်သေတ္တာများ။
 3. ကြိုတင်သတ်မှတ်မှု (`single-peer` သို့မဟုတ် `four-peer-bft`) ကို မှတ်သားပါ။ ထုတ်ပေးသော topology
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 လူသိများသော binaries များတွင်-
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 ပြတ်သားသောအခြေခံများဖြင့်-
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 တည်ဆောက်သူသည် ထိုအခြေစိုက်စခန်းများမှ ဆင့်ကဲဆိပ်ကမ်းများကို ထုတ်ပေးမည်ဖြစ်သောကြောင့် အကွာအဝေးကို ကြိုတင်မှာယူပါ။
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - ထိန်းသိမ်းထားသော CLI/environment overrides များဖြင့် သက်တူရွယ်တူများကို ပြန်လည်စတင်ပါ။
 3. ၎င်းကို ကိုယ်တိုင်လုပ်ရမည်ဆိုပါက-
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

@@ -1,10 +1,10 @@
 [package]
-name = "mochi-ui-egui"
+name = "mochi-ui"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
-description = "egui desktop shell for the MOCHI local Iroha network supervisor."
+description = "Desktop shell for the MOCHI local Iroha network supervisor."
 
 [[bin]]
 name = "mochi"
@@ -14,7 +14,7 @@ path = "src/main.rs"
 mochi-core = { path = "../mochi-core" }
 eframe = { workspace = true }
 egui_plot = { version = "0.34.0" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 toml = { workspace = true }
 hex = { workspace = true }
 norito = { workspace = true }

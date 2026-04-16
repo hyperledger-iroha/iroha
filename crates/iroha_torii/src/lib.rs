@@ -11789,6 +11789,9 @@ fn target_scope_singular_query(
     use iroha_data_model::query::SingularQueryBox;
 
     match query {
+        SingularQueryBox::FindAssetById(query) => {
+            Some(SignedQueryScope::TargetAccount(query.id.account().clone()))
+        }
         SingularQueryBox::FindAccountById(query) => {
             Some(SignedQueryScope::TargetAccount(query.account_id().clone()))
         }
@@ -11984,6 +11987,50 @@ fn should_skip_singleton_routed_query_route_error(response: &Response) -> bool {
 
 #[cfg(feature = "app_api")]
 async fn collect_torii_singleton_json_payloads<F, Fut>(
+    routes: &[RoutingDecision],
+    mut fetch: F,
+) -> Result<Vec<Value>, Response>
+where
+    F: FnMut(RoutingDecision) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for route in routes {
+        let response = fetch(*route).await;
+        if response.status() == StatusCode::NOT_FOUND {
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_json_body_value(response).await {
+            Ok(payload) => payloads.push(payload),
+            Err(response) => return Err(response),
+        }
+    }
+
+    if payloads.is_empty() {
+        return Err(last_route_unavailable.unwrap_or_else(|| {
+            last_not_found.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        }));
+    }
+
+    Ok(payloads)
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_torii_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     mut fetch: F,
 ) -> Result<Vec<Value>, Response>
@@ -13554,6 +13601,67 @@ mod torii_routed_read_tests {
         );
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_list_json_payloads_skips_route_unavailable_until_success() {
+        let unavailable_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let healthy_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
+        let expected = norito::json!({"items": [{"id": "asset"}], "total": 1});
+        let expected_for_closure = expected.clone();
+
+        let payloads =
+            collect_torii_list_json_payloads(&[unavailable_route, healthy_route], move |route| {
+                let expected = expected_for_closure.clone();
+                async move {
+                    if route == unavailable_route {
+                        torii_proxy_error_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "route_unavailable",
+                            "authoritative peers offline",
+                        )
+                    } else {
+                        crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                    }
+                }
+            })
+            .await
+            .expect("healthy list payload should survive route_unavailable on another route");
+
+        assert_eq!(payloads, vec![expected]);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_list_json_payloads_returns_route_unavailable_when_no_route_succeeds() {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+
+        let response = collect_torii_list_json_payloads(&routes, move |route| async move {
+            if route == routes[0] {
+                torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+            } else {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "authoritative peers offline",
+                )
+            }
+        })
+        .await
+        .expect_err("all list routes failing should surface the last route_unavailable");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+    }
+
     #[tokio::test]
     async fn merged_list_response_deduplicates_items_and_sets_total() {
         let response = merged_list_response(
@@ -15016,25 +15124,20 @@ async fn execute_torii_fanout_json_payloads(
         ));
     }
 
-    let mut payloads = Vec::with_capacity(routes.len());
-    for route in &routes {
-        let response = execute_torii_read_for_route(
+    let payloads = collect_torii_list_json_payloads(&routes, |route| {
+        execute_torii_read_for_route(
             app,
-            *route,
+            route,
             torii_read_request(
                 endpoint,
-                *route,
+                route,
                 path_args.clone(),
                 query_string.clone(),
                 body.clone(),
             ),
         )
-        .await;
-        match torii_json_body_value(response).await {
-            Ok(payload) => payloads.push(payload),
-            Err(response) => return Err(response),
-        }
-    }
+    })
+    .await?;
 
     Ok((routes, payloads))
 }
@@ -32943,6 +33046,10 @@ pub(crate) mod tests_runtime_handlers {
         );
         let domain_id =
             iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "asset-definition".parse().expect("asset definition name"),
+        );
 
         assert_eq!(
             super::signed_query_scope(&request_for_test(
@@ -32966,6 +33073,22 @@ pub(crate) mod tests_runtime_handlers {
                             account_id.clone(),
                             None,
                             None,
+                        ),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAssetById(
+                        iroha_data_model::query::asset::prelude::FindAssetById::new(
+                            iroha_data_model::asset::AssetId::new(
+                                asset_definition_id,
+                                account_id.clone(),
+                            ),
                         ),
                     ),
                 ),

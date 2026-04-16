@@ -43,7 +43,7 @@ PATH 上で見つかるようにしてください:
 リポジトリルートから:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 このコマンドは `mochi-core` と egui フロントエンドを両方ビルドします。
@@ -61,7 +61,7 @@ cargo xtask mochi-bundle
 cargo から UI を直接実行します:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 デフォルトでは、MOCHI は一時データディレクトリに single-peer プリセットを作成します:
@@ -73,7 +73,7 @@ cargo run -p mochi-ui-egui
 起動時に CLI フラグでデフォルトを上書きできます:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -174,7 +174,7 @@ Norito payload を手書きせずにロードマップ作業をリハーサル�
 ./ci/check_mochi.sh
 ```
 
-このヘルパーは `mochi-core`, `mochi-ui-egui`, `mochi-integration` に対して
+このヘルパーは `mochi-core`, `mochi-ui`, `mochi-integration` に対して
 `cargo check`/`cargo test` を実行し、
 フィクスチャのドリフト（正準ブロック/イベント捕捉）と egui ハーネスの
 リグレッションをまとめて検出します。スクリプトが古いフィクスチャを報告した場合は、

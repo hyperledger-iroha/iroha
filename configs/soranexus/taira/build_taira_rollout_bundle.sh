@@ -22,6 +22,7 @@ The bundle contains:
   - `sorafs_manifest_stub` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the checked-in `configs/soranexus/taira/` operator bundle
   - `scripts/render_taira_validator_bundle.py`
+  - `scripts/render_taira_edge_nginx_conf.py`
   - `scripts/taira_faucet_canary.py`
   - `rollout.manifest.json`
   - `sha256sums.txt`
@@ -137,6 +138,7 @@ done
 
 cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
+cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
 
 manifest_path="${bundle_dir}/rollout.manifest.json"
@@ -180,10 +182,12 @@ payload = {
     "included_paths": [
         "configs/soranexus/taira/",
         "scripts/render_taira_validator_bundle.py",
+        "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
     ],
     "required_followup": [
         "install the bundled binaries/config on each public Taira validator",
+        "render and install the shared-edge nginx config from the same validator roster before public cutover",
         "restart the validator with the shipped taira-irohad.service or equivalent",
         "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
         "run configs/soranexus/taira/verify_soraswap_rollout.sh after the node is back",

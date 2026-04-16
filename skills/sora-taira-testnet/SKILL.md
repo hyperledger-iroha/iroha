@@ -174,6 +174,82 @@ the caller.
    (`https://taira.sora.org`), not the MCP URL. The scripts derive `/v1/mcp`
    themselves.
 
+## MCP Write Recipes
+
+### Bootstrap a fresh runtime-only signer
+
+If the user wants a fresh ordinary signer for rollout checks, prefer the helper
+script over hand-editing TOML:
+
+```bash
+python3 scripts/taira_bootstrap_canary.py \
+  --torii-root https://taira.sora.org \
+  --output-config /run/secrets/taira-canary-client.toml
+```
+
+That flow generates a new local Ed25519 keypair, onboards it on Taira, attempts
+the public faucet claim, and writes a runtime-only client config with rollout-
+specific TTL and status timeout. Keep the generated config out of tracked repo
+state unless the user explicitly asks to persist it.
+
+### Verify the bootstrapped signer before writes
+
+After bootstrap, confirm the alias, account, and fee balance before debugging
+permissions or payloads:
+
+- resolve the alias with `iroha.aliases.resolve`
+- fetch the canonical account with `iroha.accounts.get`
+- inspect balances with `iroha.accounts.assets`
+
+If the signer is missing entirely, re-run the bootstrap flow. If the signer
+exists but has no fee asset balance, treat that as a faucet or funding problem
+before blaming the write payload.
+
+### Submit a pre-signed transaction envelope
+
+For pre-built signed transactions, prefer `iroha.transactions.submit_and_wait`
+instead of lower-level polling:
+
+```json
+{
+  "signed_tx_base64": "<base64-encoded SignedTransaction>",
+  "status_accept": "application/json",
+  "timeout_ms": 120000
+}
+```
+
+Use `signed_tx_base64` or `tx_base64` for base64 envelopes, or the hex variants
+for hex-encoded envelopes. Do not pass multiple envelope encodings in the same
+request. If the call returns `Transaction expired`, go back to the public
+health and Sumeragi checks before rebuilding the transaction.
+
+### Rollout reads for SoraFS and app-api
+
+For public trader/app rollout checks, use this read bundle before attempting a
+republish or signer mutation:
+
+- `iroha.status`
+- `iroha.sumeragi.status`
+- `GET https://taira.sora.org/v1/sorafs/capacity/state`
+- repeated `GET https://taira.sora.org/v1/app-api/cid/<cid>`
+
+If shell access is available, prefer the bundled rollout checks:
+
+```bash
+bash configs/soranexus/taira/check_sorafs_rollout.sh \
+  --public-root https://taira.sora.org \
+  --skip-write-canary
+
+bash configs/soranexus/taira/check_mcp_rollout.sh \
+  --skip-local \
+  --public-root https://taira.sora.org \
+  --skip-write-canary
+```
+
+Treat `check_sorafs_rollout.sh` as the SoraFS/app-api surface check and
+`check_mcp_rollout.sh` as the generic signed-write and native MCP surface
+check. They can fail independently.
+
 ## Common Flows
 
 ### Accounts and aliases

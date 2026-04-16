@@ -41,7 +41,7 @@ a continuación o disponible en la RUTA:
 Desde la raíz del repositorio:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Este comando construye tanto `mochi-core` como la interfaz egui. Para producir un paquete distribuible, ejecute:
@@ -57,7 +57,7 @@ La tarea del paquete ensambla los archivos binarios, el manifiesto y la configur
 Ejecute la interfaz de usuario directamente desde cargo:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 De forma predeterminada, MOCHI crea un ajuste preestablecido de un solo par en un directorio de datos temporal:
@@ -69,7 +69,7 @@ De forma predeterminada, MOCHI crea un ajuste preestablecido de un solo par en u
 Utilice indicadores CLI para anular los valores predeterminados al iniciar:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ cajas:
 ./ci/check_mochi.sh
 ```
 
-El asistente ejecuta `cargo check`/`cargo test` para `mochi-core`, `mochi-ui-egui` y
+El asistente ejecuta `cargo check`/`cargo test` para `mochi-core`, `mochi-ui` y
 `mochi-integration`, que detecta la deriva del dispositivo (capturas de eventos/bloques canónicos) y el arnés egui
 regresiones de una sola vez. Si el script informa accesorios obsoletos, vuelva a ejecutar las pruebas de regeneración ignoradas,
 por ejemplo:

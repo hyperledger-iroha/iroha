@@ -41,7 +41,7 @@ MOCHI သည် CLI binaries များသို့ ပစ်လွှတ်�
 repository root မှ
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 ဤ command သည် `mochi-core` နှင့် egui frontend နှစ်ခုလုံးကို တည်ဆောက်သည်။ ဖြန့်ဝေနိုင်သောအစုအဝေးတစ်ခုထုတ်လုပ်ရန်၊ လုပ်ဆောင်ရန်-
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 ကုန်တင်မှ UI ကို တိုက်ရိုက် run သည်-
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 မူရင်းအားဖြင့် MOCHI သည် ယာယီဒေတာလမ်းညွှန်တွင် တစ်ဦးတည်းသောရွယ်တူကြိုတင်သတ်မှတ်မှုကို ဖန်တီးသည်-
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 စတင်ချိန်တွင် ပုံသေများကို အစားထိုးရန် CLI အလံများကို အသုံးပြုပါ-
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ desktop သည် CI ပိုက်လိုင်းများသို့�
 ./ci/check_mochi.sh
 ```
 
-အကူအညီပေးသူက `cargo check`/`cargo test`၊ `mochi-core`၊ `mochi-ui-egui`၊
+အကူအညီပေးသူက `cargo check`/`cargo test`၊ `mochi-core`၊ `mochi-ui`၊
 `mochi-integration`၊ ဂိမ်းပျံမှု (canonical block/event captures) နှင့် egui harness
 တစ်ချက်တည်းတွင် ဆုတ်ယုတ်မှုများ။ script သည် stale fixtures များကို သတင်းပို့ပါက၊ လျစ်လျူရှုထားသော regeneration tests ကို ပြန်လုပ်ပါ။
 ဥပမာ-
