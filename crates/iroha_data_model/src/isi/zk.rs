@@ -317,6 +317,9 @@ isi! {
         /// Spent nullifiers.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
         pub inputs: Vec<[u8; 32]>,
+        /// Optional private change note commitments.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
+        pub outputs: Vec<[u8; 32]>,
         /// Proof attachment for the unshield.
         pub proof: crate::proof::ProofAttachment,
         /// Optional recent Merkle root used during proof construction.
@@ -336,11 +339,33 @@ impl Unshield {
         proof: crate::proof::ProofAttachment,
         root_hint: Option<[u8; 32]>,
     ) -> Self {
+        Self::new_with_outputs(
+            asset,
+            to,
+            public_amount,
+            inputs,
+            Vec::new(),
+            proof,
+            root_hint,
+        )
+    }
+
+    /// Construct a new Unshield instruction with explicit private change outputs.
+    pub fn new_with_outputs(
+        asset: AssetDefinitionId,
+        to: AccountId,
+        public_amount: u128,
+        inputs: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        proof: crate::proof::ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
         Self {
             asset,
             to,
             public_amount,
             inputs,
+            outputs,
             proof,
             root_hint,
         }

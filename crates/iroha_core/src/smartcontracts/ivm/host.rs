@@ -5817,6 +5817,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         to: u.to.clone(),
                         public_amount: *u.public_amount(),
                         inputs: u.inputs.clone(),
+                        outputs: u.outputs.clone(),
                         proof: pa,
                         root_hint: u.root_hint,
                     };

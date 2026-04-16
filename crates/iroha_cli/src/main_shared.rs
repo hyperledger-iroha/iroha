@@ -1921,9 +1921,9 @@ mod account {
         /// List account permissions
         List(PermissionList),
         /// Grant an account permission using JSON input from stdin
-        Grant(Id),
+        Grant(PermissionId),
         /// Revoke an account permission using JSON input from stdin
-        Revoke(Id),
+        Revoke(PermissionId),
     }
 
     impl Run for PermissionCommand {
@@ -1955,9 +1955,12 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     let instruction =
                         iroha::data_model::isi::Grant::account_permission(permission, account_id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to grant the permission to the account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to grant the permission to the account")
                 }
                 Revoke(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
@@ -1965,9 +1968,12 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     let instruction =
                         iroha::data_model::isi::Revoke::account_permission(permission, account_id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to revoke the permission from the account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to revoke the permission from the account")
                 }
             }
         }
@@ -1978,6 +1984,16 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct PermissionId {
+        /// Account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        id: String,
+        /// Submit without waiting for confirmation
+        #[arg(long)]
+        no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]

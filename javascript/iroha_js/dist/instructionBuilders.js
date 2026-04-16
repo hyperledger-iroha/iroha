@@ -3713,6 +3713,11 @@ export function buildUnshieldInstruction(options) {
   const inputs = Array.isArray(source.inputs)
     ? source.inputs.map((entry, index) => normalizeFixedBytes(entry, `unshield.inputs[${index}]`, 32))
     : [];
+  const outputs = Array.isArray(source.outputs)
+    ? source.outputs.map((entry, index) =>
+        normalizeFixedBytes(entry, `unshield.outputs[${index}]`, 32),
+      )
+    : [];
   if (inputs.length === 0) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,
@@ -3727,6 +3732,7 @@ export function buildUnshieldInstruction(options) {
     to: normalizeAccountId(source.toAccountId ?? source.to ?? source.destinationAccountId, "unshield.to"),
     public_amount: asU128JsonNumber(source.publicAmount ?? source.public_amount, "unshield.publicAmount"),
     inputs,
+    outputs,
     proof: normalizeProofAttachment(source.proof, "unshield.proof"),
     root_hint: normalizeOptionalFixedBytes(source.rootHint ?? source.root_hint, "unshield.rootHint"),
   };

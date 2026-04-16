@@ -106,6 +106,7 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
         to: authority.clone(),
         public_amount: 1u128,
         inputs: vec![[0u8; 32]],
+        outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0xAA, 0xBB]),

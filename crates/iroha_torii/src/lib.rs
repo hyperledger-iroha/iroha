@@ -11054,24 +11054,31 @@ fn torii_target_account_routes(
 ) -> Result<Vec<RoutingDecision>, Response> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let dataspaces: BTreeSet<_> = world
-        .account_scope_entry(account_id)
-        .map_err(|error| {
-            torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "account_scope_unavailable",
-                format!("failed to resolve account scope for {account_id}: {error}"),
-            )
-        })?
-        .map_or_else(
-            || BTreeSet::from([iroha_data_model::nexus::DataSpaceId::GLOBAL]),
-            |entry| {
-                entry
-                    .iter()
-                    .map(|(dataspace_id, _)| *dataspace_id)
-                    .collect()
-            },
-        );
+    let account_scope = world.account_scope_entry(account_id).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "account_scope_unavailable",
+            format!("failed to resolve account scope for {account_id}: {error}"),
+        )
+    })?;
+
+    let dataspaces: BTreeSet<_> = account_scope.map_or_else(
+        || {
+            // Fresh private-dataspace accounts can be queryable on another authoritative peer
+            // before the local world view can derive their account scope. Do not collapse those
+            // reads to GLOBAL only; fan out across every configured dataspace route instead.
+            torii_all_dataspace_routes(app)
+                .into_iter()
+                .map(|route| route.dataspace_id)
+                .collect()
+        },
+        |entry| {
+            entry
+                .iter()
+                .map(|(dataspace_id, _)| *dataspace_id)
+                .collect()
+        },
+    );
 
     torii_routes_for_dataspaces(app, dataspaces).map_err(|error| {
         torii_proxy_error_response(
@@ -11867,8 +11874,48 @@ fn target_account_iterable_query(
         })
 }
 
-fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> SignedQueryScope {
-    match request {
+fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
+    use iroha_data_model::query::{
+        QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions,
+    };
+
+    if let Some(query_box) = query.query_box() {
+        if let Some(erased) =
+            iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box)
+        {
+            return payload_matches_query::<FindTransactions>(erased.payload());
+        }
+        return false;
+    }
+
+    query
+        .fast_dsl_parts()
+        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::CommittedTransaction => {
+                payload_matches_query::<FindTransactions>(payload)
+            }
+            _ => false,
+        })
+}
+
+trait SignedQueryScopeInput {
+    fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority;
+}
+
+impl SignedQueryScopeInput for iroha_data_model::query::QueryRequestWithAuthority {
+    fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority {
+        self
+    }
+}
+
+impl SignedQueryScopeInput for iroha_data_model::query::SignedQuery {
+    fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority {
+        &self.payload
+    }
+}
+
+fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope {
+    match request.request_with_authority().request() {
         iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
         iroha_data_model::query::QueryRequest::Singular(query) => {
             target_scope_singular_query(query).unwrap_or(SignedQueryScope::CrossDataspaceFanout)
@@ -11879,10 +11926,14 @@ fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> Signed
             SignedQueryScope::LocalReplicated
         }
         iroha_data_model::query::QueryRequest::Start(query) => target_account_iterable_query(query)
-            .map_or(
-                SignedQueryScope::CrossDataspaceFanout,
-                SignedQueryScope::TargetAccount,
-            ),
+            .map(SignedQueryScope::TargetAccount)
+            .unwrap_or_else(|| {
+                if is_authority_routed_iterable_query(query) {
+                    SignedQueryScope::AuthorityRouted
+                } else {
+                    SignedQueryScope::CrossDataspaceFanout
+                }
+            }),
     }
 }
 
@@ -23682,7 +23733,7 @@ async fn handler_signed_query(
         }
     }
 
-    let query_scope = signed_query_scope(query_request.request());
+    let query_scope = signed_query_scope(&query_request.payload);
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     match &query_scope {
@@ -31516,6 +31567,18 @@ pub(crate) mod tests_runtime_handlers {
         executor.into_query()
     }
 
+    fn build_find_transactions_query_for_test() -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::transaction::prelude::FindTransactions::new(),
+        )
+        .execute();
+        executor.into_query()
+    }
+
     fn assert_permissions_query_targets_account(
         query: &iroha_data_model::query::QueryWithParams,
         account_id: &AccountId,
@@ -31670,6 +31733,13 @@ pub(crate) mod tests_runtime_handlers {
         iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test())
             .with_authority(authority)
             .sign(key_pair)
+    }
+
+    fn request_for_test(
+        authority: &AccountId,
+        request: iroha_data_model::query::QueryRequest,
+    ) -> iroha_data_model::query::QueryRequestWithAuthority {
+        request.with_authority(authority.clone())
     }
 
     #[cfg(feature = "app_api")]
@@ -32829,13 +32899,13 @@ pub(crate) mod tests_runtime_handlers {
 
         let find_triggers = signed_find_triggers_query_for_test(authority.clone(), &key_pair);
         assert_eq!(
-            super::signed_query_scope(find_triggers.payload.request()),
+            super::signed_query_scope(&find_triggers.payload),
             super::SignedQueryScope::LocalReplicated
         );
 
         let find_active_ids = signed_find_active_trigger_ids_query_for_test(authority, &key_pair);
         assert_eq!(
-            super::signed_query_scope(find_active_ids.payload.request()),
+            super::signed_query_scope(&find_active_ids.payload),
             super::SignedQueryScope::LocalReplicated
         );
     }
@@ -32864,6 +32934,7 @@ pub(crate) mod tests_runtime_handlers {
     #[test]
     fn signed_query_scope_classifies_target_account_queries() {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let alias = iroha_data_model::account::AccountAlias::domainless(
             "banking".parse().expect("alias label"),
             DataSpaceId::new(10),
@@ -32872,86 +32943,131 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
 
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAccountById(
-                    iroha_data_model::query::account::prelude::FindAccountById::new(
-                        account_id.clone(),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAccountById(
+                        iroha_data_model::query::account::prelude::FindAccountById::new(
+                            account_id.clone(),
+                        ),
                     ),
                 ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAliasesByAccountId(
-                    iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-                        account_id.clone(),
-                        None,
-                        None,
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAliasesByAccountId(
+                        iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+                            account_id.clone(),
+                            None,
+                            None,
+                        ),
                     ),
                 ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
-                build_find_domains_by_account_query_for_test(account_id.clone()),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_domains_by_account_query_for_test(account_id.clone()),
+                ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
-                build_find_assets_by_account_query_for_test(account_id.clone()),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_assets_by_account_query_for_test(account_id.clone()),
+                ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
-                build_find_nfts_by_account_query_for_test(account_id.clone()),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_nfts_by_account_query_for_test(account_id.clone()),
+                ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
-                build_find_permissions_by_account_query_for_test(account_id.clone()),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_permissions_by_account_query_for_test(account_id.clone()),
+                ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
-                build_find_roles_by_account_query_for_test(account_id.clone()),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_roles_by_account_query_for_test(account_id.clone()),
+                ),
             )),
             super::SignedQueryScope::TargetAccount(account_id)
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
-                    iroha_data_model::query::account::prelude::FindAccountByAlias::new(
-                        alias.clone(),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
+                        iroha_data_model::query::account::prelude::FindAccountByAlias::new(
+                            alias.clone(),
+                        ),
                     ),
                 ),
             )),
             super::SignedQueryScope::TargetAlias(alias.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindAccountRecoveryPolicyByAlias(
-                    iroha_data_model::query::account::prelude::FindAccountRecoveryPolicyByAlias::new(
-                        alias.clone(),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAccountRecoveryPolicyByAlias(
+                        iroha_data_model::query::account::prelude::FindAccountRecoveryPolicyByAlias::new(
+                            alias.clone(),
+                        ),
                     ),
                 ),
             )),
             super::SignedQueryScope::TargetAlias(alias.clone())
         );
         assert_eq!(
-            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
-                iroha_data_model::query::SingularQueryBox::FindDomainById(
-                    iroha_data_model::query::domain::prelude::FindDomainById::new(
-                        domain_id.clone(),
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindDomainById(
+                        iroha_data_model::query::domain::prelude::FindDomainById::new(
+                            domain_id.clone(),
+                        ),
                     ),
                 ),
             )),
             super::SignedQueryScope::TargetDomain(domain_id)
+        );
+    }
+
+    #[test]
+    fn signed_query_scope_classifies_find_transactions_as_authority_routed() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+
+        assert_eq!(
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_transactions_query_for_test(),
+                ),
+            )),
+            super::SignedQueryScope::AuthorityRouted
         );
     }
 
@@ -33044,6 +33160,35 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             !dataspaces.contains(&restricted_dataspace),
             "unsigned public reads must not automatically gain private dataspace visibility",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let mut app = mk_app_state_for_tests();
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_target_account_routes(app.as_ref(), &authority)
+            .expect("unknown target-account scope should fall back to all configured routes");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([
+                DataSpaceId::GLOBAL,
+                governance_dataspace,
+                restricted_dataspace,
+            ]),
+            "target-account queries with unknown local scope should fan out across all configured dataspace routes",
         );
     }
 

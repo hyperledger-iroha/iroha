@@ -36,6 +36,8 @@ const RBC_WAIT_BUDGET: Duration = Duration::from_secs(20);
 // Full-workspace runs can delay large RBC delivery under network-test permit contention.
 const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(240);
+// Keep persisted RBC proofs alive longer than the heavy restart/commit observation windows.
+const RBC_PERSISTENCE_OBSERVATION_TTL_MS: i64 = 15 * 60 * 1_000;
 // Keep the large-payload case clearly multi-chunk without saturating grouped-harness runs.
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 // Keep the restart-recovery case multi-chunk without saturating constrained hosts.
@@ -233,6 +235,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
+                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
+                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
                 );
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -547,6 +557,14 @@ fn large_payload_npos_builder() -> NetworkBuilder {
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     64_i64 * 1024,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
+                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
+                    RBC_PERSISTENCE_OBSERVATION_TTL_MS,
                 );
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
