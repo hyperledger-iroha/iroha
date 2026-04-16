@@ -11,14 +11,17 @@ deployment.
 
 ## Public API contract
 
-For the examples below, replace `PUBLIC_TORII_ROOT` with the direct public
-Torii URL of the node you are validating, for example:
+For the examples below, replace `PUBLIC_TORII_ROOT` with the live public
+Torii URL you are validating. On the current deployment that is:
 
-- `PUBLIC_TORII_ROOT=https://taira-validator-1.sora.org`
+- `PUBLIC_TORII_ROOT=https://taira.sora.org`
 
-`https://taira.sora.org` may still exist as a convenience endpoint, but it is
-the shared Torii origin, not an app website. Do not bind product frontends to
-that host root through `sorafs_sites.json`.
+Validator-specific hostnames such as `https://taira-validator-1.sora.org` may
+also exist as alternate public Torii roots when the edge is configured to
+expose them directly.
+
+`https://taira.sora.org` is the shared Torii origin, not an app website. Do
+not bind product frontends to that host root through `sorafs_sites.json`.
 
 The shipped public Taira profile pins the first-release Torii posture in
 config rather than wrapper-local defaults:
@@ -154,10 +157,12 @@ allowlisting:
 
 ## Public endpoints
 
-- Every public validator should expose Torii directly on its own TLS hostname
-  and advertise that URL through `[torii].public_address`.
-- `https://taira.sora.org` is optional convenience ingress only. Keep it as a
-  shared Torii/API origin, but do not mount websites at its root.
+- `https://taira.sora.org` is the primary public Torii/API origin on the
+  current deployment. Keep it on Torii/API duties only and do not mount
+  websites at its root.
+- Every public validator should still be able to expose Torii directly on its
+  own TLS hostname and advertise that URL through `[torii].public_address`
+  when validator-specific ingress is desired.
 - `https://taira-explorer.sora.org` points to the Iroha 2 Explorer instance.
 - Shared nginx edge configs such as `taira-explorer.nginx.conf` are optional
   convenience infrastructure, not the primary public API design.

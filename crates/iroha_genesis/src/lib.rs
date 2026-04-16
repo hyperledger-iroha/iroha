@@ -662,10 +662,14 @@ pub mod genesis_instructions_json {
                 json::Error::Message(format!("invalid base64 genesis instruction: {err}"))
             })?;
         let archived = norito::from_bytes::<InstructionBox>(&bytes).map_err(|err| {
-            json::Error::Message(format!("failed to decode base64 genesis instruction: {err}"))
+            json::Error::Message(format!(
+                "failed to decode base64 genesis instruction: {err}"
+            ))
         })?;
         norito::core::NoritoDeserialize::try_deserialize(archived).map_err(|err| {
-            json::Error::Message(format!("failed to deserialize base64 genesis instruction: {err}"))
+            json::Error::Message(format!(
+                "failed to deserialize base64 genesis instruction: {err}"
+            ))
         })
     }
 
@@ -1359,18 +1363,22 @@ pub mod genesis_instructions_json {
                 DomainId::try_new("zk", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             );
-            let instruction = InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
-                asset_definition_id,
-                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                true,
-                true,
-                None,
-                None,
-                None,
-            ));
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
+                    asset_definition_id,
+                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                    true,
+                    true,
+                    None,
+                    None,
+                    None,
+                ));
 
             let value = instruction_value(&instruction);
-            assert!(value.is_string(), "custom instruction should fall back to base64");
+            assert!(
+                value.is_string(),
+                "custom instruction should fall back to base64"
+            );
 
             let decoded =
                 value_to_instruction(value).expect("base64-encoded instruction should decode");

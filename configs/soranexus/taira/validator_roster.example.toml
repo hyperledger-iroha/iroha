@@ -10,8 +10,9 @@
 #     --secrets configs/soranexus/taira/validator_secrets.local.toml \
 #     --output-dir dist/taira-validators
 #
-# Every validator must set its own `torii_public_address`. Direct per-node Torii
-# ingress is canonical for Taira; `https://taira.sora.org` is convenience-only.
+# Every validator must set its own `torii_public_address`. `https://taira.sora.org`
+# is the current public Torii root, while per-validator Torii hostnames remain
+# valid when you want validator-specific ingress.
 
 network_address = "0.0.0.0:1337"
 torii_address = "0.0.0.0:18080"

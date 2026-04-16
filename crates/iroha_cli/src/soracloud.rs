@@ -10388,13 +10388,38 @@ fn publish_inrou_guest_image_artifacts(
             .get(&guest_isa)
             .expect("guest image exists while publishing");
         let mut member_paths = vec![
-            validate_local_inrou_member(&inrou_dir, &image.kernel_image_path)?,
-            validate_local_inrou_member(&inrou_dir, &image.rootfs_image_path)?,
+            inrou_member_path(&image.kernel_image_path)?,
+            inrou_member_path(&image.rootfs_image_path)?,
         ];
         if let Some(initrd_image_path) = image.initrd_image_path.as_deref() {
-            member_paths.push(validate_local_inrou_member(&inrou_dir, initrd_image_path)?);
+            member_paths.push(inrou_member_path(initrd_image_path)?);
         }
         let distribution = image.distribution.clone();
+        if let Some(mut published_artifact) = image.published_artifact.clone() {
+            published_artifact.distribution = distribution.clone();
+            let image = inrou
+                .guest_images
+                .get_mut(&guest_isa)
+                .expect("guest image exists while reusing published artifact");
+            image.published_artifact = Some(published_artifact.clone());
+            outputs.push(InrouGuestImageArtifactPublishOutput {
+                service_name: service_name.clone(),
+                guest_isa: guest_isa.as_str().to_owned(),
+                source_dir: inrou_dir.join(guest_isa.as_str()).to_string_lossy().into_owned(),
+                hydrate_mount_path: "/inrou".to_owned(),
+                member_paths,
+                content_cid: published_artifact.content_cid.clone(),
+                manifest_digest_hex: published_artifact.manifest_digest_hex.clone(),
+                manifest_id_hex: published_artifact.manifest_id_hex.clone(),
+                distribution,
+                note: "reused a prepublished Inrou guest-image artifact from the manifest and skipped local artifact staging".to_owned(),
+            });
+            continue;
+        }
+        member_paths = member_paths
+            .into_iter()
+            .map(|member_path| validate_local_inrou_member(&inrou_dir, &format!("/inrou/{member_path}")))
+            .collect::<Result<Vec<_>>>()?;
 
         let staged_artifact = PrivateModelSourceTempDir::new("iroha-inrou-guest-image-artifact")
             .wrap_err_with(|| {
@@ -30867,9 +30892,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$SCRIPT_DIR/frontend/dist" "$SCRIPT_DIR/services/live/build" "$SCRIPT_DIR/services/vault/build"
+mkdir -p "$SCRIPT_DIR/services/live/inrou/x86_64" "$SCRIPT_DIR/services/live/inrou/aarch64"
 printf '<!doctype html><title>Travel Ops</title>' > "$SCRIPT_DIR/frontend/dist/index.html"
 printf 'release-live-bundle' > "$SCRIPT_DIR/services/live/build/live-api.tgz"
 printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
+printf 'x86-kernel' > "$SCRIPT_DIR/services/live/inrou/x86_64/vmlinux"
+printf 'x86-rootfs' > "$SCRIPT_DIR/services/live/inrou/x86_64/rootfs.ext4"
+printf 'x86-initrd' > "$SCRIPT_DIR/services/live/inrou/x86_64/initrd.img"
+printf 'arm-kernel' > "$SCRIPT_DIR/services/live/inrou/aarch64/vmlinux"
+printf 'arm-rootfs' > "$SCRIPT_DIR/services/live/inrou/aarch64/rootfs.ext4"
+printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
 "#,
         )
         .expect("write release build script");
@@ -30940,18 +30972,179 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .expect("release must include the mutation response");
         assert!(release_response.has_mixed_planes);
         assert_eq!(release_response.services.len(), 2);
+        let live_service = release_response
+            .services
+            .iter()
+            .find(|service| service.service_name == "travel-ops_live")
+            .expect("live service output");
+        assert_eq!(live_service.published_inrou_guest_images.len(), 2);
         assert!(
             release_response
                 .published_static_site
                 .as_ref()
                 .is_some_and(|publication| publication.manifest_id_hex.as_deref() == Some("beef"))
         );
+        let storage_pin_requests = server
+            .requests()
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
+            .count();
+        assert_eq!(storage_pin_requests, 4);
         let deploy_requests = server
             .requests()
             .into_iter()
             .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
             .count();
         assert_eq!(deploy_requests, 2);
+    }
+
+    #[test]
+    fn app_release_reuses_published_inrou_guest_image_artifacts() {
+        if !bash_available() {
+            return;
+        }
+
+        let dir = temp_dir("split_app_release_reuse_guest_images");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        let build_script = dir.join("build-and-sync.sh");
+        fs::write(
+            &build_script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "$SCRIPT_DIR/frontend/dist" "$SCRIPT_DIR/services/live/build" "$SCRIPT_DIR/services/vault/build"
+printf '<!doctype html><title>Travel Ops</title>' > "$SCRIPT_DIR/frontend/dist/index.html"
+printf 'release-live-bundle' > "$SCRIPT_DIR/services/live/build/live-api.tgz"
+printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
+"#,
+        )
+        .expect("write release build script");
+        mark_template_file_executable(&build_script).expect("mark release build script executable");
+
+        let live_container_path = dir.join("services/live/container_manifest.json");
+        let mut live_container: SoraContainerManifestV1 =
+            load_json(&live_container_path).expect("live container");
+        let inrou = live_container.inrou.as_mut().expect("live inrou manifest");
+        inrou
+            .guest_images
+            .get_mut(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+            .expect("x86_64 guest image")
+            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "a".repeat(64),
+            content_cid: "bafytravelopsx8664".to_owned(),
+            manifest_id_hex: Some("b".repeat(64)),
+            distribution: SoraArtifactDistributionPolicyV1::default(),
+        });
+        inrou
+            .guest_images
+            .get_mut(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+            .expect("aarch64 guest image")
+            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "c".repeat(64),
+            content_cid: "bafytravelopsaarch64".to_owned(),
+            manifest_id_hex: Some("d".repeat(64)),
+            distribution: SoraArtifactDistributionPolicyV1::default(),
+        });
+        write_json(&live_container_path, &live_container).expect("write live container manifest");
+        fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
+        fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        fs::write(dir.join("services/live/build/live-api.tgz"), b"release-live-bundle")
+            .expect("write live bundle");
+        fs::write(dir.join("services/vault/build/vault-api.to"), b"release-vault-bundle")
+            .expect("write vault bundle");
+        SyncManifestsArgs {
+            app_manifest: Some(dir.join("app_manifest.json")),
+            container: PathBuf::from(DEFAULT_CONTAINER_MANIFEST),
+            service: PathBuf::from(DEFAULT_SERVICE_MANIFEST),
+            bundle_file: None,
+        }
+        .run()
+        .expect("sync app manifests after injecting published refs");
+        fs::remove_dir_all(dir.join("services/live/inrou")).expect("remove local inrou staging");
+
+        let status_payload =
+            mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
+        let draft_response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "beef" }))
+                        .expect("encode storage pin response"),
+                },
+            ),
+            (
+                "/v1/soracloud/deploy".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&draft_response).expect("encode deploy response"),
+                },
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_payload).expect("encode status response"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = AppReleaseArgs {
+            manifest: dir.join("app_manifest.json"),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+            skip_build: false,
+            dry_run: false,
+        }
+        .run(&authority, &key_pair)
+        .expect("release should succeed with prepublished guest images");
+
+        let release_response = output
+            .release_response
+            .as_ref()
+            .expect("release must include the mutation response");
+        let live_service = release_response
+            .services
+            .iter()
+            .find(|service| service.service_name == "travel-ops_live")
+            .expect("live service output");
+        assert_eq!(live_service.published_inrou_guest_images.len(), 2);
+        assert!(live_service
+            .published_inrou_guest_images
+            .iter()
+            .all(|artifact| artifact.note.contains("reused a prepublished Inrou guest-image artifact")));
+        let storage_pin_requests = server
+            .requests()
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
+            .count();
+        assert_eq!(storage_pin_requests, 2);
     }
 
     #[test]

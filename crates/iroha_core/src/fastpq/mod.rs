@@ -813,6 +813,52 @@ mod tests {
     }
 
     #[test]
+    fn batch_from_transcripts_trims_padded_balance_scale() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::new(11, 3);
+        transcript.deltas[0].from_balance_before =
+            Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+        transcript.deltas[0].from_balance_after =
+            Numeric::new(119_999_989_000_000_000_000_000_i128, 18);
+        transcript.deltas[0].to_balance_before = Numeric::zero();
+        transcript.deltas[0].to_balance_after = Numeric::new(11_000_000_000_000_000_i128, 18);
+
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .expect("batch");
+        let sender_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].from_account,
+                    )
+            })
+            .expect("sender row");
+        let receiver_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].to_account,
+                    )
+            })
+            .expect("receiver row");
+
+        assert_eq!(decode_le(&sender_row.pre_value), 120_000_000);
+        assert_eq!(decode_le(&sender_row.post_value), 119_999_989);
+        assert_eq!(decode_le(&receiver_row.pre_value), 0);
+        assert_eq!(decode_le(&receiver_row.post_value), 11);
+    }
+
+    #[test]
     fn batches_from_bundles_add_metadata() {
         let bundle = sample_bundle(Hash::prehashed([0x33; 32]));
         let batches = batches_from_bundles(

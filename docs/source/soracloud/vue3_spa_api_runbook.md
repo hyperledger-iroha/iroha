@@ -41,7 +41,9 @@ Examples:
   `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 
 The fallback path is not the canonical origin for app configs or release
-notes. Use it only as a compatibility gateway.
+notes. Use it only as a compatibility gateway. On Taira, the shared public
+edge serves that form generically for active aliases; do not invent
+`https://taira.sora.org/<service>/...` URLs.
 
 ## 1. Generate the Scaffold
 
