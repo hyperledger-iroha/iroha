@@ -2,6 +2,43 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Taira now has a repeatable 4-validator Docker rollout proof and a fast prebuilt image path
+- `/Users/takemiyamakoto/dev/iroha/scripts/render_taira_localnet_container_bundle.py`
+  now rewrites a fresh `kagami localnet` bundle into four container-ready peer
+  configs/env files. The renderer replaces loopback addresses with canonical
+  shared-bridge `addr:...#CRC16` literals, rewrites storage/genesis mounts for
+  the container layout, and emits wrapper env files for
+  `taira-validator-container.sh`.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  now accepts `TAIRA_DOCKER_NETWORK`, which lets the existing plain-`docker`
+  wrapper launch validators on one user-defined bridge instead of assuming only
+  single-container host deployments.
+- `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh` now uses a
+  tiny temporary Docker context when `--use-target-prebuilt` is selected and
+  writes its manifest with `python3`, so the release-image helper no longer
+  spends minutes uploading the whole checkout just to package prebuilt
+  binaries.
+- Verified in this slice:
+  - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test scripts.tests.render_taira_localnet_container_bundle_test`
+  - `python3 scripts/render_taira_localnet_container_bundle.py --bundle-dir dist/taira-localnet-smoke --output-dir dist/taira-localnet-cluster`
+  - `docker network create taira-localnet`
+  - `bash configs/soranexus/taira/taira-validator-container.sh --env-file dist/taira-localnet-cluster/peer{0,1,2,3}.env up`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:28080 --skip-write-canary` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary` (pass)
+  - `scripts/build_release_image.sh --profile iroha3 --config taira --use-target-prebuilt --tag local/taira-validator:deploy --artifacts-dir dist/taira-release-image` (pass)
+- Current resulting artifacts:
+  - local 4-peer cluster on `taira-localnet-peer{0,1,2,3}` with peer0 Torii on
+    `http://127.0.0.1:28080`
+  - `local/taira-validator:deploy`
+  - `dist/taira-release-image/iroha3-2.0.0-rc.2.0-{darwin-image.tar,image.json}`
+- Remaining external gap:
+  - this machine has Docker Hub / Harbor credentials, but I did not push
+    official `hyperledger/iroha:taira-*` or Harbor tags from the current dirty
+    uncommitted source state. The first official publish should come from a
+    committed ref or a clean publish runner, not an opaque local tree.
+
 ## 2026-04-16 Follow-up: remaining RBC harness assumptions were tightened, and the long NPoS persistence window no longer races session TTL
 - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
   now treats cluster height as the authoritative outcome for the remaining

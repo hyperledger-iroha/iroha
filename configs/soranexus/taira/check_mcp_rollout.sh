@@ -24,13 +24,16 @@ SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
 CHECKED_LABELS=()
 CHECKED_ROOTS=()
+CURL_RESOLVE_RULES=()
+CURL_URL_RESOLVE_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
                             [--skip-local] [--skip-public]
                             [--write-config PATH] [--write-target local|public|URL]
-                            [--iroha-bin PATH] [--skip-write-canary]
+                            [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
+                            [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 The check fails unless:
@@ -46,6 +49,12 @@ The check fails unless:
   - /status reports at least 4 validators in the commit QC set
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, and contract routes on the same node URL
+
+When diagnosing public write failures, prefer `/status` fields such as
+`blocks`, `queue_size`, `sumeragi.commit_qc_height`,
+`sumeragi.tx_queue_depth`, `sumeragi.tx_queue_saturated`, and
+`teu_dataspace_backlog`. Do not use `/status.peers` as validator-set size; it
+is the queried node's current remote-peer count.
 
 For final public rollout, use a runtime-only canary signer config. When
 `--write-config` is omitted, the script bootstraps
@@ -129,6 +138,14 @@ while [[ $# -gt 0 ]]; do
       IROHA_BIN="$2"
       shift 2
       ;;
+    --resolve-host)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --resolve-host" >&2
+        exit 1
+      }
+      CURL_RESOLVE_RULES+=("$2")
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -210,6 +227,47 @@ mcp_root_from_url() {
   printf '%s\n' "${url%/v1/mcp}"
 }
 
+build_curl_resolve_args() {
+  local url="$1"
+  CURL_URL_RESOLVE_ARGS=()
+  [[ ${#CURL_RESOLVE_RULES[@]} -gt 0 ]] || return 0
+
+  local host port
+  read -r host port < <(python3 - "$url" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+if parsed.port is not None:
+    port = parsed.port
+elif parsed.scheme == "https":
+    port = 443
+else:
+    port = 80
+print(host, port)
+PY
+)
+
+  [[ -n "$host" && -n "$port" ]] || return 0
+
+  local rule rule_host remainder rule_port rule_ip
+  for rule in "${CURL_RESOLVE_RULES[@]}"; do
+    rule_host="${rule%%:*}"
+    remainder="${rule#*:}"
+    if [[ "$remainder" == *:* ]]; then
+      rule_port="${remainder%%:*}"
+      rule_ip="${remainder#*:}"
+    else
+      rule_port="$port"
+      rule_ip="$remainder"
+    fi
+    if [[ "$rule_host" == "$host" && -n "$rule_ip" ]]; then
+      CURL_URL_RESOLVE_ARGS+=(--resolve "${host}:${rule_port}:${rule_ip}")
+    fi
+  done
+}
+
 if [[ -z "$LOCAL_MCP_URL" ]]; then
   LOCAL_MCP_URL="$(mcp_url_from_root "$LOCAL_TORII_ROOT")"
 fi
@@ -239,18 +297,19 @@ http_request() {
   local url="$2"
   local payload="${3:-}"
   local body_file header_file
+  local curl_cmd=(curl --silent --show-error)
 
   body_file="$(mktemp)"
   header_file="$(mktemp)"
   cleanup
   last_body="$body_file"
   last_headers="$header_file"
+  build_curl_resolve_args "$url"
+  curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
     last_status="$(
-      curl \
-      --silent \
-      --show-error \
+      "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
       --write-out "%{http_code}" \
@@ -258,9 +317,7 @@ http_request() {
     )"
   else
     last_status="$(
-      curl \
-      --silent \
-      --show-error \
+      "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
       --write-out "%{http_code}" \
@@ -270,6 +327,114 @@ http_request() {
       "$url"
     )"
   fi
+}
+
+print_status_route_diagnostics() {
+  local target_url="$1"
+  local status_url
+  status_url="$(normalize_root_url "$target_url")/status"
+
+  echo "==> diagnostic: GET ${status_url}" >&2
+  http_request GET "$status_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "status diagnostic failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  python3 - "$last_body" <<'PY' >&2
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+sumeragi = payload.get("sumeragi") or {}
+teu_backlog = None
+backlog_entries = payload.get("teu_dataspace_backlog")
+if isinstance(backlog_entries, list) and backlog_entries:
+    first = backlog_entries[0]
+    if isinstance(first, dict):
+        teu_backlog = first.get("backlog")
+
+summary = {
+    "blocks": payload.get("blocks"),
+    "queue_size": payload.get("queue_size"),
+    "commit_qc_height": sumeragi.get("commit_qc_height"),
+    "tx_queue_depth": sumeragi.get("tx_queue_depth"),
+    "tx_queue_saturated": sumeragi.get("tx_queue_saturated"),
+    "teu_dataspace_backlog": teu_backlog,
+}
+print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+PY
+}
+
+print_sumeragi_route_diagnostics() {
+  local target_url="$1"
+  local sumeragi_url
+  sumeragi_url="$(normalize_root_url "$target_url")/v1/sumeragi/status"
+
+  echo "==> diagnostic: GET ${sumeragi_url}" >&2
+  http_request GET "$sumeragi_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "sumeragi diagnostic failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  python3 - "$last_body" <<'PY' >&2
+import json
+import sys
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+summary = {
+    "commit_qc_height": payload.get("commit_qc_height", dig(payload, "commit_qc", "height")),
+    "highest_qc_height": payload.get("highest_qc_height", dig(payload, "highest_qc", "height")),
+    "tx_queue_depth": payload.get("tx_queue_depth"),
+    "tx_queue_saturated": payload.get("tx_queue_saturated"),
+    "view_change_last_cause": dig(payload, "view_change_causes", "last_cause"),
+    "worker_loop_stage": dig(payload, "worker_loop", "stage"),
+}
+print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+PY
+}
+
+classify_public_ingress_failure() {
+  local target_url="$1"
+  local status_url mcp_url
+
+  status_url="$(normalize_root_url "$target_url")/status"
+  mcp_url="$(normalize_root_url "$target_url")/v1/mcp"
+
+  http_request GET "$status_url"
+  if [[ "$last_status" == "502" || "$last_status" == "503" ]]; then
+    echo "write canary failed: public Torii ingress looks degraded (${status_url} -> HTTP ${last_status})" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  http_request GET "$mcp_url"
+  if [[ "$last_status" == "502" || "$last_status" == "503" ]]; then
+    echo "write canary failed: public MCP ingress looks degraded (${mcp_url} -> HTTP ${last_status})" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  return 1
 }
 
 check_required_tools() {
@@ -408,6 +573,7 @@ if validator_set_len < min_validator_set_len:
     print(
         f"{label}: /status reported only {validator_set_len} validators in the commit QC set; "
         f"Taira rollout expects at least {min_validator_set_len}. "
+        "Remember that /status.peers is only the queried node's remote-peer count. "
         "Render per-validator configs from configs/soranexus/taira/validator_roster.example.toml "
         "with scripts/render_taira_validator_bundle.py before cutting traffic.",
         file=sys.stderr,
@@ -890,6 +1056,23 @@ run_write_canary() {
       rm -f "$temp_config" "$output_file"
       trap cleanup EXIT
       return 0
+    fi
+    if grep -q 'Transaction expired' "$output_file"; then
+      echo "write canary failed: transaction expired; sampling public status before exiting" >&2
+      print_status_route_diagnostics "$target_url"
+      print_sumeragi_route_diagnostics "$target_url"
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
+    fi
+    if grep -Eq '(^|[^0-9])403([^0-9]|$)|Forbidden' "$output_file"; then
+      echo "write canary failed: signer or permission check returned 403; re-check that the canary account still exists on Taira, still holds a fee asset balance, and still has the permissions required for the requested mutation" >&2
+      print_status_route_diagnostics "$target_url"
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
+    fi
+    if classify_public_ingress_failure "$target_url"; then
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
     fi
     echo "write canary failed" >&2
     sed -n '1,80p' "$output_file" >&2 || true

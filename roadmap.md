@@ -127,6 +127,50 @@ invalidate the staged activation block.
     multi-hour window exists, `cargo test --workspace`) after the remaining
     unrelated dirty-tree work is either merged or isolated.
 
+Latest sync (2026-04-16 Taira local 4-validator Docker proof and slim prebuilt image path):
+the Taira Docker slice is no longer limited to a one-node smoke. The repo now
+has a renderer that turns `kagami localnet` output into four container-ready
+peer configs/env files with canonical `addr:...#CRC16` literals, the plain
+`taira-validator-container.sh` wrapper can place those peers on a shared
+Docker bridge via `TAIRA_DOCKER_NETWORK`, the repo rollout script passes
+against that local 4-validator cluster, and the public read-only rollout smoke
+also passes against `https://taira.sora.org`. The prebuilt release-image path
+is now practical locally because `scripts/build_release_image.sh
+--use-target-prebuilt` stages a tiny temporary Docker context and writes its
+manifest with `python3`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/scripts/render_taira_localnet_container_bundle.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/render_taira_localnet_container_bundle_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/taira_validator_container_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.compose.env.example`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/docker_build.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test scripts.tests.render_taira_localnet_container_bundle_test`
+  - `python3 scripts/render_taira_localnet_container_bundle.py --bundle-dir dist/taira-localnet-smoke --output-dir dist/taira-localnet-cluster`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:28080 --skip-write-canary`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+  - `scripts/build_release_image.sh --profile iroha3 --config taira --use-target-prebuilt --tag local/taira-validator:deploy --artifacts-dir dist/taira-release-image`
+- remaining work:
+  - publish the first official `taira-*` image tags from a committed ref or a
+    clean publish runner; this machine has registry credentials, but the
+    current source tree is dirty and should not be used to push opaque official
+    artifacts
+  - if a full local signed canary proof is required for the 4-node cluster,
+    seed the local fee asset path or use a pre-funded local signer; the
+    read-only rollout gate already passes once the cluster publishes
+    `commit_qc_validator_set_len = 4`
+  - run broader repository validation (`cargo build --workspace`, then the
+    multi-hour `cargo test --workspace`) once this Docker slice is isolated
+    from the unrelated dirty-tree work
+
 Latest sync (2026-04-16 Taira validator image and manual publish workflow landed):
 the repo now has a dedicated `CONFIG_PROFILE=taira` runtime image path, a
 Taira-aware default Docker entrypoint, and a manual GitHub Actions workflow for
