@@ -1,0 +1,19 @@
+[Unit]
+Description=Iroha Taira validator container
+Documentation=https://github.com/hyperledger/iroha/tree/main/configs/soranexus/taira
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/iroha
+ExecStartPre=-/opt/iroha/configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env pull
+ExecStart=/opt/iroha/configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env up
+ExecReload=/opt/iroha/configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env restart
+ExecStop=/opt/iroha/configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

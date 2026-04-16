@@ -1,6 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Negative-path integration coverage for Sumeragi evidence and reconfiguration.
-use std::{thread, time::Duration};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
+    time::Duration,
+};
 
 use eyre::{Result, bail, ensure};
 use integration_tests::sandbox;
@@ -32,6 +36,8 @@ use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
+
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 fn evidence_count(value: &norito::json::Value) -> u64 {
     value
@@ -202,6 +208,83 @@ fn set_evidence_horizon(client: &Client, horizon: u64) -> Result<()> {
     Ok(())
 }
 
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+fn submit_client_for_network(network: &Network, probe: &Client) -> Client {
+    let peer_count = network.peers().len();
+    let status = probe.get_status().ok();
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    let selected_index = pick_submit_peer_index(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    );
+    network
+        .peers()
+        .get(selected_index)
+        .unwrap_or_else(|| {
+            network
+                .peers()
+                .first()
+                .expect("network should have at least one peer")
+        })
+        .client()
+}
+
 fn advance_to_height(
     runtime: &Runtime,
     network: &Network,
@@ -211,7 +294,8 @@ fn advance_to_height(
 ) -> Result<()> {
     let status = client.get_status()?;
     for idx in status.blocks..target {
-        client.submit_blocking(Log::new(Level::INFO, format!("{label} tick {idx}")))?;
+        let submit_client = submit_client_for_network(network, client);
+        submit_client.submit_blocking(Log::new(Level::INFO, format!("{label} tick {idx}")))?;
     }
     runtime.block_on(network.ensure_blocks_with(|height| height.total >= target))?;
     Ok(())
@@ -481,7 +565,7 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
             )),
         ])
         .sign(ALICE_KEYPAIR.private_key());
-    let err = client
+    let err = submit_client_for_network(&network, &client)
         .submit_transaction_blocking(&invalid_height_tx)
         .expect_err("mode_activation_height equal to current height must fail");
     ensure!(
@@ -492,7 +576,7 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
         "expected height validation error, got {err:?}"
     );
 
-    let desired_height = client.get_status()?.blocks.saturating_add(3);
+    let desired_height = client.get_status()?.blocks.saturating_add(5);
     let staged_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
         .with_instructions([
             SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
@@ -503,7 +587,7 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
             )),
         ])
         .sign(ALICE_KEYPAIR.private_key());
-    client.submit_transaction_blocking(&staged_tx)?;
+    submit_client_for_network(&network, &client).submit_transaction_blocking(&staged_tx)?;
 
     advance_to_height(
         &runtime,
@@ -546,7 +630,7 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
     );
 
     let status = client.get_status()?;
-    let activation_height = status.blocks + 3;
+    let activation_height = status.blocks + 5;
     let switch_tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
         .with_instructions([
             SetParameter::new(Parameter::Sumeragi(SumeragiParameter::NextMode(
@@ -557,7 +641,7 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
             )),
         ])
         .sign(ALICE_KEYPAIR.private_key());
-    client.submit_transaction_blocking(&switch_tx)?;
+    submit_client_for_network(&network, &client).submit_transaction_blocking(&switch_tx)?;
 
     advance_to_height(
         &runtime,
@@ -784,6 +868,34 @@ fn start_network(context: &'static str) -> Result<Option<(sandbox::SerializedNet
         return Ok(None);
     };
     Ok(Some((network, runtime)))
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
 
 fn collectors_consensus_mode(value: &Value) -> Option<&str> {

@@ -4,11 +4,13 @@
 use std::{
     fs,
     path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
+use iroha::client::Client;
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter},
@@ -27,6 +29,7 @@ const PACEMAKER_MAX_BACKOFF_MS: u64 = 5_000;
 const PACEMAKER_JITTER_FRAC_PERMILLE: u64 = 25;
 const PACEMAKER_FALLBACK_JITTER_MS: u64 = 125;
 const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 20;
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
@@ -50,26 +53,23 @@ fn npos_network_produces_blocks() -> Result<()> {
     let result: Result<()> = (|| {
         rt.block_on(async { wait_for_status_responses(&network, sync_timeout).await })
             .wrap_err("peers did not respond to status after startup")?;
-        // Drive the chain forward deterministically with single‑transaction blocks.
-        let submit_peer = network
-            .peers()
-            .first()
-            .cloned()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let status_before = submit_peer.client().get_status()?;
+        // Drive the chain forward deterministically with single-transaction blocks, but
+        // choose a connected submit peer on each attempt to avoid queue-timeout flakiness
+        // right after startup on slower grouped runs.
+        let probe_client = network.client();
+        let status_before = probe_client.get_status()?;
         let target_height = status_before.blocks + 5;
-
-        for i in 0..5 {
-            let client = submit_peer.client();
-            let message = format!("npos liveness seed {i}");
-            client
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
-                .wrap_err_with(|| format!("submit liveness log {i}"))?;
-        }
 
         let observed_heights = rt
             .block_on(async {
-                wait_for_converged_heights(&network, target_height, sync_timeout).await
+                drive_network_to_height(
+                    &network,
+                    &probe_client,
+                    target_height,
+                    sync_timeout,
+                    "npos liveness seed",
+                )
+                .await
             })
             .wrap_err("heights did not converge")?;
 
@@ -275,6 +275,156 @@ fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
     }
 }
 
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+async fn submit_client_for_network(network: &Network, probe: &Client) -> Client {
+    let peer_count = network.peers().len();
+    let status = tokio::task::spawn_blocking({
+        let client = probe.clone();
+        move || client.get_status()
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    let selected_index = pick_submit_peer_index(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    );
+    network
+        .peers()
+        .get(selected_index)
+        .unwrap_or_else(|| {
+            network
+                .peers()
+                .first()
+                .expect("network should have at least one peer")
+        })
+        .client()
+}
+
+async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> Result<()> {
+    let submit_client = submit_client_for_network(network, probe).await;
+    tokio::task::spawn_blocking(move || {
+        // Submit without waiting for tx confirmation. The height wait below is the actual
+        // success criterion, and confirmation streams are much flakier on restart-heavy tests.
+        submit_client.submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+    })
+    .await
+    .wrap_err("join seed submit task")?
+    .map(|_| ())
+    .wrap_err("submit seed log")
+}
+
+async fn drive_network_to_height(
+    network: &Network,
+    probe: &Client,
+    target_height: u64,
+    timeout: Duration,
+    label: &str,
+) -> Result<Vec<u64>> {
+    let deadline = Instant::now() + timeout;
+    let mut attempt = 0_u64;
+    let mut last_error = None;
+    let mut next_height = tokio::task::spawn_blocking({
+        let client = probe.clone();
+        move || client.get_status()
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|status| status.blocks.saturating_add(1))
+    .unwrap_or(1)
+    .min(target_height);
+
+    let connectivity_timeout = timeout.min(Duration::from_secs(30));
+    wait_for_submit_connectivity(network, connectivity_timeout)
+        .await
+        .wrap_err("submit connectivity not ready before seeding progress")?;
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(eyre!(
+                "heights failed to converge after {attempt} seed submissions; target={target_height} last_error={last_error:?}"
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let probe_timeout = remaining.min(Duration::from_secs(POST_RESTART_PROGRESS_PROBE_SECS));
+        if next_height > target_height {
+            return wait_for_converged_heights(network, target_height, probe_timeout).await;
+        }
+
+        let message = format!("{label} {attempt}");
+        submit_seed_log(network, probe, message)
+            .await
+            .wrap_err_with(|| format!("submit seed attempt {attempt}"))?;
+        attempt = attempt.saturating_add(1);
+        match wait_for_converged_heights(network, next_height, probe_timeout).await {
+            Ok(heights) => {
+                if next_height >= target_height {
+                    return Ok(heights);
+                }
+                let observed_max = heights.iter().copied().max().unwrap_or(next_height);
+                next_height = observed_max.saturating_add(1).min(target_height);
+                last_error = None;
+            }
+            Err(err) => {
+                last_error = Some(format!("{err:?}"));
+                sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
 fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
     let storage_dir = peer
         .latest_stdout_log_path()
@@ -327,6 +477,25 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(2), 0);
     assert_eq!(min_connected_peers_for_submit(3), 1);
     assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -388,13 +557,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             .cloned()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let client = primary_peer.client();
-        for i in 0..3 {
-            let message = format!("npos pacemaker seed {i}");
-            client
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
-                .wrap_err_with(|| format!("submit pacemaker seed {i}"))?;
-        }
-        wait_for_converged_heights(&network, 4, sync_timeout)
+        drive_network_to_height(&network, &client, 4, sync_timeout, "npos pacemaker seed")
             .await
             .wrap_err("initial heights did not converge")?;
         let baseline_heights = wait_for_converged_heights_with_skew(&network, 4, sync_timeout, 0)
@@ -438,47 +601,15 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .all(|height| *height == baseline_height),
             "post-restart peers should settle on baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
         );
-        wait_for_submit_connectivity(&network, sync_timeout)
-            .await
-            .wrap_err("submit connectivity not ready after restart")?;
-        let resume_deadline = Instant::now() + sync_timeout;
-        let mut resume_attempt = 0_u64;
-        let mut last_resume_error = None;
-        let peer_count = network.peers().len();
-        ensure!(peer_count > 0, "network must have at least one peer");
-        let _resumed_heights = loop {
-            for offset in 0..3 {
-                let submit_peer = network
-                    .peers()
-                    .get((resume_attempt as usize + offset) % peer_count)
-                    .ok_or_else(|| eyre!("network must have at least one peer"))?;
-                let message = format!("npos pacemaker resume seed {resume_attempt}-{offset}");
-                submit_peer
-                    .client()
-                    .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
-                    .wrap_err_with(|| {
-                        format!("submit pacemaker resume seed {resume_attempt}-{offset}")
-                    })?;
-            }
-            resume_attempt = resume_attempt.saturating_add(1);
-
-            let now = Instant::now();
-            if now >= resume_deadline {
-                return Err(eyre!(
-                    "post-restart heights did not converge after {resume_attempt} resume batches; last_error={last_resume_error:?}"
-                ));
-            }
-            let remaining = resume_deadline.saturating_duration_since(now);
-            let probe_timeout =
-                remaining.min(Duration::from_secs(POST_RESTART_PROGRESS_PROBE_SECS));
-            match wait_for_converged_heights(&network, baseline_height + 1, probe_timeout).await {
-                Ok(heights) => break heights,
-                Err(err) => {
-                    last_resume_error = Some(format!("{err:?}"));
-                    sleep(Duration::from_millis(500)).await;
-                }
-            }
-        };
+        let _resumed_heights = drive_network_to_height(
+            &network,
+            &client,
+            baseline_height + 1,
+            sync_timeout,
+            "npos pacemaker resume seed",
+        )
+        .await
+        .wrap_err("post-restart heights did not converge")?;
 
         let pacemaker_after = fetch_pacemaker_status(&http, &pacemaker_url).await?;
 

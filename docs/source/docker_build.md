@@ -91,3 +91,15 @@ Keep validator-specific runtime material out of the image. Generate
 `/config/config.toml` with
 `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
 and mount it into the container together with persistent `/storage`.
+
+For a host-side Taira validator deployment, use the checked-in examples under
+`configs/soranexus/taira/`:
+
+- `taira-validator-container.sh`
+- `docker-compose.validator.yml`
+- `taira-validator-container.compose.env.example`
+- `taira-validator-container.service`
+
+Prefer `taira-validator-container.sh` on hosts that only have the base Docker
+CLI. Use `docker-compose.validator.yml` only when the Compose plugin is
+installed and verified.
