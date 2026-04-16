@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Musubi package-manager foundation landed
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  now defines the first Musubi registry data model: canonical
+  `namespace/package@version` references without leading `@`, exact semantic
+  versions, SoraFS-backed source archive references, source-library
+  dependencies, dapp namespace links, immutable release records, yanks, and
+  curated short aliases.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/bin/musubi.rs`
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/musubi.rs`
+  add a standalone `musubi` binary in the existing CLI package. The local
+  command surface can initialize `Musubi.toml`, add exact dependencies, seed a
+  registry-pending `Musubi.lock`, compile Kotodama `.ko` sources, hash package
+  source trees, inspect manifests, and emit dry-run publish/yank payloads.
+- `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md` documents
+  the package syntax, namespace-to-dapp alias link, current CLI workflow, and
+  anti-name-squatting policy.
+- Chain-backed publish/yank ISIs, release queries, namespace authority checks,
+  SoraFS upload integration, and compiler-level source-library import
+  resolution remain open follow-up work.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model musubi --lib -- --nocapture` (pass, 6 tests)
+  - `cargo test -p iroha_cli --bin musubi -- --nocapture` (pass, 6 tests; this
+    initially waited behind an unrelated `cargo test --lib` lock holder)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: plain `cargo test` reduced to a top-level smoke graph
 - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml` now declares only
   `crates/iroha` as the workspace default member. Plain `cargo test` still
@@ -18,6 +45,15 @@ Last updated: 2026-04-16
   `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md` now distinguish the
   reduced default smoke command from focused crate tests and the full workspace
   command.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/src/{client.rs,config.rs}`
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/tests/tx_ttl.rs`
+  now use dataspace-qualified test fixture domains and the existing
+  compatibility-test helper where required, so the narrowed root
+  `cargo test` command is green on the universal-account model.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  uses a style-compliant tuple enum variant plus a documented yank-info struct
+  for `MusubiReleaseStatus::Yanked`, which unblocks the local Musubi module
+  already wired into this checkout's data-model compile path.
 - Dependency graph snapshot on `aarch64-apple-darwin` after the reduction:
   plain `cargo test` default graph is 664 unique packages; full
   `cargo test --workspace` graph is 1108 unique packages. The default graph no
@@ -31,10 +67,14 @@ Last updated: 2026-04-16
     49m16s; this exposed why the standalone IVM/core/Norito test suites should
     not be part of the root default command)
   - `cargo test --no-run` with the final top-level default set (pass)
+  - `cargo test --lib` (pass, 274 tests)
+  - `cargo test` (pass: `iroha` lib, 3 integration test binaries, and doctests)
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha/src/config.rs crates/iroha/tests/tx_ttl.rs crates/iroha_data_model/src/musubi.rs`
   - `cargo metadata --locked --format-version 1 --no-deps`
   - `cargo tree --target aarch64-apple-darwin --edges normal,build,dev`
   - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
   - `python3 scripts/check_dependency_budget.py`
+  - `git diff --check`
 
 ## 2026-04-16 Follow-up: DA/RBC restart roster-change regression reruns cleanly
 - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`

@@ -105,6 +105,8 @@ pub mod merge;
 pub mod metadata;
 /// Ministry transparency/governance payload types.
 pub mod ministry;
+/// Musubi package registry data types for Kotodama source packages.
+pub mod musubi;
 /// Name parsing and validation utilities.
 pub mod name;
 /// Nexus-lane scaffolding and identifiers.
