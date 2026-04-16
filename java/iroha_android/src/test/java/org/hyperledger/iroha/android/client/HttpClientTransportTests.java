@@ -98,7 +98,9 @@ public final class HttpClientTransportTests {
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
+    resolveAccountAliasRequestParsesResponseWithoutIndex();
     resolveAccountAliasAllowsNotFound();
+    resolveAccountAliasRejectsNonIntegerIndex();
     resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
     identifierResolveRequestBuilderCanonicalizesPolicyInput();
@@ -1800,6 +1802,58 @@ public final class HttpClientTransportTests {
         : "Account alias resolve URI mismatch";
     assert readBody(request).equals("{\"alias\":\"missing@universal\"}")
         : "Account alias resolve payload mismatch";
+  }
+
+  private static void resolveAccountAliasRequestParsesResponseWithoutIndex() {
+    final String json =
+        "{"
+            + "\"alias\":\"banking@centralbank.universal\","
+            + "\"account_id\":\"aid:banking-123\","
+            + "\"source\":\"rekey_record\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final Optional<AccountAliasResolution> response =
+        transport.resolveAccountAlias("banking@centralbank.universal").join();
+
+    assert response.isPresent() : "Account alias resolution should be present";
+    final AccountAliasResolution resolution = response.orElseThrow();
+    assert "banking@centralbank.universal".equals(resolution.alias()) : "Alias mismatch";
+    assert "aid:banking-123".equals(resolution.accountId()) : "Account id mismatch";
+    assert resolution.index() == null : "Index should be absent when the payload omits it";
+    assert "rekey_record".equals(resolution.source()) : "Source mismatch";
+  }
+
+  private static void resolveAccountAliasRejectsNonIntegerIndex() {
+    final String json =
+        "{"
+            + "\"alias\":\"alice@universal\","
+            + "\"account_id\":\"aid:alice-123\","
+            + "\"index\":3.5"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final CompletableFuture<Optional<AccountAliasResolution>> future =
+        transport.resolveAccountAlias("alice@universal");
+    boolean threw = false;
+    try {
+      future.join();
+    } catch (final java.util.concurrent.CompletionException ex) {
+      threw = true;
+    }
+    assert threw : "Non-integer index must complete exceptionally";
+    assert future.isCompletedExceptionally()
+        : "Future must be completed exceptionally for a non-integer index";
   }
 
   private static void resolveAccountAliasFailsOnMalformedJson() {
