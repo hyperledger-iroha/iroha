@@ -9,8 +9,12 @@ LOCAL_MCP_URL="${LOCAL_MCP_URL:-}"
 PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
 WRITE_TARGET="${WRITE_TARGET:-}"
 WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
+ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
+ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
+ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -20,13 +24,16 @@ SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
 CHECKED_LABELS=()
 CHECKED_ROOTS=()
+CURL_RESOLVE_RULES=()
+CURL_URL_RESOLVE_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
                             [--skip-local] [--skip-public]
                             [--write-config PATH] [--write-target local|public|URL]
-                            [--iroha-bin PATH] [--skip-write-canary]
+                            [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
+                            [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 The check fails unless:
@@ -43,12 +50,19 @@ The check fails unless:
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, and contract routes on the same node URL
 
-For final public rollout, also pass --write-config with a runtime-only
-canary signer config. The signer must already exist on Taira; if it is missing
-the faucet asset, this script will try to bootstrap it through
-POST /v1/accounts/faucet before retrying the write canary. Without
---write-config, public checks are rejected
-unless --skip-write-canary is provided explicitly for read-only validation.
+When diagnosing public write failures, prefer `/status` fields such as
+`blocks`, `queue_size`, `sumeragi.commit_qc_height`,
+`sumeragi.tx_queue_depth`, `sumeragi.tx_queue_saturated`, and
+`teu_dataspace_backlog`. Do not use `/status.peers` as validator-set size; it
+is the queried node's current remote-peer count.
+
+For final public rollout, use a runtime-only canary signer config. When
+`--write-config` is omitted, the script bootstraps
+`/run/secrets/taira-canary-client.toml` automatically, onboarding a fresh
+ordinary account on Taira and attempting an initial faucet claim before the
+signed write canary. The write canary still retries the faucet lane on
+`Failed to find asset` so a saturated queue does not require manual signer
+preparation. Use `--skip-write-canary` only for read-only validation.
 
 Public checks intentionally require an explicit public node URL
 (`--public-root https://<taira-node>` or `--public-url https://<taira-node>/v1/mcp`).
@@ -124,6 +138,14 @@ while [[ $# -gt 0 ]]; do
       IROHA_BIN="$2"
       shift 2
       ;;
+    --resolve-host)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --resolve-host" >&2
+        exit 1
+      }
+      CURL_RESOLVE_RULES+=("$2")
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -151,8 +173,7 @@ if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
 fi
 
 if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
-  echo "public rollout requires --write-config for a signed canary write; use --skip-write-canary only for read-only validation" >&2
-  exit 1
+  WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
 fi
 
 if [[ -z "$IROHA_BIN" ]]; then
@@ -206,6 +227,47 @@ mcp_root_from_url() {
   printf '%s\n' "${url%/v1/mcp}"
 }
 
+build_curl_resolve_args() {
+  local url="$1"
+  CURL_URL_RESOLVE_ARGS=()
+  [[ ${#CURL_RESOLVE_RULES[@]} -gt 0 ]] || return 0
+
+  local host port
+  read -r host port < <(python3 - "$url" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+if parsed.port is not None:
+    port = parsed.port
+elif parsed.scheme == "https":
+    port = 443
+else:
+    port = 80
+print(host, port)
+PY
+)
+
+  [[ -n "$host" && -n "$port" ]] || return 0
+
+  local rule rule_host remainder rule_port rule_ip
+  for rule in "${CURL_RESOLVE_RULES[@]}"; do
+    rule_host="${rule%%:*}"
+    remainder="${rule#*:}"
+    if [[ "$remainder" == *:* ]]; then
+      rule_port="${remainder%%:*}"
+      rule_ip="${remainder#*:}"
+    else
+      rule_port="$port"
+      rule_ip="$remainder"
+    fi
+    if [[ "$rule_host" == "$host" && -n "$rule_ip" ]]; then
+      CURL_URL_RESOLVE_ARGS+=(--resolve "${host}:${rule_port}:${rule_ip}")
+    fi
+  done
+}
+
 if [[ -z "$LOCAL_MCP_URL" ]]; then
   LOCAL_MCP_URL="$(mcp_url_from_root "$LOCAL_TORII_ROOT")"
 fi
@@ -235,18 +297,19 @@ http_request() {
   local url="$2"
   local payload="${3:-}"
   local body_file header_file
+  local curl_cmd=(curl --silent --show-error)
 
   body_file="$(mktemp)"
   header_file="$(mktemp)"
   cleanup
   last_body="$body_file"
   last_headers="$header_file"
+  build_curl_resolve_args "$url"
+  curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
     last_status="$(
-      curl \
-      --silent \
-      --show-error \
+      "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
       --write-out "%{http_code}" \
@@ -254,9 +317,7 @@ http_request() {
     )"
   else
     last_status="$(
-      curl \
-      --silent \
-      --show-error \
+      "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
       --write-out "%{http_code}" \
@@ -266,6 +327,114 @@ http_request() {
       "$url"
     )"
   fi
+}
+
+print_status_route_diagnostics() {
+  local target_url="$1"
+  local status_url
+  status_url="$(normalize_root_url "$target_url")/status"
+
+  echo "==> diagnostic: GET ${status_url}" >&2
+  http_request GET "$status_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "status diagnostic failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  python3 - "$last_body" <<'PY' >&2
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+sumeragi = payload.get("sumeragi") or {}
+teu_backlog = None
+backlog_entries = payload.get("teu_dataspace_backlog")
+if isinstance(backlog_entries, list) and backlog_entries:
+    first = backlog_entries[0]
+    if isinstance(first, dict):
+        teu_backlog = first.get("backlog")
+
+summary = {
+    "blocks": payload.get("blocks"),
+    "queue_size": payload.get("queue_size"),
+    "commit_qc_height": sumeragi.get("commit_qc_height"),
+    "tx_queue_depth": sumeragi.get("tx_queue_depth"),
+    "tx_queue_saturated": sumeragi.get("tx_queue_saturated"),
+    "teu_dataspace_backlog": teu_backlog,
+}
+print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+PY
+}
+
+print_sumeragi_route_diagnostics() {
+  local target_url="$1"
+  local sumeragi_url
+  sumeragi_url="$(normalize_root_url "$target_url")/v1/sumeragi/status"
+
+  echo "==> diagnostic: GET ${sumeragi_url}" >&2
+  http_request GET "$sumeragi_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "sumeragi diagnostic failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  python3 - "$last_body" <<'PY' >&2
+import json
+import sys
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+summary = {
+    "commit_qc_height": payload.get("commit_qc_height", dig(payload, "commit_qc", "height")),
+    "highest_qc_height": payload.get("highest_qc_height", dig(payload, "highest_qc", "height")),
+    "tx_queue_depth": payload.get("tx_queue_depth"),
+    "tx_queue_saturated": payload.get("tx_queue_saturated"),
+    "view_change_last_cause": dig(payload, "view_change_causes", "last_cause"),
+    "worker_loop_stage": dig(payload, "worker_loop", "stage"),
+}
+print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+PY
+}
+
+classify_public_ingress_failure() {
+  local target_url="$1"
+  local status_url mcp_url
+
+  status_url="$(normalize_root_url "$target_url")/status"
+  mcp_url="$(normalize_root_url "$target_url")/v1/mcp"
+
+  http_request GET "$status_url"
+  if [[ "$last_status" == "502" || "$last_status" == "503" ]]; then
+    echo "write canary failed: public Torii ingress looks degraded (${status_url} -> HTTP ${last_status})" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  http_request GET "$mcp_url"
+  if [[ "$last_status" == "502" || "$last_status" == "503" ]]; then
+    echo "write canary failed: public MCP ingress looks degraded (${mcp_url} -> HTTP ${last_status})" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    return 0
+  fi
+
+  return 1
 }
 
 check_required_tools() {
@@ -404,6 +573,7 @@ if validator_set_len < min_validator_set_len:
     print(
         f"{label}: /status reported only {validator_set_len} validators in the commit QC set; "
         f"Taira rollout expects at least {min_validator_set_len}. "
+        "Remember that /status.peers is only the queried node's remote-peer count. "
         "Render per-validator configs from configs/soranexus/taira/validator_roster.example.toml "
         "with scripts/render_taira_validator_bundle.py before cutting traffic.",
         file=sys.stderr,
@@ -570,8 +740,10 @@ build_write_canary_config() {
   local source_config="$1"
   local target_torii_url="$2"
   local output_config="$3"
+  local time_to_live_ms="$4"
+  local status_timeout_ms="$5"
 
-  python3 - "$source_config" "$target_torii_url" "$output_config" <<'PY'
+  python3 - "$source_config" "$target_torii_url" "$output_config" "$time_to_live_ms" "$status_timeout_ms" <<'PY'
 import sys
 
 try:
@@ -584,7 +756,7 @@ except ModuleNotFoundError:
             "python3 must provide tomllib (Python 3.11+) or tomli to load the canary config"
         ) from error
 
-source_path, target_torii_url, output_path = sys.argv[1:]
+source_path, target_torii_url, output_path, time_to_live_ms, status_timeout_ms = sys.argv[1:]
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
@@ -596,9 +768,9 @@ chain_discriminant = account.get("chain_discriminant")
 domain = account.get("domain", "wonderland.universal")
 basic_auth = source.get("basic_auth")
 transaction = source.get("transaction") or {}
-time_to_live_ms = transaction.get("time_to_live_ms", 120000)
-status_timeout_ms = transaction.get("status_timeout_ms", 120000)
 nonce = transaction.get("nonce", False)
+time_to_live_ms = int(time_to_live_ms)
+status_timeout_ms = int(status_timeout_ms)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
@@ -612,10 +784,6 @@ if not isinstance(domain, str) or not domain:
     domain = "wonderland.universal"
 elif "." not in domain:
     domain = f"{domain}.universal"
-if not isinstance(time_to_live_ms, int):
-    raise SystemExit("write canary config `transaction.time_to_live_ms` must be an integer when present")
-if not isinstance(status_timeout_ms, int):
-    raise SystemExit("write canary config `transaction.status_timeout_ms` must be an integer when present")
 if not isinstance(nonce, bool):
     raise SystemExit("write canary config `transaction.nonce` must be a boolean when present")
 
@@ -667,35 +835,68 @@ PY
 }
 
 ensure_iroha_bin() {
-  if [[ "$IROHA_BIN" == */* ]]; then
-    [[ -x "$IROHA_BIN" ]] || {
-      echo "iroha binary is not executable: $IROHA_BIN" >&2
-      exit 1
-    }
-    IROHA_RUNNER=("$IROHA_BIN")
-  else
-    if command -v "$IROHA_BIN" >/dev/null 2>&1; then
+  if [[ -n "$IROHA_BIN" ]]; then
+    if [[ "$IROHA_BIN" == */* ]]; then
+      [[ -x "$IROHA_BIN" ]] || {
+        echo "iroha binary is not executable: $IROHA_BIN" >&2
+        exit 1
+      }
       IROHA_RUNNER=("$IROHA_BIN")
       return 0
     fi
-    if [[ "$IROHA_BIN" == "iroha" ]] && command -v cargo >/dev/null 2>&1; then
-      IROHA_RUNNER=(
-        cargo
-        run
-        --quiet
-        --manifest-path
-        "${REPO_ROOT}/Cargo.toml"
-        -p
-        iroha_cli
-        --bin
-        iroha
-        --
-      )
+    if command -v "$IROHA_BIN" >/dev/null 2>&1; then
+      IROHA_RUNNER=("$IROHA_BIN")
       return 0
     fi
     echo "could not find iroha binary on PATH: $IROHA_BIN" >&2
     exit 1
   fi
+
+  if [[ -x "${REPO_ROOT}/bin/iroha" ]]; then
+    IROHA_RUNNER=("${REPO_ROOT}/bin/iroha")
+  elif [[ -x "${REPO_ROOT}/target/debug/iroha" ]]; then
+    IROHA_RUNNER=("${REPO_ROOT}/target/debug/iroha")
+  elif [[ -x "${REPO_ROOT}/target/release/iroha" ]]; then
+    IROHA_RUNNER=("${REPO_ROOT}/target/release/iroha")
+  elif command -v iroha >/dev/null 2>&1; then
+    IROHA_RUNNER=("iroha")
+  elif command -v cargo >/dev/null 2>&1; then
+    IROHA_RUNNER=(
+      cargo
+      run
+      --quiet
+      --manifest-path
+      "${REPO_ROOT}/Cargo.toml"
+      -p
+      iroha_cli
+      --bin
+      iroha
+      --
+    )
+  else
+    echo "could not find an iroha binary or cargo fallback" >&2
+    exit 1
+  fi
+}
+
+ensure_write_canary_config() {
+  local target_url="$1"
+  local bootstrap_cmd=(
+    python3
+    "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
+    --torii-root "$target_url"
+    --output-config "$WRITE_CONFIG"
+    --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"
+    --time-to-live-ms "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
+    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  )
+
+  if [[ -n "$IROHA_BIN" ]]; then
+    bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+
+  echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
+  "${bootstrap_cmd[@]}" >&2
 }
 
 resolve_canary_account_id() {
@@ -815,15 +1016,18 @@ run_write_canary() {
   local output_file temp_config write_msg
 
   ensure_iroha_bin
-  [[ -f "$WRITE_CONFIG" ]] || {
-    echo "write canary config does not exist: $WRITE_CONFIG" >&2
-    exit 1
-  }
+  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  ensure_write_canary_config "$target_url"
 
   temp_config="$(mktemp)"
   output_file="$(mktemp)"
-  trap 'rm -f "$temp_config" "$output_file"; cleanup' EXIT
-  build_write_canary_config "$WRITE_CONFIG" "$target_url" "$temp_config"
+  trap 'rm -f "${temp_config:-}" "${output_file:-}"; cleanup' EXIT
+  build_write_canary_config \
+    "$WRITE_CONFIG" \
+    "$target_url" \
+    "$temp_config" \
+    "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
+    "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 
   write_msg="${WRITE_MESSAGE_PREFIX}-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "==> write canary: ${target_url} (message: ${write_msg})"
@@ -852,6 +1056,23 @@ run_write_canary() {
       rm -f "$temp_config" "$output_file"
       trap cleanup EXIT
       return 0
+    fi
+    if grep -q 'Transaction expired' "$output_file"; then
+      echo "write canary failed: transaction expired; sampling public status before exiting" >&2
+      print_status_route_diagnostics "$target_url"
+      print_sumeragi_route_diagnostics "$target_url"
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
+    fi
+    if grep -Eq '(^|[^0-9])403([^0-9]|$)|Forbidden' "$output_file"; then
+      echo "write canary failed: signer or permission check returned 403; re-check that the canary account still exists on Taira, still holds a fee asset balance, and still has the permissions required for the requested mutation" >&2
+      print_status_route_diagnostics "$target_url"
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
+    fi
+    if classify_public_ingress_failure "$target_url"; then
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
     fi
     echo "write canary failed" >&2
     sed -n '1,80p' "$output_file" >&2 || true

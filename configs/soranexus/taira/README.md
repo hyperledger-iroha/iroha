@@ -20,6 +20,11 @@ Validator-specific hostnames such as `https://taira-validator-1.sora.org` may
 also exist as alternate public Torii roots when the edge is configured to
 expose them directly.
 
+Use the exact public root the deployment or operator gives you. Do not
+silently swap `https://taira.sora.org` for a guessed direct-validator host,
+and do not infer validator-set size from `/status.peers`: that field is the
+queried node's current remote-peer count, not the chain's validator-set size.
+
 `https://taira.sora.org` is the shared Torii origin, not an app website. Do
 not bind product frontends to that host root through `sorafs_sites.json`.
 
@@ -64,6 +69,9 @@ config rather than wrapper-local defaults:
   have the Docker Compose plugin installed.
 - `taira-validator-container.service`: sample systemd wrapper that keeps the
   validator container under service management without requiring Docker Compose.
+- `scripts/render_taira_localnet_container_bundle.py`: rewrites a fresh
+  `kagami localnet` bundle into four container-ready configs/env files with
+  canonical `addr:...#CRC16` literals for shared-bridge Docker validation.
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
@@ -151,8 +159,9 @@ The image ships:
 
 - `irohad`
 - the checked-in static Taira bundle under `/opt/iroha/configs/soranexus/taira`
+- the bundled rANS codec tables under `/opt/iroha/codec/rans/tables`
 - a Taira-aware entrypoint that defaults to:
-  - `irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json`
+  - `irohad --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json`
 
 The image does **not** embed validator-specific runtime material. Keep using
 `render_taira_validator_bundle.py` to generate the mounted
@@ -176,7 +185,7 @@ docker run -d --name taira-validator-1 \
 ```
 
 If you need to override the bundled public genesis, point the entrypoint at a
-mounted file:
+mounted manifest file:
 
 ```bash
 docker run --rm \
@@ -186,6 +195,53 @@ docker run --rm \
   -v /var/lib/iroha/taira-validator-1:/storage \
   hyperledger/iroha:taira-latest
 ```
+
+If you need a disconnected or one-node smoke boot, mount both the manifest JSON
+and a signed genesis payload. The entrypoint rewrites the copied
+`/storage/runtime-config.toml` so `genesis.file` points at the mounted
+`/config/genesis.signed.nrt` path:
+
+```bash
+docker run --rm \
+  -e IROHA_TAIRA_GENESIS=/config/genesis.json \
+  -e IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt \
+  -v "$PWD/dist/taira-localnet-smoke-container.toml:/config/config.toml:ro" \
+  -v "$PWD/dist/taira-localnet-smoke/genesis.json:/config/genesis.json:ro" \
+  -v "$PWD/dist/taira-localnet-smoke/genesis.signed.nrt:/config/genesis.signed.nrt:ro" \
+  -v "$PWD/dist/taira-localnet-smoke-container-storage:/storage" \
+  -p 28080:8080 \
+  hyperledger/iroha:taira-latest
+```
+
+The checked-in `check_mcp_rollout.sh --skip-public --local-root ...` helper
+still expects at least 4 live validators in `/status`, so a one-node smoke
+should be validated directly with `curl /health`, `curl /status`, and
+`curl /v1/mcp` instead of the full rollout script.
+
+For a local 4-validator container proof, render container-ready configs from a
+fresh `kagami localnet` bundle and start the peers on one user-defined Docker
+bridge:
+
+```bash
+python3 scripts/render_taira_localnet_container_bundle.py \
+  --bundle-dir dist/taira-localnet-smoke \
+  --output-dir dist/taira-localnet-cluster
+
+docker network create taira-localnet >/dev/null 2>&1 || true
+for peer in 0 1 2 3; do
+  bash configs/soranexus/taira/taira-validator-container.sh \
+    --env-file "dist/taira-localnet-cluster/peer${peer}.env" up
+done
+
+bash configs/soranexus/taira/check_mcp_rollout.sh \
+  --skip-public \
+  --local-root http://127.0.0.1:28080 \
+  --skip-write-canary
+```
+
+That path is now validated on this host: peer0 publishes `/status` with
+`commit_qc_validator_set_len = 4`, and the repo rollout script passes end to
+end against the local cluster.
 
 ## Minimum viable topology
 
@@ -303,12 +359,12 @@ Parliament flow and the examples already shipped in the repo:
 Taira's public edge also needs to accept the storage payload upload that
 precedes root serving. The current SoraFS storage pin API sends the full staged
 site in one JSON request (`payload_b64`), so the nginx host serving
-the chosen public Torii hostname must keep `client_max_body_size 64m;` from
+the chosen public Torii hostname must keep `client_max_body_size 512m;` from
 `taira-explorer.nginx.conf`. Without that, `yarn taira:publish` fails at
 `POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
 the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
-`64_000_000`, and the local bootstrap overlay now rewrites the served
+`536_870_912`, and the local bootstrap overlay now rewrites the served
 `dist/taira-localnet/peer*.toml` files to keep that same cap live after every
 reset. Taira also overrides `[sorafs.quota] storage_pin_max_events = 64` so
 publish/retry loops on the public testnet do not immediately exhaust the
@@ -367,10 +423,11 @@ top-level `"type": "object"` schema without top-level `anyOf`, `oneOf`,
 for tools such as `iroha.connect.session.delete`, `check_mcp_rollout.sh` now
 fails the rollout immediately instead of letting Codex discover the breakage.
 
-The repo-local Codex plugin and Taira skill now expect an explicit direct-node
-MCP URL rather than a canonical committed live host. Future Nexus/Torii
-deployments should expose the same `/v1/mcp` path and be added as user-local
-MCP servers rather than committed to this repo with one fixed public hostname.
+The repo-local Codex plugin and Taira skill now treat
+`https://taira.sora.org/v1/mcp` as the current primary public MCP endpoint
+while still allowing operator-provided alternate public roots. Future
+Nexus/Torii deployments should keep the same `/v1/mcp` path and be added as
+user-local MCP servers with the exact public root under test.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
 both the public endpoint and a runtime-only canary signer config:
@@ -413,14 +470,15 @@ It also verifies that the same direct node serves:
 - `/v1/contracts/deploy`
 - `/v1/contracts/state`
 
-That config must be a normal `iroha` client TOML for a low-risk signer that
-already exists on Taira. Start from `taira-canary-client.example.toml`, not
+That config must be a normal `iroha` client TOML for a low-risk runtime-only
+signer. Start from `taira-canary-client.example.toml`, not
 `defaults/client.toml`: the generic repo client uses the zero chain id and is
-not valid for Taira. If the signer still has zero balance for the live faucet
-asset, `check_mcp_rollout.sh` will now solve the public faucet puzzle, claim
-starter funds for that account, wait for the queued transfer to land, and then
-retry the signed ping automatically. Keep the populated canary config out of
-the repo and out of shell history where possible.
+not valid for Taira. If the configured file is missing or still contains the
+placeholder authority, the rollout scripts now generate a fresh keypair,
+onboard the account on public Taira, solve the faucet puzzle, claim starter
+funds, and rewrite `/run/secrets/taira-canary-client.toml` automatically before
+retrying the signed ping. Keep the populated canary config out of the repo and
+out of shell history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
 topology failure, not an app-level validation issue: the public Torii ingress is
@@ -430,6 +488,58 @@ If it fails with `Failed to find asset` even after the automatic faucet
 bootstrap path runs, treat that as a faucet-health or signer-selection issue:
 the configured account either does not exist on Taira yet or the live faucet
 could not fund it.
+
+### Public write failure triage
+
+When public reads succeed but writes fail or hang, classify the failure from
+the queried public Torii node first before assuming a malformed request or a
+full validator-set outage.
+
+Before long public writes such as Soracloud releases or large SoraFS publishes:
+
+- treat `https://taira.sora.org` as the current primary public Torii/API root
+- confirm that the public read path is advancing before trusting writes:
+  - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{blocks, queue_size, peers, sumeragi: {commit_qc_height, commit_qc_validator_set_len, tx_queue_depth, tx_queue_saturated}, teu_dataspace_backlog}'`
+  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{commit_qc_height: (.commit_qc_height // .commit_qc.height // null), highest_qc_height: (.highest_qc_height // .highest_qc.height // null), view_change_last_cause: (.view_change_causes.last_cause // null), worker_loop_stage: (.worker_loop.stage // null)}'`
+- verify the signer you intend to use still exists on the current Taira chain
+  and still has a positive fee-asset balance
+- for Soracloud mutations specifically, also verify that the signer still
+  holds `CanManageSoracloud` and `CanPublishSpaceDirectoryManifest` before
+  starting a large upload
+- after a Taira reset or redeploy, treat cached or previously faucet-funded
+  signers as stale until those checks pass again
+
+When a public write still fails, start with the same status samples above.
+
+Interpret the common public failures as follows:
+
+- `502` / `503` from `GET /v1/mcp`, `POST /v1/mcp`, or other public Torii routes:
+  ingress or rollout health degradation. Treat this as deployment health first.
+- `route_unavailable` from a live write:
+  the public Torii ingress is up, but the write path still cannot reach an
+  authoritative peer for the target lane.
+- `Transaction expired`:
+  likely chain-health, consensus-latency, or queue-saturation trouble first.
+  Report the current `blocks`, `commit_qc_height`, `queue_size`,
+  `tx_queue_depth`, `tx_queue_saturated`, `teu_dataspace_backlog`,
+  `highest_qc_height`, and `view_change_last_cause` samples alongside the
+  failure.
+- `403 Forbidden` immediately after a reset or redeploy:
+  likely signer-permission or signer-state drift first. Re-check that the
+  signer still exists on-chain, still holds a fee asset balance, and still has
+  the permissions required for the mutation.
+- `GET /v1/transactions/status?hash=...` returning `404 not_found` for a
+  previously submitted hash:
+  the queried public node currently has no visibility for that hash. Do not
+  infer commit, reject, or network-wide disappearance from that result alone.
+
+If the latest committed block timestamp stops advancing and `/v1/sumeragi/status`
+shows signals such as `membership.height > commit_qc.height`,
+`view_change_causes.last_cause = "missing_qc"`, or `worker_loop.stage = "idle"`,
+report that the queried public Torii finality path appears stalled. Unless you
+also have validator-side access, describe that as a public-node or
+public-finality-path observation rather than proof that the full validator set
+is down.
 
 ## Governance mode
 
@@ -564,7 +674,7 @@ away from the shipped MCP-enabled config:
    - `sudo systemctl restart taira-irohad.service`
 6. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
-   - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
+   - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis-manifest-json "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
@@ -624,15 +734,18 @@ From `../iroha2-block-explorer-web`:
      Codex/Torii MCP path explicit on both public hostnames and keep future
      route changes from accidentally hiding the MCP endpoint behind the generic
      `/` or `/v1/` proxy rules.
-  - on the shared convenience host, pin the public SoraFS/app-api publication
-    surface to `taira_validator_1_upstream` until all public validators expose
-    symmetric SoraFS capacity and can rehydrate the same CID set. The checked-in
-    nginx example now special-cases:
+  - keep the shared convenience host on `taira_public_edge_upstream` for the
+    public SoraFS and app-api surface as well. The checked-in nginx example now
+    keeps these paths symmetric with the rest of the public edge:
     - `/v1/app-api/`
     - `/v1/sorafs/storage/`
     - `/v1/sorafs/pin/`
     - `/v1/sorafs/cid/`
     - `/sorafs/cid/`
+  - if CID hydration is still inconsistent after the runtime rollout, treat
+    that as a provider-capacity/bootstrap problem and inspect
+    `/v1/sorafs/capacity/state`; do not reintroduce a validator-1-only nginx
+    pin as the steady-state fix.
     - `*.sorafs.taira.sora.org`
     Keep those routes on the same convenience validator that receives
     `POST /v1/sorafs/storage/pin`; otherwise the shared host will flap between
@@ -694,8 +807,13 @@ From `../iroha2-block-explorer-web`:
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}"`
-   - the public check now requires `--write-config /run/secrets/taira-canary-client.toml`
-     unless you explicitly opt into read-only mode with `--skip-write-canary`
+   - when you are validating edge-local SNI before public DNS or TLS is fully
+     live, pin the public host to the edge IP explicitly:
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --resolve-host taira.sora.org:443:127.0.0.1`
+  - the public check now defaults to
+    `/run/secrets/taira-canary-client.toml` and auto-bootstraps it when the
+    file is missing or still contains placeholders, unless you explicitly opt
+    into read-only mode with `--skip-write-canary`
 7. Verify that SNI now serves the correct cert for each host and that MCP,
    Connect, and CID-host routing still work through the public edge:
    - `curl -vI https://taira.sora.org`
@@ -708,7 +826,11 @@ From `../iroha2-block-explorer-web`:
    - verify curated `iroha.*` exposure:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .`
    - verify the native status snapshot is healthy before trusting public writes:
-     `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '.peers, .blocks, .sumeragi.commit_qc_validator_set_len'`
+     `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{blocks, queue_size, peers, sumeragi: {commit_qc_height, commit_qc_validator_set_len, tx_queue_depth, tx_queue_saturated}, teu_dataspace_backlog}'`
+   - remember that `/status.peers` is the queried node's current remote-peer
+     count, not the validator-set size; use
+     `.sumeragi.commit_qc_validator_set_len` or `/v1/sumeragi/validator-sets`
+     for validator-set visibility.
    - create a Connect session through the proxy and ask explicitly for JSON:
      `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
    - verify Connect websocket upgrades on both public hostnames with the

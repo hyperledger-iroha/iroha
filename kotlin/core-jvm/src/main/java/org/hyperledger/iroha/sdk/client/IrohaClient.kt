@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 
@@ -26,6 +27,20 @@ interface IrohaClient {
         val future = CompletableFuture<Map<String, Any>>()
         future.completeExceptionally(
             UnsupportedOperationException("waitForTransactionStatus not supported")
+        )
+        return future
+    }
+
+    /**
+     * Resolves an account alias to its underlying Iroha account id via Torii's
+     * `/v1/aliases/resolve` endpoint.
+     *
+     * The default implementation reports that the operation is unsupported.
+     */
+    fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
+        val future = CompletableFuture<Optional<AccountAliasResolution>>()
+        future.completeExceptionally(
+            UnsupportedOperationException("resolveAccountAlias not supported by this client")
         )
         return future
     }

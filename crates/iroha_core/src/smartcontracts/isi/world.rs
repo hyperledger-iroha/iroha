@@ -8379,9 +8379,10 @@ pub mod isi {
                     ));
                 }
             }
-            // Reject duplicated nullifiers
+            // Reject both previously spent nullifiers and repeated inputs within this transfer.
+            let mut seen_nullifiers = std::collections::BTreeSet::new();
             for &nullifier in self.inputs() {
-                if st.nullifiers.contains(&nullifier) {
+                if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "duplicate nullifier".into(),
                     ));

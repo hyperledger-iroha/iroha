@@ -97,6 +97,9 @@ public final class HttpClientTransportTests {
     callContractRequestParsesResponse();
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
+    resolveAccountAliasRequestParsesResponse();
+    resolveAccountAliasAllowsNotFound();
+    resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
     identifierResolveRequestBuilderCanonicalizesPolicyInput();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
@@ -1738,6 +1741,86 @@ public final class HttpClientTransportTests {
     assert request.uri().toString().equals("https://torii.example/api/v1/gov/contracts/" + contractAddress)
         : "Governance contract URI mismatch";
     assert "GET".equals(request.method()) : "Governance contract must use GET";
+  }
+
+  private static void resolveAccountAliasRequestParsesResponse() {
+    final String accountId =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    final String json =
+        "{"
+            + "\"alias\":\"alice@universal\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"index\":7,"
+            + "\"source\":\"directory\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final Optional<AccountAliasResolution> response =
+        transport.resolveAccountAlias("alice@universal").join();
+
+    assert response.isPresent() : "Account alias resolution should be present";
+    final AccountAliasResolution resolution = response.orElseThrow();
+    assert "alice@universal".equals(resolution.alias()) : "Alias mismatch";
+    assert accountId.equals(resolution.accountId()) : "Account id mismatch";
+    assert Long.valueOf(7L).equals(resolution.index()) : "Index mismatch";
+    assert "directory".equals(resolution.source()) : "Source mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Account alias resolve request must be captured";
+    assert "POST".equals(request.method()) : "Account alias resolve must use POST";
+    assert request.uri().toString().equals("https://torii.example/api/v1/aliases/resolve")
+        : "Account alias resolve URI mismatch";
+    assert request.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
+        : "Account alias resolve must send JSON";
+    assert readBody(request).equals("{\"alias\":\"alice@universal\"}")
+        : "Account alias resolve payload mismatch";
+  }
+
+  private static void resolveAccountAliasAllowsNotFound() {
+    final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<AccountAliasResolution> response =
+        transport.resolveAccountAlias("missing@universal").join();
+    assert response.isEmpty() : "404 account alias resolution should return Optional.empty";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Account alias resolve request must be captured";
+    assert request.uri().toString().equals("https://torii.example/v1/aliases/resolve")
+        : "Account alias resolve URI mismatch";
+    assert readBody(request).equals("{\"alias\":\"missing@universal\"}")
+        : "Account alias resolve payload mismatch";
+  }
+
+  private static void resolveAccountAliasFailsOnMalformedJson() {
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, "not json".getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final CompletableFuture<Optional<AccountAliasResolution>> future =
+        transport.resolveAccountAlias("alice@universal");
+    boolean threw = false;
+    try {
+      future.join();
+    } catch (final java.util.concurrent.CompletionException ex) {
+      threw = true;
+    }
+    assert threw : "Malformed JSON must complete exceptionally";
+    assert future.isCompletedExceptionally()
+        : "Future must be completed exceptionally for malformed JSON";
   }
 
   private static void identifierNormalizationCanonicalizesInputs() {

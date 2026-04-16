@@ -763,6 +763,21 @@ response.rejectCode().ifPresent(code -> {
 });
 ```
 
+### Resolving Account Aliases
+
+`HttpClientTransport.resolveAccountAlias(...)` posts to `/v1/aliases/resolve` and
+returns an `Optional<AccountAliasResolution>`. An `Optional.empty()` value
+indicates the node responded with HTTP 404 for an unknown alias; other failures
+complete the future exceptionally.
+
+```java
+Optional<AccountAliasResolution> resolved =
+    client.resolveAccountAlias("some_alias@universal").join();
+resolved.ifPresentOrElse(
+    resolution -> System.out.println("account: " + resolution.accountId()),
+    () -> System.out.println("alias not found"));
+```
+
 ### Key Manager Defaults
 
 `IrohaKeyManager.withDefaultProviders()` constructs a manager that prefers

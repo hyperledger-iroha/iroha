@@ -27,6 +27,8 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.storage_path.mkdir()
         self.genesis_path = self.root / "genesis.json"
         self.genesis_path.write_text("{}\n", encoding="utf-8")
+        self.signed_genesis_path = self.root / "genesis.signed.nrt"
+        self.signed_genesis_path.write_bytes(b"norito")
         self.sites_path = self.root / "sorafs_sites.json"
         self.sites_path.write_text("{}\n", encoding="utf-8")
         self.env_file = self.root / "validator.env"
@@ -40,7 +42,9 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 TAIRA_P2P_PORT=1447
                 TAIRA_TORII_PORT=19080
                 TAIRA_RUST_LOG=debug
+                TAIRA_DOCKER_NETWORK=taira-localnet
                 TAIRA_GENESIS_PATH={self.genesis_path}
+                TAIRA_SIGNED_GENESIS_PATH={self.signed_genesis_path}
                 TAIRA_SORAFS_SITE_BINDINGS_PATH={self.sites_path}
                 """
             ),
@@ -101,7 +105,9 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertIn("--name test-validator", result.stdout)
         self.assertIn("-p 1447:1337", result.stdout)
         self.assertIn("-p 19080:8080", result.stdout)
+        self.assertIn("--network taira-localnet", result.stdout)
         self.assertIn("IROHA_TAIRA_GENESIS=/config/genesis.json", result.stdout)
+        self.assertIn("IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt", result.stdout)
         self.assertIn("IROHA_SORAFS_SITE_BINDINGS_FILE=/config/sorafs_sites.json", result.stdout)
         self.assertIn("example/taira:test", result.stdout)
 
@@ -119,8 +125,11 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                     "-e RUST_LOG=debug -p 1447:1337 -p 19080:8080 "
                     f"-v {self.config_path}:/config/config.toml:ro "
                     f"-v {self.storage_path}:/storage "
+                    "--network taira-localnet "
                     "-e IROHA_TAIRA_GENESIS=/config/genesis.json "
                     f"-v {self.genesis_path}:/config/genesis.json:ro "
+                    "-e IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt "
+                    f"-v {self.signed_genesis_path}:/config/genesis.signed.nrt:ro "
                     "-e IROHA_SORAFS_SITE_BINDINGS_FILE=/config/sorafs_sites.json "
                     f"-v {self.sites_path}:/config/sorafs_sites.json:ro "
                     "example/taira:test"
