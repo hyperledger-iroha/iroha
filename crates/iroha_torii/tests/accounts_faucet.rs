@@ -94,11 +94,7 @@ fn build_faucet_test_context_with_registration(
         accounts.push(Account::new(user_id.clone()).build(&authority_id));
     }
 
-    let mut world = World::with(
-        [domain],
-        accounts,
-        [asset_definition],
-    );
+    let mut world = World::with([domain], accounts, [asset_definition]);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     {
         let mut block = world.block();
@@ -488,7 +484,10 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
     assert!(applied > 0);
 
     let view = state.view();
-    assert!(view.world().account(&user_id).is_ok(), "user account should exist");
+    assert!(
+        view.world().account(&user_id).is_ok(),
+        "user account should exist"
+    );
     let user_asset_id = AssetId::new(asset_definition_id, user_id.clone());
     let user_asset = view
         .world()

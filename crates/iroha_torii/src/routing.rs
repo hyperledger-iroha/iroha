@@ -30525,6 +30525,10 @@ const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_CONFIDENTIAL_NOTES: &str = "/v1/confidential/notes";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT: &str = "/v1/confidential/relay/submit";
+#[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
@@ -51411,6 +51415,55 @@ pub struct AccountFaucetPuzzleDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+pub struct ConfidentialNotesQuery {
+    #[norito(default)]
+    pub asset_definition_id: Option<String>,
+    #[norito(default)]
+    pub from_block: Option<u64>,
+    #[norito(default)]
+    pub cursor: Option<String>,
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+pub struct ConfidentialNoteRecordDto {
+    pub entrypoint_hash: String,
+    pub transaction_hash: String,
+    pub block: u64,
+    pub result_ok: bool,
+    pub authority: String,
+    pub metadata: Value,
+    pub instructions: Vec<Value>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+pub struct ConfidentialNotesPageDto {
+    pub items: Vec<ConfidentialNoteRecordDto>,
+    pub next_cursor: Option<String>,
+    pub scanned_to_block: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct ConfidentialRelaySubmitRequestDto {
+    pub signed_tx_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+pub struct ConfidentialRelaySubmitResponseDto {
+    pub tx_hash_hex: String,
+    pub status: &'static str,
+    pub relay_authority: String,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
 pub struct MultisigAccountOnboardingRequestDto {
     pub alias: String,
@@ -51449,6 +51502,15 @@ impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto 
 }
 
 #[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for ConfidentialRelaySubmitRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid ConfidentialRelaySubmitRequestDto: {err}"))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardingRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
@@ -51470,6 +51532,14 @@ fn onboarding_invalid_request(reason: &str) -> Error {
 #[cfg(feature = "app_api")]
 fn faucet_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.faucet", reason, "Account faucet request rejected");
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        QueryExecutionFail::InvalidSingularParameters,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn confidential_invalid_request(reason: &str) -> Error {
+    iroha_logger::warn!(target: "torii.confidential", reason, "Confidential request rejected");
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         QueryExecutionFail::InvalidSingularParameters,
     ))
@@ -51781,6 +51851,307 @@ mod faucet_pow_tests {
         assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
+    }
+}
+
+#[cfg(feature = "app_api")]
+const CONFIDENTIAL_NOTES_DEFAULT_LIMIT: u64 = 200;
+#[cfg(feature = "app_api")]
+const CONFIDENTIAL_NOTES_MAX_LIMIT: u64 = 1_000;
+
+#[cfg(feature = "app_api")]
+fn hex32(bytes: &[u8; 32]) -> String {
+    hex::encode(bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn string_array(values: impl IntoIterator<Item = String>) -> Value {
+    Value::Array(values.into_iter().map(Value::String).collect())
+}
+
+#[cfg(feature = "app_api")]
+fn zk_instruction_record(kind: &'static str, payload: Map) -> Value {
+    let mut by_kind = Map::new();
+    by_kind.insert(kind.to_string(), Value::Object(payload));
+    let mut root = Map::new();
+    root.insert("zk".to_string(), Value::Object(by_kind));
+    Value::Object(root)
+}
+
+#[cfg(feature = "app_api")]
+fn confidential_note_instruction_payload(
+    instruction: &InstructionBox,
+    asset: &AssetDefinitionId,
+) -> Option<Value> {
+    if let Some(shield) = instruction.as_any().downcast_ref::<dm::isi::zk::Shield>() {
+        if shield.asset != *asset {
+            return None;
+        }
+        let mut payload = Map::new();
+        payload.insert("asset".into(), Value::String(shield.asset.to_string()));
+        payload.insert("from".into(), Value::String(shield.from.to_string()));
+        payload.insert("amount".into(), Value::String(shield.amount.to_string()));
+        payload.insert(
+            "note_commitment".into(),
+            Value::String(hex32(&shield.note_commitment)),
+        );
+        return Some(zk_instruction_record("Shield", payload));
+    }
+
+    if let Some(transfer) = instruction
+        .as_any()
+        .downcast_ref::<dm::isi::zk::ZkTransfer>()
+    {
+        if transfer.asset != *asset {
+            return None;
+        }
+        let mut payload = Map::new();
+        payload.insert("asset".into(), Value::String(transfer.asset.to_string()));
+        payload.insert(
+            "inputs".into(),
+            string_array(transfer.inputs.iter().map(hex32)),
+        );
+        payload.insert(
+            "outputs".into(),
+            string_array(transfer.outputs.iter().map(hex32)),
+        );
+        if let Some(root_hint) = transfer.root_hint.as_ref() {
+            payload.insert("root_hint".into(), Value::String(hex32(root_hint)));
+        }
+        return Some(zk_instruction_record("ZkTransfer", payload));
+    }
+
+    if let Some(unshield) = instruction.as_any().downcast_ref::<dm::isi::zk::Unshield>() {
+        if unshield.asset != *asset {
+            return None;
+        }
+        let mut payload = Map::new();
+        payload.insert("asset".into(), Value::String(unshield.asset.to_string()));
+        payload.insert("to".into(), Value::String(unshield.to.to_string()));
+        payload.insert(
+            "public_amount".into(),
+            Value::String(unshield.public_amount.to_string()),
+        );
+        payload.insert(
+            "inputs".into(),
+            string_array(unshield.inputs.iter().map(hex32)),
+        );
+        if let Some(root_hint) = unshield.root_hint.as_ref() {
+            payload.insert("root_hint".into(), Value::String(hex32(root_hint)));
+        }
+        return Some(zk_instruction_record("Unshield", payload));
+    }
+
+    None
+}
+
+#[cfg(feature = "app_api")]
+fn confidential_notes_cursor(cursor: Option<&str>) -> Result<Option<u64>> {
+    let Some(raw) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    raw.parse::<u64>()
+        .map(Some)
+        .map_err(|_| confidential_invalid_request("invalid confidential notes cursor"))
+}
+
+#[cfg(feature = "app_api")]
+fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
+    let trimmed = raw.trim().trim_start_matches("0x");
+    if trimmed.is_empty() {
+        return Err(confidential_invalid_request(
+            "signed_tx_hex must not be empty",
+        ));
+    }
+    let bytes =
+        hex::decode(trimmed).map_err(|_| confidential_invalid_request("invalid signed_tx_hex"))?;
+    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
+        .map_err(|_| confidential_invalid_request("invalid signed transaction bytes"))
+}
+
+#[cfg(feature = "app_api")]
+fn relayable_zk_transfer_instruction(tx: &SignedTransaction) -> Result<InstructionBox> {
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return Err(confidential_invalid_request(
+            "confidential relay accepts exactly one ZkTransfer instruction",
+        ));
+    };
+    if instructions.len() != 1 {
+        return Err(confidential_invalid_request(
+            "confidential relay accepts exactly one ZkTransfer instruction",
+        ));
+    }
+    let instruction = instructions
+        .first()
+        .cloned()
+        .ok_or_else(|| confidential_invalid_request("missing relay instruction"))?;
+    if instruction
+        .as_any()
+        .downcast_ref::<dm::isi::zk::ZkTransfer>()
+        .is_none()
+    {
+        return Err(confidential_invalid_request(
+            "confidential relay only accepts ZkTransfer",
+        ));
+    }
+    Ok(instruction)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_confidential_notes(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(query): crate::NoritoQuery<ConfidentialNotesQuery>,
+) -> Result<impl IntoResponse> {
+    let asset_literal = query
+        .asset_definition_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| confidential_invalid_request("asset_definition_id is required"))?;
+    let asset = asset_literal
+        .parse::<AssetDefinitionId>()
+        .map_err(|_| confidential_invalid_request("invalid asset_definition_id"))?;
+    let max_height = state.committed_height() as u64;
+    let requested_start = confidential_notes_cursor(query.cursor.as_deref())?
+        .or(query.from_block)
+        .unwrap_or(max_height);
+    let start_height = requested_start.min(max_height);
+    let limit = query
+        .limit
+        .unwrap_or(CONFIDENTIAL_NOTES_DEFAULT_LIMIT)
+        .min(CONFIDENTIAL_NOTES_MAX_LIMIT);
+    let mut items = Vec::new();
+    let mut scanned_to_block = start_height;
+    let mut next_cursor = None;
+
+    if start_height > 0 && limit > 0 {
+        let mut height = start_height;
+        loop {
+            scanned_to_block = height;
+            let Some(nonzero_height) = nonzero_height(height) else {
+                break;
+            };
+            if let Some(block) = state.block_by_height(nonzero_height) {
+                let block_ref = block.as_ref();
+                let external_total = block_ref.external_transactions().len();
+                for (tx, result) in block_ref
+                    .external_transactions()
+                    .zip(block_ref.results().take(external_total))
+                {
+                    if result.as_ref().is_err() {
+                        continue;
+                    }
+                    let Executable::Instructions(instructions) = tx.instructions() else {
+                        continue;
+                    };
+                    let confidential_instructions: Vec<Value> = instructions
+                        .iter()
+                        .filter_map(|instruction| {
+                            confidential_note_instruction_payload(instruction, &asset)
+                        })
+                        .collect();
+                    if confidential_instructions.is_empty() {
+                        continue;
+                    }
+                    let tx_hash = tx.hash_as_entrypoint().to_string();
+                    items.push(ConfidentialNoteRecordDto {
+                        entrypoint_hash: tx_hash.clone(),
+                        transaction_hash: tx_hash,
+                        block: height,
+                        result_ok: true,
+                        authority: crate::account_literal::display_literal(tx.authority()),
+                        metadata: metadata_to_json(tx.metadata()),
+                        instructions: confidential_instructions,
+                    });
+                }
+            }
+            if items.len() as u64 >= limit {
+                next_cursor = height
+                    .checked_sub(1)
+                    .filter(|next| *next > 0)
+                    .map(|next| next.to_string());
+                break;
+            }
+            if height == 1 {
+                break;
+            }
+            height -= 1;
+        }
+    }
+
+    Ok(JsonBody(ConfidentialNotesPageDto {
+        items,
+        next_cursor,
+        scanned_to_block,
+    })
+    .into_response())
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_confidential_relay_submit(
+    app: crate::SharedAppState,
+    crate::NoritoJson(req): crate::NoritoJson<ConfidentialRelaySubmitRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let Some(signer) = app.account_faucet.as_ref() else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("Confidential relay disabled".into()),
+        ));
+    };
+    let source_tx = decode_relay_signed_transaction(&req.signed_tx_hex)?;
+    if source_tx.chain() != app.chain_id.as_ref() {
+        return Err(confidential_invalid_request(
+            "signed transaction chain does not match this Torii",
+        ));
+    }
+    let instruction = relayable_zk_transfer_instruction(&source_tx)?;
+
+    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_instructions([instruction])
+        .with_metadata(source_tx.metadata().clone());
+    if let Some(attachments) = source_tx.attachments().cloned() {
+        builder = builder.with_attachments(attachments);
+    }
+    builder.set_ttl(Duration::from_secs(60));
+    let tx = builder.sign(&signer.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
+    )
+    .await?;
+
+    let response = ConfidentialRelaySubmitResponseDto {
+        tx_hash_hex,
+        status: "QUEUED",
+        relay_authority: signer.authority.to_string(),
+    };
+    let mut resp = Response::new(Body::from(
+        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+    ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod confidential_notes_tests {
+    use super::*;
+
+    #[test]
+    fn confidential_notes_cursor_rejects_invalid_values() {
+        assert!(confidential_notes_cursor(Some("not-a-height")).is_err());
+        assert_eq!(confidential_notes_cursor(Some("42")).unwrap(), Some(42));
+        assert_eq!(confidential_notes_cursor(Some("")).unwrap(), None);
     }
 }
 
@@ -52157,9 +52528,8 @@ pub async fn handle_v1_accounts_faucet(
         account_id.clone(),
     )));
 
-    let mut builder =
-        TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
-            .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
+        .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(60));
     let tx = builder.sign(&faucet.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
