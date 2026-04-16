@@ -93,16 +93,20 @@ impl TransferDeltaTranscript {
     #[must_use]
     pub fn normalized_scale(&self) -> u32 {
         [
-            self.amount.scale(),
-            self.from_balance_before.scale(),
-            self.from_balance_after.scale(),
-            self.to_balance_before.scale(),
-            self.to_balance_after.scale(),
+            trimmed_scale(&self.amount),
+            trimmed_scale(&self.from_balance_before),
+            trimmed_scale(&self.from_balance_after),
+            trimmed_scale(&self.to_balance_before),
+            trimmed_scale(&self.to_balance_after),
         ]
         .into_iter()
         .max()
         .unwrap_or(0)
     }
+}
+
+fn trimmed_scale(value: &Numeric) -> u32 {
+    value.clone().trim_trailing_zeros().scale()
 }
 
 /// Normalize a numeric into deterministic integer witness units for FASTPQ.
@@ -111,6 +115,7 @@ impl TransferDeltaTranscript {
 /// share that target scale, then converted into a non-negative `u64`.
 #[must_use]
 pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u64> {
+    let value = value.clone().trim_trailing_zeros();
     if value.mantissa().is_negative() || value.scale() > target_scale {
         return None;
     }
@@ -324,11 +329,36 @@ mod tests {
     }
 
     #[test]
+    fn transfer_delta_normalized_scale_trims_trailing_zero_padding() {
+        let delta = TransferDeltaTranscript {
+            from_account: account("alice"),
+            to_account: account("bob"),
+            asset_definition: asset("xor"),
+            amount: Numeric::new(11, 3),
+            from_balance_before: Numeric::new(120_000_000_000_000_000_000_000_i128, 18),
+            from_balance_after: Numeric::new(119_999_989_000_000_000_000_000_i128, 18),
+            to_balance_before: Numeric::zero(),
+            to_balance_after: Numeric::new(11_000_000_000_000_000_i128, 18),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+
+        assert_eq!(delta.normalized_scale(), 3);
+    }
+
+    #[test]
     fn normalized_numeric_to_u64_scales_to_requested_precision() {
         let whole = Numeric::new(1, 0);
         let fractional = Numeric::new(5, 1);
 
         assert_eq!(normalized_numeric_to_u64(&whole, 1), Some(10));
         assert_eq!(normalized_numeric_to_u64(&fractional, 1), Some(5));
+    }
+
+    #[test]
+    fn normalized_numeric_to_u64_accepts_trimmed_trailing_zero_scale() {
+        let padded = Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+
+        assert_eq!(normalized_numeric_to_u64(&padded, 3), Some(120_000_000));
     }
 }

@@ -58,3 +58,57 @@ Iroha 3-only defaults.
 
 Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
 names automatically when `--profile` is set to `iroha2` or `iroha3`.
+
+## Runtime Images
+
+The repository-root `Dockerfile` builds the runtime image used for published
+`irohad` containers. The supported `CONFIG_PROFILE` values are:
+
+- `single` — embed the default single-node bundle under `/config`
+- `nexus` — embed the Nexus sample bundle under `/config`
+- `taira` — ship the public Taira static bundle under
+  `/opt/iroha/configs/soranexus/taira` and expect a rendered validator config
+  to be mounted at `/config/config.toml`
+
+Local Taira image build example:
+
+```bash
+scripts/build_release_image.sh --profile iroha3 --config taira
+```
+
+The Taira helper now defaults to `CARGO_BUILD_JOBS=1` and `BINARIES=irohad`
+so validator-image builds do not depend on unrelated `iroha_cli` health. For a
+direct Docker build, pass those explicitly:
+
+```bash
+docker build \
+  --build-arg CONFIG_PROFILE=taira \
+  --build-arg FEATURES=embedded-soracloud-runtime \
+  --build-arg CARGO_BUILD_JOBS=1 \
+  --build-arg BINARIES=irohad \
+  -t hyperledger/iroha:taira-local .
+```
+
+The Taira image automatically includes `embedded-soracloud-runtime` and uses a
+Taira-aware entrypoint. With no command override it starts:
+
+```bash
+irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json
+```
+
+Keep validator-specific runtime material out of the image. Generate
+`/config/config.toml` with
+`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
+and mount it into the container together with persistent `/storage`.
+
+For a host-side Taira validator deployment, use the checked-in examples under
+`configs/soranexus/taira/`:
+
+- `taira-validator-container.sh`
+- `docker-compose.validator.yml`
+- `taira-validator-container.compose.env.example`
+- `taira-validator-container.service`
+
+Prefer `taira-validator-container.sh` on hosts that only have the base Docker
+CLI. Use `docker-compose.validator.yml` only when the Compose plugin is
+installed and verified.

@@ -11,14 +11,17 @@ deployment.
 
 ## Public API contract
 
-For the examples below, replace `PUBLIC_TORII_ROOT` with the direct public
-Torii URL of the node you are validating, for example:
+For the examples below, replace `PUBLIC_TORII_ROOT` with the live public
+Torii URL you are validating. On the current deployment that is:
 
-- `PUBLIC_TORII_ROOT=https://taira-validator-1.sora.org`
+- `PUBLIC_TORII_ROOT=https://taira.sora.org`
 
-`https://taira.sora.org` may still exist as a convenience endpoint, but it is
-the shared Torii origin, not an app website. Do not bind product frontends to
-that host root through `sorafs_sites.json`.
+Validator-specific hostnames such as `https://taira-validator-1.sora.org` may
+also exist as alternate public Torii roots when the edge is configured to
+expose them directly.
+
+`https://taira.sora.org` is the shared Torii origin, not an app website. Do
+not bind product frontends to that host root through `sorafs_sites.json`.
 
 The shipped public Taira profile pins the first-release Torii posture in
 config rather than wrapper-local defaults:
@@ -53,6 +56,14 @@ config rather than wrapper-local defaults:
   the shipped Taira config and genesis.
 - `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
   pointing the systemd unit at a rendered validator config.
+- `docker-compose.validator.yml`: sample containerized validator deployment
+  that mounts one rendered validator config plus persistent `/storage`.
+- `taira-validator-container.compose.env.example`: sample compose env file for
+  a single validator host using the published Taira image.
+- `taira-validator-container.sh`: plain-`docker` wrapper for hosts that do not
+  have the Docker Compose plugin installed.
+- `taira-validator-container.service`: sample systemd wrapper that keeps the
+  validator container under service management without requiring Docker Compose.
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
@@ -104,6 +115,78 @@ same bootstrap source of truth. It now requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
+## Validator container image
+
+The repo now supports a dedicated Taira validator runtime image via the main
+`Dockerfile`:
+
+- local build helper:
+  - `scripts/build_release_image.sh --profile iroha3 --config taira`
+- manual publish workflow:
+  - `.github/workflows/publish_taira_validator.yml`
+
+Manual publish prerequisites:
+
+- GitHub Actions secrets:
+  - `DOCKERHUB_USERNAME`
+  - `DOCKERHUB_TOKEN`
+  - `HARBOR_USERNAME`
+  - `HARBOR_TOKEN`
+- a self-hosted runner with enough RAM to finish the deploy-profile Rust
+  compile inside `docker build`; the current Taira workflow now forces
+  `CARGO_BUILD_JOBS=1` and `BINARIES=irohad` so validator-image publishing is
+  not blocked by unrelated CLI build failures or Colima memory pressure
+- one explicit `workflow_dispatch` run against the chosen release ref so the
+  first `hyperledger/iroha:taira-*` and
+  `docker.soramitsu.co.jp/iroha3/iroha:taira-*` tags actually exist before
+  operator hosts switch to the published image path
+
+If the Docker host is memory-constrained, cap Cargo parallelism during the
+image build:
+
+- `scripts/build_release_image.sh --profile iroha3 --config taira`
+- or, for a direct Docker build, `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=1 --build-arg BINARIES=irohad ...`
+
+The image ships:
+
+- `irohad`
+- the checked-in static Taira bundle under `/opt/iroha/configs/soranexus/taira`
+- a Taira-aware entrypoint that defaults to:
+  - `irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json`
+
+The image does **not** embed validator-specific runtime material. Keep using
+`render_taira_validator_bundle.py` to generate the mounted
+`/config/config.toml` from user-local roster/secrets files.
+
+`docker-compose.validator.yml` uses `pull_policy: missing` so a host-local
+`docker load` override works without forcing a registry lookup. When you want
+to refresh a published tag explicitly, run `docker compose ... pull` before
+`up -d`.
+
+Minimal container run example:
+
+```bash
+docker run -d --name taira-validator-1 \
+  --restart unless-stopped \
+  -p 1337:1337 \
+  -p 18080:8080 \
+  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -v /var/lib/iroha/taira-validator-1:/storage \
+  hyperledger/iroha:taira-latest
+```
+
+If you need to override the bundled public genesis, point the entrypoint at a
+mounted file:
+
+```bash
+docker run --rm \
+  -e IROHA_TAIRA_GENESIS=/config/genesis.json \
+  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -v "$PWD/configs/soranexus/taira/genesis.json:/config/genesis.json:ro" \
+  -v /var/lib/iroha/taira-validator-1:/storage \
+  hyperledger/iroha:taira-latest
+```
+
 ## Minimum viable topology
 
 Use at least 4 validator peers (plus optional observers). Single-peer setups are
@@ -154,10 +237,12 @@ allowlisting:
 
 ## Public endpoints
 
-- Every public validator should expose Torii directly on its own TLS hostname
-  and advertise that URL through `[torii].public_address`.
-- `https://taira.sora.org` is optional convenience ingress only. Keep it as a
-  shared Torii/API origin, but do not mount websites at its root.
+- `https://taira.sora.org` is the primary public Torii/API origin on the
+  current deployment. Keep it on Torii/API duties only and do not mount
+  websites at its root.
+- Every public validator should still be able to expose Torii directly on its
+  own TLS hostname and advertise that URL through `[torii].public_address`
+  when validator-specific ingress is desired.
 - `https://taira-explorer.sora.org` points to the Iroha 2 Explorer instance.
 - Shared nginx edge configs such as `taira-explorer.nginx.conf` are optional
   convenience infrastructure, not the primary public API design.
@@ -378,7 +463,65 @@ fee selector for `universal.xor`, which does not match Taira's on-chain
 `xor#universal` asset-definition alias and causes public deploy/call
 transactions to be rejected before SoraSwap instances can activate.
 
-## Validator deployment
+## Containerized validator deployment
+
+Use this path when the validator host should run the published Docker image
+instead of locally installed `irohad` binaries. The primary wrapper is
+`taira-validator-container.sh`, which uses plain `docker` and therefore works
+on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
+available as an optional convenience for environments that do have Compose.
+
+1. Publish or otherwise load the image you intend to run on the host.
+   - manual publish path:
+     `workflow_dispatch` `.github/workflows/publish_taira_validator.yml`
+   - local host-side override:
+     `docker load < iroha3-<version>-linux-image.tar`
+2. Render the validator config bundle from your user-local roster and secrets:
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+3. Install the rendered config and storage directories on the validator host:
+   - `sudo install -d -o 1001 -g 1001 /etc/iroha/taira-validator-1`
+   - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
+   - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
+4. Copy the sample env file and adjust the host-specific values:
+   - `sudo cp configs/soranexus/taira/taira-validator-container.compose.env.example /etc/default/taira-validator-container.compose.env`
+   - set at least:
+     - `TAIRA_IMAGE=hyperledger/iroha:taira-latest` or the exact pushed `taira-<suffix>` tag
+     - `TAIRA_CONFIG_PATH=/etc/iroha/taira-validator-1/config.toml`
+     - `TAIRA_STORAGE_PATH=/var/lib/iroha/taira-validator-1`
+     - `TAIRA_TORII_PORT=18080` unless your ingress expects another loopback port
+5. Start the validator directly with the plain-`docker` wrapper:
+   - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env up`
+   - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env status`
+   - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env logs`
+   - to inspect the exact `docker run` invocation before starting:
+     `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env config`
+6. If you prefer Docker Compose and the host actually has the plugin, the
+   equivalent commands are:
+   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml up -d`
+   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml ps`
+   - `docker compose --env-file /etc/default/taira-validator-container.compose.env -f configs/soranexus/taira/docker-compose.validator.yml logs --tail=200`
+7. If you want systemd ownership, install the wrapper service:
+   - `sudo cp configs/soranexus/taira/taira-validator-container.service /etc/systemd/system/`
+   - if the repo checkout is not `/opt/iroha`, edit the script path in
+     `ExecStart*=` before enabling the unit
+   - `sudo systemctl daemon-reload`
+   - `sudo systemctl enable --now taira-validator-container.service`
+8. Prove the local MCP surface before any public cutover:
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
+   - for a signed local write-path check:
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
+
+Optional container overrides:
+
+- if you need a validator-specific `genesis.json`, uncomment the matching
+  `IROHA_TAIRA_GENESIS` and volume lines in
+  `docker-compose.validator.yml`, then set `TAIRA_GENESIS_PATH=...` in
+  `/etc/default/taira-validator-container.compose.env`
+- if the validator host should serve named SoraFS host bindings directly from
+  the container, uncomment the matching `IROHA_SORAFS_SITE_BINDINGS_FILE` and
+  volume lines, then set `TAIRA_SORAFS_SITE_BINDINGS_PATH=...`
+
+## Bare-metal validator deployment
 
 Install the validator from the repo checkout so the live process cannot drift
 away from the shipped MCP-enabled config:

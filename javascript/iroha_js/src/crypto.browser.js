@@ -150,6 +150,18 @@ export function deriveConfidentialKeysetFromHex() {
   return unsupported("deriveConfidentialKeysetFromHex");
 }
 
+export function deriveConfidentialOwnerTagV2() {
+  return unsupported("deriveConfidentialOwnerTagV2");
+}
+
+export function deriveConfidentialNoteV2() {
+  return unsupported("deriveConfidentialNoteV2");
+}
+
+export function deriveConfidentialNullifierV2() {
+  return unsupported("deriveConfidentialNullifierV2");
+}
+
 export function sm2FixtureFromSeed() {
   return unsupported("sm2FixtureFromSeed");
 }

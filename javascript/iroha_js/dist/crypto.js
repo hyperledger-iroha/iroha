@@ -202,6 +202,15 @@ function ensureKaigiRosterNative(native) {
   return native;
 }
 
+function ensureConfidentialV2Native(native, operation) {
+  if (!native || typeof native[operation] !== "function") {
+    throw new Error(
+      `confidential v2 helper '${operation}' is unavailable; build iroha_js_host with \`npm run build:native\` before using shielded transfer v2`,
+    );
+  }
+  return native;
+}
+
 export function generateSm2KeyPair(options = {}) {
   const native = ensureSm2Native(resolveNativeBinding());
   const effectiveDistid = normalizeSm2Distid(options.distid, native);
@@ -389,6 +398,94 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
 }
 
 /**
+ * Derive the confidential v2 owner tag from a 32-byte spend key.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
+ * @returns {Buffer}
+ */
+export function deriveConfidentialOwnerTagV2(spendKey) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialOwnerTagV2",
+  );
+  const spendKeyBuffer = toBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer));
+}
+
+/**
+ * Derive a confidential v2 note commitment from note material.
+ * @param {{assetDefinitionId: string, amount: string | number | bigint, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer, ownerTagHex?: string, ownerTag?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @returns {{commitment: Buffer, commitmentHex: string}}
+ */
+export function deriveConfidentialNoteV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialNoteV2",
+  );
+  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
+  if (!assetDefinitionId) {
+    throw new Error("assetDefinitionId is required");
+  }
+  const amount = normalizeWholeNumberLiteral(input?.amount, "amount");
+  const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
+  const ownerTagHex = normalizeFixed32HexInput(
+    input?.ownerTagHex ?? input?.ownerTag,
+    "ownerTag",
+  );
+  const commitment = Buffer.from(
+    native.deriveConfidentialNoteV2(
+      assetDefinitionId,
+      amount,
+      rhoHex,
+      ownerTagHex,
+    ),
+  );
+  return {
+    commitment,
+    commitmentHex: commitment.toString("hex"),
+  };
+}
+
+/**
+ * Derive a confidential v2 nullifier from note material.
+ * @param {{chainId: string, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @returns {{nullifier: Buffer, nullifierHex: string}}
+ */
+export function deriveConfidentialNullifierV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialNullifierV2",
+  );
+  const chainId = String(input?.chainId ?? "").trim();
+  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
+  const spendKey = toBuffer(input?.spendKey, "spendKey");
+  if (!chainId) {
+    throw new Error("chainId is required");
+  }
+  if (!assetDefinitionId) {
+    throw new Error("assetDefinitionId is required");
+  }
+  if (spendKey.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
+  const nullifier = Buffer.from(
+    native.deriveConfidentialNullifierV2(
+      chainId,
+      assetDefinitionId,
+      spendKey,
+      rhoHex,
+    ),
+  );
+  return {
+    nullifier,
+    nullifierHex: nullifier.toString("hex"),
+  };
+}
+
+/**
  * Return the canonical SM2 signing fixture values for the given seed and message.
  * @param {string} distid
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
@@ -486,6 +583,29 @@ function toBuffer(value, name) {
     return Buffer.from(value);
   }
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
+}
+
+function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+      throw new Error(`${name} must be a 32-byte hex string`);
+    }
+    return normalized;
+  }
+  const buffer = toBuffer(value, name);
+  if (buffer.length !== 32) {
+    throw new Error(`${name} must be 32 bytes`);
+  }
+  return Buffer.from(buffer).toString("hex");
+}
+
+function normalizeWholeNumberLiteral(value, name) {
+  const normalized = String(value ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`${name} must be a whole-number string`);
+  }
+  return normalized;
 }
 
 function toBufferField(payload, ...fieldNames) {

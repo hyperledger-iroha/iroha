@@ -1,6 +1,122 @@
 # Status
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
+
+## 2026-04-16 Follow-up: NPoS liveness and mode-cutover tests no longer depend on a single flaky submit peer
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  now drives height one block at a time through a connected submit peer
+  selected from the current leader or the best-height fallback instead of
+  assuming a burst of fire-and-forget submissions to the first peer will stick.
+  The `npos_network_produces_blocks` and
+  `npos_pacemaker_resumes_after_downtime` scenarios now wait for submit
+  connectivity before seeding progress and retry based on observed block
+  advancement rather than on queued transaction count.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_negative_paths.rs`
+  now uses the same submit-peer selection strategy for staged consensus
+  cutover transactions and for the helper that advances block height. The
+  staged activation-height assertions also use a larger future-height margin so
+  short startup jitter does not invalidate the cutover transaction before it
+  lands.
+- Added focused helper coverage in the same two integration test files for the
+  shared peer-selection primitives:
+  `min_connected_peers_for_submit`,
+  `pick_fallback_submit_peer_index`, and
+  `pick_submit_peer_index`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposnet2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposrestart2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negmode.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::mode_activation_height_requires_next_mode_and_future_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negjoint.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::joint_consensus_switches_mode_at_activation_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.reorder.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_reorder' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_submit_peer_index_prefers_connected_leader' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_fallback_submit_peer_index_prefers_best_height_round_robin' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'min_connected_peers_for_submit_keeps_quorum_margin' -- --nocapture`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
+## 2026-04-16 Follow-up: Taira validator image now has a dedicated runtime profile and manual publish workflow
+- `/Users/takemiyamakoto/dev/iroha/Dockerfile` now supports
+  `CONFIG_PROFILE=taira`, ships the checked-in static Taira bundle under
+  `/opt/iroha/configs/soranexus/taira`, runs from `/opt/iroha` so the mounted
+  validator config can keep its relative Taira paths, and uses a dedicated
+  runtime entrypoint instead of hard-coding `CMD ["irohad"]`.
+- `/Users/takemiyamakoto/dev/iroha/scripts/docker_entrypoint.sh` now owns the
+  runtime default-command logic:
+  - explicit commands still bypass the wrapper unchanged;
+  - generic images still default to plain `irohad`;
+  - Taira images now default to
+    `irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json`
+    and fail fast when the mounted config/genesis path is missing.
+- `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh` now accepts
+  `--config taira`, automatically appends `embedded-soracloud-runtime` to the
+  Docker build feature set for that image path, and exposes
+  `--cargo-build-jobs` for memory-constrained builders.
+- `/Users/takemiyamakoto/dev/iroha/.github/workflows/publish_taira_validator.yml`
+  now adds a dedicated `workflow_dispatch` publish path for the Taira validator
+  image. The workflow resolves Taira-specific tags, builds a local smoke image,
+  probes `/v1/mcp` through the new default entrypoint, caps Cargo parallelism
+  with `CARGO_BUILD_JOBS=4`, and then pushes the image to DockerHub plus the
+  `docker.soramitsu.co.jp/iroha3/iroha` Harbor namespace.
+- `/Users/takemiyamakoto/dev/iroha/.dockerignore` now excludes additional
+  generated workspace directories (`.git`, `build`, `tmp`, `target-*`,
+  `localnet-*`, nested `node_modules` / `.build`, etc.) so dirty self-hosted
+  runners do not spend minutes uploading stale local artifacts before the
+  Docker build even starts, while still re-including the tracked
+  `artifacts/offline_poseidon` snapshot that the Rust build embeds.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md` and
+  `/Users/takemiyamakoto/dev/iroha/docs/source/docker_build.md` now document
+  the Taira container contract explicitly: the image ships only the static
+  public bundle, while operators still render and mount each validator’s
+  `config.toml` from user-local roster/secrets material; both docs now also
+  note the optional Cargo job cap for lower-memory Docker builders, the
+  required GitHub Actions secrets for the manual publish workflow, and the
+  concrete one-host container deployment path.
+- Added host-side container deployment assets:
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/docker-compose.validator.yml`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.compose.env.example`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.service`
+  These give operators a concrete published-image path for one validator host
+  instead of requiring local bare-metal binary installs; the new shell wrapper
+  also removes the hard dependency on the Docker Compose plugin for service
+  management and local operations.
+- Added focused regression coverage in
+  `/Users/takemiyamakoto/dev/iroha/scripts/tests/docker_entrypoint_test.py`
+  for the non-Taira default path, the Taira boot command, explicit command
+  override behavior, and the fast-fail missing-config guard.
+- Added focused regression coverage in
+  `/Users/takemiyamakoto/dev/iroha/scripts/tests/taira_validator_container_test.py`
+  for the host-side Taira container wrapper:
+  - resolved `docker run` generation from the env file;
+  - image-missing pull + run behavior;
+  - existing-container replacement; and
+  - fast-fail missing-config handling.
+- Focused validation for this slice:
+  - `bash -n scripts/docker_entrypoint.sh`
+  - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
+  - `python3 -m unittest scripts.tests.docker_entrypoint_test`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/publish_taira_validator.yml"); puts "yaml ok"'`
+  - `ruby -e 'require "yaml"; YAML.load_file("configs/soranexus/taira/docker-compose.validator.yml"); puts "yaml ok"'`
+  - clean tracked-context Docker rebuilds now keep
+    `artifacts/offline_poseidon/constants.ron` in the context after the
+    `.dockerignore` tightening:
+    - `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --tag local/taira-validator:test /tmp/iroha-docker-context-tracked.hJRBJY`
+      reached the real deploy-profile Rust compile before the local Colima
+      builder hit `ResourceExhausted: cannot allocate memory`;
+    - `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=4 --tag local/taira-validator:test /tmp/iroha-docker-context-tracked.QFNnd8`
+      progressed materially further into the same deploy-profile compile, but
+      the local Colima builder still OOM-killed `rustc` after several minutes.
+  - `docker compose config` validation for the new validator compose file was
+    not runnable in this environment because the local `docker` CLI does not
+    have the Compose plugin wired in and `docker-compose` is also absent.
+  - `docker manifest inspect hyperledger/iroha:taira-latest` and
+    `docker manifest inspect docker.soramitsu.co.jp/iroha3/iroha:taira-latest`
+    both currently return `no such manifest`, so the new host-side runtime path
+    is structurally validated and locally test-covered, but cannot boot a real
+    published Taira image until the first manual publish run succeeds.
 
 ## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
 - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

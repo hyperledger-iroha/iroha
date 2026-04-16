@@ -1376,8 +1376,6 @@ const PIPELINE_STATUS_CACHE_CAP: usize = 1_500_000;
 const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const TORII_PROXY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_COMPLETED_TTL: Duration = Duration::from_secs(30);
 
 impl PipelineStatusKind {
@@ -13882,6 +13880,32 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV1) -> &'static str {
+    match request {
+        ToriiProxyRequestKindV1::SubmitTransaction { .. } => "submit_transaction",
+        ToriiProxyRequestKindV1::SignedQuery { .. } => "signed_query",
+        ToriiProxyRequestKindV1::VerifiedQuery { .. } => "verified_query",
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::Read(_) => "read",
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::HostedHttp(_) => "hosted_http",
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
+    match request {
+        ToriiProxyRequestKindV1::SubmitTransaction { .. } => Duration::from_secs(10),
+        ToriiProxyRequestKindV1::SignedQuery { .. }
+        | ToriiProxyRequestKindV1::VerifiedQuery { .. } => DEFAULT_ROUTE_TIMEOUT,
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::Read(_) | ToriiProxyRequestKindV1::HostedHttp(_) => {
+            DEFAULT_ROUTE_TIMEOUT
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
     target_peer_id: PeerId,
@@ -13893,6 +13917,8 @@ async fn execute_torii_proxy_request_via_peer(
 
     let request_id = request.request_id.clone();
     let pending_key = (request_id, target_peer_id.clone());
+    let request_kind_name = torii_proxy_request_kind_name(&request.request);
+    let attempt_timeout = torii_proxy_attempt_timeout(&request.request);
     let (tx, rx) = tokio::sync::oneshot::channel();
     prune_completed_torii_proxy_requests(app).await;
     app.torii_proxy_pending
@@ -13905,6 +13931,8 @@ async fn execute_torii_proxy_request_via_peer(
         hop_count = request.hop_count,
         max_hops = request.max_hops,
         visited_peer_count = request.visited_peer_ids.len(),
+        request_kind = request_kind_name,
+        attempt_timeout_ms = attempt_timeout.as_millis() as u64,
         "sending Torii proxy request to peer"
     );
     network.post(iroha_p2p::Post {
@@ -13913,7 +13941,7 @@ async fn execute_torii_proxy_request_via_peer(
         data: iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(request)),
     });
 
-    match tokio::time::timeout(TORII_PROXY_ATTEMPT_TIMEOUT, rx).await {
+    match tokio::time::timeout(attempt_timeout, rx).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(_)) => Err(format!(
             "Torii proxy request `{}` to peer `{target_peer_id}` closed before returning a response",
@@ -13921,9 +13949,16 @@ async fn execute_torii_proxy_request_via_peer(
         )),
         Err(_) => {
             app.torii_proxy_pending.lock().await.remove(&pending_key);
+            iroha_logger::warn!(
+                request_id = %pending_key.0,
+                peer_id = %target_peer_id,
+                request_kind = request_kind_name,
+                attempt_timeout_ms = attempt_timeout.as_millis() as u64,
+                "Torii proxy request timed out before any authoritative response"
+            );
             Err(format!(
-                "Torii proxy request `{}` to peer `{target_peer_id}` timed out",
-                pending_key.0
+                "Torii proxy request `{}` to peer `{target_peer_id}` timed out after {:?} kind={request_kind_name}",
+                pending_key.0, attempt_timeout,
             ))
         }
     }
@@ -33264,6 +33299,47 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("body bytes");
         assert_eq!(body.as_ref(), b"proxied-body");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
+        let route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
+        let query_request = ToriiProxyRequestKindV1::VerifiedQuery {
+            request_bytes: Vec::new(),
+            expected_route: ToriiRouteHintV1::from(route),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        };
+        assert_eq!(
+            super::torii_proxy_attempt_timeout(&query_request),
+            DEFAULT_ROUTE_TIMEOUT
+        );
+        assert_eq!(
+            super::torii_proxy_request_kind_name(&query_request),
+            "verified_query"
+        );
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(
+            "torii-proxy-timeout-test"
+                .parse::<ChainId>()
+                .expect("chain id"),
+            authority,
+        )
+        .sign(keypair.private_key());
+        let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
+            transaction: iroha_data_model::transaction::TransactionEntrypoint::External(tx),
+            expected_route: ToriiRouteHintV1::from(route),
+        };
+        assert_eq!(
+            super::torii_proxy_attempt_timeout(&submit_request),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            super::torii_proxy_request_kind_name(&submit_request),
+            "submit_transaction"
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
