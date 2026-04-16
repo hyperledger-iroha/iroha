@@ -14,14 +14,13 @@ future Nexus deployments, not contributor-local repo workflows.
 
 ## Built-in preset
 
-The bundled MCP preset is intentionally a placeholder:
+The bundled MCP preset currently targets the primary public Taira endpoint:
 
-- `https://<taira-node-hostname>/v1/mcp`
+- `https://taira.sora.org/v1/mcp`
 
-Replace `<taira-node-hostname>` with the direct Torii hostname of the public
-node you want to use. `https://taira.sora.org/v1/mcp` can still exist as a
-convenience endpoint, but the repo no longer treats it as the canonical API
-target.
+If your deployment or operator gives you a different public Torii root for the
+environment under test, override it locally instead of editing the committed
+repo preset.
 
 That endpoint must be enabled by the deployed validator config before the
 plugin can be used. If it returns `404`, the node has not been redeployed with
@@ -36,8 +35,9 @@ transactions still fail with `route_unavailable`.
 Use the repo-local marketplace entry in `.agents/plugins/marketplace.json` and
 install the `iroha` plugin through Codex.
 
-The plugin assumes the repo is the source of truth but keeps only a direct-node
-placeholder committed. Real public node URLs should stay user-local.
+The plugin assumes the repo is the source of truth and keeps the current
+primary public Taira root committed. Alternate public roots should stay
+user-local.
 
 ## Standalone Codex skill
 
@@ -95,9 +95,10 @@ Those values are runtime-only inputs:
 
 When live Taira writes fail with `route_unavailable`, treat that as an ingress
 or authoritative-peer deployment issue and rerun
-`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<taira-node> --write-config <runtime-only client.toml>`
-rather than debugging the plugin surface first. If the deploy still relies on
-hand-edited validator configs, rebuild them from
+`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --write-config <runtime-only client.toml>`
+or the exact public Torii root under test rather than debugging the plugin
+surface first. If the deploy still relies on hand-edited validator configs,
+rebuild them from
 `configs/soranexus/taira/validator_roster.example.toml` plus
 `configs/soranexus/taira/validator_secrets.example.toml` with
 `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`

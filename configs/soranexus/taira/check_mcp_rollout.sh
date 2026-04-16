@@ -65,7 +65,8 @@ signed write canary. The write canary still retries the faucet lane on
 preparation. Use `--skip-write-canary` only for read-only validation.
 
 Public checks intentionally require an explicit public node URL
-(`--public-root https://<taira-node>` or `--public-url https://<taira-node>/v1/mcp`).
+(`--public-root https://<public-torii-root>` or
+`--public-url https://<public-torii-root>/v1/mcp`).
 `https://taira.sora.org` is the current public Torii root, but this script
 still requires an explicit URL so operators do not accidentally validate the
 wrong edge or validator hostname.

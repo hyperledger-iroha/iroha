@@ -2,8 +2,8 @@
   "mcpServers": {
     "iroha-taira": {
       "type": "http",
-      "url": "https://<taira-node-hostname>/v1/mcp",
-      "note": "Replace <taira-node-hostname> with the direct public Torii hostname of the Taira node you want to use. `https://taira.sora.org/v1/mcp` is convenience-only, not the canonical API target."
+      "url": "https://taira.sora.org/v1/mcp",
+      "note": "Current primary public Taira MCP endpoint. If your deployment or operator gives you a different public Torii root, override it in local Codex config instead of editing the repo copy."
     }
   }
 }

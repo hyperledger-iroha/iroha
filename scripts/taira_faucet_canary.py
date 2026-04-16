@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--torii-root",
         required=True,
-        help="Torii root URL, for example https://taira-validator-1.sora.org",
+        help="Torii root URL, for example https://taira.sora.org",
     )
     args = parser.parse_args(argv)
 

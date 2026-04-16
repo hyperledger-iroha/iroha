@@ -144,9 +144,10 @@ Note: First release policy
 - DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 3 * commit_time`) to let RBC/availability QC finish on slower hosts.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
-  prefer the curated `iroha.*` tool surface on an explicit public-node MCP URL
-  such as `https://<taira-node>/v1/mcp`; `https://taira.sora.org/v1/mcp` is
-  convenience-only.
+  prefer the curated `iroha.*` tool surface. Treat
+  `https://taira.sora.org/v1/mcp` as the current primary public Taira MCP
+  endpoint unless the user or operator gives you a different public Torii
+  root for the deployment under test.
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.

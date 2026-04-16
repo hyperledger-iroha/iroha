@@ -9071,7 +9071,10 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         return reject("empty verifying key bytes");
     }
 
-    ensure_halo2_max_degree(64);
+    // Confidential v2 circuits inline nested Poseidon expressions; clamping the
+    // quotient degree at 64 yields proofs that can be generated but later fail
+    // verification because the effective circuit degree is truncated too low.
+    ensure_halo2_max_degree(1024);
 
     let params: PastaParams = match zkparse::params_any(vk_box.bytes.as_slice()) {
         Some(p) => p,
