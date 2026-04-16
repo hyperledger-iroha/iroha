@@ -13,6 +13,10 @@ artifacts/*
 !artifacts/offline_poseidon/**
 build
 dist
+!dist/
+!dist/.gitkeep
+!dist/docker-bin/
+!dist/docker-bin/**
 localnet-*
 target-*
 tmp
