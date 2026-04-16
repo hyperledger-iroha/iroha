@@ -92,19 +92,25 @@ EOF
 
 FROM alpine
 
+ARG APP_DIR=/opt/iroha
+ARG STORAGE=/storage
+ENV APP_DIR=$APP_DIR
+ENV BIN_PATH=/usr/local/bin/
+ENV CONFIG_DIR=/config
+ENV KURA_STORE_DIR=$STORAGE
+ENV SNAPSHOT_STORE_DIR=$STORAGE/snapshot
+ENV IROHA_IMAGE_CONFIG_PROFILE=taira
+ENV USER=iroha
+ENV UID=1001
+ENV GID=1001
+
 COPY --from=xx-build /app/bins/* /usr/local/bin/
+COPY scripts/docker_entrypoint.sh /usr/local/bin/docker_entrypoint.sh
+COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
+COPY codec/rans/tables $APP_DIR/codec/rans/tables
 
-# NOTE: jq & curl to support output `kagami swarm`
-RUN apk add jq curl \
-  && adduser --disabled-password --gecos '' iroha \
-  && mkdir -p /data/iroha /config/iroha \
-  && chown -R iroha /data/iroha /config/iroha
+RUN apk add --no-cache jq curl ca-certificates   && addgroup -g "$GID" "$USER"   && adduser -D -h "$APP_DIR" -G "$USER" -u "$UID" "$USER"   && mkdir -p "$APP_DIR" "$CONFIG_DIR" "$STORAGE" "$APP_DIR/configs/soranexus"   && chown -R "$UID:$GID" "$APP_DIR" "$CONFIG_DIR" "$STORAGE"   && chmod 755 /usr/local/bin/docker_entrypoint.sh
 
-USER iroha
-
-ENV KURA_STORE_DIR=/data/iroha/storage
-ENV SNAPSHOT_STORE_DIR=/data/iroha/snapshot
-
-VOLUME ["/data/iroha/storage", "/data/iroha/snapshot"]
-
-CMD ["irohad"]
+WORKDIR $APP_DIR
+USER $UID:$GID
+ENTRYPOINT ["docker_entrypoint.sh"]
