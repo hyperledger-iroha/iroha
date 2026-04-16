@@ -52121,8 +52121,9 @@ pub async fn handle_v1_accounts_faucet(
 
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
-    let (destination_balance, source_balance) = {
+    let (account_exists, destination_balance, source_balance) = {
         let world = app.state.world_view();
+        let account_exists = world.account(&account_id).is_ok();
         let destination_balance = match world.asset(&destination_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => iroha_primitives::numeric::Numeric::zero(),
@@ -52131,7 +52132,7 @@ pub async fn handle_v1_accounts_faucet(
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => iroha_primitives::numeric::Numeric::zero(),
         };
-        (destination_balance, source_balance)
+        (account_exists, destination_balance, source_balance)
     };
     if destination_balance > iroha_primitives::numeric::Numeric::zero() {
         return Err(faucet_invalid_request(
@@ -52142,12 +52143,23 @@ pub async fn handle_v1_accounts_faucet(
         return Err(faucet_invalid_request("faucet is out of funds"));
     }
 
-    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
-        .with_instructions([InstructionBox::from(Transfer::asset_numeric(
-            source_asset_id,
-            faucet.amount.clone(),
-            account_id.clone(),
-        ))]);
+    let mut instructions = Vec::with_capacity(2);
+    if !account_exists {
+        instructions.push(InstructionBox::from(
+            iroha_data_model::isi::Register::account(iroha_data_model::account::Account::new(
+                account_id.clone(),
+            )),
+        ));
+    }
+    instructions.push(InstructionBox::from(Transfer::asset_numeric(
+        source_asset_id,
+        faucet.amount.clone(),
+        account_id.clone(),
+    )));
+
+    let mut builder =
+        TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
+            .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(60));
     let tx = builder.sign(&faucet.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
