@@ -694,6 +694,66 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
 }
 
 #[test]
+fn transfer_rejects_repeated_nullifier_in_same_instruction() {
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("zkd", "universal").unwrap(),
+        "dupnf".parse().unwrap(),
+    );
+    let (owner, _owner_key) = gen_account_in("zkd");
+
+    let domain = Domain::new(domain_id.clone()).build(&owner);
+    let account = iroha_data_model::account::Account::new(owner.clone()).build(&owner);
+    let asset_def =
+        AssetDefinition::numeric(asset_def_id.clone()).with_name(asset_def_id.name().to_string());
+    let world = World::with_assets([domain], [account], [asset_def.build(&owner)], [], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
+
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
+        asset_def_id.clone(),
+        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+        true,
+        true,
+        None,
+        None,
+        None,
+    );
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
+        .expect("register zk asset");
+
+    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
+        asset_def_id.clone(),
+        vec![[7u8; 32], [7u8; 32]],
+        vec![[9u8; 32]],
+        native_ipa_attachment(),
+        None,
+    );
+    let err = stx
+        .world
+        .executor()
+        .clone()
+        .execute_instruction(&mut stx, &owner, InstructionBox::from(transfer))
+        .expect_err("transfer should reject repeated nullifier");
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(msg.contains("duplicate nullifier"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn shield_rejected_when_policy_disallows() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();

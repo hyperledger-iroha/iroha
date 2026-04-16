@@ -5180,6 +5180,13 @@ export interface ConfidentialKeyset {
   asHex(): Record<string, string>;
 }
 
+export interface ConfidentialReceiveAddressV2 {
+  ownerTag: Buffer;
+  ownerTagHex: string;
+  diversifier: Buffer;
+  diversifierHex: string;
+}
+
 export interface KaigiRosterJoinProof {
   commitment: Buffer;
   nullifier: Buffer;
@@ -6927,6 +6934,9 @@ export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
   rho?: BinaryLike;
+  diversifierHex?: string;
+  diversifier_hex?: string;
+  diversifier?: BinaryLike;
   leafIndex?: number;
   leaf_index?: number;
 }
@@ -8444,6 +8454,43 @@ export function deriveConfidentialKeyset(
 ): ConfidentialKeyset;
 
 export function deriveConfidentialKeysetFromHex(spendKeyHex: string): ConfidentialKeyset;
+
+export function deriveConfidentialOwnerTagV2(
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: {
+    diversifierHex?: string;
+    diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  },
+): Buffer;
+
+export function deriveConfidentialDiversifierV2(
+  seed: ArrayBufferView | ArrayBuffer | Buffer | string,
+): {
+  diversifier: Buffer;
+  diversifierHex: string;
+};
+
+export function deriveConfidentialReceiveAddressV2(input: {
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  diversifierSeed: ArrayBufferView | ArrayBuffer | Buffer | string;
+}): ConfidentialReceiveAddressV2;
+
+export function deriveConfidentialNoteV2(input: {
+  assetDefinitionId: string;
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+  ownerTagHex?: string;
+  ownerTag?: ArrayBufferView | ArrayBuffer | Buffer;
+}): { commitment: Buffer; commitmentHex: string };
+
+export function deriveConfidentialNullifierV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: ArrayBufferView | ArrayBuffer | Buffer;
+  rhoHex?: string;
+  rho?: ArrayBufferView | ArrayBuffer | Buffer;
+}): { nullifier: Buffer; nullifierHex: string };
 
 export interface Sm2Fixture {
   distid: string;
