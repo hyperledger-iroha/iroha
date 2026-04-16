@@ -18,11 +18,7 @@ use std::{
 };
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
-use iroha_data_model::{
-    parameter::system::SumeragiConsensusMode,
-    peer::PeerId,
-    prelude::{AccountId, ChainId, DomainId},
-};
+use iroha_data_model::{parameter::system::SumeragiConsensusMode, peer::PeerId, prelude::ChainId};
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
 use norito::json::{self, Map, Value};
@@ -30,7 +26,7 @@ use once_cell::sync::OnceCell;
 use tokio::runtime::Handle;
 
 use crate::{
-    compose::SigningAuthority,
+    compose::{SigningAuthority, development_signing_authorities},
     config::{
         GenesisProfile, NetworkPaths, NetworkProfile, PortAllocator, ProfilePreset,
         infer_workspace_root_from_sandbox_root,
@@ -46,10 +42,10 @@ const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
 const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
-const SMOKE_ACCOUNT_DOMAIN: &str = "wonderland";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
+const LOCAL_NORITO_RPC_STAGE: &str = "ga";
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1678,6 +1674,7 @@ fn normalize_peer_config_overrides(
     }
 
     ensure_local_mcp_config(torii)?;
+    ensure_local_norito_rpc_config(torii)?;
 
     Ok(())
 }
@@ -1709,6 +1706,38 @@ fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
             "torii.mcp.allow_tool_prefixes must be an array".to_owned(),
         ));
     }
+
+    Ok(())
+}
+
+fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()> {
+    let table = torii.get_or_insert_with(toml::Table::new);
+    let transport_entry = table
+        .entry("transport".to_owned())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(transport) = transport_entry.as_table_mut() else {
+        return Err(SupervisorError::Config(
+            "torii.transport must be a table".to_owned(),
+        ));
+    };
+    let norito_entry = transport
+        .entry("norito_rpc".to_owned())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(norito_rpc) = norito_entry.as_table_mut() else {
+        return Err(SupervisorError::Config(
+            "torii.transport.norito_rpc must be a table".to_owned(),
+        ));
+    };
+
+    norito_rpc
+        .entry("enabled".to_owned())
+        .or_insert(toml::Value::Boolean(true));
+    norito_rpc
+        .entry("require_mtls".to_owned())
+        .or_insert(toml::Value::Boolean(false));
+    norito_rpc
+        .entry("stage".to_owned())
+        .or_insert(toml::Value::String(LOCAL_NORITO_RPC_STAGE.to_owned()));
 
     Ok(())
 }
@@ -2105,17 +2134,15 @@ impl Supervisor {
     }
 
     fn readiness_smoke_signer(&self) -> Result<SigningAuthority> {
-        let domain = DomainId::try_new(SMOKE_ACCOUNT_DOMAIN, "universal").map_err(|err| {
-            SupervisorError::Config(format!(
-                "invalid readiness smoke account domain `{SMOKE_ACCOUNT_DOMAIN}`: {err}"
-            ))
-        })?;
-        let account = self.genesis.account_in_domain(&domain);
-        Ok(SigningAuthority::new(
-            format!("Genesis readiness ({SMOKE_ACCOUNT_DOMAIN})"),
-            account,
-            self.genesis.key_pair().clone(),
-        ))
+        development_signing_authorities()
+            .first()
+            .cloned()
+            .or_else(|| self.signers.first().cloned())
+            .ok_or_else(|| {
+                SupervisorError::Config(
+                    "no signing authorities available for readiness smoke".to_owned(),
+                )
+            })
     }
 
     /// Paths to the binaries used by the supervisor.
@@ -3638,15 +3665,6 @@ impl GenesisMaterial {
     fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
     }
-
-    fn key_pair(&self) -> &KeyPair {
-        &self.key_pair
-    }
-
-    fn account_in_domain(&self, domain: &DomainId) -> AccountId {
-        let _ = domain;
-        AccountId::new(self.key_pair.public_key().clone())
-    }
 }
 
 fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
@@ -3977,7 +3995,7 @@ mod tests {
     };
 
     use iroha_crypto::PublicKey;
-    use iroha_data_model::{peer::PeerId, prelude::DomainId};
+    use iroha_data_model::peer::PeerId;
     use tokio::runtime::Runtime;
 
     use super::*;
@@ -4427,6 +4445,12 @@ JSON
         }
     }
 
+    fn npos_preset_profile(preset: ProfilePreset) -> NetworkProfile {
+        let mut profile = NetworkProfile::from_preset(preset);
+        profile.consensus_mode = SumeragiConsensusMode::Npos;
+        profile
+    }
+
     #[test]
     fn binary_paths_default_respects_env_override() {
         let temp = tempfile::NamedTempFile::new().expect("temp file");
@@ -4682,6 +4706,40 @@ JSON
                 .and_then(|table| table.get("address"))
                 .and_then(toml::Value::as_str),
             Some(expected_torii.as_str())
+        );
+        assert_eq!(
+            value
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("mcp"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("transport"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("norito_rpc"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("enabled"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("transport"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("norito_rpc"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("stage"))
+                .and_then(toml::Value::as_str),
+            Some(LOCAL_NORITO_RPC_STAGE)
         );
         assert_eq!(
             value
@@ -4986,8 +5044,8 @@ JSON
     }
 
     #[test]
-    fn readiness_smoke_plan_uses_genesis_signer_and_unique_nonces() {
-        if !ports_available("readiness_smoke_plan_uses_genesis_signer_and_unique_nonces") {
+    fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
+        if !ports_available("readiness_smoke_plan_uses_primary_signer_and_unique_nonces") {
             return;
         }
         let _env = env_lock().lock().expect("env lock");
@@ -5003,9 +5061,11 @@ JSON
             .expect("build readiness plan");
         assert_eq!(plan.transactions.len(), 3);
 
-        let expected_domain =
-            DomainId::try_new(SMOKE_ACCOUNT_DOMAIN, "universal").expect("parse domain id");
-        let expected_authority = supervisor.genesis.account_in_domain(&expected_domain);
+        let expected_authority = supervisor
+            .readiness_smoke_signer()
+            .expect("readiness signer available")
+            .account_id()
+            .clone();
         let mut nonces = HashSet::new();
         for (idx, tx) in plan.transactions.iter().enumerate() {
             assert_eq!(tx.authority(), &expected_authority);
@@ -5186,11 +5246,12 @@ JSON
             toml::Value::Array(vec![toml::Value::Table(dataspace)]),
         );
 
-        let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
-            .data_root(temp.path())
-            .nexus_config(nexus)
-            .build()
-            .expect("build supervisor");
+        let mut supervisor =
+            SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::FourPeerBft))
+                .data_root(temp.path())
+                .nexus_config(nexus)
+                .build()
+                .expect("build supervisor");
 
         let snapshot_root = supervisor
             .export_snapshot(Some("Multilane Snapshot"))
@@ -5886,13 +5947,14 @@ JSON
             toml::Value::String("127.0.0.1:8080".to_owned()),
         );
 
-        let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
-            .data_root(temp.path())
-            .nexus_config(nexus)
-            .sumeragi_config(sumeragi)
-            .torii_config(torii)
-            .build()
-            .expect("build supervisor");
+        let supervisor =
+            SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
+                .data_root(temp.path())
+                .nexus_config(nexus)
+                .sumeragi_config(sumeragi)
+                .torii_config(torii)
+                .build()
+                .expect("build supervisor");
 
         let nexus = supervisor
             .nexus_config_overrides()
@@ -6248,12 +6310,13 @@ JSON
         let mut sumeragi = toml::Table::new();
         sumeragi.insert("da_enabled".into(), toml::Value::Boolean(true));
 
-        let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
-            .data_root(temp.path())
-            .nexus_config(nexus)
-            .sumeragi_config(sumeragi)
-            .build()
-            .expect("build supervisor");
+        let mut supervisor =
+            SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
+                .data_root(temp.path())
+                .nexus_config(nexus)
+                .sumeragi_config(sumeragi)
+                .build()
+                .expect("build supervisor");
 
         let peer = supervisor.peers().first().expect("peer available");
         let lane0_slug = lane_slug("core", 0);

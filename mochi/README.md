@@ -57,11 +57,18 @@ By default the helper uses the current directory as `MOCHI_WORKSPACE_ROOT` and s
 set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not already in the target app
 workspace.
 
-`up` backgrounds `cargo run -p mochi-ui -- sandbox serve`, waits for Torii readiness and local MCP
-validation, writes `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes
-`.env.local` plus `.mochi/generated/*` under the workspace. The helper now isolates its Cargo
-artifacts under `<workspace>/.mochi/build-target` by default (override with
-`MOCHI_CARGO_TARGET_DIR`) so local sandbox startup does not contend with unrelated workspace builds.
+`up` launches `cargo run -p mochi-ui -- sandbox serve` in a detached process group, waits for Torii
+readiness, runs a local smoke transaction, validates the local MCP surface, writes
+`<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
+`.mochi/generated/*` under the workspace. The helper records the long-lived Mochi process in
+`serve.pid`, so `status` stays `ready` after the shell command returns and `down` can stop the
+sandbox with SIGTERM. Cargo artifacts stay isolated under `<workspace>/.mochi/build-target` by
+default (override with `MOCHI_CARGO_TARGET_DIR`) so local sandbox startup does not contend with
+unrelated workspace builds.
+
+The generated local Torii config enables both the curated `/v1/mcp` endpoint and local Norito-RPC
+transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clients and local SDK
+smoke tests without extra hand-edited config.
 
 Generated local validator configs now pin the runtime-critical defaults Mochi depends on:
 `nexus.enabled = false` unless explicitly enabled, `confidential.enabled = true`, and

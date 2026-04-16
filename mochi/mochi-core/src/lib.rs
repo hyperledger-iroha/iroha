@@ -38,7 +38,7 @@ pub use dashboard::{
     DashboardAccountCard, DashboardAssetBalance, DashboardRecentBlock, DashboardSnapshot,
     fetch_dashboard_snapshot,
 };
-pub use genesis::default_manifest;
+pub use genesis::{default_manifest, sample_cabbage_definition_id, sample_rose_definition_id};
 pub use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 pub use iroha_telemetry::metrics::{Status as TelemetryStatus, TxGossipSnapshot};
 pub use logs::{LifecycleEvent, LogStreamKind, PeerLogEvent, PeerLogStream};

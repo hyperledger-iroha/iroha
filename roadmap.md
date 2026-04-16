@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Mochi local sandbox startup/runtime smoke completed):
+the Mochi helper now behaves like a localton/Ganache-style sandbox launcher for
+the default single-peer profile. The headless flow starts in a detached process
+group, waits for status readiness, validates local MCP, runs a metadata-based
+readiness smoke against the existing `wonderland.universal` domain, confirms
+commit through stream plus HTTP transaction-status fallback, writes app
+bootstrap artifacts, and shuts down cleanly through `scripts/mochi_local_sandbox.sh down`.
+Generated peer configs also enable the local Norito-RPC transport expected by
+SDK smoke clients.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/{genesis.rs,lib.rs,supervisor.rs,torii.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/src/main.rs`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/mochi_local_sandbox.sh`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/fixtures/composer/*`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/tests/fixtures/composer_drafts/*`
+  - `/Users/takemiyamakoto/dev/iroha/skills/mochi-local-sandbox/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/mochi/{quickstart.md,troubleshooting.md}`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n scripts/mochi_local_sandbox.sh`
+  - `git diff --check -- ...` for the touched Mochi/helper/doc/skill files
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core status -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core builder_creates_peer_configs -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core --test composer_drafts -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_min_initial_amounts_parses_lines -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_account_admission_policy_builds_policy -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui composer_template_prefills -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo build -p mochi-ui`
+  - fresh temporary-workspace helper run for `up`, `status`, `env`, `mcp-add-command`, config inspection, and `down`
+- open work after this slice:
+  - run the full `cargo test --workspace` window before release signoff
+  - install PyYAML or run the skill validator from an environment that has it, then record the `skills/mochi-local-sandbox` validation result
+  - mirror the English Mochi quickstart/troubleshooting updates into translated docs only if those translated guides are still part of the release surface
+
 Latest sync (2026-04-16 `iroha_crypto` secp256k1 default-test compile fix):
 the reported `Sha256::digest` failure in
 `crates/iroha_crypto/src/signature/secp256k1.rs` was a feature-gated test

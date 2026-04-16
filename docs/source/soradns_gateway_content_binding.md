@@ -57,6 +57,9 @@ cargo xtask soradns-hosts \
   --verify-host-patterns docs/examples/soradns_host_patterns_docs_sora.json
 ```
 
+For Taira's owned Mon gateway, add `--pretty-suffix mon.taira.sora.org`; the
+derived pretty host becomes `docs.sora.mon.taira.sora.org`.
+
 The helper normalises the name, prints the canonical Base32 label, and ensures
 the provided GAR host-pattern JSON authorises:
 
