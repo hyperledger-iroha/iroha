@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Soracloud/Torii integration response compatibility restored):
+the reported Soracloud/Torii integration failures were narrowed to response and
+partial-config compatibility gaps rather than consensus or contract execution.
+Single-contract deploy responses now keep the canonical nested bundle receipt
+and mirror the first contract's legacy top-level fields, CLI service mutations
+surface authoritative `current_version` and rollout fields at the top level, and
+partial HF runtime config overrides now retain default inference/import
+settings.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/soracloud.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config soracloud_runtime_partial_hf_overrides_keep_defaults`
+  - `cargo test -p iroha_cli --bin iroha direct_service_mutation_output_hoists_authoritative_status_fields`
+  - `cargo test -p iroha_torii single_contract_deploy_receipt_keeps_top_level_fields --features app_api`
+  - `cargo test -p integration_tests --test core_api contracts::deploy_and_get_contract_manifest_via_torii -- --nocapture`
+  - `cargo test -p integration_tests --test core_api iroha_cli::soracloud_mutations_use_live_torii_control_plane -- --nocapture`
+- open work after this slice:
+  - rerun the broader `core_api` group and full workspace validation when a
+    multi-hour window is available; this slice focused on the reported failing
+    response/config paths.
+
 Latest sync (2026-04-16 adversarial/NPoS RBC harness follow-up):
 the remaining adversarial RBC harnesses no longer treat `delivered=true`
 telemetry as proof of commit progress when local payload recovery can retire the

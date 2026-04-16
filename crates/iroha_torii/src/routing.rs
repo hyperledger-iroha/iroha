@@ -22860,6 +22860,49 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
+const SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS: &[&str] = &[
+    "name",
+    "contract_alias",
+    "contract_address",
+    "previous_contract_address",
+    "upgraded",
+    "dataspace",
+    "deploy_nonce",
+    "code_hash_hex",
+    "abi_hash_hex",
+    "tx_hash_hex",
+    "status",
+];
+
+#[cfg(feature = "app_api")]
+fn single_contract_deploy_receipt_json(
+    receipt: &DeployContractBundleReceiptDto,
+) -> Result<norito::json::Value> {
+    let mut value = norito::json::to_value(receipt).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode single contract deploy receipt: {err}"
+        ))
+    })?;
+    let Some(contract) = receipt.contracts.first() else {
+        return Ok(value);
+    };
+    let contract_value = norito::json::to_value(contract).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode single contract deploy receipt item: {err}"
+        ))
+    })?;
+    if let (Some(root), Some(contract_object)) = (value.as_object_mut(), contract_value.as_object())
+    {
+        for field in SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS {
+            if let Some(field_value) = contract_object.get(*field).cloned() {
+                root.insert((*field).to_owned(), field_value);
+            }
+        }
+    }
+    Ok(value)
+}
+
+#[cfg(feature = "app_api")]
 /// POST /v1/contracts/deploy-bundle — deploy a dependency-ordered bundle of
 /// public contracts, init calls, and post-deploy assertions.
 pub async fn handle_post_contract_deploy_bundle(
@@ -22925,7 +22968,8 @@ pub async fn handle_post_contract_deploy(
         false,
     )
     .await?;
-    let body = norito::json::to_json_pretty(&receipt).unwrap_or_else(|_| "{}".into());
+    let response = single_contract_deploy_receipt_json(&receipt)?;
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -23171,6 +23215,63 @@ mod contract_bundle_tests {
             sample_alias("greeter::universal")
         );
         assert_eq!(loaded.assertions[0].status, "passed");
+    }
+
+    #[test]
+    fn single_contract_deploy_receipt_keeps_top_level_fields() {
+        let address = sample_address(0);
+        let receipt = DeployContractBundleReceiptDto {
+            ok: true,
+            bundle_name: "single-contract-deploy".to_owned(),
+            bundle_digest: "digest-1".to_owned(),
+            chain_fingerprint: "chain@block1".to_owned(),
+            dry_run: false,
+            completed_stages: vec!["plan".to_owned(), "deploy".to_owned()],
+            failure_point: None,
+            contracts: vec![DeployContractBundleContractReceiptDto {
+                name: "greeter::universal".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                contract_address: address.clone(),
+                previous_contract_address: None,
+                upgraded: false,
+                dataspace: "universal".to_owned(),
+                deploy_nonce: 0,
+                code_hash_hex: "code".to_owned(),
+                abi_hash_hex: "abi".to_owned(),
+                tx_hash_hex: Some("tx".to_owned()),
+                status: "deployed".to_owned(),
+            }],
+            init_calls: Vec::new(),
+            assertions: Vec::new(),
+        };
+
+        let value = single_contract_deploy_receipt_json(&receipt).expect("receipt json");
+        let address_literal = address.to_string();
+
+        assert_eq!(
+            value
+                .get("contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(address_literal.as_str())
+        );
+        assert_eq!(
+            value
+                .get("code_hash_hex")
+                .and_then(norito::json::Value::as_str),
+            Some("code")
+        );
+        assert_eq!(
+            value
+                .get("tx_hash_hex")
+                .and_then(norito::json::Value::as_str),
+            Some("tx")
+        );
+        assert!(
+            value
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(|contracts| contracts.len() == 1)
+        );
     }
 
     #[test]
