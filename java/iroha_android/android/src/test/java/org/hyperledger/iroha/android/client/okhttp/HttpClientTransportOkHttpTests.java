@@ -166,6 +166,48 @@ public final class HttpClientTransportOkHttpTests {
   }
 
   @Test
+  public void resolveAccountAliasParsesSuccessResponseWithoutIndex() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(
+          new MockResponse()
+              .setResponseCode(200)
+              .setBody(
+                  "{\"alias\":\"banking@centralbank.universal\","
+                      + "\"account_id\":\"aid:banking-123\","
+                      + "\"source\":\"rekey_record\"}"));
+      server.start();
+
+      final ClientConfig config =
+          ClientConfig.builder()
+              .setBaseUri(server.url("/").uri())
+              .setRequestTimeout(Duration.ofSeconds(2))
+              .build();
+      final OkHttpTransportExecutor executor = new OkHttpTransportExecutor(new OkHttpClient());
+      final org.hyperledger.iroha.android.client.HttpClientTransport transport =
+          new org.hyperledger.iroha.android.client.HttpClientTransport(executor, config);
+
+      final Optional<AccountAliasResolution> response =
+          transport.resolveAccountAlias("banking@centralbank.universal")
+              .get(2, TimeUnit.SECONDS);
+      assertTrue("account alias resolution must be present", response.isPresent());
+      final AccountAliasResolution resolution = response.orElseThrow();
+      assertEquals("banking@centralbank.universal", resolution.alias());
+      assertEquals("aid:banking-123", resolution.accountId());
+      assertNull("index must be null when omitted", resolution.index());
+      assertEquals("rekey_record", resolution.source());
+
+      final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
+      assertNotNull(recorded);
+      assertEquals("POST", recorded.getMethod());
+      assertEquals("/v1/aliases/resolve", recorded.getPath());
+      final String body = recorded.getBody().readString(StandardCharsets.UTF_8);
+      assertTrue(
+          "request body must carry the alias literal: " + body,
+          body.contains("\"alias\":\"banking@centralbank.universal\""));
+    }
+  }
+
+  @Test
   public void resolveAccountAliasFailsOnMalformedJson() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(new MockResponse().setResponseCode(200).setBody("not json"));

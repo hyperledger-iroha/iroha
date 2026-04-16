@@ -155,8 +155,9 @@ fast instead of silently downgrading.
 ## Resolving Account Aliases
 
 `HttpClientTransport.resolveAccountAlias` posts to Torii's `/v1/aliases/resolve`
-endpoint and returns the mapped account id. Unknown aliases surface as
-`Optional.empty()` without throwing:
+endpoint and returns the mapped account id. `AccountAliasResolution.index` is
+optional and may be absent for backends that do not expose a deterministic
+alias index. Unknown aliases surface as `Optional.empty()` without throwing:
 
 ```kotlin
 val client = HttpClientTransport.createDefault(config)
