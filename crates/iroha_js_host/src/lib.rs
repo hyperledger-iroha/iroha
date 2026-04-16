@@ -46,7 +46,14 @@ use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
-use iroha_core::zk::{hash_vk as hash_verifying_key_box, test_utils::halo2_fixture_envelope};
+use iroha_core::zk::{
+    confidential_v2::{
+        self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2,
+        ConfidentialUnshieldInputV2,
+    },
+    hash_vk as hash_verifying_key_box,
+    test_utils::halo2_fixture_envelope,
+};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -1198,6 +1205,209 @@ pub fn derive_confidential_keyset(spend_key: Uint8Array) -> napi::Result<JsConfi
         ivk: Buffer::from(keyset.incoming_view_key().to_vec()),
         ovk: Buffer::from(keyset.outgoing_view_key().to_vec()),
         fvk: Buffer::from(keyset.full_view_key().to_vec()),
+    })
+}
+
+/// Derive the confidential v2 owner tag from a 32-byte spend key.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_owner_tag_v2(spend_key: Uint8Array) -> napi::Result<Buffer> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_owner_tag_v2(spend_key).to_vec(),
+    ))
+}
+
+/// Derive a confidential v2 note commitment from note material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_note_v2(
+    asset_definition_id: String,
+    amount: String,
+    rho_hex: String,
+    owner_tag_hex: String,
+) -> napi::Result<Buffer> {
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let amount = parse_confidential_amount_u128("amount", &amount)?;
+    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
+    let owner_tag = parse_fixed_32_hex("owner_tag_hex", &owner_tag_hex)?;
+    let commitment = confidential_v2::derive_confidential_note_v2(
+        &asset_definition_id.to_string(),
+        amount,
+        rho,
+        owner_tag,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(Buffer::from(commitment.to_vec()))
+}
+
+/// Derive a confidential v2 nullifier from spend key material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_nullifier_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    rho_hex: String,
+) -> napi::Result<Buffer> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_nullifier_v2(
+            chain_id.trim(),
+            &asset_definition_id.to_string(),
+            spend_key,
+            rho,
+        )
+        .to_vec(),
+    ))
+}
+
+/// Build a confidential transfer v2 proof envelope.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_transfer_proof_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    outputs: Vec<JsConfidentialTransferOutputV2>,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialTransferProofEnvelopeV2> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_transfer_inputs_v2(inputs)?;
+    let outputs = parse_confidential_transfer_outputs_v2(outputs)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box =
+        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.trim().to_owned(), vk_bytes.to_vec());
+    let proof = confidential_v2::build_confidential_transfer_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialTransferProofEnvelopeV2 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        output_commitments: proof
+            .output_commitments
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
+    })
+}
+
+/// Build a confidential unshield v2 proof envelope.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_unshield_proof_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    public_amount: String,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV2> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_unshield_inputs_v2(inputs)?;
+    let public_amount = parse_confidential_amount_u128("public_amount", &public_amount)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box =
+        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.trim().to_owned(), vk_bytes.to_vec());
+    let proof = confidential_v2::build_confidential_unshield_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialUnshieldProofEnvelopeV2 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
     })
 }
 
@@ -7964,6 +8174,54 @@ pub struct JsPrivateKaigiFeeSpendEnvelope {
     pub proof: Buffer,
 }
 
+/// Input note material for confidential transfer/unshield proof construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialTransferInputV2 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+    /// Current note leaf index inside the confidential tree.
+    pub leaf_index: u32,
+}
+
+/// Output note material for confidential transfer proof construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialTransferOutputV2 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Fresh note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+    /// Recipient owner tag rendered as 32-byte hexadecimal.
+    pub owner_tag_hex: String,
+}
+
+/// Result of building a confidential transfer v2 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialTransferProofEnvelopeV2 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the proof.
+    pub output_commitments: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+/// Result of building a confidential unshield v2 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialUnshieldProofEnvelopeV2 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
 fn parse_private_kaigi_json<T>(context: &str, payload: &str) -> napi::Result<T>
 where
     T: JsonDeserialize,
@@ -8125,6 +8383,102 @@ fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&decoded);
     Ok(out)
+}
+
+fn parse_confidential_amount_u128(context: &str, value: &str) -> napi::Result<u128> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be a non-empty whole number"),
+        ));
+    }
+    normalized.parse::<u128>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} whole-number amount: {err}"),
+        )
+    })
+}
+
+fn parse_confidential_tree_commitments(
+    commitments_hex: Vec<String>,
+) -> napi::Result<Vec<[u8; 32]>> {
+    commitments_hex
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| parse_fixed_32_hex(&format!("tree_commitments_hex[{index}]"), &value))
+        .collect()
+}
+
+fn parse_confidential_transfer_inputs_v2(
+    inputs: Vec<JsConfidentialTransferInputV2>,
+) -> napi::Result<Vec<ConfidentialTransferInputV2>> {
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| {
+            Ok(ConfidentialTransferInputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("inputs[{index}].amount"),
+                    &input.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("inputs[{index}].leaf_index is out of range"),
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_unshield_inputs_v2(
+    inputs: Vec<JsConfidentialTransferInputV2>,
+) -> napi::Result<Vec<ConfidentialUnshieldInputV2>> {
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| {
+            Ok(ConfidentialUnshieldInputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("inputs[{index}].amount"),
+                    &input.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("inputs[{index}].leaf_index is out of range"),
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_transfer_outputs_v2(
+    outputs: Vec<JsConfidentialTransferOutputV2>,
+) -> napi::Result<Vec<ConfidentialTransferOutputV2>> {
+    outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            Ok(ConfidentialTransferOutputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("outputs[{index}].amount"),
+                    &output.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
+                owner_tag: parse_fixed_32_hex(
+                    &format!("outputs[{index}].owner_tag_hex"),
+                    &output.owner_tag_hex,
+                )?,
+            })
+        })
+        .collect()
 }
 
 fn private_kaigi_fee_aux_json(

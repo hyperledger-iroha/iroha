@@ -1621,6 +1621,75 @@ export function buildEndKaigiTransaction({
   });
 }
 
+function normalizeInlineVerifyingKeyRecord(value, context) {
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : null;
+  if (!record) {
+    throw new TypeError(`${context}.verifyingKey must be an object`);
+  }
+  const inlineKey =
+    record.inline_key ??
+    record.inlineKey ??
+    null;
+  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
+    throw new TypeError(`${context}.verifyingKey.inline_key must be present`);
+  }
+  const bytesBase64 = String(
+    inlineKey.bytes_b64 ??
+      inlineKey.bytesBase64 ??
+      "",
+  ).trim();
+  if (!bytesBase64) {
+    throw new TypeError(`${context}.verifyingKey.inline_key.bytes_b64 must be present`);
+  }
+  return {
+    record,
+    backend: String(record.id?.backend ?? record.backend ?? "").trim(),
+    circuitId: String(
+      record.record?.circuit_id ?? record.circuit_id ?? record.circuitId ?? "",
+    ).trim(),
+    bytes: Buffer.from(bytesBase64, "base64"),
+  };
+}
+
+function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new TypeError(`${context} must be a whole-number string`);
+  }
+  return normalized;
+}
+
+function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+      throw new TypeError(`${context} must be a 32-byte hex string`);
+    }
+    return normalized;
+  }
+  const buffer = toNamedBuffer(value, context);
+  if (buffer.length !== 32) {
+    throw new TypeError(`${context} must be 32 bytes`);
+  }
+  return Buffer.from(buffer).toString("hex");
+}
+
+function toNamedBuffer(value, context) {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+  throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
+}
+
 /**
  * Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
  */
@@ -1638,41 +1707,19 @@ export function buildPrivateKaigiFeeSpend({
       "native binding 'buildPrivateKaigiFeeSpend' is unavailable",
     );
   }
-  const record =
-    verifyingKey && typeof verifyingKey === "object" && !Array.isArray(verifyingKey)
-      ? verifyingKey
-      : null;
-  if (!record) {
-    throw new TypeError("privateKaigiFeeSpend.verifyingKey must be an object");
-  }
-  const inlineKey =
-    record.inline_key ??
-    record.inlineKey ??
-    null;
-  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
-    throw new TypeError(
-      "privateKaigiFeeSpend.verifyingKey.inline_key must be present",
-    );
-  }
-  const bytesBase64 = String(
-    inlineKey.bytes_b64 ??
-      inlineKey.bytesBase64 ??
-      "",
-  ).trim();
-  if (!bytesBase64) {
-    throw new TypeError(
-      "privateKaigiFeeSpend.verifyingKey.inline_key.bytes_b64 must be present",
-    );
-  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "privateKaigiFeeSpend",
+  );
   const result = native.buildPrivateKaigiFeeSpend(
     String(chainId ?? "").trim(),
     String(assetDefinitionId ?? "").trim(),
     toBuffer(actionHash),
     String(anchorRootHex ?? "").trim(),
     String(feeAmount ?? "").trim(),
-    String(record.id?.backend ?? record.backend ?? "").trim(),
-    String(record.record?.circuit_id ?? record.circuit_id ?? record.circuitId ?? "").trim(),
-    Buffer.from(bytesBase64, "base64"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
   );
   return {
     asset_definition_id: String(result.assetDefinitionId ?? result.asset_definition_id),
@@ -1690,6 +1737,148 @@ export function buildPrivateKaigiFeeSpend({
           Buffer.from(entry),
         )
       : [],
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build a confidential transfer v2 proof envelope.
+ */
+export function buildConfidentialTransferProofV2({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  outputs,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialTransferProofV2 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialTransferProofV2' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialTransferProofV2",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedOutputs = Array.isArray(outputs)
+    ? outputs.map((output, index) => ({
+        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          output?.rhoHex ?? output?.rho,
+          `outputs[${index}].rho`,
+        ),
+        ownerTagHex: normalizeFixed32HexInput(
+          output?.ownerTagHex ?? output?.owner_tag_hex ?? output?.ownerTag,
+          `outputs[${index}].ownerTag`,
+        ),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialTransferProofV2(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizedOutputs,
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build a confidential unshield v2 proof envelope.
+ */
+export function buildConfidentialUnshieldProofV2({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  publicAmount,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialUnshieldProofV2 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialUnshieldProofV2",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialUnshieldProofV2(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
     proof: Buffer.from(result.proof),
   };
 }

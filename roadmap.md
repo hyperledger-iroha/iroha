@@ -52,6 +52,11 @@ artifact. The remaining work is operational rather than structural.
   - `/Users/takemiyamakoto/dev/iroha/scripts/docker_entrypoint.sh`
   - `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh`
   - `/Users/takemiyamakoto/dev/iroha/scripts/tests/docker_entrypoint_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/docker-compose.validator.yml`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.compose.env.example`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.service`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/taira_validator_container_test.py`
   - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
   - `/Users/takemiyamakoto/dev/iroha/docs/source/docker_build.md`
   - `/Users/takemiyamakoto/dev/iroha/status.md`
@@ -59,12 +64,19 @@ artifact. The remaining work is operational rather than structural.
 - verified in this slice:
   - `bash -n scripts/docker_entrypoint.sh`
   - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
   - `python3 -m unittest scripts.tests.docker_entrypoint_test`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test`
   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/publish_taira_validator.yml"); puts "yaml ok"'`
+  - `ruby -e 'require "yaml"; YAML.load_file("configs/soranexus/taira/docker-compose.validator.yml"); puts "yaml ok"'`
   - tracked-files-only Docker rebuilds now keep the required `artifacts/offline_poseidon` snapshot in a clean ~512 MB context; local Colima still OOM-kills the deploy-profile Rust compile even with `CARGO_BUILD_JOBS=4`, so final image proof still needs a better-provisioned builder
+  - `docker manifest inspect` confirms neither `hyperledger/iroha:taira-latest` nor `docker.soramitsu.co.jp/iroha3/iroha:taira-latest` exists yet, so the host-side deployment path cannot boot a real published Taira image until the first manual publish succeeds
 - open work after this slice:
   - run `.github/workflows/publish_taira_validator.yml` once with real registry
     credentials to push the first `taira-*` tags to Docker Hub and Harbor;
+  - after the first publish, run a real host smoke with either
+    `taira-validator-container.sh ... up` or `docker compose ... up -d` against
+    the published image and prove local `/status` plus `/v1/mcp`;
   - let the clean-context Taira image build finish on a publish-grade host if a
     full pre-push compile proof is required beyond the entrypoint/script
     validation above; and

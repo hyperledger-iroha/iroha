@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  taira-validator:
+    container_name: ${TAIRA_CONTAINER_NAME:-taira-validator-1}
+    image: ${TAIRA_IMAGE:-hyperledger/iroha:taira-latest}
+    pull_policy: missing
+    init: true
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${TAIRA_RUST_LOG:-info}
+      # Uncomment when mounting a custom genesis file below.
+      # IROHA_TAIRA_GENESIS: /config/genesis.json
+      # Uncomment when mounting explicit SoraFS host bindings below.
+      # IROHA_SORAFS_SITE_BINDINGS_FILE: /config/sorafs_sites.json
+    ports:
+      - "${TAIRA_P2P_PORT:-1337}:1337"
+      - "${TAIRA_TORII_PORT:-18080}:8080"
+    volumes:
+      - "${TAIRA_CONFIG_PATH:-/etc/iroha/taira-validator-1/config.toml}:/config/config.toml:ro"
+      - "${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}:/storage"
+      # Uncomment to override the bundled public genesis.
+      # - "${TAIRA_GENESIS_PATH:-/etc/iroha/taira-validator-1/genesis.json}:/config/genesis.json:ro"
+      # Uncomment to expose explicit host bindings from the validator container.
+      # - "${TAIRA_SORAFS_SITE_BINDINGS_PATH:-/etc/iroha/taira-validator-1/sorafs_sites.json}:/config/sorafs_sites.json:ro"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s

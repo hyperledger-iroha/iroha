@@ -69,16 +69,37 @@ Last updated: 2026-04-16
   the Taira container contract explicitly: the image ships only the static
   public bundle, while operators still render and mount each validator’s
   `config.toml` from user-local roster/secrets material; both docs now also
-  note the optional Cargo job cap for lower-memory Docker builders.
+  note the optional Cargo job cap for lower-memory Docker builders, the
+  required GitHub Actions secrets for the manual publish workflow, and the
+  concrete one-host container deployment path.
+- Added host-side container deployment assets:
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/docker-compose.validator.yml`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.compose.env.example`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-validator-container.service`
+  These give operators a concrete published-image path for one validator host
+  instead of requiring local bare-metal binary installs; the new shell wrapper
+  also removes the hard dependency on the Docker Compose plugin for service
+  management and local operations.
 - Added focused regression coverage in
   `/Users/takemiyamakoto/dev/iroha/scripts/tests/docker_entrypoint_test.py`
   for the non-Taira default path, the Taira boot command, explicit command
   override behavior, and the fast-fail missing-config guard.
+- Added focused regression coverage in
+  `/Users/takemiyamakoto/dev/iroha/scripts/tests/taira_validator_container_test.py`
+  for the host-side Taira container wrapper:
+  - resolved `docker run` generation from the env file;
+  - image-missing pull + run behavior;
+  - existing-container replacement; and
+  - fast-fail missing-config handling.
 - Focused validation for this slice:
   - `bash -n scripts/docker_entrypoint.sh`
   - `bash -n scripts/build_release_image.sh`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh`
   - `python3 -m unittest scripts.tests.docker_entrypoint_test`
+  - `python3 -m unittest scripts.tests.taira_validator_container_test`
   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/publish_taira_validator.yml"); puts "yaml ok"'`
+  - `ruby -e 'require "yaml"; YAML.load_file("configs/soranexus/taira/docker-compose.validator.yml"); puts "yaml ok"'`
   - clean tracked-context Docker rebuilds now keep
     `artifacts/offline_poseidon/constants.ron` in the context after the
     `.dockerignore` tightening:
@@ -88,6 +109,14 @@ Last updated: 2026-04-16
     - `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=4 --tag local/taira-validator:test /tmp/iroha-docker-context-tracked.QFNnd8`
       progressed materially further into the same deploy-profile compile, but
       the local Colima builder still OOM-killed `rustc` after several minutes.
+  - `docker compose config` validation for the new validator compose file was
+    not runnable in this environment because the local `docker` CLI does not
+    have the Compose plugin wired in and `docker-compose` is also absent.
+  - `docker manifest inspect hyperledger/iroha:taira-latest` and
+    `docker manifest inspect docker.soramitsu.co.jp/iroha3/iroha:taira-latest`
+    both currently return `no such manifest`, so the new host-side runtime path
+    is structurally validated and locally test-covered, but cannot boot a real
+    published Taira image until the first manual publish run succeeds.
 
 ## 2026-04-15 Follow-up: same-height vote-backed recovery no longer strands restart convergence
 - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

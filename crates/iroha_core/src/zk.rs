@@ -43,6 +43,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Confidential transfer v2 helpers, circuits, and proof builders.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub mod confidential_v2;
+
 #[cfg(feature = "zk-preverify")]
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
