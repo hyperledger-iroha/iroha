@@ -517,10 +517,12 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
     match name {
         LOCALNET_FEE_ZK_VK_TRANSFER_NAME => {
-            confidential_v2::confidential_transfer_v2_vk_record(name, version).map_err(Into::into)
+            confidential_v2::confidential_transfer_v2_vk_record(name, version)
+                .map_err(|error| eyre!(error))
         }
         LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
-            confidential_v2::confidential_unshield_v2_vk_record(name, version).map_err(Into::into)
+            confidential_v2::confidential_unshield_v2_vk_record(name, version)
+                .map_err(|error| eyre!(error))
         }
         _ => Err(eyre!("unknown localnet confidential verifier name: {name}")),
     }

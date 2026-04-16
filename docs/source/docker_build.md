@@ -77,8 +77,11 @@ scripts/build_release_image.sh --profile iroha3 --config taira
 ```
 
 The Taira helper now defaults to `CARGO_BUILD_JOBS=1` and `BINARIES=irohad`
-so validator-image builds do not depend on unrelated `iroha_cli` health. For a
-direct Docker build, pass those explicitly:
+so validator-image builds do not depend on unrelated `iroha_cli` health. When
+`--use-target-prebuilt` is set, the helper now stages a tiny temporary Docker
+context instead of sending the whole repository into `docker build`, which
+keeps the prebuilt path practical on local hosts. For a direct Docker build,
+pass the Taira-specific args explicitly:
 
 ```bash
 docker build \
@@ -109,6 +112,19 @@ For disconnected or one-node smoke starts, mount both a manifest JSON and a
 signed genesis payload. The entrypoint accepts `IROHA_TAIRA_SIGNED_GENESIS` and
 rewrites the copied runtime config so `genesis.file` points at the mounted
 payload path before `irohad` starts.
+
+For a local 4-validator container rollout proof, first render a fresh
+`kagami localnet` bundle into bridge-friendly configs/env files:
+
+```bash
+python3 scripts/render_taira_localnet_container_bundle.py \
+  --bundle-dir dist/taira-localnet-smoke \
+  --output-dir dist/taira-localnet-cluster
+```
+
+Those generated env files set `TAIRA_DOCKER_NETWORK=taira-localnet` so the
+existing `taira-validator-container.sh` wrapper can launch all four peers on a
+shared Docker bridge with canonical internal `addr:...#CRC16` literals.
 
 For a host-side Taira validator deployment, use the checked-in examples under
 `configs/soranexus/taira/`:

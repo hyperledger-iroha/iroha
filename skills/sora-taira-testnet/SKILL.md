@@ -126,6 +126,54 @@ the caller.
    edge, check for backup `.conf` files left under the `servers/` include
    directory. Duplicate upstream definitions there will block reload.
 
+## Known Failure Patterns
+
+1. `route_unavailable` while public reads still work usually means the public
+   ingress can answer read traffic but cannot reach an authoritative peer for
+   the target write lane. Treat that as rollout health first and point
+   operators at `configs/soranexus/taira/check_mcp_rollout.sh`.
+2. Stable `404` on `/v1/app-api/cid/<cid>` together with
+   `/v1/sorafs/capacity/state.declaration_count = 0` usually means public
+   SoraFS provider capacity was never declared on-chain or the publish surface
+   is pointed at a node that cannot hydrate the CID.
+3. Mixed `200` and `404` from repeated `/v1/app-api/cid/<cid>` probes usually
+   means the edge is balancing across validators with inconsistent SoraFS
+   manifest visibility. Treat that as a rollout or edge-routing problem, not a
+   corrupted CID.
+4. `check_sorafs_rollout.sh` can pass while `check_mcp_rollout.sh` still fails.
+   That means the SoraFS-specific route and declaration path are healthy enough
+   for the app-api read surface, but the generic signed-transaction or finality
+   lane is still degraded.
+5. `Transaction expired` on generic signed writes while a dedicated SoraFS
+   declaration succeeds usually points at partial public finality trouble such
+   as `missing_qc` or `quorum_timeout`, not necessarily a malformed request.
+6. `502` or `503` from `/v1/mcp` or the public Torii root usually means nginx
+   or upstream rollout breakage, not a signer or payload problem.
+
+## Preferred Triage Sequence
+
+1. Start with read-only public health:
+   - `GET https://taira.sora.org/status`
+   - `iroha.status`
+   - `iroha.sumeragi.status`
+2. If the task involves SoraFS or app-api rollout, check the public read path
+   before any write:
+   - `GET /v1/sorafs/capacity/state`
+   - repeated `GET /v1/app-api/cid/<cid>`
+3. If shell access is available, run the read-only public SoraFS ingress check
+   first:
+   - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root https://taira.sora.org --skip-write-canary`
+4. If the public read path looks healthy and the task needs generic signed
+   writes or native MCP validation, run:
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+5. Only after those checks are green should the agent spend time on signer or
+   payload debugging. If the user wants a live write canary, then move to the
+   full write checks with either an explicit `--write-config` or the automatic
+   runtime-only canary bootstrap.
+6. When using the rollout scripts, pass the Torii root as `--public-root`
+   (`https://taira.sora.org`), not the MCP URL. The scripts derive `/v1/mcp`
+   themselves.
+
 ## Common Flows
 
 ### Accounts and aliases
