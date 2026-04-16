@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 NPoS liveness and staged mode-cutover harnesses no longer depend on a single submit peer):
+the reported `consensus_and_da` failures were narrowed to test-harness
+submission strategy rather than a new Sumeragi core regression. The NPoS
+liveness suite now picks a connected leader or best-height fallback submit
+peer, waits for submit connectivity, and advances the chain one block at a
+time instead of assuming a burst of fire-and-forget logs to the first peer
+will commit. The staged mode-cutover negative-path tests now use the same
+submit-peer selection for their configuration transactions and height-driving
+helper, plus a slightly larger future-height margin so startup jitter does not
+invalidate the staged activation block.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_negative_paths.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposnet2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposrestart2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negmode.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::mode_activation_height_requires_next_mode_and_future_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negjoint.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::joint_consensus_switches_mode_at_activation_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.reorder.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_reorder' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_submit_peer_index_prefers_connected_leader' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_fallback_submit_peer_index_prefers_best_height_round_robin' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'min_connected_peers_for_submit_keeps_quorum_margin' -- --nocapture`
+- open work after this slice:
+  - rerun a somewhat broader `consensus_and_da` sweep when another long localnet
+    window is available, especially the remaining grouped Sumeragi/NPoS cases
+    that were not part of the focused triage above; and
+  - run the broader repository validation (`cargo build --workspace` and, when a
+    multi-hour window exists, `cargo test --workspace`) after the remaining
+    unrelated dirty-tree work is either merged or isolated.
+
 Latest sync (2026-04-16 Taira validator image and manual publish workflow landed):
 the repo now has a dedicated `CONFIG_PROFILE=taira` runtime image path, a
 Taira-aware default Docker entrypoint, and a manual GitHub Actions workflow for

@@ -2,6 +2,39 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: NPoS liveness and mode-cutover tests no longer depend on a single flaky submit peer
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  now drives height one block at a time through a connected submit peer
+  selected from the current leader or the best-height fallback instead of
+  assuming a burst of fire-and-forget submissions to the first peer will stick.
+  The `npos_network_produces_blocks` and
+  `npos_pacemaker_resumes_after_downtime` scenarios now wait for submit
+  connectivity before seeding progress and retry based on observed block
+  advancement rather than on queued transaction count.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_negative_paths.rs`
+  now uses the same submit-peer selection strategy for staged consensus
+  cutover transactions and for the helper that advances block height. The
+  staged activation-height assertions also use a larger future-height margin so
+  short startup jitter does not invalidate the cutover transaction before it
+  lands.
+- Added focused helper coverage in the same two integration test files for the
+  shared peer-selection primitives:
+  `min_connected_peers_for_submit`,
+  `pick_fallback_submit_peer_index`, and
+  `pick_submit_peer_index`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposnet2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposrestart2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negmode.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::mode_activation_height_requires_next_mode_and_future_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.negjoint.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_negative_paths::joint_consensus_switches_mode_at_activation_height' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.reorder.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_reorder' -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_submit_peer_index_prefers_connected_leader' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'pick_fallback_submit_peer_index_prefers_best_height_round_robin' -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'min_connected_peers_for_submit_keeps_quorum_margin' -- --nocapture`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: Taira validator image now has a dedicated runtime profile and manual publish workflow
 - `/Users/takemiyamakoto/dev/iroha/Dockerfile` now supports
   `CONFIG_PROFILE=taira`, ships the checked-in static Taira bundle under
