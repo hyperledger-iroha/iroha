@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 dependency graph reduction started):
+the first compile-time dependency reduction slice moved Criterion benchmark
+harnesses, Trybuild UI compile tests, and crypto parity/fuzz validation crates
+behind explicit opt-in features. This keeps all workspace members in place
+while making the default local test graph smaller and making future dependency
+budget checks visible.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  - Cargo manifests for the benchmark-heavy crates and proc-macro/UI-test crates
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `python3 scripts/check_dependency_budget.py --help`
+  - `cargo metadata --locked --no-deps --format-version 1`
+  - `cargo metadata --locked --format-version 1`
+  - `cargo metadata --locked --no-deps --format-version 1 --manifest-path crates/iroha_crypto/Cargo.toml --features crypto-parity-tests,sm_proptest`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `git diff --check`
+  - metadata audit for touched bench targets requiring the `bench` feature
+- open work after this slice:
+  - replace the CLI/Torii `qrcode` usage with an internal deterministic encoder
+  - replace CLI `image` usage with internal RGBA/grayscale buffers plus PNG/APNG
+    writers, then remove the remaining GIF dependency path
+  - replace or slim the MOCHI egui desktop shell so `eframe`/`egui_plot` are no
+    longer in the default workspace build graph
+  - continue direct `serde_json` cleanup through Norito JSON wrappers
+
 Latest sync (2026-04-16 Taira public-root contract and operator guidance aligned):
 the active Taira operator/docs/plugin contract is now internally consistent.
 The repo guidance treats `https://taira.sora.org` as the current primary public

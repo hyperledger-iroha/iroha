@@ -15,7 +15,7 @@ default = []
 futures = []
 config_base = []
 telemetry = []
-trybuild-tests = []
+trybuild-tests = ["dep:trybuild"]
 
 [lib]
 proc-macro = true
@@ -28,6 +28,7 @@ proc-macro2 = { workspace = true }
 manyhow = { workspace = true }
 darling = { workspace = true }
 iroha_derive_primitives = { path = "../iroha_derive_primitives" }
+trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 iroha_macro = { workspace = true }
@@ -35,4 +36,11 @@ iroha_config_base = { workspace = true }
 
 impls = { workspace = true }
 expect-test = { workspace = true }
-trybuild = { workspace = true }
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]
+
+[[test]]
+name = "config_base_ui"
+required-features = ["trybuild-tests"]

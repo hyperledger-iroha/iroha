@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: benchmark and UI compile-test dependencies moved behind explicit features
+- Criterion benchmark dependencies are now opt-in through per-crate `bench`
+  features instead of default dev-dependencies. Bench targets across
+  `iroha_core`, `ivm`, `iroha_crypto`, `iroha_data_model`, `norito`, Torii,
+  and related helper crates declare `required-features = ["bench"]`, so normal
+  workspace test builds no longer need to compile Criterion just because the
+  crate has benchmark targets.
+- Proc-macro/UI compile-test harnesses now wire their existing
+  `trybuild-tests` features to the optional `trybuild` dependency and mark the
+  `ui`/`config_base_ui` test targets with `required-features`. Default
+  `cargo test --workspace` can skip those heavy compiler-harness tests, while
+  `cargo test --workspace --features trybuild-tests` still runs them
+  explicitly.
+- `iroha_crypto` parity/fuzz dependencies are now explicit opt-ins:
+  `crypto-parity-tests` enables the OpenSSL/AMCL/secp256k1 comparison paths,
+  and `sm_proptest` owns the SM property-test dependency. Default crypto tests
+  still cover the in-tree implementations without compiling those external
+  validation crates.
+- `scripts/check_dependency_budget.py` now reports total, registry, path, and
+  watched dependency counts using `cargo metadata`; it uses `--locked` by
+  default so dependency-budget checks do not rewrite `Cargo.lock`.
+- Validation in this slice:
+  - `python3 scripts/check_dependency_budget.py --help`
+  - `cargo metadata --locked --no-deps --format-version 1`
+  - `cargo metadata --locked --format-version 1`
+  - `cargo metadata --locked --no-deps --format-version 1 --manifest-path crates/iroha_crypto/Cargo.toml --features crypto-parity-tests,sm_proptest`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `git diff --check`
+  - Metadata target audit confirming all touched Criterion bench targets require
+    the `bench` feature.
+- The local ignored `Cargo.lock` was refreshed with `cargo generate-lockfile`;
+  because the repository ignores `Cargo.lock`, this produced no tracked diff.
+  Full locked graph metadata now passes.
+
 ## 2026-04-16 Follow-up: Soracloud/Torii integration response compatibility restored
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now applies Norito defaults to partial `soracloud_runtime.hf` config tables.

@@ -301,15 +301,18 @@ impl From<elliptic_curve::Error> for Error {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "crypto-parity-tests")]
     use amcl::secp256k1::ecp;
     use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
     use k256::elliptic_curve::sec1::ToEncodedPoint;
+    #[cfg(feature = "crypto-parity-tests")]
     use openssl::{
         bn::{BigNum, BigNumContext},
         ec::{EcGroup, EcKey, EcPoint},
         ecdsa::EcdsaSig,
         nid::Nid,
     };
+    #[cfg(feature = "crypto-parity-tests")]
     use sha2::Digest;
 
     use super::*;
@@ -329,6 +332,7 @@ mod test {
         EcdsaSecp256k1Sha256::parse_public_key(&payload).unwrap()
     }
 
+    #[cfg(feature = "crypto-parity-tests")]
     fn public_key_uncompressed(pk: &PublicKey) -> Vec<u8> {
         const PUBLIC_UNCOMPRESSED_KEY_SIZE: usize = 65;
 
@@ -353,6 +357,7 @@ mod test {
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
 
+    #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_compatibility() {
         let secret = private_key();
@@ -368,6 +373,7 @@ mod test {
                 .unwrap();
     }
 
+    #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_verify() {
         let p = public_key();
@@ -403,6 +409,7 @@ mod test {
         assert!(openssl_result.unwrap());
     }
 
+    #[cfg(feature = "crypto-parity-tests")]
     #[test]
     fn secp256k1_sign() {
         let secret = private_key();

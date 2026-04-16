@@ -23,13 +23,15 @@ maintenance = { status = "actively-developed" }
 metric-instrumentation = []
 # Test-only feature for mirroring `cfg(feature = "telemetry")` in trybuild cases.
 telemetry = []
-trybuild-tests = ["metric-instrumentation", "telemetry"]
+trybuild-tests = ["dep:trybuild", "metric-instrumentation", "telemetry"]
 
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 manyhow = { workspace = true }
+trybuild = { workspace = true, optional = true }
 
-[dev-dependencies]
-trybuild = { workspace = true }
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]
