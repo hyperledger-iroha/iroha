@@ -2,6 +2,15 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: `iroha_crypto` secp256k1 default-test build restored
+- `/home/mtakemiya/dev/iroha/crates/iroha_crypto/src/signature/secp256k1.rs`
+  now imports `sha2::Digest` unconditionally inside the test module so the
+  default recoverable-prehash coverage can call `sha2::Sha256::digest(...)`
+  without requiring the `crypto-parity-tests` feature gate.
+- Focused validation for this slice:
+  - `cargo test -p iroha_crypto recoverable_prehash_roundtrip_preserves_key_and_evm_address -- --nocapture` (pass)
+  - `cargo test -p iroha_crypto` (fails in unrelated `tests::ml_dsa_secret_key_clone_shares_inner_arc`)
+
 ## 2026-04-16 Follow-up: Mochi now defaults to workspace-scoped sandboxes, validates local MCP on startup, and ships a local Codex skill
 - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/{config.rs,bootstrap.rs,supervisor.rs,torii.rs,lib.rs}`
   now split the user workspace root from the runtime sandbox root, default

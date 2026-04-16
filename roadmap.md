@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 `iroha_crypto` secp256k1 default-test compile fix):
+the reported `Sha256::digest` failure in
+`crates/iroha_crypto/src/signature/secp256k1.rs` was a feature-gated test
+import bug rather than a secp256k1 implementation regression. The test module
+now imports `sha2::Digest` unconditionally so the default recoverable-prehash
+coverage builds without enabling `crypto-parity-tests`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo test -p iroha_crypto recoverable_prehash_roundtrip_preserves_key_and_evm_address -- --nocapture` (pass)
+  - `cargo test -p iroha_crypto` (currently still fails in unrelated `tests::ml_dsa_secret_key_clone_shares_inner_arc`)
+- open work after this slice:
+  - debug or isolate the unrelated `iroha_crypto` test failure
+    `tests::ml_dsa_secret_key_clone_shares_inner_arc` before treating the full
+    crate suite as green again
+  - rerun broader workspace validation when a longer local build window is
+    available; this fix itself only needed crate-scoped verification
+
 Latest sync (2026-04-16 Mochi workspace-scoped local sandbox + local MCP automation):
 the Mochi local-dev flow now has a cleaner split between the app workspace and
 the runtime sandbox. Mochi-managed sandboxes default to
