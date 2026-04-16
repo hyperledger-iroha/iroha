@@ -870,6 +870,12 @@ export interface OfflineAllowanceListOptions extends IterableListOptions {
   includeExpired?: boolean;
 }
 
+export interface OfflineAllowanceQueryOptions extends OfflineAllowanceListOptions {
+  fetchSize?: NumericLike;
+  queryName?: string;
+  select?: ReadonlyArray<Record<string, unknown>>;
+}
+
 export interface OfflineTransferListOptions extends IterableListOptions {
   controllerId?: string;
   receiverId?: string;
@@ -887,6 +893,12 @@ export interface OfflineTransferListOptions extends IterableListOptions {
   requireVerdict?: boolean;
   onlyMissingVerdict?: boolean;
   platformPolicy?: string;
+}
+
+export interface OfflineTransferQueryOptions extends OfflineTransferListOptions {
+  fetchSize?: NumericLike;
+  queryName?: string;
+  select?: ReadonlyArray<Record<string, unknown>>;
 }
 
 export interface IterableQueryOptions extends IterableListOptions {
@@ -8290,7 +8302,7 @@ export declare class ToriiClient {
     options?: OfflineAllowanceListOptions,
   ): Promise<ToriiOfflineAllowanceListResponse>;
   queryOfflineAllowances(
-    options?: IterableQueryOptions,
+    options?: OfflineAllowanceQueryOptions,
   ): Promise<ToriiOfflineAllowanceListResponse>;
   iterateOfflineAllowances(
     options?: PaginationIteratorOptions,
@@ -8302,7 +8314,7 @@ export declare class ToriiClient {
     options?: OfflineTransferListOptions,
   ): Promise<ToriiOfflineTransferListResponse>;
   queryOfflineTransfers(
-    options?: IterableQueryOptions,
+    options?: OfflineTransferQueryOptions,
   ): Promise<ToriiOfflineTransferListResponse>;
   iterateOfflineTransfers(
     options?: PaginationIteratorOptions,

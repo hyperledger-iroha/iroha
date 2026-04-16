@@ -37,8 +37,8 @@ pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
-pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
-pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
+pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 10;
+pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 10;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
@@ -2588,5 +2588,135 @@ mod tests {
             .expect("transfer key must parse as confidential transfer v2");
         super::parse_vk_for_unshield_v2(&unshield.circuit_id, unshield_key)
             .expect("unshield key must parse as confidential unshield v2");
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
+        use halo2_proofs::halo2curves::ff::Field as _;
+        use iroha_data_model::ChainId;
+
+        let chain_id: ChainId = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+            .parse()
+            .expect("valid chain id");
+        let asset_definition_id = "xor#universal";
+        let spend_key = [0x11_u8; 32];
+        let input_rho = [0x22_u8; 32];
+        let input_diversifier = super::derive_confidential_diversifier_v2(b"input");
+        let input_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_diversifier)
+                .expect("input owner tag");
+        let input_commitment =
+            super::derive_confidential_note_v2(asset_definition_id, 7, input_rho, input_owner_tag)
+                .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root = super::compute_confidential_root_v2(&tree_commitments).expect("root");
+
+        let recipient_key = [0x33_u8; 32];
+        let output_rho = [0x44_u8; 32];
+        let output_diversifier = super::derive_confidential_diversifier_v2(b"recipient");
+        let output_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &recipient_key,
+            output_diversifier,
+        )
+        .expect("output owner tag");
+        let transfer_vk = super::confidential_transfer_v2_vk_record("vk_transfer", 1)
+            .expect("transfer vk");
+        let transfer_key = transfer_vk.key.as_ref().expect("inline transfer vk");
+        let input_path =
+            super::compute_confidential_merkle_path_v2(&tree_commitments, 0).expect("input path");
+        let empty_path = super::compute_confidential_merkle_path_v2(
+            &tree_commitments,
+            tree_commitments.len(),
+        )
+        .expect("empty input path");
+        let output_commitment =
+            super::derive_confidential_note_v2(asset_definition_id, 7, output_rho, output_owner_tag)
+                .expect("output commitment");
+        let nullifier = super::derive_confidential_nullifier_v2(
+            chain_id.as_str(),
+            asset_definition_id,
+            &spend_key,
+            input_rho,
+        );
+        let witness = super::ConfidentialTransferWitnessV2 {
+            include_input_1: false,
+            include_output_1: false,
+            input_0_amount: 7,
+            input_1_amount: 0,
+            output_0_amount: 7,
+            output_1_amount: 0,
+            input_0_rho: input_rho,
+            input_1_rho: [0u8; 32],
+            output_0_rho: output_rho,
+            output_1_rho: [0u8; 32],
+            spend_scalar: super::scalar_to_repr_bytes(super::hash_to_scalar(
+                b"iroha.confidential.v2.spend_scalar",
+                &[&spend_key],
+            )),
+            input_0_diversifier: input_diversifier,
+            input_1_diversifier: super::default_confidential_diversifier_v2(),
+            output_0_owner_tag: output_owner_tag,
+            output_1_owner_tag: [0u8; 32],
+            input_0_path: input_path,
+            input_1_path: empty_path,
+        };
+        let circuit = super::ConfidentialTransferCircuitV2::<
+            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
+        > {
+            witness: Some(witness),
+        };
+        let instance_columns = vec![
+            vec![super::scalar_from_repr(input_commitment).expect("input commitment")],
+            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![super::scalar_from_repr(nullifier).expect("nullifier")],
+            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![super::scalar_from_repr(output_commitment).expect("output commitment")],
+            vec![halo2_proofs::halo2curves::pasta::Fp::ZERO],
+            vec![super::scalar_from_repr(root).expect("root")],
+            vec![super::scalar_from_repr(super::derive_confidential_asset_tag_v2(
+                asset_definition_id,
+            ))
+            .expect("asset tag")],
+            vec![super::scalar_from_repr(super::derive_confidential_chain_tag_v2(
+                chain_id.as_str(),
+            ))
+            .expect("chain tag")],
+        ];
+        halo2_proofs::dev::MockProver::run(
+            super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            &circuit,
+            instance_columns,
+        )
+        .expect("mock prover")
+        .assert_satisfied();
+
+        let proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialTransferInputV2 {
+                amount: 7,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[super::ConfidentialTransferOutputV2 {
+                amount: 7,
+                rho: output_rho,
+                owner_tag: output_owner_tag,
+            }],
+            root,
+            &transfer_vk.circuit_id,
+            transfer_key,
+        )
+        .expect("transfer proof");
+
+        assert!(crate::zk::verify_backend(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            &proof.proof,
+            Some(transfer_key),
+        ));
     }
 }
