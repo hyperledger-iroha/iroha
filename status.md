@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Soracloud/Torii integration response compatibility restored
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
+  now applies Norito defaults to partial `soracloud_runtime.hf` config tables.
+  Tests that override only the local HF Hub/API endpoints keep the default
+  `inference_base_url` and import/timeout knobs instead of failing peer startup
+  during config deserialization.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  keeps the canonical bundle-style `/v1/contracts/deploy` receipt while also
+  mirroring the single deployed contract's legacy fields (`contract_address`,
+  `code_hash_hex`, `tx_hash_hex`, and related metadata) at the top level. That
+  preserves compatibility for single-contract callers while retaining the
+  nested `contracts` receipt.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/soracloud.rs`
+  now exposes authoritative service mutation fields such as `current_version`,
+  `rollout_handle`, `rollout_stage`, `stage`, and `traffic_percent` at the
+  top level of CLI deploy/upgrade output, while still preserving the raw
+  response payload.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config soracloud_runtime_partial_hf_overrides_keep_defaults`
+  - `cargo test -p iroha_cli --bin iroha direct_service_mutation_output_hoists_authoritative_status_fields`
+  - `cargo test -p iroha_torii single_contract_deploy_receipt_keeps_top_level_fields --features app_api`
+  - `cargo test -p integration_tests --test core_api contracts::deploy_and_get_contract_manifest_via_torii -- --nocapture`
+  - `cargo test -p integration_tests --test core_api iroha_cli::soracloud_mutations_use_live_torii_control_plane -- --nocapture`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: remaining RBC harness assumptions were tightened, and the long NPoS persistence window no longer races session TTL
 - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
   now treats cluster height as the authoritative outcome for the remaining
