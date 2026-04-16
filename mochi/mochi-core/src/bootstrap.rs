@@ -21,6 +21,8 @@ pub struct BootstrapInputs {
     pub api_base: String,
     /// Torii base URL used for transaction/query submissions.
     pub torii_url: String,
+    /// Native MCP endpoint exposed by the local Torii node.
+    pub mcp_url: Option<String>,
     /// Chain identifier exposed by the local network.
     pub chain_id: String,
     /// Optional account identifier for the preferred dev signer.
@@ -45,6 +47,12 @@ impl BootstrapInputs {
             ),
             format!("export IROHA_CHAIN_ID={}", shell_quote(&self.chain_id)),
         ];
+        if let Some(mcp_url) = self.mcp_url.as_deref() {
+            lines.push(format!(
+                "export IROHA_MCP_URL={}",
+                shell_quote(&ensure_http_base(mcp_url))
+            ));
+        }
         if let Some(account_id) = self.account_id.as_deref() {
             lines.push(format!(
                 "export IROHA_ACCOUNT_ID={}",
@@ -68,6 +76,9 @@ impl BootstrapInputs {
             "IROHA_TORII_URL=".to_owned() + &dotenv_quote(&ensure_http_base(&self.torii_url)),
             "IROHA_CHAIN_ID=".to_owned() + &dotenv_quote(&self.chain_id),
         ];
+        if let Some(mcp_url) = self.mcp_url.as_deref() {
+            lines.push("IROHA_MCP_URL=".to_owned() + &dotenv_quote(&ensure_http_base(mcp_url)));
+        }
         if let Some(account_id) = self.account_id.as_deref() {
             lines.push("IROHA_ACCOUNT_ID=".to_owned() + &dotenv_quote(account_id));
         }
@@ -207,6 +218,7 @@ fn render_typescript_sample(inputs: &BootstrapInputs) -> String {
         r#"export type IrohaLocalConfig = {{
   apiBase: string;
   toriiUrl: string;
+  mcpUrl?: string;
   chainId: string;
   accountId?: string;
   privateKey?: string;
@@ -215,6 +227,7 @@ fn render_typescript_sample(inputs: &BootstrapInputs) -> String {
 export const irohaLocalDefaults: IrohaLocalConfig = {{
   apiBase: process.env.IROHA_API_BASE ?? "{api_base}",
   toriiUrl: process.env.IROHA_TORII_URL ?? "{torii_url}",
+  mcpUrl: process.env.IROHA_MCP_URL ?? {mcp_url},
   chainId: process.env.IROHA_CHAIN_ID ?? "{chain_id}",
   accountId: process.env.IROHA_ACCOUNT_ID ?? {account_id},
   privateKey: process.env.IROHA_PRIVATE_KEY ?? {private_key},
@@ -222,6 +235,7 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
 "#,
         api_base = ensure_http_base(&inputs.api_base),
         torii_url = ensure_http_base(&inputs.torii_url),
+        mcp_url = render_ts_optional(inputs.mcp_url.as_deref().map(ensure_http_base).as_deref(),),
         chain_id = inputs.chain_id,
         account_id = render_ts_optional(inputs.account_id.as_deref()),
         private_key = render_ts_optional(inputs.private_key.as_deref()),
@@ -234,6 +248,7 @@ fn render_rust_sample(inputs: &BootstrapInputs) -> String {
 pub struct IrohaLocalConfig {{
     pub api_base: String,
     pub torii_url: String,
+    pub mcp_url: Option<String>,
     pub chain_id: String,
     pub account_id: Option<String>,
     pub private_key: Option<String>,
@@ -246,6 +261,7 @@ impl IrohaLocalConfig {{
                 .unwrap_or_else(|_| "{api_base}".to_owned()),
             torii_url: std::env::var("IROHA_TORII_URL")
                 .unwrap_or_else(|_| "{torii_url}".to_owned()),
+            mcp_url: std::env::var("IROHA_MCP_URL").ok().or_else(|| {mcp_url}),
             chain_id: std::env::var("IROHA_CHAIN_ID")
                 .unwrap_or_else(|_| "{chain_id}".to_owned()),
             account_id: std::env::var("IROHA_ACCOUNT_ID").ok(),
@@ -256,6 +272,7 @@ impl IrohaLocalConfig {{
 "#,
         api_base = ensure_http_base(&inputs.api_base),
         torii_url = ensure_http_base(&inputs.torii_url),
+        mcp_url = render_rust_optional(inputs.mcp_url.as_deref().map(ensure_http_base).as_deref(),),
         chain_id = inputs.chain_id,
     )
 }
@@ -265,6 +282,7 @@ fn render_kotlin_sample(inputs: &BootstrapInputs) -> String {
         r#"data class IrohaLocalConfig(
     val apiBase: String,
     val toriiUrl: String,
+    val mcpUrl: String?,
     val chainId: String,
     val accountId: String?,
     val privateKey: String?
@@ -274,6 +292,7 @@ fun irohaLocalConfig(env: Map<String, String> = System.getenv()): IrohaLocalConf
     IrohaLocalConfig(
         apiBase = env["IROHA_API_BASE"] ?: "{api_base}",
         toriiUrl = env["IROHA_TORII_URL"] ?: "{torii_url}",
+        mcpUrl = env["IROHA_MCP_URL"] ?: {mcp_url},
         chainId = env["IROHA_CHAIN_ID"] ?: "{chain_id}",
         accountId = env["IROHA_ACCOUNT_ID"],
         privateKey = env["IROHA_PRIVATE_KEY"],
@@ -281,8 +300,27 @@ fun irohaLocalConfig(env: Map<String, String> = System.getenv()): IrohaLocalConf
 "#,
         api_base = ensure_http_base(&inputs.api_base),
         torii_url = ensure_http_base(&inputs.torii_url),
+        mcp_url =
+            render_kotlin_optional(inputs.mcp_url.as_deref().map(ensure_http_base).as_deref(),),
         chain_id = inputs.chain_id,
     )
+}
+
+fn render_rust_optional(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!(
+            "Some(\"{}\".to_owned())",
+            value.replace('\\', "\\\\").replace('"', "\\\"")
+        ),
+        None => "None".to_owned(),
+    }
+}
+
+fn render_kotlin_optional(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
+        None => "null".to_owned(),
+    }
 }
 
 fn render_ts_optional(value: Option<&str>) -> String {
@@ -306,6 +344,7 @@ mod tests {
         BootstrapInputs {
             api_base: "127.0.0.1:8080".to_owned(),
             torii_url: "http://127.0.0.1:8080".to_owned(),
+            mcp_url: Some("http://127.0.0.1:8080/v1/mcp".to_owned()),
             chain_id: "mochi-local".to_owned(),
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("private key value".to_owned()),
@@ -349,6 +388,11 @@ mod tests {
             bundle.artifacts[0]
                 .contents
                 .contains("IROHA_PRIVATE_KEY=\"private key value\"")
+        );
+        assert!(
+            bundle.artifacts[0]
+                .contents
+                .contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp")
         );
     }
 

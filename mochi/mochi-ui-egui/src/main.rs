@@ -74,13 +74,14 @@ use mochi_core::{
     BootstrapInputs, BootstrapWriteError, ChaosPreset, ChaosReport, ChaosRunRequest,
     DashboardSnapshot, EventCategory, EventDecodeStage, EventStreamDecodeError, EventStreamEvent,
     EventSummary, ExposedPrivateKey, GenesisProfile, InstructionDraft, InstructionPermission,
-    KeyPair, LifecycleEvent, LogStreamKind, ManagedBlockStream, ManagedEventStream,
-    ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey, ProfilePreset,
-    SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind, StatusStreamEvent,
-    Supervisor, SupervisorBuilder, SupervisorError, ToriiClient, TransactionComposeOptions,
-    TransactionPreview, compose_preview_with_options, development_signing_authorities,
-    drafts_from_json_str, drafts_to_pretty_json, fetch_dashboard_snapshot, run_chaos_preset,
-    run_state_query,
+    KeyPair, LifecycleEvent, LocalMcpProbeResult, LogStreamKind, ManagedBlockStream,
+    ManagedEventStream, ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey,
+    ProfilePreset, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
+    StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, SupervisorSessionInfo,
+    ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
+    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
+    fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root, run_chaos_preset,
+    run_state_query, sandbox_root_for_workspace,
     supervisor::RestartPolicy,
     torii::{
         ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
@@ -88,7 +89,8 @@ use mochi_core::{
     },
     write_bootstrap_bundle,
 };
-use norito::json::{self, Map, Value};
+use norito::json;
+use norito::json::{Map, Value};
 use tokio::{
     runtime::{Handle, Runtime},
     sync::{
@@ -145,6 +147,7 @@ static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
 
 #[derive(Debug, Default, Clone)]
 struct CliOverrides {
+    workspace_root: Option<PathBuf>,
     data_root: Option<PathBuf>,
     profile: Option<NetworkProfile>,
     config_path: Option<PathBuf>,
@@ -173,6 +176,8 @@ impl CliOverrides {
     fn apply_to(&self, mut builder: SupervisorBuilder) -> SupervisorBuilder {
         if let Some(root) = &self.data_root {
             builder = builder.data_root(root.clone());
+        } else if let Some(root) = &self.workspace_root {
+            builder = builder.data_root(sandbox_root_for_workspace(root));
         }
         if let Some(profile) = self.profile.as_ref() {
             if let Some(preset) = profile.preset {
@@ -252,8 +257,15 @@ impl Drop for StatusStreamHandle {
 
 #[derive(Debug)]
 struct ParsedCli {
+    command: CliCommand,
     overrides: CliOverrides,
     help: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliCommand {
+    Gui,
+    SandboxServe,
 }
 
 #[derive(Debug)]
@@ -293,6 +305,7 @@ fn parse_cli_overrides_from<I>(args: I) -> Result<ParsedCli, CliParseError>
 where
     I: IntoIterator<Item = OsString>,
 {
+    let (command, args) = extract_cli_command(args)?;
     let mut overrides = CliOverrides::default();
     let mut iter = args.into_iter();
     let mut restart_mode: Option<RestartModeFlag> = None;
@@ -306,9 +319,14 @@ where
         match flag.as_str() {
             "-h" | "--help" => {
                 return Ok(ParsedCli {
+                    command,
                     overrides,
                     help: true,
                 });
+            }
+            "--workspace-root" => {
+                let value = next_value(&mut iter, "--workspace-root")?;
+                overrides.workspace_root = Some(PathBuf::from(value));
             }
             "--data-root" => {
                 let value = next_value(&mut iter, "--data-root")?;
@@ -423,13 +441,46 @@ where
         build_restart_policy_override(restart_mode, restart_max, restart_backoff_ms)?;
 
     Ok(ParsedCli {
+        command,
         overrides,
         help: false,
     })
 }
 
+fn extract_cli_command<I>(args: I) -> Result<(CliCommand, Vec<OsString>), CliParseError>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut args: Vec<OsString> = args.into_iter().collect();
+    let Some(first) = args.first() else {
+        return Ok((CliCommand::Gui, args));
+    };
+    let first = first
+        .to_str()
+        .ok_or_else(|| CliParseError::new("arguments must be valid UTF-8"))?;
+    if first == "sandbox" {
+        let Some(second) = args.get(1) else {
+            return Err(CliParseError::new(
+                "expected `serve` after the `sandbox` subcommand",
+            ));
+        };
+        let second = second
+            .to_str()
+            .ok_or_else(|| CliParseError::new("arguments must be valid UTF-8"))?;
+        if second != "serve" {
+            return Err(CliParseError::new(format!(
+                "unknown sandbox subcommand `{second}`"
+            )));
+        }
+        args.drain(0..2);
+        return Ok((CliCommand::SandboxServe, args));
+    }
+    Ok((CliCommand::Gui, args))
+}
+
 fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
     CliOverrides {
+        workspace_root: cli.workspace_root.or(env.workspace_root),
         data_root: cli.data_root.or(env.data_root),
         profile: cli.profile.or(env.profile),
         config_path: cli.config_path.or(env.config_path),
@@ -456,6 +507,9 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
 fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
     let mut overrides = CliOverrides::default();
 
+    if let Some(root) = env_value("MOCHI_WORKSPACE_ROOT")? {
+        overrides.workspace_root = Some(PathBuf::from(root));
+    }
     if let Some(root) = env_value("MOCHI_DATA_ROOT")? {
         overrides.data_root = Some(PathBuf::from(root));
     }
@@ -829,7 +883,11 @@ fn reset_cli_overrides_for_tests() {
 fn print_cli_usage() {
     println!("MOCHI usage:");
     println!("  mochi [options]");
+    println!("  mochi sandbox serve [options]");
     println!("Options:");
+    println!(
+        "  --workspace-root <path>      Workspace root; Mochi stores runtime state under .mochi/sandbox."
+    );
     println!("  --data-root <path>           Override the supervisor data root.");
     println!(
         "  --profile <single-peer|four-peer-bft|{{ peer_count = 3, consensus_mode = \"permissioned\" }}>"
@@ -860,6 +918,225 @@ fn print_cli_usage() {
     println!("  --restart-max <attempts>     Override retry attempts in on-failure mode.");
     println!("  --restart-backoff-ms <millis>  Override the base retry backoff (ms).");
     println!("  -h, --help                   Show this help text.");
+}
+
+fn configured_readiness_smoke_for(
+    config: Option<&ResolvedBundleConfig>,
+    overrides: &CliOverrides,
+) -> bool {
+    overrides
+        .readiness_smoke
+        .or_else(|| config.and_then(|cfg| cfg.config.readiness_smoke))
+        .unwrap_or(true)
+}
+
+fn should_default_workspace_root(
+    overrides: &CliOverrides,
+    config: Option<&ResolvedBundleConfig>,
+) -> bool {
+    if overrides.workspace_root.is_some() || overrides.data_root.is_some() {
+        return false;
+    }
+    match config {
+        Some(cfg) => cfg.config.workspace_root.is_none() && cfg.config.data_root.is_none(),
+        None => true,
+    }
+}
+
+fn resolved_build_binaries(
+    overrides: &CliOverrides,
+    config: Option<&ResolvedBundleConfig>,
+) -> bool {
+    overrides
+        .build_binaries
+        .or_else(|| config.and_then(|cfg| cfg.config.build_binaries))
+        .unwrap_or(true)
+}
+
+fn resolve_workspace_root_for_cli(
+    overrides: &CliOverrides,
+    config: Option<&ResolvedBundleConfig>,
+    supervisor: Option<&Supervisor>,
+) -> PathBuf {
+    overrides
+        .workspace_root
+        .clone()
+        .or_else(|| config.and_then(|cfg| cfg.config.workspace_root.clone()))
+        .or_else(|| {
+            overrides
+                .data_root
+                .as_deref()
+                .and_then(infer_workspace_root_from_sandbox_root)
+        })
+        .or_else(|| {
+            config
+                .and_then(|cfg| cfg.config.data_root.as_deref())
+                .and_then(infer_workspace_root_from_sandbox_root)
+        })
+        .or_else(|| supervisor.and_then(MochiApp::infer_workspace_root_from_supervisor))
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn write_session_metadata_file(
+    session_path: &Path,
+    workspace_root: &Path,
+    session: &SupervisorSessionInfo,
+    readiness_smoke: bool,
+    mcp_probe: &LocalMcpProbeResult,
+) -> Result<(), String> {
+    let payload = json!({
+        "pid": (process::id()),
+        "ready": true,
+        "mcp_ready": true,
+        "readiness_smoke": readiness_smoke,
+        "profile": (session.profile_slug.clone()),
+        "chain_id": (session.chain_id.clone()),
+        "workspace_root": (workspace_root.display().to_string()),
+        "sandbox_root": (session.sandbox_root.display().to_string()),
+        "peer_alias": (session.peer_alias.clone()),
+        "api_base": (session.api_base.clone()),
+        "torii_url": (session.torii_url.clone()),
+        "mcp_url": (session.mcp_url.clone()),
+        "account_id": (session.account_id.clone()),
+        "private_key": (session.private_key.clone()),
+        "mcp_protocol_version": (mcp_probe.protocol_version.clone()),
+        "mcp_toolset_version": (mcp_probe.toolset_version.clone()),
+        "mcp_tool_count": (mcp_probe.tool_count),
+        "mcp_tools": (mcp_probe.tool_names.clone()),
+    });
+    let bytes = json::to_vec_pretty(&payload)
+        .map_err(|err| format!("failed to serialize session metadata: {err}"))?;
+    if let Some(parent) = session_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create session metadata directory {}: {err}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(session_path, bytes).map_err(|err| {
+        format!(
+            "failed to write session metadata {}: {err}",
+            session_path.display()
+        )
+    })
+}
+
+fn bootstrap_inputs_from_session(session: &SupervisorSessionInfo) -> BootstrapInputs {
+    BootstrapInputs {
+        api_base: session.api_base.clone(),
+        torii_url: session.torii_url.clone(),
+        mcp_url: Some(session.mcp_url.clone()),
+        chain_id: session.chain_id.clone(),
+        account_id: session.account_id.clone(),
+        private_key: session.private_key.clone(),
+    }
+}
+
+fn write_bootstrap_files_for_session(
+    workspace_root: &Path,
+    session: &SupervisorSessionInfo,
+) -> Result<Vec<PathBuf>, BootstrapWriteError> {
+    let bundle = BootstrapBundle::render(&bootstrap_inputs_from_session(session));
+    write_bootstrap_bundle(workspace_root, &bundle, true)
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
+    let (supervisor, supervisor_error, bundle_config) =
+        prepare_supervisor_with_overrides(&overrides);
+    let mut supervisor = supervisor.ok_or_else(|| {
+        supervisor_error
+            .map(|err| format!("failed during sandbox preparation: {err}"))
+            .unwrap_or_else(|| "failed during sandbox preparation".to_owned())
+    })?;
+
+    let workspace_root =
+        resolve_workspace_root_for_cli(&overrides, bundle_config.as_ref(), Some(&supervisor));
+    let readiness_smoke = configured_readiness_smoke_for(bundle_config.as_ref(), &overrides);
+
+    supervisor
+        .start_all()
+        .map_err(|err| format!("failed while starting peers: {err}"))?;
+
+    let session = supervisor
+        .session_info()
+        .map_err(|err| format!("failed while collecting sandbox connection info: {err}"))?;
+    let client = supervisor
+        .torii_client(&session.peer_alias)
+        .ok_or_else(|| "failed to create a Torii client for the local sandbox".to_owned())?;
+
+    let runtime = Runtime::new().map_err(|err| format!("failed to create runtime: {err}"))?;
+    runtime.block_on(async {
+        if readiness_smoke {
+            let plan = supervisor
+                .default_readiness_smoke_plan()
+                .map_err(|err| format!("failed while preparing readiness smoke: {err}"))?;
+            client
+                .wait_for_readiness_smoke(plan)
+                .await
+                .map_err(|err| format!("failed while waiting for readiness smoke: {err}"))?;
+        } else {
+            client
+                .wait_for_ready(
+                    ReadinessOptions::new(READINESS_TIMEOUT)
+                        .with_poll_interval(READINESS_POLL_INTERVAL),
+                )
+                .await
+                .map_err(|err| format!("failed while waiting for /status readiness: {err}"))?;
+        }
+        Ok::<(), String>(())
+    })?;
+
+    let mcp_probe = runtime.block_on(async {
+        client
+            .validate_local_mcp()
+            .await
+            .map_err(|err| format!("failed while validating local MCP: {err}"))
+    })?;
+
+    write_bootstrap_files_for_session(&workspace_root, &session)
+        .map_err(|err| format!("failed while writing workspace bootstrap files: {err}"))?;
+
+    let session_path = session.sandbox_root.join("session.json");
+    write_session_metadata_file(
+        &session_path,
+        &workspace_root,
+        &session,
+        readiness_smoke,
+        &mcp_probe,
+    )?;
+
+    println!("MOCHI sandbox ready");
+    println!("  workspace: {}", workspace_root.display());
+    println!("  sandbox: {}", session.sandbox_root.display());
+    println!("  torii: {}", session.torii_url);
+    println!("  mcp: {}", session.mcp_url);
+    println!("  session: {}", session_path.display());
+
+    runtime.block_on(wait_for_shutdown_signal());
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1745,10 +2022,24 @@ impl MaintenanceState {
 }
 
 fn main() -> eframe::Result<()> {
+    let parsed_cli = match parse_cli_overrides() {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!("MOCHI: {err}");
+            print_cli_usage();
+            process::exit(1);
+        }
+    };
+
+    if parsed_cli.help {
+        print_cli_usage();
+        return Ok(());
+    }
+
     #[cfg(target_os = "macos")]
     {
         const ENV: &str = "ICRATE_UNSAFE_DISABLE_RUNTIME_ASSERTS";
-        if env::var_os(ENV).is_none() {
+        if parsed_cli.command == CliCommand::Gui && env::var_os(ENV).is_none() {
             match (|| -> std::io::Result<()> {
                 let mut cmd = process::Command::new(env::current_exe()?);
                 cmd.args(env::args_os().skip(1));
@@ -1764,17 +2055,11 @@ fn main() -> eframe::Result<()> {
         }
     }
 
-    let parsed_cli = match parse_cli_overrides() {
-        Ok(parsed) => parsed,
-        Err(err) => {
+    if parsed_cli.command == CliCommand::SandboxServe {
+        if let Err(err) = run_sandbox_serve_cli(parsed_cli.overrides) {
             eprintln!("MOCHI: {err}");
-            print_cli_usage();
             process::exit(1);
         }
-    };
-
-    if parsed_cli.help {
-        print_cli_usage();
         return Ok(());
     }
 
@@ -2105,7 +2390,16 @@ fn prepare_supervisor() -> (
     Option<SupervisorError>,
     Option<ResolvedBundleConfig>,
 ) {
-    let overrides = cli_overrides();
+    prepare_supervisor_with_overrides(&cli_overrides())
+}
+
+fn prepare_supervisor_with_overrides(
+    overrides: &CliOverrides,
+) -> (
+    Option<Supervisor>,
+    Option<SupervisorError>,
+    Option<ResolvedBundleConfig>,
+) {
     let config = match overrides.config_path.clone() {
         Some(path) => match load_bundle_config_at(path) {
             Ok(cfg) => Some(cfg),
@@ -2132,7 +2426,13 @@ fn prepare_supervisor() -> (
         builder = cfg.config.apply_to(builder);
     }
 
-    builder = overrides.apply_to(builder);
+    builder = overrides.clone().apply_to(builder);
+    builder = builder.auto_build_binaries(resolved_build_binaries(overrides, config.as_ref()));
+    if should_default_workspace_root(overrides, config.as_ref()) {
+        if let Ok(workspace_root) = env::current_dir() {
+            builder = builder.data_root(sandbox_root_for_workspace(workspace_root));
+        }
+    }
 
     match builder.build() {
         Ok(supervisor) => (Some(supervisor), None, config),
@@ -2296,7 +2596,7 @@ impl MochiApp {
             settings_sumeragi_da_enabled: false,
             settings_torii_da_replay_dir_input: String::new(),
             settings_torii_da_manifest_dir_input: String::new(),
-            settings_build_binaries: false,
+            settings_build_binaries: true,
             settings_readiness_smoke: true,
             settings_log_stdout: true,
             settings_log_stderr: true,
@@ -2404,6 +2704,22 @@ mod cli_tests {
         let parsed =
             parse_cli_overrides_from(vec![OsString::from("--help")]).expect("parse help flag");
         assert!(parsed.help, "help flag should be detected");
+    }
+
+    #[test]
+    fn parse_cli_sandbox_serve_command_and_workspace_root() {
+        let parsed = parse_cli_overrides_from(vec![
+            OsString::from("sandbox"),
+            OsString::from("serve"),
+            OsString::from("--workspace-root"),
+            OsString::from("/tmp/workspace"),
+        ])
+        .expect("parse CLI");
+        assert_eq!(parsed.command, CliCommand::SandboxServe);
+        assert_eq!(
+            parsed.overrides.workspace_root.as_deref(),
+            Some(Path::new("/tmp/workspace"))
+        );
     }
 
     #[test]
@@ -2603,6 +2919,62 @@ lane_count = 2
             overrides.profile,
             Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
         );
+    }
+
+    #[test]
+    fn env_workspace_root_override_applies() {
+        let _guard = cli_env_lock().lock().expect("env lock");
+        let _workspace = CliEnvGuard::set("MOCHI_WORKSPACE_ROOT", "/tmp/workspace");
+        let overrides = parse_env_overrides().expect("parse env overrides");
+        assert_eq!(
+            overrides.workspace_root.as_deref(),
+            Some(Path::new("/tmp/workspace"))
+        );
+    }
+
+    #[test]
+    fn should_default_workspace_root_when_no_paths_are_configured() {
+        assert!(should_default_workspace_root(
+            &CliOverrides::default(),
+            None
+        ));
+    }
+
+    #[test]
+    fn should_not_default_workspace_root_when_data_root_is_configured() {
+        let config = ResolvedBundleConfig {
+            config: BundleConfig {
+                data_root: Some(PathBuf::from("/tmp/mochi")),
+                ..Default::default()
+            },
+            path: PathBuf::from("/tmp/mochi.toml"),
+        };
+
+        assert!(!should_default_workspace_root(
+            &CliOverrides::default(),
+            Some(&config),
+        ));
+    }
+
+    #[test]
+    fn resolved_build_binaries_defaults_to_true() {
+        assert!(resolved_build_binaries(&CliOverrides::default(), None));
+    }
+
+    #[test]
+    fn resolved_build_binaries_honors_explicit_config_disable() {
+        let config = ResolvedBundleConfig {
+            config: BundleConfig {
+                build_binaries: Some(false),
+                ..Default::default()
+            },
+            path: PathBuf::from("/tmp/mochi.toml"),
+        };
+
+        assert!(!resolved_build_binaries(
+            &CliOverrides::default(),
+            Some(&config),
+        ));
     }
 
     #[test]
@@ -2952,15 +3324,63 @@ impl MochiApp {
         }
     }
 
-    fn effective_workspace_recipe(&self, supervisor: &Supervisor) -> String {
+    fn configured_workspace_root_path(&self, supervisor: Option<&Supervisor>) -> Option<PathBuf> {
+        self.cli_overrides
+            .workspace_root
+            .clone()
+            .or_else(|| {
+                self.bundle_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.config.workspace_root.clone())
+            })
+            .or_else(|| supervisor.and_then(Self::infer_workspace_root_from_supervisor))
+    }
+
+    fn infer_workspace_root_from_supervisor(supervisor: &Supervisor) -> Option<PathBuf> {
+        infer_workspace_root_from_sandbox_root(&Self::supervisor_base_data_root(supervisor))
+    }
+
+    fn effective_workspace_root_path(&self, supervisor: Option<&Supervisor>) -> Option<PathBuf> {
         let trimmed = self.settings_data_root_input.trim();
         if !trimmed.is_empty() {
-            trimmed.to_owned()
+            Some(PathBuf::from(trimmed))
         } else {
-            Self::supervisor_base_data_root(supervisor)
-                .display()
-                .to_string()
+            self.configured_workspace_root_path(supervisor)
+                .or_else(|| supervisor.map(Self::supervisor_base_data_root))
         }
+    }
+
+    fn effective_sandbox_base_root(&self, supervisor: Option<&Supervisor>) -> PathBuf {
+        if let Some(root) = self.cli_overrides.data_root.clone() {
+            return root;
+        }
+        if let Some(root) = self
+            .bundle_config
+            .as_ref()
+            .and_then(|cfg| cfg.config.data_root.clone())
+        {
+            return root;
+        }
+        if let Some(workspace_root) = self.effective_workspace_root_path(supervisor) {
+            return sandbox_root_for_workspace(workspace_root);
+        }
+        supervisor
+            .map(Self::supervisor_base_data_root)
+            .unwrap_or_else(std::env::temp_dir)
+    }
+
+    fn effective_workspace_recipe(&self, supervisor: &Supervisor) -> String {
+        self.effective_workspace_root_path(Some(supervisor))
+            .unwrap_or_else(|| Self::supervisor_base_data_root(supervisor))
+            .display()
+            .to_string()
+    }
+
+    fn effective_sandbox_recipe(&self, supervisor: &Supervisor) -> String {
+        self.effective_sandbox_base_root(Some(supervisor))
+            .join(supervisor.profile().slug())
+            .display()
+            .to_string()
     }
 
     fn effective_chain_id_recipe(&self, supervisor: &Supervisor) -> String {
@@ -3030,6 +3450,11 @@ impl MochiApp {
         Some(compose_app_env_recipe(
             &Self::peer_api_base(peer),
             &peer.torii,
+            ToriiClient::new(&peer.torii)
+                .ok()
+                .and_then(|client| client.mcp_endpoint().ok())
+                .map(|url| url.to_string())
+                .as_deref(),
             &self.effective_chain_id_recipe(supervisor),
             account_id.as_deref(),
             private_key.as_deref(),
@@ -3667,14 +4092,7 @@ impl MochiApp {
     }
 
     fn configured_build_binaries(&self) -> bool {
-        self.cli_overrides
-            .build_binaries
-            .or_else(|| {
-                self.bundle_config
-                    .as_ref()
-                    .and_then(|cfg| cfg.config.build_binaries)
-            })
-            .unwrap_or(false)
+        resolved_build_binaries(&self.cli_overrides, self.bundle_config.as_ref())
     }
 
     fn configured_readiness_smoke(&self) -> bool {
@@ -4940,8 +5358,10 @@ impl MochiApp {
             });
 
         if let Some(supervisor) = self.supervisor.as_ref() {
-            let base_root = Self::supervisor_base_data_root(supervisor);
-            self.settings_data_root_input = base_root.display().to_string();
+            let workspace_root = self
+                .configured_workspace_root_path(Some(supervisor))
+                .unwrap_or_else(|| Self::supervisor_base_data_root(supervisor));
+            self.settings_data_root_input = workspace_root.display().to_string();
             if let Some(port) = Self::infer_torii_base_port(supervisor) {
                 self.settings_torii_port_input = port.to_string();
             } else {
@@ -4957,7 +5377,10 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         } else {
-            self.settings_data_root_input.clear();
+            self.settings_data_root_input = self
+                .configured_workspace_root_path(None)
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
             self.settings_torii_port_input.clear();
             self.settings_p2p_port_input.clear();
             self.settings_chain_id_input.clear();
@@ -5026,8 +5449,10 @@ impl MochiApp {
             });
 
         if let Some(supervisor) = supervisor {
-            let base_root = Self::supervisor_base_data_root(supervisor);
-            self.settings_data_root_input = base_root.display().to_string();
+            let workspace_root = self
+                .configured_workspace_root_path(Some(supervisor))
+                .unwrap_or_else(|| Self::supervisor_base_data_root(supervisor));
+            self.settings_data_root_input = workspace_root.display().to_string();
             if let Some(port) = Self::infer_torii_base_port(supervisor) {
                 self.settings_torii_port_input = port.to_string();
             } else {
@@ -5043,7 +5468,10 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         } else {
-            self.settings_data_root_input.clear();
+            self.settings_data_root_input = self
+                .configured_workspace_root_path(None)
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
             self.settings_torii_port_input.clear();
             self.settings_p2p_port_input.clear();
             self.settings_chain_id_input.clear();
@@ -5090,7 +5518,9 @@ impl MochiApp {
 
     fn initialize_first_run_wizard(&mut self) {
         if let Some(supervisor) = self.supervisor.as_ref() {
-            self.first_run_wizard.workspace_input = Self::supervisor_base_data_root(supervisor)
+            self.first_run_wizard.workspace_input = self
+                .configured_workspace_root_path(Some(supervisor))
+                .unwrap_or_else(|| Self::supervisor_base_data_root(supervisor))
                 .display()
                 .to_string();
             self.first_run_wizard.preset = supervisor
@@ -5205,12 +5635,13 @@ impl MochiApp {
         &mut self,
         force_start_after_rebuild: bool,
     ) -> Result<(), String> {
-        let data_root_input = self.settings_data_root_input.trim();
-        let data_root = if data_root_input.is_empty() {
+        let workspace_root_input = self.settings_data_root_input.trim();
+        let workspace_root = if workspace_root_input.is_empty() {
             None
         } else {
-            Some(PathBuf::from(data_root_input))
+            Some(PathBuf::from(workspace_root_input))
         };
+        let data_root = workspace_root.as_ref().map(sandbox_root_for_workspace);
 
         let torii_port = {
             let trimmed = self.settings_torii_port_input.trim();
@@ -5307,7 +5738,8 @@ impl MochiApp {
             Some(parsed)
         };
 
-        resolved.config.set_data_root(data_root.clone());
+        resolved.config.set_workspace_root(workspace_root.clone());
+        resolved.config.set_data_root(None);
         let current_profile = self
             .supervisor
             .as_ref()
@@ -5676,14 +6108,7 @@ impl MochiApp {
         lane_count: Option<u32>,
         lane_catalog: Option<&[TomlValue]>,
     ) -> Option<Vec<LanePathPreview>> {
-        let base_root = if self.settings_data_root_input.trim().is_empty() {
-            self.supervisor
-                .as_ref()
-                .map(Self::supervisor_base_data_root)
-                .unwrap_or_else(std::env::temp_dir)
-        } else {
-            PathBuf::from(self.settings_data_root_input.trim())
-        };
+        let base_root = self.effective_sandbox_base_root(self.supervisor.as_ref());
         let profile = self
             .supervisor
             .as_ref()
@@ -6369,10 +6794,13 @@ impl MochiApp {
                             }
                         });
                         ui.add_space(8.0);
-                        ui.label("Data root");
+                        ui.label("Workspace root");
                         ui.add(
                             egui::TextEdit::singleline(&mut self.settings_data_root_input)
-                                .hint_text("/path/to/mochi-data"),
+                                .hint_text("/path/to/workspace"),
+                        );
+                        ui.small(
+                            "Runtime state lives under `.mochi/sandbox/<profile>` inside this workspace unless you use a direct data-root override.",
                         );
                         ui.add_space(8.0);
                         ui.horizontal_wrapped(|ui| {
@@ -7110,7 +7538,7 @@ impl MochiApp {
                     ui.label("Workspace");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.settings_data_root_input)
-                            .hint_text("/path/to/mochi-data")
+                            .hint_text("/path/to/workspace")
                             .desired_width(340.0),
                     );
                     ui.label("Chain");
@@ -11761,7 +12189,7 @@ fn ensure_http_base(value: &str) -> String {
 
 fn compose_launch_recipe(
     profile: &str,
-    data_root: &str,
+    workspace_root: &str,
     chain_id: &str,
     torii_port: Option<u16>,
     p2p_port: Option<u16>,
@@ -11769,11 +12197,11 @@ fn compose_launch_recipe(
     readiness_smoke: bool,
 ) -> String {
     let mut parts = vec![
-        "cargo run -p mochi-ui-egui --".to_owned(),
+        "cargo run -p mochi-ui -- sandbox serve".to_owned(),
         format!("--profile {}", shell_quote(profile)),
     ];
-    if !data_root.trim().is_empty() {
-        parts.push(format!("--data-root {}", shell_quote(data_root)));
+    if !workspace_root.trim().is_empty() {
+        parts.push(format!("--workspace-root {}", shell_quote(workspace_root)));
     }
     if !chain_id.trim().is_empty() {
         parts.push(format!("--chain-id {}", shell_quote(chain_id)));
@@ -11800,6 +12228,7 @@ fn compose_launch_recipe(
 fn compose_app_env_recipe(
     api_base: &str,
     torii_url: &str,
+    mcp_url: Option<&str>,
     chain_id: &str,
     account_id: Option<&str>,
     private_key: Option<&str>,
@@ -11807,6 +12236,7 @@ fn compose_app_env_recipe(
     BootstrapInputs {
         api_base: api_base.to_owned(),
         torii_url: torii_url.to_owned(),
+        mcp_url: mcp_url.map(ToOwned::to_owned),
         chain_id: chain_id.to_owned(),
         account_id: account_id.map(ToOwned::to_owned),
         private_key: private_key.map(ToOwned::to_owned),
@@ -13016,9 +13446,9 @@ mod tests {
             true,
             false,
         );
-        assert!(recipe.starts_with("cargo run -p mochi-ui-egui --"));
+        assert!(recipe.starts_with("cargo run -p mochi-ui -- sandbox serve"));
         assert!(recipe.contains("--profile single-peer"));
-        assert!(recipe.contains("--data-root '/tmp/mochi data'"));
+        assert!(recipe.contains("--workspace-root '/tmp/mochi data'"));
         assert!(recipe.contains("--chain-id mochi-local"));
         assert!(recipe.contains("--torii-start 8080"));
         assert!(recipe.contains("--p2p-start 1337"));
@@ -13031,15 +13461,89 @@ mod tests {
         let recipe = compose_app_env_recipe(
             "127.0.0.1:8080",
             "127.0.0.1:8080",
+            Some("http://127.0.0.1:8080/v1/mcp"),
             "mochi-local",
             Some("alice@wonderland"),
             Some("deadbeef"),
         );
         assert!(recipe.contains("export IROHA_API_BASE=http://127.0.0.1:8080"));
         assert!(recipe.contains("export IROHA_TORII_URL=http://127.0.0.1:8080"));
+        assert!(recipe.contains("export IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp"));
         assert!(recipe.contains("export IROHA_CHAIN_ID=mochi-local"));
         assert!(recipe.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
         assert!(recipe.contains("export IROHA_PRIVATE_KEY=deadbeef"));
+    }
+
+    #[test]
+    fn bootstrap_inputs_from_session_keeps_local_mcp_fields() {
+        let session = SupervisorSessionInfo {
+            profile_slug: "single-peer".to_owned(),
+            chain_id: "mochi-local".to_owned(),
+            sandbox_root: PathBuf::from("/tmp/workspace/.mochi/sandbox/single-peer"),
+            workspace_root: Some(PathBuf::from("/tmp/workspace")),
+            peer_alias: "peer-1".to_owned(),
+            api_base: "http://127.0.0.1:8080".to_owned(),
+            torii_url: "http://127.0.0.1:8080".to_owned(),
+            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
+            account_id: Some("alice@wonderland".to_owned()),
+            private_key: Some("deadbeef".to_owned()),
+        };
+
+        let inputs = bootstrap_inputs_from_session(&session);
+
+        assert_eq!(inputs.api_base, session.api_base);
+        assert_eq!(inputs.torii_url, session.torii_url);
+        assert_eq!(inputs.mcp_url.as_deref(), Some(session.mcp_url.as_str()));
+        assert_eq!(inputs.chain_id, session.chain_id);
+        assert_eq!(inputs.account_id.as_deref(), session.account_id.as_deref());
+        assert_eq!(
+            inputs.private_key.as_deref(),
+            session.private_key.as_deref()
+        );
+    }
+
+    #[test]
+    fn write_bootstrap_files_for_session_writes_env_bundle() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let session = SupervisorSessionInfo {
+            profile_slug: "single-peer".to_owned(),
+            chain_id: "mochi-local".to_owned(),
+            sandbox_root: temp
+                .path()
+                .join(".mochi")
+                .join("sandbox")
+                .join("single-peer"),
+            workspace_root: Some(temp.path().to_path_buf()),
+            peer_alias: "peer-1".to_owned(),
+            api_base: "http://127.0.0.1:8080".to_owned(),
+            torii_url: "http://127.0.0.1:8080".to_owned(),
+            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
+            account_id: Some("alice@wonderland".to_owned()),
+            private_key: Some("deadbeef".to_owned()),
+        };
+
+        let written = write_bootstrap_files_for_session(temp.path(), &session)
+            .expect("bootstrap files should write");
+        assert_eq!(written.len(), 4);
+
+        let env_local = std::fs::read_to_string(temp.path().join(".env.local"))
+            .expect("env local should exist");
+        assert!(env_local.contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp"));
+        assert!(
+            temp.path()
+                .join(".mochi/generated/typescript/connect.ts")
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(".mochi/generated/rust/connect.rs")
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(".mochi/generated/kotlin/MochiConnect.kt")
+                .exists()
+        );
     }
 
     #[test]
@@ -15625,7 +16129,11 @@ mod tests {
                 resolved_path.display()
             );
         }
-        assert_eq!(bundle.config.data_root.as_deref(), Some(new_root.as_path()));
+        assert_eq!(
+            bundle.config.workspace_root.as_deref(),
+            Some(new_root.as_path())
+        );
+        assert!(bundle.config.data_root.is_none());
         assert_eq!(bundle.config.torii_start, Some(15000));
         assert_eq!(bundle.config.p2p_start, Some(16000));
         assert_eq!(bundle.config.chain_id.as_deref(), Some("custom-chain"));
@@ -15692,9 +16200,10 @@ mod tests {
             .expect("config should exist on disk");
         assert_eq!(round_trip.path, bundle.path);
         assert_eq!(
-            round_trip.config.data_root.as_deref(),
+            round_trip.config.workspace_root.as_deref(),
             Some(new_root.as_path())
         );
+        assert!(round_trip.config.data_root.is_none());
         assert_eq!(round_trip.config.torii_start, Some(15000));
         assert_eq!(round_trip.config.p2p_start, Some(16000));
         assert_eq!(round_trip.config.chain_id.as_deref(), Some("custom-chain"));
@@ -15746,8 +16255,8 @@ mod tests {
             .expect("rebuild should leave a supervisor instance");
         assert_eq!(
             MochiApp::supervisor_base_data_root(supervisor),
-            new_root,
-            "rebuilt supervisor should adopt new data root"
+            sandbox_root_for_workspace(&new_root),
+            "rebuilt supervisor should derive sandbox state under the workspace"
         );
         assert_eq!(supervisor.chain_id(), "custom-chain");
         assert_eq!(

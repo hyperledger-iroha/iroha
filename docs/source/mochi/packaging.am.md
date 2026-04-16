@@ -65,7 +65,7 @@ cargo xtask mochi-bundle
   ባለብዙ ፕላትፎርም ግንባታዎች ቅርሶችን በአንድ ላይ ማስቀመጥ እንዲችሉ የዝግጅት ማውጫ ማውጫ
   ያለ ተጨማሪ ስክሪፕት ቦታ።
 
-ትዕዛዙ `mochi-ui-egui`, `kagami`, `LICENSE`, ናሙናውን ይገለበጣል.
+ትዕዛዙ `mochi-ui`, `kagami`, `LICENSE`, ናሙናውን ይገለበጣል.
 ማዋቀር፣ እና `mochi/BUNDLE_README.md` ወደ ጥቅል። መወሰኛ
 `manifest.json` የ CI ስራዎች ፋይሉን መከታተል እንዲችሉ ከሁለትዮሽ ጎን ለጎን ነው የተፈጠረው
 hashes እና መጠኖች.

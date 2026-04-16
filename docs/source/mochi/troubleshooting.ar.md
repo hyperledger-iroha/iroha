@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. التقط جذر البيانات الذي يستخدمه MOCHI. يتبع الافتراضي
    `$TMPDIR/mochi/<profile-slug>`; تظهر المسارات المخصصة في شريط عنوان واجهة المستخدم و
-   عبر `cargo run -p mochi-ui-egui -- --data-root ...`.
+   عبر `cargo run -p mochi-ui -- --data-root ...`.
 2. قم بتشغيل `./ci/check_mochi.sh` من جذر مساحة العمل. وهذا يؤكد صحة الجوهر
    واجهة المستخدم وصناديق التكامل قبل البدء في تعديل التكوينات.
 3. لاحظ الإعداد المسبق (`single-peer` أو `four-peer-bft`). طوبولوجيا ولدت
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 في الثنائيات المعروفة الجيدة:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 ذات أسس صريحة:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 سيقوم المنشئ بتوزيع المنافذ التسلسلية من تلك القواعد، لذا قم بحجز نطاق
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - إعادة تشغيل الأقران باستخدام تجاوزات واجهة سطر الأوامر/البيئة المحفوظة.
 3. إذا كان عليك القيام بذلك يدويًا:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

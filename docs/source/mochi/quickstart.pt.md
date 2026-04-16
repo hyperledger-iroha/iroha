@@ -41,7 +41,7 @@ abaixo ou disponível no PATH:
 Da raiz do repositório:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Este comando cria `mochi-core` e o frontend egui. Para produzir um pacote distribuível, execute:
@@ -57,7 +57,7 @@ A tarefa do pacote agrupa os binários, o manifesto e os stubs de configuração
 Execute a UI diretamente do cargo:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Por padrão, o MOCHI cria uma predefinição de ponto único em um diretório de dados temporário:
@@ -69,7 +69,7 @@ Por padrão, o MOCHI cria uma predefinição de ponto único em um diretório de
 Use sinalizadores CLI para substituir os padrões ao iniciar:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ caixas:
 ./ci/check_mochi.sh
 ```
 
-O auxiliar executa `cargo check`/`cargo test` para `mochi-core`, `mochi-ui-egui` e
+O auxiliar executa `cargo check`/`cargo test` para `mochi-core`, `mochi-ui` e
 `mochi-integration`, que captura desvios de fixtures (capturas de blocos/eventos canônicos) e chicote egui
 regressões de uma só vez. Se o script relatar fixtures obsoletos, execute novamente os testes de regeneração ignorados,
 por exemplo:

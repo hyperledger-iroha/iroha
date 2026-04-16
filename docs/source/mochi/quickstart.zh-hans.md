@@ -41,7 +41,7 @@ MOCHI shell 到 CLI 二进制文件。确保可以通过环境变量发现它们
 从存储库根目录：
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 此命令构建 `mochi-core` 和 egui 前端。要生成可分发的包，请运行：
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 直接从 Cargo 运行 UI：
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 默认情况下，MOCHI 在临时数据目录中创建单点预设：
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 启动时使用 CLI 标志覆盖默认值：
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS pin 清单以及授予或撤销角色等治理操作非常常见
 ./ci/check_mochi.sh
 ```
 
-帮助程序针对 `mochi-core`、`mochi-ui-egui` 执行 `cargo check`/`cargo test`，以及
+帮助程序针对 `mochi-core`、`mochi-ui` 执行 `cargo check`/`cargo test`，以及
 `mochi-integration`，捕获夹具漂移（规范块/事件捕获）和 egui 线束
 一次性回归。如果脚本报告陈旧的装置，请重新运行忽略的再生测试，
 例如：

@@ -65,7 +65,7 @@ la construction :
   un répertoire intermédiaire afin que les versions multiplateformes puissent déposer des artefacts dans un seul
   emplacement sans script supplémentaire.
 
-La commande copie `mochi-ui-egui`, `kagami`, `LICENSE`, l'échantillon
+La commande copie `mochi-ui`, `kagami`, `LICENSE`, l'échantillon
 configuration et `mochi/BUNDLE_README.md` dans le bundle. Un déterministe
 `manifest.json` est généré avec les binaires afin que les tâches CI puissent suivre le fichier
 hachages et tailles.

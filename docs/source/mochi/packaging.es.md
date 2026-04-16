@@ -65,7 +65,7 @@ la construcción:
   un directorio provisional para que las compilaciones multiplataforma puedan depositar artefactos en uno
   ubicación sin secuencias de comandos adicionales.
 
-El comando copia `mochi-ui-egui`, `kagami`, `LICENSE`, el ejemplo
+El comando copia `mochi-ui`, `kagami`, `LICENSE`, el ejemplo
 configuración e `mochi/BUNDLE_README.md` en el paquete. Un determinista
 `manifest.json` se genera junto con los binarios para que los trabajos de CI puedan rastrear el archivo
 hashes y tamaños.

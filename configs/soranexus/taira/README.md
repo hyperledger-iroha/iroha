@@ -80,6 +80,10 @@ config rather than wrapper-local defaults:
   rollout artifact, building `irohad` with
   `--features embedded-soracloud-runtime`, and records the git revision in
   `rollout.manifest.json`.
+- `scripts/render_taira_edge_nginx_conf.py`: renders the shared-edge nginx
+  config directly from the same validator roster used for per-validator
+  `config.toml` generation so public Torii ingress cannot drift onto stale
+  loopback ports.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
@@ -95,8 +99,8 @@ config rather than wrapper-local defaults:
   health samples, and one shared local onboarding/faucet signer account, then
   rewrites the live peer configs and restarts the detached
   `taira-localnet` session.
-- `taira-explorer.nginx.conf`: multi-domain nginx edge config for
-  `taira.sora.org`, `taira-explorer.sora.org`, and the current
+- `taira-explorer.nginx.conf`: example rendered multi-domain nginx edge config
+  for `taira.sora.org`, `taira-explorer.sora.org`, and the current
   `taira-validator-{1,2,3,4}.sora.org` direct-hostname layout on a shared host.
 
 ## Render validator configs
@@ -122,6 +126,18 @@ The renderer rewrites the checked-in peer-1 baseline with the full
 same bootstrap source of truth. It now requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
+
+When you run the shared nginx edge on one host, keep the same roster as the
+source of truth for the edge upstreams too:
+
+- add `edge_torii_upstream = "<host>:<port>"` for each validator entry
+- render the nginx snippet from that roster instead of hand-editing ports:
+  - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
+
+That avoids the common drift where the copied nginx snippet still points at
+`127.0.0.1:18080..18083` while the live validator listeners have moved to
+different loopback ports such as `127.0.0.1:29080..29083`, which turns
+`GET /v1/mcp` and the generic public API surface into `502 Bad Gateway`.
 
 ## Validator container image
 
@@ -643,6 +659,9 @@ away from the shipped MCP-enabled config:
    - the script refuses a dirty worktree by default and writes
      `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
      `sha256sums.txt`
+   - the bundle now includes both `scripts/render_taira_validator_bundle.py`
+     and `scripts/render_taira_edge_nginx_conf.py` so validator config and
+     shared-edge nginx can be rendered from the same roster artifact
    - capture the emitted git revision and archive path in the rollout ticket;
      that is the exact runtime candidate the later SoraSwap gate must approve
 3. Render the per-validator config bundle from a user-local roster file, then
@@ -709,18 +728,16 @@ From `../iroha2-block-explorer-web`:
      public node than the checked-in example
 2. Build and deploy static assets:
    - `corepack enable && pnpm i && pnpm build`
-3. Install the nginx snippet from
-   `../iroha/configs/soranexus/taira/taira-explorer.nginx.conf` on the edge host
-   (for convenience, explorer, and direct validator hostnames on one machine), e.g.:
-   - `sudo cp ../iroha/configs/soranexus/taira/taira-explorer.nginx.conf /etc/nginx/conf.d/taira.conf`
-   - on the shared macOS/Homebrew host, install the same template as
-     `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead, then point
-     the upstreams at the locally served Torii ports (currently
-     `127.0.0.1:29080..29083` on that machine rather than the template's
-     `127.0.0.1:18080..18083`)
-   - if your Torii endpoints are not `127.0.0.1:18080..18083`, update the
-     `upstream taira_validator_{1,2,3,4}_upstream` targets to the live
-     validator endpoints before reload.
+3. Render and install the nginx snippet from the same validator roster you use
+   for the validator configs:
+   - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
+   - `sudo cp dist/taira-edge/taira.sora.org.conf /etc/nginx/conf.d/taira.conf`
+   - on the shared macOS/Homebrew host, install the rendered file as
+     `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead
+   - set each validator entry's `edge_torii_upstream` in the roster to the
+     real Torii listener the edge should proxy to, for example the current
+     shared-host `127.0.0.1:29080..29083` layout rather than the old
+     `127.0.0.1:18080..18083` default
   - keep the shared `taira_public_edge_upstream` wired to every live validator
     and use it for `taira.sora.org` plus the explorer's `/status` and the
     general `/v1/*` proxy locations. Do not pin MCP or the generic API surface

@@ -10,6 +10,10 @@ use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
 const MIN_PEER_COUNT: usize = 1;
 const MAX_PEER_COUNT: usize = 7;
+/// Relative directory used for Mochi-generated workspace artifacts.
+pub const WORKSPACE_MOCHI_DIR: &str = ".mochi";
+/// Relative directory under a workspace that stores sandbox runtime state.
+pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
 
 /// High-level presets exposed directly to the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +304,29 @@ impl NetworkPaths {
     }
 }
 
+/// Derive the sandbox base root for a workspace.
+#[must_use]
+pub fn sandbox_root_for_workspace(workspace_root: impl AsRef<Path>) -> PathBuf {
+    workspace_root
+        .as_ref()
+        .join(WORKSPACE_MOCHI_DIR)
+        .join("sandbox")
+}
+
+/// Infer the owning workspace root from a sandbox base root when it follows Mochi defaults.
+#[must_use]
+pub fn infer_workspace_root_from_sandbox_root(sandbox_root: &Path) -> Option<PathBuf> {
+    let sandbox_dir = sandbox_root.file_name()?;
+    if sandbox_dir != "sandbox" {
+        return None;
+    }
+    let mochi_dir = sandbox_root.parent()?;
+    if mochi_dir.file_name()? != WORKSPACE_MOCHI_DIR {
+        return None;
+    }
+    mochi_dir.parent().map(PathBuf::from)
+}
+
 /// Deterministic port allocator that hands out incrementing socket ports.
 #[derive(Debug, Clone)]
 pub struct PortAllocator {
@@ -471,6 +498,28 @@ mod tests {
         let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         let paths = NetworkPaths::from_root("/tmp/mochi", &profile);
         assert!(paths.root().ends_with(Path::new("four-peer-bft")));
+    }
+
+    #[test]
+    fn sandbox_root_for_workspace_uses_mochi_runtime_dir() {
+        let workspace = Path::new("/tmp/demo-workspace");
+        assert_eq!(
+            sandbox_root_for_workspace(workspace),
+            PathBuf::from("/tmp/demo-workspace/.mochi/sandbox")
+        );
+    }
+
+    #[test]
+    fn infer_workspace_root_from_sandbox_root_matches_default_layout() {
+        let sandbox = Path::new("/tmp/demo-workspace/.mochi/sandbox");
+        assert_eq!(
+            infer_workspace_root_from_sandbox_root(sandbox),
+            Some(PathBuf::from("/tmp/demo-workspace"))
+        );
+        assert_eq!(
+            infer_workspace_root_from_sandbox_root(Path::new("/tmp/other-layout")),
+            None
+        );
     }
 
     #[test]

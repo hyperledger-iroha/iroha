@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. MOCHI пайдаланатын деректер түбірін түсіріңіз. Әдепкі келесі болады
    `$TMPDIR/mochi/<profile-slug>`; теңшелетін жолдар UI тақырып жолағында пайда болады және
-   `cargo run -p mochi-ui-egui -- --data-root ...` арқылы.
+   `cargo run -p mochi-ui -- --data-root ...` арқылы.
 2. Жұмыс кеңістігінің түбірінен `./ci/check_mochi.sh` іске қосыңыз. Бұл өзегін растайды,
    UI және біріктіру жәшіктері конфигурацияларды өзгертуді бастамас бұрын.
 3. Алдын ала орнатылғанға назар аударыңыз (`single-peer` немесе `four-peer-bft`). Жасалған топология
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 белгілі екілік файлдарда:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 айқын негіздермен:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Құрылысшы сол негіздердегі дәйекті порттарды шығарады, сондықтан ауқымды сақтаңыз
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - сақталған CLI/ортаны қайта анықтаулары бар теңдестілерді қайта іске қосыңыз.
 3. Мұны қолмен жасау керек болса:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

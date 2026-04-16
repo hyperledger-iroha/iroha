@@ -10,6 +10,12 @@
 #     --secrets configs/soranexus/taira/validator_secrets.local.toml \
 #     --output-dir dist/taira-validators
 #
+# For the shared nginx edge on one machine, also set `edge_torii_upstream`
+# for each validator and render the edge config from the same roster:
+#   python3 scripts/render_taira_edge_nginx_conf.py \
+#     --roster configs/soranexus/taira/validator_roster.local.toml \
+#     --output dist/taira-edge/taira.sora.org.conf
+#
 # Every validator must set its own `torii_public_address`. `https://taira.sora.org`
 # is the current public Torii root, while per-validator Torii hostnames remain
 # valid when you want validator-specific ingress.
@@ -23,6 +29,7 @@ public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_1"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_1"
 public_address = "taira-validator-1.sora.org:1337"
 torii_public_address = "https://taira-validator-1.sora.org"
+edge_torii_upstream = "127.0.0.1:18080"
 
 [[validators]]
 slug = "taira-validator-2"
@@ -30,6 +37,7 @@ public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_2"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_2"
 public_address = "taira-validator-2.sora.org:1337"
 torii_public_address = "https://taira-validator-2.sora.org"
+edge_torii_upstream = "127.0.0.1:18081"
 
 [[validators]]
 slug = "taira-validator-3"
@@ -37,6 +45,7 @@ public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_3"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_3"
 public_address = "taira-validator-3.sora.org:1337"
 torii_public_address = "https://taira-validator-3.sora.org"
+edge_torii_upstream = "127.0.0.1:18082"
 
 [[validators]]
 slug = "taira-validator-4"
@@ -44,3 +53,4 @@ public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_4"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_4"
 public_address = "taira-validator-4.sora.org:1337"
 torii_public_address = "https://taira-validator-4.sora.org"
+edge_torii_upstream = "127.0.0.1:18083"

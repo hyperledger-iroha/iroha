@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. Գրավել տվյալների արմատը, որն օգտագործում է MOCHI: Լռելյայն հետևում է
    `$TMPDIR/mochi/<profile-slug>`; հարմարեցված ուղիները հայտնվում են UI վերնագրի տողում և
-   `cargo run -p mochi-ui-egui -- --data-root ...`-ի միջոցով:
+   `cargo run -p mochi-ui -- --data-root ...`-ի միջոցով:
 2. Գործարկեք `./ci/check_mochi.sh`-ը աշխատանքային տարածքի արմատից: Սա հաստատում է առանցքը,
    UI և ինտեգրման տուփեր՝ նախքան կազմաձևերը փոփոխելը:
 3. Նշեք նախադրյալը (`single-peer` կամ `four-peer-bft`): Ստեղծված տոպոլոգիա
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 հայտնի-լավ երկուականներով.
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 հստակ հիմքերով.
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Կառուցողը կհեռացնի հաջորդական նավահանգիստները այդ հիմքերից, այնպես որ պահպանեք տիրույթ
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - վերագործարկեք հասակակիցները պահպանված CLI/շրջակա միջավայրի անտեսումներով:
 3. Եթե դուք պետք է դա անեք ձեռքով.
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

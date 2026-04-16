@@ -25,7 +25,7 @@ yo'l xaritasi elementi "Hujjatlar va tarqatish" nazoratchi xatti-harakatlarini o
 
 1. MOCHI ishlatayotgan maʼlumotlar ildizini yozib oling. Standart quyidagicha
    `$TMPDIR/mochi/<profile-slug>`; maxsus yo'llar UI sarlavha satrida paydo bo'ladi va
-   `cargo run -p mochi-ui-egui -- --data-root ...` orqali.
+   `cargo run -p mochi-ui -- --data-root ...` orqali.
 2. Ishchi maydon ildizidan `./ci/check_mochi.sh` ni ishga tushiring. Bu yadroni tasdiqlaydi,
    Konfiguratsiyalarni o'zgartirishni boshlashdan oldin foydalanuvchi interfeysi va integratsiya qutilari.
 3. Oldindan o'rnatilganga e'tibor bering (`single-peer` yoki `four-peer-bft`). Yaratilgan topologiya
@@ -68,7 +68,7 @@ Agar UI "jarayonni ishlab chiqara olmadi" yoki "ruxsat rad etildi" haqida xabar 
 yaxshi ma'lum ikkiliklarda:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ jarayon allaqachon standart diapazonda (8080/1337) tinglanmoqda. MOCHI-ni qayta 
 aniq asoslar bilan:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Quruvchi ushbu bazalardan ketma-ket portlarni chiqaradi, shuning uchun diapazonni zaxiralang
@@ -119,7 +119,7 @@ tez muvaffaqiyatsiz bo'lishi kerak bo'lgan CI ishlari uchun qayta urinish oynasi
    - saqlangan CLI/muhitni bekor qilish bilan tengdoshlarni qayta ishga tushiring.
 3. Agar buni qo'lda qilishingiz kerak bo'lsa:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

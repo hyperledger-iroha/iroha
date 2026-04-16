@@ -41,7 +41,7 @@ MOCHI снарядтар сығарып CLI бинарҙары. Тәьмин и�
 Репозиторий тамырынан:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Был команда `mochi-core` һәм эгуи фронтендты ла төҙөй. Таратыу өйөмө етештереү өсөн, йүгерергә:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 Йүгерергә UI туранан-тура йөктән:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Ғәҙәттәгесә, MOCHI ваҡытлыса мәғлүмәттәр каталогында бер тиңдәш алдан ҡуйылған:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 CLI флагтарын ҡулланыу өсөн өҫтөнлөк бирә, ҡасан старт:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS штекер манифесттары, һәм идара итеү ғәм�
 ./ci/check_mochi.sh
 ```
 
-Ярҙамсы `cargo check`/`cargo test` өсөн `mochi-core`, `mochi-ui-egui` өсөн башҡарыла, һәм
+Ярҙамсы `cargo check`/`cargo test` өсөн `mochi-core`, `mochi-ui` өсөн башҡарыла, һәм
 `mochi-integration`, унда ҡоролма дрейфы (канон блок/ваҡиғаларҙы тотоу) һәм эгуи йүгәнен тота
 бер атыуҙа регрессиялар. Әгәр сценарий тураһында хәбәр итеү иҫке ҡоролмалары, ҡабаттан эшләү иғтибарһыҙ ҡалған регенерация һынауҙары,
 Мәҫәлән:

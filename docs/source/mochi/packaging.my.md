@@ -65,7 +65,7 @@ host OS နှင့် architecture မှဆင်းသက်လာသော 
   multi-platform builds များသည် artefacts များကို တစ်ခုတည်းတွင် အပ်နှံနိုင်သောကြောင့် ဇာတ်ညွှန်းလမ်းညွှန်တစ်ခု
   အပို scripting မပါဘဲတည်နေရာ။
 
-အမိန့်ပေးချက်သည် နမူနာကို `mochi-ui-egui`၊ `kagami`၊ `LICENSE`၊
+အမိန့်ပေးချက်သည် နမူနာကို `mochi-ui`၊ `kagami`၊ `LICENSE`၊
 configuration နှင့် `mochi/BUNDLE_README.md` အစုအဝေးထဲသို့။ အဆုံးအဖြတ်တစ်ခု
 `manifest.json` ကို binaries များနှင့်အတူ ထုတ်ပေးသောကြောင့် CI အလုပ်များသည် ဖိုင်ကို ခြေရာခံနိုင်သည်
 hashes နှင့်အရွယ်အစားများ။

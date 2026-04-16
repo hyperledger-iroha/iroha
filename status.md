@@ -2,6 +2,52 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Mochi now defaults to workspace-scoped sandboxes, validates local MCP on startup, and ships a local Codex skill
+- `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/{config.rs,bootstrap.rs,supervisor.rs,torii.rs,lib.rs}`
+  now split the user workspace root from the runtime sandbox root, default
+  Mochi-managed runtime state to `<workspace>/.mochi/sandbox/<profile>`,
+  render `IROHA_MCP_URL` into `.env.local` and the generated language samples,
+  expose session metadata for the preferred peer/signer, and validate the
+  local `/v1/mcp` surface against the curated `iroha.*` tool contract instead
+  of reusing the public Taira rollout assumptions.
+- `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/src/{config.rs,dashboard_view.rs,main.rs,wizard.rs}`
+  now persist `workspace_root` separately from direct `data_root` overrides,
+  default GUI/headless runs to a workspace-relative sandbox, expose the local
+  MCP URL plus a copyable `codex mcp add mochi-local --url ...` command in the
+  dashboard, and add a headless `mochi sandbox serve` mode that waits for
+  readiness, validates local MCP, writes bootstrap files into the workspace,
+  emits `<sandbox>/session.json`, and stays alive until SIGINT/SIGTERM.
+- `/Users/takemiyamakoto/dev/iroha/scripts/mochi_local_sandbox.sh` now provides
+  the flat `up`, `down`, `status`, `reset`, `env`, and `mcp-add-command`
+  operator flow for local Mochi sandboxes, while
+  `/Users/takemiyamakoto/dev/iroha/skills/mochi-local-sandbox/{SKILL.md,agents/openai.yaml}`
+  ship the matching standalone repo-shared Codex skill.
+- `/Users/takemiyamakoto/dev/iroha/mochi/README.md`,
+  `/Users/takemiyamakoto/dev/iroha/docs/source/mochi/{quickstart.md,troubleshooting.md}`,
+  and `/Users/takemiyamakoto/dev/iroha/ci/check_mochi.sh` now document and gate
+  the workspace/sandbox split, the helper script, the local MCP flow, and the
+  standalone skill install path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n scripts/mochi_local_sandbox.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-core -p mochi-ui -p mochi-integration --no-run` (pass)
+
+## 2026-04-16 Follow-up: MOCHI UI package renamed to `mochi-ui`
+- The MOCHI desktop package at `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/Cargo.toml`
+  now publishes the Cargo package name `mochi-ui` while keeping the existing
+  binary name `mochi` and on-disk directory layout unchanged.
+- Current MOCHI docs, architecture notes, troubleshooting guides, and
+  `ci/check_mochi.sh` now use `cargo ... -p mochi-ui` for package-scoped
+  commands. References to the source directory path
+  `mochi/mochi-ui-egui/...` were intentionally left unchanged.
+- Focused validation for this slice:
+  - `cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="mochi-ui") | .manifest_path'`
+  - `cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="mochi-ui-egui") | .manifest_path'`
+  - Targeted `cargo check`/`cargo test` runs for `mochi-ui` were started, but
+    this checkout already had unrelated long-running Cargo jobs holding the
+    shared build/package locks, so those validations did not complete during
+    this slice.
+
 ## 2026-04-16 Follow-up: Soracloud/Torii integration response compatibility restored
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now applies Norito defaults to partial `soracloud_runtime.hf` config tables.

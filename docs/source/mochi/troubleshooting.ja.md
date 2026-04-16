@@ -23,7 +23,7 @@ translation_last_reviewed: 2026-01-21
 
 1. MOCHI が使用している data root を把握する。デフォルトは
    `$TMPDIR/mochi/<profile-slug>`。カスタムパスは UI タイトルバーや
-   `cargo run -p mochi-ui-egui -- --data-root ...` で確認できる。
+   `cargo run -p mochi-ui -- --data-root ...` で確認できる。
 2. workspace ルートで `./ci/check_mochi.sh` を実行する。core/UI/integration
    クレートを検証してから設定変更に着手する。
 3. プリセット（`single-peer` または `four-peer-bft`）を記録する。
@@ -65,7 +65,7 @@ UI が「failed to spawn process」や「permission denied」を報告する場�
 既知の正常バイナリを指定する:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -82,7 +82,7 @@ cargo run -p mochi-ui-egui -- \
 既に別プロセスが 8080/1337 を占有している。明示的なベースを指定して再起動する:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 builder はベースから連番でポートを割り当てるため、プリセットの peer 数に合わせて
@@ -115,7 +115,7 @@ snapshot ルートを再作成してからプロセスを再起動する。
    - 保持している CLI/環境オーバーライドで peer を再起動。
 3. 手動で行う場合:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # 表示された root を確認してから:
    rm -rf /tmp/mochi/four-peer-bft
    ```

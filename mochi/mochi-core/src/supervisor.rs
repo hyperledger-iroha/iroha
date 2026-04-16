@@ -31,7 +31,10 @@ use tokio::runtime::Handle;
 
 use crate::{
     compose::SigningAuthority,
-    config::{GenesisProfile, NetworkPaths, NetworkProfile, PortAllocator, ProfilePreset},
+    config::{
+        GenesisProfile, NetworkPaths, NetworkProfile, PortAllocator, ProfilePreset,
+        infer_workspace_root_from_sandbox_root,
+    },
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
     torii::{ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiResult},
@@ -44,6 +47,8 @@ const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
 const SMOKE_ACCOUNT_DOMAIN: &str = "wonderland";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
+const LOCAL_MCP_PROFILE: &str = "writer";
+const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -338,6 +343,31 @@ impl CompatibilityReport {
             format!("chain {} • {}", self.chain_id, fragments.join(" • "))
         }
     }
+}
+
+/// Connection details for the active Mochi sandbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorSessionInfo {
+    /// Human-readable profile slug for the sandbox.
+    pub profile_slug: String,
+    /// Chain identifier currently configured for the sandbox.
+    pub chain_id: String,
+    /// Profile-specific sandbox root containing peer state and logs.
+    pub sandbox_root: PathBuf,
+    /// Workspace root when Mochi can infer it from the sandbox layout.
+    pub workspace_root: Option<PathBuf>,
+    /// Preferred peer alias for bootstrap snippets and health checks.
+    pub peer_alias: String,
+    /// Explorer/API base URL for the preferred peer.
+    pub api_base: String,
+    /// Torii submission URL for the preferred peer.
+    pub torii_url: String,
+    /// Native Torii MCP endpoint for the preferred peer.
+    pub mcp_url: String,
+    /// Preferred local dev signer account identifier.
+    pub account_id: Option<String>,
+    /// Preferred local dev signer private key.
+    pub private_key: Option<String>,
 }
 
 /// Paths to external binaries used by the supervisor.
@@ -1565,6 +1595,39 @@ fn normalize_peer_config_overrides(
         ));
     }
 
+    ensure_local_mcp_config(torii)?;
+
+    Ok(())
+}
+
+fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
+    let table = torii.get_or_insert_with(toml::Table::new);
+    let entry = table
+        .entry("mcp".to_owned())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(mcp) = entry.as_table_mut() else {
+        return Err(SupervisorError::Config(
+            "torii.mcp must be a table".to_owned(),
+        ));
+    };
+
+    mcp.entry("enabled".to_owned())
+        .or_insert(toml::Value::Boolean(true));
+    mcp.entry("profile".to_owned())
+        .or_insert(toml::Value::String(LOCAL_MCP_PROFILE.to_owned()));
+    mcp.entry("expose_operator_routes".to_owned())
+        .or_insert(toml::Value::Boolean(false));
+    mcp.entry("allow_tool_prefixes".to_owned())
+        .or_insert_with(|| {
+            toml::Value::Array(vec![toml::Value::String(LOCAL_MCP_TOOL_PREFIX.to_owned())])
+        });
+
+    if !matches!(mcp.get("allow_tool_prefixes"), Some(toml::Value::Array(_))) {
+        return Err(SupervisorError::Config(
+            "torii.mcp.allow_tool_prefixes must be an array".to_owned(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -1864,6 +1927,59 @@ impl Supervisor {
             .iter()
             .find(|peer| peer.alias() == alias)
             .and_then(|peer| peer.torii_client().ok())
+    }
+
+    /// Produce local sandbox connection details for bootstrap files and automation.
+    pub fn session_info(&self) -> Result<SupervisorSessionInfo> {
+        let peer = self.peers.first().ok_or_else(|| {
+            SupervisorError::Config("supervisor has no prepared peers".to_owned())
+        })?;
+        let torii_url = peer
+            .torii_client()
+            .map_err(|err| {
+                SupervisorError::Config(format!(
+                    "failed to build a Torii client for session metadata: {err}"
+                ))
+            })?
+            .base_url()
+            .trim_end_matches('/')
+            .to_owned();
+        let mcp_url = peer
+            .torii_client()
+            .map_err(|err| {
+                SupervisorError::Config(format!(
+                    "failed to build a Torii client for local MCP metadata: {err}"
+                ))
+            })?
+            .mcp_endpoint()
+            .map_err(|err| {
+                SupervisorError::Config(format!(
+                    "failed to compute the local MCP endpoint for session metadata: {err}"
+                ))
+            })?
+            .to_string()
+            .trim_end_matches('/')
+            .to_owned();
+        let signer = self.signers.first();
+
+        Ok(SupervisorSessionInfo {
+            profile_slug: self.profile.slug(),
+            chain_id: self.chain_id.clone(),
+            sandbox_root: self.paths.root().to_path_buf(),
+            workspace_root: infer_workspace_root_from_sandbox_root(
+                self.paths
+                    .root()
+                    .parent()
+                    .unwrap_or_else(|| self.paths.root()),
+            ),
+            peer_alias: peer.alias().to_owned(),
+            api_base: torii_url.clone(),
+            torii_url,
+            mcp_url,
+            account_id: signer.map(|entry| entry.account_id().to_string()),
+            private_key: signer
+                .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()),
+        })
     }
 
     /// Access the structured log stream for the given peer alias.
@@ -4004,7 +4120,12 @@ exit 0
     impl KagamiStub {
         fn install(root: &Path) -> Self {
             let script_path = root.join("kagami_stub.sh");
-            let script = r#"#!/bin/sh
+            let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
+            let manifest = format!(
+                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"transactions\":[{{\"instructions\":[]}}]}}"
+            );
+            let script = format!(
+                r#"#!/bin/sh
 if [ -n "$MOCHI_KAGAMI_LOG" ]; then
   printf 'args:%s\n' "$*" >> "$MOCHI_KAGAMI_LOG"
 fi
@@ -4024,9 +4145,10 @@ case "$1" in
     ;;
 esac
 cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
+{manifest}
 JSON
-"#;
+"#
+            );
             fs::write(&script_path, script).expect("write kagami stub");
             #[cfg(unix)]
             {
@@ -5390,6 +5512,19 @@ JSON
             sumeragi.get("da_enabled"),
             Some(toml::Value::Boolean(true))
         ));
+        let torii = torii.expect("torii config");
+        let mcp = torii
+            .get("mcp")
+            .and_then(toml::Value::as_table)
+            .expect("mcp table");
+        assert!(matches!(
+            mcp.get("enabled"),
+            Some(toml::Value::Boolean(true))
+        ));
+        assert!(matches!(
+            mcp.get("profile"),
+            Some(toml::Value::String(value)) if value == LOCAL_MCP_PROFILE
+        ));
     }
 
     #[test]
@@ -5550,6 +5685,18 @@ JSON
             .get("torii")
             .and_then(toml::Value::as_table)
             .expect("torii table");
+        let mcp = torii
+            .get("mcp")
+            .and_then(toml::Value::as_table)
+            .expect("mcp table");
+        assert!(matches!(
+            mcp.get("enabled"),
+            Some(toml::Value::Boolean(true))
+        ));
+        assert!(matches!(
+            mcp.get("profile"),
+            Some(toml::Value::String(value)) if value == LOCAL_MCP_PROFILE
+        ));
         let expected_torii_dir = spec.storage_dir.join("torii").display().to_string();
         assert_eq!(
             torii.get("data_dir").and_then(toml::Value::as_str),
@@ -5770,6 +5917,34 @@ JSON
         assert!(contents.contains(&format!("# mochi.lane[1].blocks_dir = {lane1_blocks}")));
         assert!(contents.contains(&format!("# mochi.lane[0].merge_log = {lane0_merge}")));
         assert!(contents.contains(&format!("# mochi.lane[1].merge_log = {lane1_merge}")));
+    }
+
+    #[test]
+    fn supervisor_session_info_reports_workspace_and_mcp_urls() {
+        if !ports_available("supervisor_session_info_reports_workspace_and_mcp_urls") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_root = temp.path().join("workspace");
+        let sandbox_root = workspace_root.join(".mochi").join("sandbox");
+        let _stub = KagamiStub::install(temp.path());
+
+        let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(&sandbox_root)
+            .build()
+            .expect("build supervisor");
+
+        let info = supervisor.session_info().expect("session info");
+        assert_eq!(
+            info.workspace_root.as_deref(),
+            Some(workspace_root.as_path())
+        );
+        assert!(info.sandbox_root.ends_with(Path::new("single-peer")));
+        assert_eq!(info.torii_url, "http://127.0.0.1:8080");
+        assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
+        assert!(info.account_id.is_some());
+        assert!(info.private_key.is_some());
     }
 
     #[test]

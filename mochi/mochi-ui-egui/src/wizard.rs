@@ -60,7 +60,9 @@ impl MochiApp {
                 ui.add_space(12.0);
                 ui.label(RichText::new("Workspace").strong());
                 ui.text_edit_singleline(&mut self.first_run_wizard.workspace_input);
-                ui.small("Mochi writes `.env.local` and `.mochi/generated/*` into this root.");
+                ui.small(
+                    "Mochi writes `.env.local` and `.mochi/generated/*` here, and keeps peer state under `.mochi/sandbox/<profile>`.",
+                );
 
                 ui.add_space(12.0);
                 ui.checkbox(

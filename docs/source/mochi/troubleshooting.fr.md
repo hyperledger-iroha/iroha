@@ -25,7 +25,7 @@ redémarrez la boucle ou arrêtez la diffusion des mises à jour de bloc/événe
 
 1. Capturez la racine de données utilisée par MOCHI. La valeur par défaut suit
    `$TMPDIR/mochi/<profile-slug>` ; les chemins personnalisés apparaissent dans la barre de titre de l'interface utilisateur et
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
+   via `cargo run -p mochi-ui -- --data-root ...`.
 2. Exécutez `./ci/check_mochi.sh` à partir de la racine de l'espace de travail. Cela valide le noyau,
    L'interface utilisateur et les caisses d'intégration avant de commencer à modifier les configurations.
 3. Notez le préréglage (`single-peer` ou `four-peer-bft`). La topologie générée
@@ -68,7 +68,7 @@ Si l'interface utilisateur signale « échec du processus de génération » ou 
 sur les bons binaires connus :
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ le processus écoute déjà sur la plage par défaut (8080/1337). Relancer MOCHI
 avec des bases explicites :
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 Le constructeur déploiera des ports séquentiels à partir de ces bases, alors réservez une plage
@@ -119,7 +119,7 @@ pour réduire la fenêtre de nouvelle tentative pour les tâches CI qui doivent 
    - redémarrer les pairs avec les remplacements CLI/environnement préservés.
 3. Si vous devez le faire manuellement :
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

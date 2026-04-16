@@ -41,7 +41,7 @@ MOCHI CLI екілік файлдарын шығарады. Олардың ор�
 Репозиторий түбірінен:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Бұл пәрмен `mochi-core` және egui фронтенді құрастырады. Таратылатын буманы жасау үшін келесі әрекеттерді орындаңыз:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 UI-ді жүктен тікелей іске қосыңыз:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Әдепкі бойынша MOCHI уақытша деректер каталогында бір деңгейлі алдын ала орнатуды жасайды:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 Іске қосу кезінде әдепкі мәндерді қайта анықтау үшін CLI жалауларын пайдаланыңыз:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS пин манифесттері және рөлдерді беру нем
 ./ci/check_mochi.sh
 ```
 
-Көмекші `cargo check`/`cargo test` `mochi-core`, `mochi-ui-egui` және
+Көмекші `cargo check`/`cargo test` `mochi-core`, `mochi-ui` және
 `mochi-integration`, ол арматураның дрейфін (канондық блок/оқиғаны түсіру) және egui белгішесін ұстайды
 бір кадрдағы регрессиялар. Сценарий ескірген құрылғылар туралы хабарласа, еленбеген регенерация сынақтарын қайта іске қосыңыз,
 мысалы:

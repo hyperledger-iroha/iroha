@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Mochi workspace-scoped local sandbox + local MCP automation):
+the Mochi local-dev flow now has a cleaner split between the app workspace and
+the runtime sandbox. Mochi-managed sandboxes default to
+`<workspace>/.mochi/sandbox/<profile>`, the headless `mochi sandbox serve`
+path now validates local `/v1/mcp` and writes `session.json` plus workspace
+bootstrap files, the desktop dashboard surfaces the local MCP URL and exact
+Codex add command, and the repo now ships a shell helper plus a standalone
+`mochi-local-sandbox` skill for Codex/local automation.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/{config.rs,bootstrap.rs,supervisor.rs,torii.rs,lib.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/src/{config.rs,dashboard_view.rs,main.rs,wizard.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/Cargo.toml`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/mochi_local_sandbox.sh`
+  - `/Users/takemiyamakoto/dev/iroha/skills/mochi-local-sandbox/{SKILL.md,agents/openai.yaml}`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/mochi/{quickstart.md,troubleshooting.md}`
+  - `/Users/takemiyamakoto/dev/iroha/ci/check_mochi.sh`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `bash -n scripts/mochi_local_sandbox.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-core -p mochi-ui -p mochi-integration --no-run`
+- open work after this slice:
+  - finish and record a focused runtime test sweep for the new local-MCP and
+    headless `sandbox serve` paths now that the package-level no-run compile is
+    green
+  - decide whether the translated Mochi quickstart/troubleshooting guides
+    should mirror the new workspace/sandbox and local MCP flow now that the
+    English docs have been updated
+
 Latest sync (2026-04-16 Taira public-root contract and operator guidance aligned):
 the active Taira operator/docs/plugin contract is now internally consistent.
 The repo guidance treats `https://taira.sora.org` as the current primary public
