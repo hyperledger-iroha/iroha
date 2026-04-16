@@ -2,6 +2,46 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: remaining RBC harness assumptions were tightened, and the long NPoS persistence window no longer races session TTL
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  now treats cluster height as the authoritative outcome for the remaining
+  equivocation and partial-withholding adversarial cases. A stalled cluster may
+  still surface `delivered=true` RBC telemetry via local payload recovery, so
+  the harness no longer assumes delivery implies commit progress in those two
+  scenarios.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  now configures a 15-minute RBC session/store TTL for the heavy restart and
+  large-payload NPoS happy-path cases. That keeps persisted RBC evidence alive
+  longer than the test’s own 240s commit + 240s delivery observation window, so
+  `npos_rbc_persists_payload_across_restart` no longer races the default 120s
+  TTL.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  now gives the chunk-loss backlog probe a 120s observation window and extends
+  the RBC session/store TTL in that scenario so the operator endpoints have
+  time to expose missing-chunk/backlog evidence under serialized grouped runs.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  now has longer restart-pressure wait windows, explicit helper coverage for
+  those context-specific windows, best-effort restarted-peer catch-up in the
+  combined downtime+timeout case, and a more robust any-peer submit helper that
+  no longer aborts immediately on one bad peer response after another peer has
+  already accepted the transaction.
+- Focused validation for the green slices in this pass:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da restart_pressure_windows -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da finish_submit_attempts -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da should_retry_submit_after_all_peer_timeout -- --nocapture`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.equiv.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.partial.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcpersist.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.chunkloss.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_rbc_chunk_loss_fault_reports_backlog' -- --exact --nocapture --test-threads=1`
+- Remaining red in this slice:
+  - `zk_confidential_localnet::{confidential_dual_restart_stress_mid_flow_localnet, confidential_combined_peer_downtime_and_timeout_pressure_localnet}`
+    still fail after restart pressure with
+    `400 Bad Request: Could not decode request (... invalid magic header)` from
+    `iroha::client::submit_transaction`. The failures are now narrowed to the
+    confidential post-restart submit path rather than to the previous wait/catch-up
+    assertions.
+
 ## 2026-04-16 Follow-up: RBC chunk-loss harnesses account for local-payload recovery
 - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
   no longer treats a single node's RBC `delivered` telemetry bit as proof that

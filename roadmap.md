@@ -2,6 +2,45 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 adversarial/NPoS RBC harness follow-up):
+the remaining adversarial RBC harnesses no longer treat `delivered=true`
+telemetry as proof of commit progress when local payload recovery can retire the
+session ahead of cluster height advancement, and the heavy NPoS restart /
+chunk-loss harnesses now keep RBC evidence alive longer than their own
+observation windows. The previously reported
+`sumeragi_adversarial_chunk_equivocation_marks_invalid`,
+`sumeragi_adversarial_partial_chunk_withholding_stalls_delivery`,
+`npos_rbc_persists_payload_across_restart`, and
+`npos_rbc_chunk_loss_fault_reports_backlog` cases rerun cleanly on the current
+tree.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da restart_pressure_windows -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da finish_submit_attempts -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da should_retry_submit_after_all_peer_timeout -- --nocapture`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.equiv.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.partial.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcpersist.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.chunkloss.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_rbc_chunk_loss_fault_reports_backlog' -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - debug the remaining confidential restart-pressure submit failures:
+    `zk_confidential_localnet::{confidential_dual_restart_stress_mid_flow_localnet, confidential_combined_peer_downtime_and_timeout_pressure_localnet}`
+    still return
+    `400 Bad Request: Could not decode request (... invalid magic header)`
+    from `iroha::client::submit_transaction` after restart pressure, so the
+    remaining work is now in the client/Torii submission path rather than in
+    the RBC wait/catch-up assertions; and
+  - rerun the broader grouped `consensus_and_da` batch once the confidential
+    submit-path issue is resolved or isolated.
+
 Latest sync (2026-04-16 RBC chunk-loss harnesses account for local-payload recovery):
 the reported `sumeragi_adversarial_chunk_drop` failure was a stale harness
 assumption: an RBC session can be marked delivered on one node via local-payload
