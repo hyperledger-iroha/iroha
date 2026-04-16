@@ -9459,8 +9459,16 @@ export class ToriiClient {
     if (typeof envelopeHook === "function") {
       envelopeHook(envelope, rest);
     }
+    const listParamAllowedKeys = new Set([
+      ...ITERABLE_QUERY_OPTION_KEYS,
+      ...extraAllowedKeys,
+    ]);
     const params = includeListParams
-      ? ToriiClient._encodeIterableListParams(rest, optionContext)
+      ? ToriiClient._encodeIterableListParams(
+          rest,
+          optionContext,
+          listParamAllowedKeys,
+        )
       : undefined;
     const response = await this._request("POST", path, {
       headers: {
