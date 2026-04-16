@@ -2,6 +2,35 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 NPoS localnet regressions rerun cleanly):
+the reported
+`sumeragi_npos_liveness::npos_network_produces_blocks`,
+`sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics`, and
+`sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set`
+failures were narrowed to brittle progress-driving behavior in the test
+harnesses rather than a new shared NPoS core failure. Liveness now fans a
+single signed seed transaction out to the ordered candidate peers, the
+stake-activation harness waits for submit connectivity and advances one height
+at a time instead of flooding logs, and the baseline telemetry harness keeps
+only one seed transaction outstanding while it samples metrics.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposlive.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.fixed2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1`
+  - `cargo test`
+- open work after this slice:
+  - rerun a broader grouped `consensus_and_da` sweep when another long localnet
+    window is available so these NPoS harness fixes are exercised together
+    instead of only as exact reruns
+
 Latest sync (2026-04-16 Musubi package-manager foundation):
 Musubi now has a typed package identity model and a standalone local CLI
 workflow for Kotodama source packages. Package references use
