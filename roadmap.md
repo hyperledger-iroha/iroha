@@ -1,40 +1,42 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
-Latest sync (2026-04-15 same-height vote-backed recovery fixes the reported restart and timeout-pressure stalls):
-the reported `sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime`,
-`sumeragi_lock_convergence::sumeragi_view_change_lock_convergence`, and
-`zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet`
-failures are fixed on the current tree. Sumeragi now joins a lower same-height
-vote-backed recovery branch after downtime when the local validator has not
-already voted for the competing live owner, while still keeping locally
-conflicting branches passive. Higher-view proposal and precommit paths now wait
-for lower same-height vote evidence to resolve, and retained superseded payloads
-remain available for exact body fetch recovery.
+Latest sync (2026-04-16 Taira validator image and manual publish workflow landed):
+the repo now has a dedicated `CONFIG_PROFILE=taira` runtime image path, a
+Taira-aware default Docker entrypoint, and a manual GitHub Actions workflow for
+publishing validator-ready images to Docker Hub and Soramitsu Harbor. The
+image now ships the checked-in static Taira bundle under
+`/opt/iroha/configs/soranexus/taira`, expects per-validator runtime config to
+be mounted at `/config/config.toml`, and keeps validator secrets out of the
+artifact. The remaining work is operational rather than structural.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/propose.rs`
-  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/Dockerfile`
+  - `/Users/takemiyamakoto/dev/iroha/.dockerignore`
+  - `/Users/takemiyamakoto/dev/iroha/.github/workflows/publish_taira_validator.yml`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/docker_entrypoint.sh`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/build_release_image.sh`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/docker_entrypoint_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/docker_build.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - verified in this slice:
-  - `cargo fmt --all`
-  - `cargo test -p iroha_core --lib stale_vote_backed_block_created_supersedes_live_owner_without_local_vote -- --nocapture`
-  - `cargo test -p iroha_core --lib conflicting_higher_view_block_created_stays_passive_after_local_vote -- --nocapture`
-  - `cargo test -p iroha_core --lib stale_block_created -- --nocapture`
-  - `cargo test -p iroha_core --lib "higher_view" -- --nocapture`
-  - `cargo test -p iroha_core --lib event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_lower_conflict -- --nocapture`
-  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime -- --nocapture`
-  - `cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --nocapture`
-  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
+  - `bash -n scripts/docker_entrypoint.sh`
+  - `bash -n scripts/build_release_image.sh`
+  - `python3 -m unittest scripts.tests.docker_entrypoint_test`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/publish_taira_validator.yml"); puts "yaml ok"'`
+  - tracked-files-only Docker rebuilds now keep the required `artifacts/offline_poseidon` snapshot in a clean ~512 MB context; local Colima still OOM-kills the deploy-profile Rust compile even with `CARGO_BUILD_JOBS=4`, so final image proof still needs a better-provisioned builder
 - open work after this slice:
-  - run `cargo test --workspace` only when a several-hour validation window is
-    available.
+  - run `.github/workflows/publish_taira_validator.yml` once with real registry
+    credentials to push the first `taira-*` tags to Docker Hub and Harbor;
+  - let the clean-context Taira image build finish on a publish-grade host if a
+    full pre-push compile proof is required beyond the entrypoint/script
+    validation above; and
+  - run broader repository validation (`cargo build --workspace` and, when a
+    multi-hour window is available, `cargo test --workspace`) after this Docker
+    slice is merged or isolated from unrelated dirty-tree work.
 
 Latest sync (2026-04-15 DA eviction harness scales lane TEU budget for large payload blocks):
 the reproducible `sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store`

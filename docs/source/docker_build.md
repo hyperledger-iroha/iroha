@@ -58,3 +58,36 @@ Iroha 3-only defaults.
 
 Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
 names automatically when `--profile` is set to `iroha2` or `iroha3`.
+
+## Runtime Images
+
+The repository-root `Dockerfile` builds the runtime image used for published
+`irohad` containers. The supported `CONFIG_PROFILE` values are:
+
+- `single` — embed the default single-node bundle under `/config`
+- `nexus` — embed the Nexus sample bundle under `/config`
+- `taira` — ship the public Taira static bundle under
+  `/opt/iroha/configs/soranexus/taira` and expect a rendered validator config
+  to be mounted at `/config/config.toml`
+
+Local Taira image build example:
+
+```bash
+scripts/build_release_image.sh --profile iroha3 --config taira
+```
+
+On memory-constrained builders, pass `--cargo-build-jobs 4` to the helper or
+`--build-arg CARGO_BUILD_JOBS=4` to `docker build` to cap Cargo parallelism
+inside the image build.
+
+The Taira image automatically includes `embedded-soracloud-runtime` and uses a
+Taira-aware entrypoint. With no command override it starts:
+
+```bash
+irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json
+```
+
+Keep validator-specific runtime material out of the image. Generate
+`/config/config.toml` with
+`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
+and mount it into the container together with persistent `/storage`.

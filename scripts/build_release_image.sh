@@ -7,8 +7,9 @@ Usage: build_release_image.sh --profile <name> --config <config> [options]
 
 Options:
   --profile <name>        Logical profile name (e.g. iroha2, iroha3). Required.
-  --config <config>       Configuration bundle to embed (single, nexus, or path). Required.
+  --config <config>       Configuration bundle to embed (single, nexus, or taira). Required.
   --features <list>       Optional comma-separated Cargo feature list passed to the Docker build.
+  --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
   --tag <tag>             Docker image tag (default: hyperledger/iroha:<profile>-<version>).
   --artifacts-dir <dir>   Output directory for saved images/manifests (default: dist).
   --signing-key <path>    Optional PEM private key for signing the saved image tarball.
@@ -24,6 +25,7 @@ log() {
 profile=""
 config=""
 features=""
+cargo_build_jobs=""
 image_tag=""
 artifacts_dir="dist"
 signing_key=""
@@ -41,6 +43,10 @@ while (($#)); do
             ;;
         --features)
             features="${2:-}"
+            shift 2
+            ;;
+        --cargo-build-jobs)
+            cargo_build_jobs="${2:-}"
             shift 2
             ;;
         --tag)
@@ -109,6 +115,16 @@ case "$config" in
     nexus)
         config_profile="nexus"
         ;;
+    taira)
+        config_profile="taira"
+        case ",${features}," in
+            *,embedded-soracloud-runtime,*)
+                ;;
+            *)
+                features="${features:+${features},}embedded-soracloud-runtime"
+                ;;
+        esac
+        ;;
     *)
         printf 'Unsupported config value: %s\n' "$config" >&2
         exit 1
@@ -116,10 +132,18 @@ case "$config" in
 esac
 
 log "Building Docker image ${image_tag}"
+docker_build_args=(
+    --build-arg PROFILE=deploy
+    --build-arg "FEATURES=${features}"
+    --build-arg "CONFIG_PROFILE=${config_profile}"
+)
+
+if [[ -n "$cargo_build_jobs" ]]; then
+    docker_build_args+=(--build-arg "CARGO_BUILD_JOBS=${cargo_build_jobs}")
+fi
+
 docker build \
-    --build-arg PROFILE=deploy \
-    --build-arg FEATURES="${features}" \
-    --build-arg CONFIG_PROFILE="${config_profile}" \
+    "${docker_build_args[@]}" \
     --tag "${image_tag}" \
     --file Dockerfile \
     .

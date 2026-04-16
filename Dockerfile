@@ -12,19 +12,23 @@ ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
-RUN RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" --bin irohad --bin iroha --bin kagami
+ARG CARGO_BUILD_JOBS=""
+RUN CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" --bin irohad --bin iroha --bin kagami
 
 # final image
 FROM debian:bookworm-slim
 
 ARG PROFILE="deploy"
 ARG CONFIG_PROFILE="single"
+ARG APP_DIR=/opt/iroha
 ARG  STORAGE=/storage
 ARG  TARGET_DIR=/app/target/${PROFILE}
+ENV  APP_DIR=$APP_DIR
 ENV  BIN_PATH=/usr/local/bin/
 ENV  CONFIG_DIR=/config
 ENV  KURA_STORE_DIR=$STORAGE
 ENV  SNAPSHOT_STORE_DIR=$STORAGE/snapshot
+ENV  IROHA_IMAGE_CONFIG_PROFILE=$CONFIG_PROFILE
 ENV  USER=iroha
 ENV  UID=1001
 ENV  GID=1001
@@ -37,20 +41,25 @@ RUN <<EOT
   adduser \
     --disabled-password \
     --gecos "" \
-    --home /app \
+    --home "$APP_DIR" \
     --ingroup "$USER" \
     --no-create-home \
     --uid "$UID" \
     "$USER"
+  mkdir -p "$APP_DIR"
   mkdir -p $CONFIG_DIR
   mkdir -p $STORAGE
+  mkdir -p "$APP_DIR/configs/soranexus"
   chown $USER:$USER $STORAGE
   chown $USER:$USER $CONFIG_DIR
+  chown -R $USER:$USER "$APP_DIR"
 EOT
 
 COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
 COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
 COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
+COPY scripts/docker_entrypoint.sh $BIN_PATH
+COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
 COPY defaults /tmp/defaults
 RUN set -euo pipefail; \
   case "${CONFIG_PROFILE}" in \
@@ -67,11 +76,17 @@ RUN set -euo pipefail; \
       cp /tmp/defaults/nexus/client.toml "${CONFIG_DIR}/client.toml"; \
       cp /tmp/defaults/nexus/config.toml "${CONFIG_DIR}/config.toml"; \
       ;; \
+    taira) \
+      :; \
+      ;; \
     *) \
       echo "Unsupported CONFIG_PROFILE ${CONFIG_PROFILE}" >&2; \
       exit 1; \
       ;; \
   esac; \
+  chown -R "${UID}:${GID}" "${APP_DIR}"; \
+  chmod 755 "${BIN_PATH}/docker_entrypoint.sh"; \
   rm -rf /tmp/defaults
+WORKDIR $APP_DIR
 USER $USER
-CMD ["irohad"]
+ENTRYPOINT ["docker_entrypoint.sh"]

@@ -107,6 +107,54 @@ same bootstrap source of truth. It now requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
+## Validator container image
+
+The repo now supports a dedicated Taira validator runtime image via the main
+`Dockerfile`:
+
+- local build helper:
+  - `scripts/build_release_image.sh --profile iroha3 --config taira`
+- manual publish workflow:
+  - `.github/workflows/publish_taira_validator.yml`
+
+If the Docker host is memory-constrained, cap Cargo parallelism during the
+image build:
+
+- `scripts/build_release_image.sh --profile iroha3 --config taira --cargo-build-jobs 4`
+- or `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=4 ...`
+
+The image ships:
+
+- `irohad`, `iroha`, and `kagami`
+- the checked-in static Taira bundle under `/opt/iroha/configs/soranexus/taira`
+- a Taira-aware entrypoint that defaults to:
+  - `irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json`
+
+The image does **not** embed validator-specific runtime material. Keep using
+`render_taira_validator_bundle.py` to generate the mounted
+`/config/config.toml` from user-local roster/secrets files.
+
+Minimal container run example:
+
+```bash
+docker run --rm \
+  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -v taira-validator-1-storage:/storage \
+  hyperledger/iroha:taira-latest
+```
+
+If you need to override the bundled public genesis, point the entrypoint at a
+mounted file:
+
+```bash
+docker run --rm \
+  -e IROHA_TAIRA_GENESIS=/config/genesis.json \
+  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -v "$PWD/configs/soranexus/taira/genesis.json:/config/genesis.json:ro" \
+  -v taira-validator-1-storage:/storage \
+  hyperledger/iroha:taira-latest
+```
+
 ## Minimum viable topology
 
 Use at least 4 validator peers (plus optional observers). Single-peer setups are
