@@ -1844,17 +1844,20 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
         );
     }
 
-    wait_for_numeric_balance(
-        &tx_builder_client,
+    let quorum = peer_clients.len().saturating_sub(1).max(1);
+    wait_for_numeric_balance_quorum(
+        &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
         Numeric::from(500_u32),
+        quorum,
         "wait source balance after combined downtime+timeout flow",
     )
     .await?;
-    wait_for_numeric_balance(
-        &tx_builder_client,
+    wait_for_numeric_balance_quorum(
+        &peer_clients,
         AssetId::new(asset_def, recipient.clone()),
         Numeric::from(120_u32),
+        quorum,
         "wait recipient balance after combined downtime+timeout flow",
     )
     .await?;

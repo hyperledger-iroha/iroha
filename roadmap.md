@@ -30,6 +30,46 @@ budget checks visible.
     longer in the default workspace build graph
   - continue direct `serde_json` cleanup through Norito JSON wrappers
 
+Latest sync (2026-04-16 grouped `consensus_and_da` exact regressions rerun cleanly):
+the reported startup/submit-path flakes were narrowed to test-harness
+assumptions rather than a new Sumeragi core regression. Serialized async
+network startup now gets one extra retryable attempt, the DA eviction harness
+searches every peer's Kura root instead of only peer 0, the NPoS performance
+and stake-activation harnesses submit through the connected leader or a
+best-height fallback peer, and the combined confidential restart-pressure case
+now checks quorum-observed final balances instead of trusting a single lagging
+peer. The previously red exact cases
+`sumeragi_adversarial_partial_chunk_withholding_stalls_delivery`,
+`sumeragi_da_eviction_rehydrates_block_bodies`,
+`npos_baseline_1s_k3_captures_metrics`,
+`npos_entity_correlation_limits_validator_set`, and
+`confidential_combined_peer_downtime_and_timeout_pressure_localnet`
+rerun green on the current tree.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/src/sandbox.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.partialfix.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.daevict2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_da_eviction_rehydrates_block_bodies' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.zkcombo.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet' -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - rerun a broader grouped `consensus_and_da` sweep when another long localnet
+    window is available so these fixes are exercised together rather than only
+    as exact reruns; and
+  - debug any still-red confidential restart-pressure submit paths that were
+    not part of this exact rerun set, especially
+    `zk_confidential_localnet::confidential_dual_restart_stress_mid_flow_localnet`
+    if it still reproduces on the current tree.
+
 Latest sync (2026-04-16 Taira public-root contract and operator guidance aligned):
 the active Taira operator/docs/plugin contract is now internally consistent.
 The repo guidance treats `https://taira.sora.org` as the current primary public
@@ -124,13 +164,13 @@ tree.
   - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcpersist.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart' -- --exact --nocapture --test-threads=1`
   - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.chunkloss.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_rbc_chunk_loss_fault_reports_backlog' -- --exact --nocapture --test-threads=1`
 - open work after this slice:
-  - debug the remaining confidential restart-pressure submit failures:
-    `zk_confidential_localnet::{confidential_dual_restart_stress_mid_flow_localnet, confidential_combined_peer_downtime_and_timeout_pressure_localnet}`
-    still return
+  - debug any remaining confidential restart-pressure submit failures:
+    `zk_confidential_localnet::confidential_dual_restart_stress_mid_flow_localnet`
+    still returns
     `400 Bad Request: Could not decode request (... invalid magic header)`
-    from `iroha::client::submit_transaction` after restart pressure, so the
-    remaining work is now in the client/Torii submission path rather than in
-    the RBC wait/catch-up assertions; and
+    from `iroha::client::submit_transaction` after restart pressure when it
+    reproduces, so the remaining work is now in the client/Torii submission
+    path rather than in the RBC wait/catch-up assertions; and
   - rerun the broader grouped `consensus_and_da` batch once the confidential
     submit-path issue is resolved or isolated.
 
