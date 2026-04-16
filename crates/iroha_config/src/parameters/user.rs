@@ -14281,51 +14281,122 @@ impl SoracloudRuntimeEgress {
 pub struct SoracloudRuntimeHuggingFace {
     /// Base URL used to resolve repo files from the Hub.
     #[config(default = "defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string()")]
+    #[norito(default = "default_soracloud_runtime_hf_hub_base_url")]
     pub hub_base_url: String,
     /// Base URL used to fetch model metadata from the Hub API.
     #[config(default = "defaults::soracloud_runtime::hf::API_BASE_URL.to_string()")]
+    #[norito(default = "default_soracloud_runtime_hf_api_base_url")]
     pub api_base_url: String,
     /// Base URL used to forward `/infer` calls to HF Inference.
     #[config(default = "defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string()")]
+    #[norito(default = "default_soracloud_runtime_hf_inference_base_url")]
     pub inference_base_url: String,
     /// Timeout applied to Hugging Face API and file requests (milliseconds).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS))"
     )]
+    #[norito(default = "default_soracloud_runtime_hf_request_timeout_ms")]
     pub request_timeout_ms: DurationMs,
     /// Whether generated HF services should prefer the on-node local runner path.
     #[config(default = "defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED")]
+    #[norito(default = "default_soracloud_runtime_hf_local_execution_enabled")]
     pub local_execution_enabled: bool,
     /// Program used to invoke the embedded local HF runner script.
     #[config(default = "defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()")]
+    #[norito(default = "default_soracloud_runtime_hf_local_runner_program")]
     pub local_runner_program: String,
     /// Timeout applied to one local runner invocation (milliseconds).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS))"
     )]
+    #[norito(default = "default_soracloud_runtime_hf_local_runner_timeout_ms")]
     pub local_runner_timeout_ms: DurationMs,
     /// TTL applied when the runtime emits authoritative model-host heartbeats after a successful local probe (milliseconds).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS))"
     )]
+    #[norito(default = "default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms")]
     pub model_host_heartbeat_ttl_ms: DurationMs,
     /// Whether the runtime may fall back to HF Inference when local execution fails.
     #[config(default = "defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK")]
+    #[norito(default = "default_soracloud_runtime_hf_allow_inference_bridge_fallback")]
     pub allow_inference_bridge_fallback: bool,
     /// Maximum number of imported Hub files retained per shared source.
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILES")]
+    #[norito(default = "default_soracloud_runtime_hf_import_max_files")]
     pub import_max_files: u32,
     /// Maximum size of one imported Hub file.
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES")]
+    #[norito(default = "default_soracloud_runtime_hf_import_max_file_bytes")]
     pub import_max_file_bytes: u64,
     /// Maximum aggregate size imported per shared source.
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES")]
+    #[norito(default = "default_soracloud_runtime_hf_import_max_total_bytes")]
     pub import_max_total_bytes: u64,
     /// File-selection allowlist used by the importer.
     #[config(default = "defaults::soracloud_runtime::hf::import_file_allowlist()")]
+    #[norito(default = "default_soracloud_runtime_hf_import_file_allowlist")]
     pub import_file_allowlist: Vec<String>,
     /// Optional bearer token used for HF Inference requests.
     pub inference_token: Option<String>,
+}
+
+fn default_soracloud_runtime_hf_hub_base_url() -> String {
+    defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string()
+}
+
+fn default_soracloud_runtime_hf_api_base_url() -> String {
+    defaults::soracloud_runtime::hf::API_BASE_URL.to_string()
+}
+
+fn default_soracloud_runtime_hf_inference_base_url() -> String {
+    defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string()
+}
+
+fn default_soracloud_runtime_hf_request_timeout_ms() -> DurationMs {
+    DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
+    ))
+}
+
+fn default_soracloud_runtime_hf_local_execution_enabled() -> bool {
+    defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
+}
+
+fn default_soracloud_runtime_hf_local_runner_program() -> String {
+    defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()
+}
+
+fn default_soracloud_runtime_hf_local_runner_timeout_ms() -> DurationMs {
+    DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
+    ))
+}
+
+fn default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms() -> DurationMs {
+    DurationMs(std::time::Duration::from_millis(
+        defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
+    ))
+}
+
+fn default_soracloud_runtime_hf_allow_inference_bridge_fallback() -> bool {
+    defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
+}
+
+fn default_soracloud_runtime_hf_import_max_files() -> u32 {
+    defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
+}
+
+fn default_soracloud_runtime_hf_import_max_file_bytes() -> u64 {
+    defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES
+}
+
+fn default_soracloud_runtime_hf_import_max_total_bytes() -> u64 {
+    defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES
+}
+
+fn default_soracloud_runtime_hf_import_file_allowlist() -> Vec<String> {
+    defaults::soracloud_runtime::hf::import_file_allowlist()
 }
 
 impl Default for SoracloudRuntimeHuggingFace {
@@ -18886,6 +18957,51 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
         );
         assert!(actual.soracloud_runtime.hf.inference_token.is_none());
+    }
+
+    #[test]
+    fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let mut hf = Table::new();
+        hf.insert(
+            "hub_base_url".into(),
+            Value::String("http://127.0.0.1:52220".to_owned()),
+        );
+        hf.insert(
+            "api_base_url".into(),
+            Value::String("http://127.0.0.1:52220/api".to_owned()),
+        );
+        runtime.insert("hf".into(), Value::Table(hf));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.soracloud_runtime.hf.hub_base_url,
+            "http://127.0.0.1:52220"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.api_base_url,
+            "http://127.0.0.1:52220/api"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_base_url,
+            defaults::soracloud_runtime::hf::INFERENCE_BASE_URL
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.request_timeout,
+            StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS)
+        );
+        let mut expected_allowlist = defaults::soracloud_runtime::hf::import_file_allowlist();
+        expected_allowlist.sort();
+        expected_allowlist.dedup();
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_file_allowlist,
+            expected_allowlist
+        );
     }
 
     #[test]
