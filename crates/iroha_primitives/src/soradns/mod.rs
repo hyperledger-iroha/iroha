@@ -8,6 +8,7 @@
 pub mod hosts;
 
 pub use hosts::{
-    GatewayHostBindings, GatewayHostError, canonical_gateway_suffix,
-    canonical_gateway_wildcard_pattern, derive_gateway_hosts, pretty_gateway_suffix,
+    GatewayHostBindings, GatewayHostError, GatewayHostProfile, canonical_gateway_suffix,
+    canonical_gateway_wildcard_pattern, derive_gateway_hosts, derive_gateway_hosts_with_profile,
+    pretty_gateway_suffix, taira_mon_pretty_gateway_suffix,
 };

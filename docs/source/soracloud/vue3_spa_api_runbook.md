@@ -28,22 +28,26 @@ Soracloud deploys must behave like IPFS-style publishing for runtime URLs:
 - the registered vanity host stays fixed
 - deploys update Soracloud route bindings, not DNS records on every release
 - direct vanity-host access remains canonical
-- `/soradns/<alias>/...` is the gateway fallback for clients that cannot
-  resolve SoraDNS directly yet
+- Taira's owned public browser gateway is `mon.taira.sora.org`
+- `/soradns/<alias>/...` is the legacy Torii compatibility fallback
 
 Examples:
 
 - direct frontend origin: `https://docs.sora/`
-- fallback frontend origin: `https://taira.sora.org/soradns/docs.sora/`
+- Taira browser frontend origin: `https://docs.sora.mon.taira.sora.org/`
+- legacy fallback frontend origin: `https://taira.sora.org/soradns/docs.sora/`
 - direct API origin:
   `https://solswap-indexer.sora/api/indexer/v1/health`
-- fallback API origin:
+- Taira browser API origin:
+  `https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`
+- legacy fallback API origin:
   `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 
-The fallback path is not the canonical origin for app configs or release
-notes. Use it only as a compatibility gateway. On Taira, the shared public
-edge serves that form generically for active aliases; do not invent
-`https://taira.sora.org/<service>/...` URLs.
+The Mon gateway is the public browser URL for clients that need normal DNS/TLS
+before native SoraDNS resolution is available. The `/soradns/<alias>/...` path
+is not the canonical origin for app configs or release notes. Use it only as a
+compatibility/debug gateway. Do not invent `https://taira.sora.org/<service>/...`
+URLs.
 
 ## 1. Generate the Scaffold
 
@@ -304,13 +308,14 @@ For split apps in production on Taira, keep `https://taira.sora.org/` bound to
 Torii and use it as:
 
 - the Torii/control-plane base URL
-- the SoraDNS fallback gateway:
+- the legacy SoraDNS compatibility gateway:
   `https://taira.sora.org/soradns/<alias>/...`
 - the SoraFS CID gateway for intentionally CID-only frontends:
   `https://taira.sora.org/sorafs/cid/<cid>/`
 
-Do not treat `taira.sora.org` paths as the canonical origin for a Soracloud
-runtime that already has a vanity alias host.
+Use `https://<alias>.mon.taira.sora.org/...` as the Taira public browser URL
+for Soracloud apps that already have a vanity alias host. Do not treat
+`taira.sora.org` paths as canonical app origins.
 
 ## 5. Deploy
 
@@ -503,8 +508,10 @@ the matching hosted-service or app-wide upgrade command.
   app-wide manifest hashes.
 - Fail frontend production builds if they point at demo/static data or the
   wrong API base.
-- Treat `taira.sora.org` as Torii/control-plane first and as the transitional
-  `/soradns/<alias>/...` fallback gateway second.
+- Treat `taira.sora.org` as Torii/control-plane first and as the legacy
+  `/soradns/<alias>/...` compatibility gateway second.
+- Use `https://<alias>.mon.taira.sora.org/...` for Taira browser examples that
+  need ordinary public DNS/TLS.
 - Keep the canonical runtime origin on the registered vanity alias host.
 - Use SoraFS CID paths only for apps that intentionally publish CID-only
   frontend assets.

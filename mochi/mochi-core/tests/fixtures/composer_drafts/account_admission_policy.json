@@ -1,7 +1,7 @@
 [
   {
     "kind": "account_admission_policy",
-    "domain": "wonderland",
+    "domain": "wonderland.universal",
     "policy": {
       "mode": {
         "mode": "ImplicitReceive"
@@ -9,15 +9,15 @@
       "max_implicit_creations_per_tx": 3,
       "max_implicit_creations_per_block": 10,
       "implicit_creation_fee": {
-        "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        "asset_definition_id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
         "amount": "1",
         "destination": {
           "destination": "Burn"
         }
       },
       "min_initial_amounts": {
-        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM": "5",
-        "5f9QzYSrzikeDsmrBouSTHREggYu": "1"
+        "6pEP9RjNoZ7beWkT3pLfKoM1dyfi": "5",
+        "7juDbiprDn46sQ8YRdmM4VbUMYot": "1"
       },
       "default_role_on_create": "basic_user"
     }

@@ -135,7 +135,10 @@ use iroha_data_model::{
 use iroha_primitives::{
     json::Json,
     numeric::Numeric,
-    soradns::{GatewayHostBindings, derive_gateway_hosts},
+    soradns::{
+        GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
+        derive_gateway_hosts_with_profile,
+    },
 };
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
@@ -463,6 +466,24 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     let bindings = derive_gateway_hosts(&fqdn).map_err(|err| {
         napi::Error::from_reason(format!("failed to derive deterministic hosts: {err}"))
     })?;
+    js_gateway_hosts_from_bindings(&bindings)
+}
+
+/// Derive deterministic `SoraDNS` gateway hosts using a custom pretty suffix.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
+pub fn soradns_derive_gateway_hosts_with_pretty_suffix(
+    fqdn: String,
+    pretty_suffix: String,
+) -> napi::Result<JsGatewayHosts> {
+    let bindings =
+        derive_gateway_hosts_with_profile(&fqdn, GatewayHostProfile::new(&pretty_suffix)).map_err(
+            |err| napi::Error::from_reason(format!("failed to derive deterministic hosts: {err}")),
+        )?;
+    js_gateway_hosts_from_bindings(&bindings)
+}
+
+fn js_gateway_hosts_from_bindings(bindings: &GatewayHostBindings) -> napi::Result<JsGatewayHosts> {
     let host_patterns = bindings
         .host_patterns()
         .into_iter()

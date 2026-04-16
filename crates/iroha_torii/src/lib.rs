@@ -285,6 +285,8 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
+#[cfg(feature = "app_api")]
+use iroha_primitives::soradns::taira_mon_pretty_gateway_suffix;
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
     PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot, uri,
@@ -16949,6 +16951,45 @@ fn rewrite_soradns_public_runtime_headers(
 }
 
 #[cfg(feature = "app_api")]
+fn host_header_without_port(host: &str) -> String {
+    let trimmed = host.trim().trim_end_matches('.');
+    if trimmed.starts_with('[') {
+        return trimmed.to_ascii_lowercase();
+    }
+    trimmed
+        .rsplit_once(':')
+        .and_then(|(name, port)| port.chars().all(|ch| ch.is_ascii_digit()).then_some(name))
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase()
+}
+
+#[cfg(feature = "app_api")]
+fn soradns_alias_from_taira_mon_host(host: &str) -> Option<String> {
+    let normalized_host = host_header_without_port(host);
+    let suffix = taira_mon_pretty_gateway_suffix();
+    let alias = normalized_host.strip_suffix(suffix)?.strip_suffix('.')?;
+    (!alias.is_empty()).then(|| alias.to_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn rewrite_taira_mon_public_runtime_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<HeaderMap, Response> {
+    let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(headers.clone());
+    };
+    let Some(alias) = soradns_alias_from_taira_mon_host(host) else {
+        return Ok(headers.clone());
+    };
+    let resolved = resolve_active_soradns_gateway_host(app, &alias)?;
+    rewrite_soradns_public_runtime_headers(headers, &resolved)
+}
+
+#[cfg(feature = "app_api")]
 async fn execute_soracloud_public_runtime_request(
     app: SharedAppState,
     method: axum::http::Method,
@@ -16957,6 +16998,10 @@ async fn execute_soracloud_public_runtime_request(
     remote_ip: IpAddr,
     body: Bytes,
 ) -> Response {
+    let headers = match rewrite_taira_mon_public_runtime_headers(&app, &headers) {
+        Ok(headers) => headers,
+        Err(response) => return response,
+    };
     let rate_key = limits::key_from_headers(
         &headers,
         Some(remote_ip),
@@ -38194,6 +38239,76 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body")
             .to_bytes();
         assert_eq!(body.as_ref(), b"asset-body");
+
+        let captured = captured_requests.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].request_path, "/app/assets");
+        assert_eq!(captured[0].request_query.as_deref(), Some("fresh=1"));
+        assert_eq!(
+            captured[0].request_headers.get("host").map(String::as_str),
+            Some("portal.sora")
+        );
+    }
+
+    #[tokio::test]
+    async fn taira_mon_gateway_host_routes_local_read_requests() {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-taira-mon-public-runtime"),
+            local_peer_id: None,
+            result: Ok(iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
+                response_bytes: b"mon-asset-body".to_vec(),
+                content_type: Some("text/plain; charset=utf-8".to_owned()),
+                content_encoding: None,
+                cache_control: Some("public, max-age=60".to_owned()),
+                bindings: vec![iroha_core::soracloud_runtime::SoracloudLocalReadBinding {
+                    binding_name: None,
+                    state_key: None,
+                    payload_commitment: None,
+                    artifact_hash: Some(Hash::new(b"mon-asset-hash")),
+                }],
+                result_commitment: Hash::new(b"mon-result"),
+                certified_by:
+                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::StateCommitment,
+                runtime_receipt: None,
+            }),
+            captured_requests: Arc::clone(&captured_requests),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(runtime));
+        bind_domain_name_for_test(&app, "portal.sora");
+        let router = soradns_public_alias_router(app);
+
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/app/assets?fresh=1")
+                    .header(
+                        axum::http::header::HOST,
+                        "portal.sora.mon.taira.sora.org:443",
+                    )
+                    .extension(crate::loopback_connect_info())
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"mon-asset-body");
 
         let captured = captured_requests.lock().expect("capture lock");
         assert_eq!(captured.len(), 1);

@@ -2,6 +2,41 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Mochi local sandbox now completes a detached Ganache-style startup and MCP smoke
+- `mochi/mochi-core/src/{genesis.rs,lib.rs,supervisor.rs,torii.rs}` now keeps
+  the bundled sample asset IDs behind exported helpers, renders local
+  Norito-RPC config with `stage = "ga"` and no mTLS, signs readiness smoke with
+  the primary bundled development signer, submits Norito bytes as
+  `application/x-norito`, and treats `/status` as bare adaptive Norito while
+  keeping `/v1/sumeragi/status` on framed Norito decoding.
+- The readiness smoke now updates metadata on the existing
+  `wonderland.universal` domain instead of attempting SNS-gated domain
+  registration, and commit detection now uses block/event streams plus HTTP
+  status fallback through pipeline/explorer transaction lookups.
+- `mochi/mochi-ui-egui/src/main.rs`, `scripts/mochi_local_sandbox.sh`, and the
+  composer fixtures now derive user-facing sample rose/cabbage IDs from the
+  same genesis helpers, use `wonderland.universal` where the parser requires a
+  fully qualified domain, and keep helper-launched sandboxes alive as detached
+  process groups until `down` sends SIGTERM.
+- `mochi/README.md`, `docs/source/mochi/{quickstart.md,troubleshooting.md}`,
+  and `skills/mochi-local-sandbox/SKILL.md` now document the detached helper
+  lifecycle, stale-session diagnosis, readiness smoke behavior, local MCP URL,
+  and generated Norito-RPC config.
+- Focused validation for this slice:
+  - `bash -n scripts/mochi_local_sandbox.sh`
+  - `git diff --check -- scripts/mochi_local_sandbox.sh mochi/mochi-core/src/torii.rs mochi/mochi-core/src/supervisor.rs mochi/mochi-core/src/genesis.rs mochi/mochi-core/src/lib.rs mochi/mochi-ui-egui/src/main.rs mochi/README.md docs/source/mochi/quickstart.md docs/source/mochi/troubleshooting.md skills/mochi-local-sandbox/SKILL.md`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core status -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core builder_creates_peer_configs -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core --test composer_drafts -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_min_initial_amounts_parses_lines -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_account_admission_policy_builds_policy -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui composer_template_prefills -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo build -p mochi-ui`
+  - Fresh temporary-workspace `scripts/mochi_local_sandbox.sh up/status/env/mcp-add-command/down` run with `MOCHI_CARGO_TARGET_DIR=/tmp/iroha-mochi-run`; the sandbox reached `ready`, printed `codex mcp add mochi-local --url http://127.0.0.1:8080/v1/mcp`, generated MCP/Norito-RPC config, and released ports 8080/1337 after `down`.
+- `python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/mochi-local-sandbox`
+  could not run in this shell because PyYAML is not installed (`ModuleNotFoundError: No module named 'yaml'`).
+
 ## 2026-04-16 Follow-up: `iroha_crypto` secp256k1 default-test build restored
 - `/home/mtakemiya/dev/iroha/crates/iroha_crypto/src/signature/secp256k1.rs`
   now imports `sha2::Digest` unconditionally inside the test module so the

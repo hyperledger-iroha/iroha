@@ -47,8 +47,11 @@ manager; the CLI does not keep a shadow control-plane mirror.
   example:
   - `https://docs.sora/`
   - `https://solswap-indexer.sora/api/indexer/v1/health`
-- For clients that cannot resolve SoraDNS names directly yet, Torii exposes a
-  generic fallback path:
+- For clients that cannot resolve SoraDNS names directly yet, Taira exposes the
+  owned Mon browser gateway:
+  - `https://docs.sora.mon.taira.sora.org/`
+  - `https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`
+- Torii also exposes a legacy generic fallback path:
   - `https://taira.sora.org/soradns/docs.sora/`
   - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 - On Taira, the shared public edge serves that fallback form generically for
@@ -56,7 +59,8 @@ manager; the CLI does not keep a shadow control-plane mirror.
   `https://taira.sora.org/<service>/...`.
 - The `/soradns/<alias>/...` path is a compatibility gateway, not the
   canonical app origin. App manifests, frontend env vars, and release notes
-  should continue to point at the vanity host itself.
+  should continue to point at the vanity host itself; public browser examples
+  for Taira should use the Mon gateway when native SoraDNS is unavailable.
 - The fallback accepts any active registered alias FQDN, not only `.sora`
   names. `.dao`, `.nexus`, and future suffixes follow the same rule.
 
@@ -563,7 +567,8 @@ For Taira-style deployments, keep Torii root bound to Torii itself and use the
 gateway host only as:
 
 - the Torii/control-plane base URL
-- the non-SoraDNS fallback form `https://taira.sora.org/soradns/<alias>/...`
+- the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.org/...`
+- the legacy fallback form `https://taira.sora.org/soradns/<alias>/...`
 - the SoraFS CID gateway for intentionally CID-only frontend assets
 
 Do not replace a stable Soracloud vanity host with a `taira.sora.org` path
