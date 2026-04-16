@@ -1321,8 +1321,10 @@ pub fn build_confidential_transfer_proof_v2(
     let inputs = parse_confidential_transfer_inputs_v2(inputs)?;
     let outputs = parse_confidential_transfer_outputs_v2(outputs)?;
     let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
-    let vk_box =
-        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.trim().to_owned(), vk_bytes.to_vec());
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
     let proof = confidential_v2::build_confidential_transfer_proof_v2(
         &chain_id,
         &asset_definition_id.to_string(),
@@ -1386,8 +1388,10 @@ pub fn build_confidential_unshield_proof_v2(
     let inputs = parse_confidential_unshield_inputs_v2(inputs)?;
     let public_amount = parse_confidential_amount_u128("public_amount", &public_amount)?;
     let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
-    let vk_box =
-        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.trim().to_owned(), vk_bytes.to_vec());
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
     let proof = confidential_v2::build_confidential_unshield_proof_v2(
         &chain_id,
         &asset_definition_id.to_string(),

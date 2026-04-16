@@ -687,8 +687,9 @@ pub mod isi {
         let Some(vk_record) = vk_record else {
             return Ok(());
         };
-        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&vk_record.circuit_id)
-        {
+        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
             return Ok(());
         }
         if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
@@ -737,19 +738,17 @@ pub mod isi {
                 ));
             }
         }
-        let expected_asset_tag =
-            crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-                &transfer.asset().to_string(),
-            );
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &transfer.asset().to_string(),
+        );
         if asset_tag != expected_asset_tag {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential transfer v2 asset tag mismatch".into(),
             ));
         }
-        let expected_chain_tag =
-            crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-                state_transaction.chain_id.as_str(),
-            );
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
         if chain_tag != expected_chain_tag {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential transfer v2 chain tag mismatch".into(),
@@ -767,8 +766,9 @@ pub mod isi {
         let Some(vk_record) = vk_record else {
             return Ok(());
         };
-        if !crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(&vk_record.circuit_id)
-        {
+        if !crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
             return Ok(());
         }
         if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
@@ -814,19 +814,17 @@ pub mod isi {
                 ));
             }
         }
-        let expected_asset_tag =
-            crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-                &unshield.asset().to_string(),
-            );
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &unshield.asset().to_string(),
+        );
         if asset_tag != expected_asset_tag {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v2 asset tag mismatch".into(),
             ));
         }
-        let expected_chain_tag =
-            crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-                state_transaction.chain_id.as_str(),
-            );
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
         if chain_tag != expected_chain_tag {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential unshield v2 chain tag mismatch".into(),
@@ -8140,8 +8138,11 @@ pub mod isi {
             let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
             #[cfg(feature = "telemetry")]
             let root_history_before = st.root_history.len();
-            let new_root =
-                push_confidential_commitment_for_asset(&mut st, *self.note_commitment(), state_transaction)?;
+            let new_root = push_confidential_commitment_for_asset(
+                &mut st,
+                *self.note_commitment(),
+                state_transaction,
+            )?;
             let frontier_update = st.record_frontier_checkpoint(
                 state_transaction.block_height(),
                 state_transaction.zk.tree_frontier_checkpoint_interval,
@@ -8360,11 +8361,8 @@ pub mod isi {
             #[cfg(feature = "telemetry")]
             let appended_outputs = outputs_sorted.len();
             for &commitment in &outputs_sorted {
-                let _ = push_confidential_commitment_for_asset(
-                    &mut st,
-                    commitment,
-                    state_transaction,
-                )?;
+                let _ =
+                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
             }
             let frontier_update = st.record_frontier_checkpoint(
                 state_transaction.block_height(),

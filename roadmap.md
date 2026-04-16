@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 Soracloud CLI output-model duplicates removed):
+the user-reported `iroha_cli` Soracloud compile failure was caused by a stale
+duplicate DTO block in `crates/iroha_cli/src/soracloud.rs`, not by a new
+behavioral regression in the local plan/dev/build workspace flows. The file
+now keeps a single canonical set of output structs for the service and app
+workspace commands, and those structs match the fields the builders already
+emit.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_cli/src/soracloud.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_cli`
+  - `cargo test -p iroha_cli app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script -- --nocapture`
+  - `cargo test -p iroha_cli local_dev_http_service_dry_run_reports_manifest_adjacent_script -- --nocapture`
+- open work after this slice:
+  - rerun the broader workspace validation (`cargo build --workspace` and,
+    when a multi-hour window is available, `cargo test --workspace`) once this
+    Soracloud CLI fix is merged or isolated from unrelated dirty-tree work.
+
 Latest sync (2026-04-16 NPoS liveness and staged mode-cutover harnesses no longer depend on a single submit peer):
 the reported `consensus_and_da` failures were narrowed to test-harness
 submission strategy rather than a new Sumeragi core regression. The NPoS

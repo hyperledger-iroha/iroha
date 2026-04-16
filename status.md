@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: Soracloud CLI output-model duplicates no longer break the local app/service workspace commands
+- `/home/mtakemiya/dev/iroha/crates/iroha_cli/src/soracloud.rs` no longer carries
+  the stale duplicate top-level DTO block that had drifted away from the
+  current Soracloud builders. The canonical
+  `ServiceWorkspaceScriptOutput`,
+  `AppLocalPlanOutput`,
+  `AppLocalWorkspaceScriptsOutput`,
+  `AppLocalDevOutput`,
+  `AppBuildAndSyncOutput`,
+  `AppLocalServicePlanOutput`, and related static-site output types now exist
+  only once and match the fields already emitted by the local plan/dev/build
+  workspace code paths.
+- This fixes the reported `iroha_cli` compile break where the local Soracloud
+  app/service outputs expected fields such as `routes`, `manifest_path`,
+  `doctor`, `release`, `hostname`, `workspace_dir`, and per-service workspace
+  metadata that the stale duplicate structs no longer exposed.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_cli`
+  - `cargo test -p iroha_cli app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script -- --nocapture`
+  - `cargo test -p iroha_cli local_dev_http_service_dry_run_reports_manifest_adjacent_script -- --nocapture`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: NPoS liveness and mode-cutover tests no longer depend on a single flaky submit peer
 - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
   now drives height one block at a time through a connected submit peer

@@ -9,9 +9,7 @@ use halo2_proofs::{
         ff::{Field as _, PrimeField as _},
         pasta::{EqAffine as Curve, Fp as Scalar},
     },
-    plonk::{
-        create_proof, keygen_pk, Circuit, ConstraintSystem, Error as PlonkError, Selector,
-    },
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk},
     poly::{
         Rotation,
         ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
@@ -109,8 +107,17 @@ pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
 
 pub fn parse_transfer_public_inputs(
     proof_bytes: &[u8],
-) -> Result<([[u8; 32]; 2], [[u8; 32]; 2], [[u8; 32]; 2], [u8; 32], [u8; 32], [u8; 32]), String>
-{
+) -> Result<
+    (
+        [[u8; 32]; 2],
+        [[u8; 32]; 2],
+        [[u8; 32]; 2],
+        [u8; 32],
+        [u8; 32],
+        [u8; 32],
+    ),
+    String,
+> {
     let columns = extract_confidential_public_columns(proof_bytes)
         .ok_or_else(|| "failed to decode transfer proof public inputs".to_owned())?;
     if columns.len() < 9 || columns.iter().take(9).any(|column| column.len() != 1) {
@@ -128,7 +135,17 @@ pub fn parse_transfer_public_inputs(
 
 pub fn parse_unshield_public_inputs(
     proof_bytes: &[u8],
-) -> Result<([[u8; 32]; 2], [[u8; 32]; 2], [u8; 32], [u8; 32], [u8; 32], [u8; 32]), String> {
+) -> Result<
+    (
+        [[u8; 32]; 2],
+        [[u8; 32]; 2],
+        [u8; 32],
+        [u8; 32],
+        [u8; 32],
+        [u8; 32],
+    ),
+    String,
+> {
     let columns = extract_confidential_public_columns(proof_bytes)
         .ok_or_else(|| "failed to decode unshield proof public inputs".to_owned())?;
     if columns.len() < 8 || columns.iter().take(8).any(|column| column.len() != 1) {
@@ -150,9 +167,11 @@ fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8
             BackendTag::Halo2IpaPasta => {
                 super::extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
             }
-            BackendTag::Stark => norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-                .ok()
-                .map(|proof| proof.public_inputs),
+            BackendTag::Stark => {
+                norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+                    .ok()
+                    .map(|proof| proof.public_inputs)
+            }
             _ => None,
         };
     }
@@ -219,7 +238,10 @@ fn note_commitment_scalar(
     owner_tag: Scalar,
     asset_tag: Scalar,
 ) -> Scalar {
-    poseidon_pair(amount, poseidon_pair(rho, poseidon_pair(owner_tag, asset_tag)))
+    poseidon_pair(
+        amount,
+        poseidon_pair(rho, poseidon_pair(owner_tag, asset_tag)),
+    )
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -262,8 +284,8 @@ pub fn derive_confidential_note_v2(
     rho: [u8; 32],
     owner_tag: [u8; 32],
 ) -> Result<[u8; 32], String> {
-    let owner_tag_scalar =
-        scalar_from_repr(owner_tag).ok_or_else(|| "owner_tag must be a canonical Pasta scalar".to_owned())?;
+    let owner_tag_scalar = scalar_from_repr(owner_tag)
+        .ok_or_else(|| "owner_tag must be a canonical Pasta scalar".to_owned())?;
     let asset_tag_scalar =
         scalar_from_repr(derive_confidential_asset_tag_v2(asset_definition_id)).expect("asset tag");
     let rho_scalar = hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&rho]);
@@ -362,7 +384,11 @@ pub fn compute_confidential_merkle_path_v2(
         } else {
             current_index - 1
         };
-        let direction = if current_index.is_multiple_of(2) { 0 } else { 1 };
+        let direction = if current_index.is_multiple_of(2) {
+            0
+        } else {
+            1
+        };
         let lhs = if direction == 0 {
             layer[current_index]
         } else {
@@ -519,18 +545,18 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                         poseidon_pair_expr(rho, poseidon_pair_expr(owner_tag, asset_tag.clone())),
                     )
                 };
-            let nullifier_expr =
-                |rho: halo2_proofs::plonk::Expression<Scalar>| {
+            let nullifier_expr = |rho: halo2_proofs::plonk::Expression<Scalar>| {
+                poseidon_pair_expr(
+                    sk.clone(),
                     poseidon_pair_expr(
-                        sk.clone(),
-                        poseidon_pair_expr(
-                            rho,
-                            poseidon_pair_expr(asset_tag.clone(), chain_tag.clone()),
-                        ),
-                    )
-                };
+                        rho,
+                        poseidon_pair_expr(asset_tag.clone(), chain_tag.clone()),
+                    ),
+                )
+            };
             let owner_tag = poseidon_pair_expr(sk.clone(), one.clone());
-            let in0_commit_expr = note_commit_expr(in0_amt.clone(), in0_rho.clone(), owner_tag.clone());
+            let in0_commit_expr =
+                note_commit_expr(in0_amt.clone(), in0_rho.clone(), owner_tag.clone());
             let in1_commit_raw = note_commit_expr(in1_amt.clone(), in1_rho.clone(), owner_tag);
             let out0_commit_expr = note_commit_expr(out0_amt.clone(), out0_rho.clone(), out0_owner);
             let out1_commit_raw = note_commit_expr(out1_amt.clone(), out1_rho.clone(), out1_owner);
@@ -554,9 +580,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                 let sibling = meta.query_advice(input_0_siblings[i], Rotation::cur());
                 let direction = meta.query_advice(input_0_directions[i], Rotation::cur());
                 let witness = meta.query_advice(input_0_witness_nodes[i], Rotation::cur());
-                constraints.push(
-                    enabled.clone() * direction.clone() * (direction.clone() - one.clone()),
-                );
+                constraints
+                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
                 let forward = poseidon_pair_expr(input_0_prev.clone(), sibling.clone());
                 let reverse = poseidon_pair_expr(sibling, input_0_prev.clone());
                 constraints.push(
@@ -572,9 +597,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
                 let sibling = meta.query_advice(input_1_siblings[i], Rotation::cur());
                 let direction = meta.query_advice(input_1_directions[i], Rotation::cur());
                 let witness = meta.query_advice(input_1_witness_nodes[i], Rotation::cur());
-                constraints.push(
-                    enabled.clone() * direction.clone() * (direction.clone() - one.clone()),
-                );
+                constraints
+                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
                 let forward = poseidon_pair_expr(input_1_prev.clone(), sibling.clone());
                 let reverse = poseidon_pair_expr(sibling, input_1_prev.clone());
                 constraints.push(
@@ -614,7 +638,11 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
     }
 
     #[allow(clippy::too_many_lines)]
-    fn synthesize(&self, cfg: Self::Config, mut layouter: impl Layouter<Scalar>) -> Result<(), PlonkError> {
+    fn synthesize(
+        &self,
+        cfg: Self::Config,
+        mut layouter: impl Layouter<Scalar>,
+    ) -> Result<(), PlonkError> {
         let (
             include_input_1,
             include_output_1,
@@ -644,91 +672,214 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
             |mut region| {
                 selector.enable(&mut region, 0)?;
                 let scalar_or_unknown = |value: Option<[u8; 32]>| {
-                    value.and_then(scalar_from_repr).map_or(Value::unknown(), Value::known)
-                };
-                let amount_or_unknown = |value: Option<u128>| {
-                    value.map(scalar_from_u128).map_or(Value::unknown(), Value::known)
-                };
-                let bool_or_unknown = |value: Option<bool>| {
-                    value.map(|flag| if flag { Scalar::ONE } else { Scalar::ZERO })
+                    value
+                        .and_then(scalar_from_repr)
                         .map_or(Value::unknown(), Value::known)
                 };
-                super::assign_advice_compat(&mut region, || "include_input_1", include_input_1, 0, || {
-                    bool_or_unknown(witness.as_ref().map(|value| value.include_input_1))
-                })?;
-                super::assign_advice_compat(&mut region, || "include_output_1", include_output_1, 0, || {
-                    bool_or_unknown(witness.as_ref().map(|value| value.include_output_1))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_0_amount", input_0_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.input_0_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_1_amount", input_1_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.input_1_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_0_amount", output_0_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.output_0_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_1_amount", output_1_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.output_1_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_0_rho", input_0_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.input_0_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_1_rho", input_1_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.input_1_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_0_rho", output_0_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.output_0_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_1_rho", output_1_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.output_1_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "spend_scalar", spend_scalar, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_0_owner_tag", output_0_owner_tag, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| value.output_0_owner_tag))
-                })?;
-                super::assign_advice_compat(&mut region, || "output_1_owner_tag", output_1_owner_tag, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| value.output_1_owner_tag))
-                })?;
+                let amount_or_unknown = |value: Option<u128>| {
+                    value
+                        .map(scalar_from_u128)
+                        .map_or(Value::unknown(), Value::known)
+                };
+                let bool_or_unknown = |value: Option<bool>| {
+                    value
+                        .map(|flag| if flag { Scalar::ONE } else { Scalar::ZERO })
+                        .map_or(Value::unknown(), Value::known)
+                };
+                super::assign_advice_compat(
+                    &mut region,
+                    || "include_input_1",
+                    include_input_1,
+                    0,
+                    || bool_or_unknown(witness.as_ref().map(|value| value.include_input_1)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "include_output_1",
+                    include_output_1,
+                    0,
+                    || bool_or_unknown(witness.as_ref().map(|value| value.include_output_1)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_amount",
+                    input_0_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.input_0_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_amount",
+                    input_1_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.input_1_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_0_amount",
+                    output_0_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.output_0_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_1_amount",
+                    output_1_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.output_1_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_rho",
+                    input_0_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.input_0_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_rho",
+                    input_1_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.input_1_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_0_rho",
+                    output_0_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.output_0_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_1_rho",
+                    output_1_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.output_1_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "spend_scalar",
+                    spend_scalar,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_0_owner_tag",
+                    output_0_owner_tag,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.output_0_owner_tag)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "output_1_owner_tag",
+                    output_1_owner_tag,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.output_1_owner_tag)),
+                )?;
                 for index in 0..DEPTH {
-                    super::assign_advice_compat(&mut region, || format!("input_0_sibling_{index}"), input_0_siblings[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_0_path.siblings.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_0_direction_{index}"), input_0_directions[index], 0, || {
-                        witness.as_ref()
-                            .and_then(|value| value.input_0_path.directions.get(index).copied())
-                            .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                            .map_or(Value::unknown(), Value::known)
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_0_witness_{index}"), input_0_witness_nodes[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_0_path.witness_nodes.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_sibling_{index}"), input_1_siblings[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_1_path.siblings.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_direction_{index}"), input_1_directions[index], 0, || {
-                        witness.as_ref()
-                            .and_then(|value| value.input_1_path.directions.get(index).copied())
-                            .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                            .map_or(Value::unknown(), Value::known)
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_witness_{index}"), input_1_witness_nodes[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_1_path.witness_nodes.get(index).copied()))
-                    })?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_sibling_{index}"),
+                        input_0_siblings[index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness.as_ref().and_then(|value| {
+                                    value.input_0_path.siblings.get(index).copied()
+                                }),
+                            )
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_direction_{index}"),
+                        input_0_directions[index],
+                        0,
+                        || {
+                            witness
+                                .as_ref()
+                                .and_then(|value| value.input_0_path.directions.get(index).copied())
+                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
+                                .map_or(Value::unknown(), Value::known)
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_witness_{index}"),
+                        input_0_witness_nodes[index],
+                        0,
+                        || {
+                            scalar_or_unknown(witness.as_ref().and_then(|value| {
+                                value.input_0_path.witness_nodes.get(index).copied()
+                            }))
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_sibling_{index}"),
+                        input_1_siblings[index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness.as_ref().and_then(|value| {
+                                    value.input_1_path.siblings.get(index).copied()
+                                }),
+                            )
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_direction_{index}"),
+                        input_1_directions[index],
+                        0,
+                        || {
+                            witness
+                                .as_ref()
+                                .and_then(|value| value.input_1_path.directions.get(index).copied())
+                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
+                                .map_or(Value::unknown(), Value::known)
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_witness_{index}"),
+                        input_1_witness_nodes[index],
+                        0,
+                        || {
+                            scalar_or_unknown(witness.as_ref().and_then(|value| {
+                                value.input_1_path.witness_nodes.get(index).copied()
+                            }))
+                        },
+                    )?;
                 }
                 Ok(())
             },
@@ -832,19 +983,21 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                  rho: halo2_proofs::plonk::Expression<Scalar>| {
                     poseidon_pair_expr(
                         amount,
-                        poseidon_pair_expr(rho, poseidon_pair_expr(owner_tag.clone(), asset_tag.clone())),
-                    )
-                };
-            let nullifier_expr =
-                |rho: halo2_proofs::plonk::Expression<Scalar>| {
-                    poseidon_pair_expr(
-                        sk.clone(),
                         poseidon_pair_expr(
                             rho,
-                            poseidon_pair_expr(asset_tag.clone(), chain_tag.clone()),
+                            poseidon_pair_expr(owner_tag.clone(), asset_tag.clone()),
                         ),
                     )
                 };
+            let nullifier_expr = |rho: halo2_proofs::plonk::Expression<Scalar>| {
+                poseidon_pair_expr(
+                    sk.clone(),
+                    poseidon_pair_expr(
+                        rho,
+                        poseidon_pair_expr(asset_tag.clone(), chain_tag.clone()),
+                    ),
+                )
+            };
             let in0_commit_expr = note_commit_expr(in0_amt.clone(), in0_rho.clone());
             let in1_commit_raw = note_commit_expr(in1_amt.clone(), in1_rho.clone());
             let nf0_expr = nullifier_expr(in0_rho.clone());
@@ -852,7 +1005,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
             let mut constraints = vec![
                 enabled.clone() * in1_present.clone() * (in1_present.clone() - one.clone()),
                 enabled.clone()
-                    * (in0_amt.clone() + in1_present.clone() * in1_amt.clone() - public_amount.clone()),
+                    * (in0_amt.clone() + in1_present.clone() * in1_amt.clone()
+                        - public_amount.clone()),
                 enabled.clone() * (in0_commit_expr.clone() - cm_in0.clone()),
                 enabled.clone() * (cm_in1.clone() - in1_present.clone() * in1_commit_raw),
                 enabled.clone() * (nf0_expr - nf0.clone()),
@@ -863,9 +1017,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                 let sibling = meta.query_advice(input_0_siblings[i], Rotation::cur());
                 let direction = meta.query_advice(input_0_directions[i], Rotation::cur());
                 let witness = meta.query_advice(input_0_witness_nodes[i], Rotation::cur());
-                constraints.push(
-                    enabled.clone() * direction.clone() * (direction.clone() - one.clone()),
-                );
+                constraints
+                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
                 let forward = poseidon_pair_expr(input_0_prev.clone(), sibling.clone());
                 let reverse = poseidon_pair_expr(sibling, input_0_prev.clone());
                 constraints.push(
@@ -881,9 +1034,8 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
                 let sibling = meta.query_advice(input_1_siblings[i], Rotation::cur());
                 let direction = meta.query_advice(input_1_directions[i], Rotation::cur());
                 let witness = meta.query_advice(input_1_witness_nodes[i], Rotation::cur());
-                constraints.push(
-                    enabled.clone() * direction.clone() * (direction.clone() - one.clone()),
-                );
+                constraints
+                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
                 let forward = poseidon_pair_expr(input_1_prev.clone(), sibling.clone());
                 let reverse = poseidon_pair_expr(sibling, input_1_prev.clone());
                 constraints.push(
@@ -915,7 +1067,11 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
     }
 
     #[allow(clippy::too_many_lines)]
-    fn synthesize(&self, cfg: Self::Config, mut layouter: impl Layouter<Scalar>) -> Result<(), PlonkError> {
+    fn synthesize(
+        &self,
+        cfg: Self::Config,
+        mut layouter: impl Layouter<Scalar>,
+    ) -> Result<(), PlonkError> {
         let (
             include_input_1,
             input_0_amount,
@@ -938,63 +1094,157 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV2<DEPTH
             |mut region| {
                 selector.enable(&mut region, 0)?;
                 let scalar_or_unknown = |value: Option<[u8; 32]>| {
-                    value.and_then(scalar_from_repr).map_or(Value::unknown(), Value::known)
+                    value
+                        .and_then(scalar_from_repr)
+                        .map_or(Value::unknown(), Value::known)
                 };
                 let amount_or_unknown = |value: Option<u128>| {
-                    value.map(scalar_from_u128).map_or(Value::unknown(), Value::known)
-                };
-                super::assign_advice_compat(&mut region, || "include_input_1", include_input_1, 0, || {
-                    witness
-                        .as_ref()
-                        .map(|value| if value.include_input_1 { Scalar::ONE } else { Scalar::ZERO })
+                    value
+                        .map(scalar_from_u128)
                         .map_or(Value::unknown(), Value::known)
-                })?;
-                super::assign_advice_compat(&mut region, || "input_0_amount", input_0_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.input_0_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_1_amount", input_1_amount, 0, || {
-                    amount_or_unknown(witness.as_ref().map(|value| value.input_1_amount))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_0_rho", input_0_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.input_0_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "input_1_rho", input_1_rho, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| scalar_to_repr_bytes(hash_to_scalar(
-                        b"iroha.confidential.v2.note_rho",
-                        &[&value.input_1_rho],
-                    ))))
-                })?;
-                super::assign_advice_compat(&mut region, || "spend_scalar", spend_scalar, 0, || {
-                    scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar))
-                })?;
+                };
+                super::assign_advice_compat(
+                    &mut region,
+                    || "include_input_1",
+                    include_input_1,
+                    0,
+                    || {
+                        witness
+                            .as_ref()
+                            .map(|value| {
+                                if value.include_input_1 {
+                                    Scalar::ONE
+                                } else {
+                                    Scalar::ZERO
+                                }
+                            })
+                            .map_or(Value::unknown(), Value::known)
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_amount",
+                    input_0_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.input_0_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_amount",
+                    input_1_amount,
+                    0,
+                    || amount_or_unknown(witness.as_ref().map(|value| value.input_1_amount)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_0_rho",
+                    input_0_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.input_0_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "input_1_rho",
+                    input_1_rho,
+                    0,
+                    || {
+                        scalar_or_unknown(witness.as_ref().map(|value| {
+                            scalar_to_repr_bytes(hash_to_scalar(
+                                b"iroha.confidential.v2.note_rho",
+                                &[&value.input_1_rho],
+                            ))
+                        }))
+                    },
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "spend_scalar",
+                    spend_scalar,
+                    0,
+                    || scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar)),
+                )?;
                 for index in 0..DEPTH {
-                    super::assign_advice_compat(&mut region, || format!("input_0_sibling_{index}"), input_0_siblings[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_0_path.siblings.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_0_direction_{index}"), input_0_directions[index], 0, || {
-                        witness.as_ref()
-                            .and_then(|value| value.input_0_path.directions.get(index).copied())
-                            .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                            .map_or(Value::unknown(), Value::known)
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_0_witness_{index}"), input_0_witness_nodes[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_0_path.witness_nodes.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_sibling_{index}"), input_1_siblings[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_1_path.siblings.get(index).copied()))
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_direction_{index}"), input_1_directions[index], 0, || {
-                        witness.as_ref()
-                            .and_then(|value| value.input_1_path.directions.get(index).copied())
-                            .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                            .map_or(Value::unknown(), Value::known)
-                    })?;
-                    super::assign_advice_compat(&mut region, || format!("input_1_witness_{index}"), input_1_witness_nodes[index], 0, || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| value.input_1_path.witness_nodes.get(index).copied()))
-                    })?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_sibling_{index}"),
+                        input_0_siblings[index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness.as_ref().and_then(|value| {
+                                    value.input_0_path.siblings.get(index).copied()
+                                }),
+                            )
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_direction_{index}"),
+                        input_0_directions[index],
+                        0,
+                        || {
+                            witness
+                                .as_ref()
+                                .and_then(|value| value.input_0_path.directions.get(index).copied())
+                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
+                                .map_or(Value::unknown(), Value::known)
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_0_witness_{index}"),
+                        input_0_witness_nodes[index],
+                        0,
+                        || {
+                            scalar_or_unknown(witness.as_ref().and_then(|value| {
+                                value.input_0_path.witness_nodes.get(index).copied()
+                            }))
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_sibling_{index}"),
+                        input_1_siblings[index],
+                        0,
+                        || {
+                            scalar_or_unknown(
+                                witness.as_ref().and_then(|value| {
+                                    value.input_1_path.siblings.get(index).copied()
+                                }),
+                            )
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_direction_{index}"),
+                        input_1_directions[index],
+                        0,
+                        || {
+                            witness
+                                .as_ref()
+                                .and_then(|value| value.input_1_path.directions.get(index).copied())
+                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
+                                .map_or(Value::unknown(), Value::known)
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("input_1_witness_{index}"),
+                        input_1_witness_nodes[index],
+                        0,
+                        || {
+                            scalar_or_unknown(witness.as_ref().and_then(|value| {
+                                value.input_1_path.witness_nodes.get(index).copied()
+                            }))
+                        },
+                    )?;
                 }
                 Ok(())
             },
@@ -1017,12 +1267,12 @@ fn parse_vk_for_transfer(
     }
     let params = super::zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed =
-        super::zkparse::vk_from_bytes::<ConfidentialTransferCircuitV2<CONFIDENTIAL_TREE_DEPTH_V2>>(
-            vk_box.bytes.as_slice(),
-            &params,
-        )
-        .ok_or_else(|| "missing/invalid H2VK payload for confidential transfer verifying key".to_owned())?;
+    let parsed = super::zkparse::vk_from_bytes::<
+        ConfidentialTransferCircuitV2<CONFIDENTIAL_TREE_DEPTH_V2>,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for confidential transfer verifying key".to_owned()
+    })?;
     Ok((params, parsed))
 }
 
@@ -1041,12 +1291,12 @@ fn parse_vk_for_unshield(
     }
     let params = super::zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed =
-        super::zkparse::vk_from_bytes::<ConfidentialUnshieldCircuitV2<CONFIDENTIAL_TREE_DEPTH_V2>>(
-            vk_box.bytes.as_slice(),
-            &params,
-        )
-        .ok_or_else(|| "missing/invalid H2VK payload for confidential unshield verifying key".to_owned())?;
+    let parsed = super::zkparse::vk_from_bytes::<
+        ConfidentialUnshieldCircuitV2<CONFIDENTIAL_TREE_DEPTH_V2>,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for confidential unshield verifying key".to_owned()
+    })?;
     Ok((params, parsed))
 }
 
@@ -1072,7 +1322,10 @@ fn encode_halo2_envelope(
     };
     let encoded = norito::to_bytes(&envelope)
         .map_err(|err| format!("failed to encode confidential proof envelope: {err}"))?;
-    Ok(ProofBox::new(super::ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
+    Ok(ProofBox::new(
+        super::ZK_BACKEND_HALO2_IPA.to_owned(),
+        encoded,
+    ))
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -1113,12 +1366,8 @@ pub fn build_confidential_transfer_proof_v2(
         .cloned()
         .ok_or_else(|| "missing transfer output".to_owned())?;
     let output_1 = outputs.get(1).cloned();
-    let input_0_commitment = derive_confidential_note_v2(
-        asset_definition_id,
-        input_0.amount,
-        input_0.rho,
-        owner_tag,
-    )?;
+    let input_0_commitment =
+        derive_confidential_note_v2(asset_definition_id, input_0.amount, input_0.rho, owner_tag)?;
     let input_1_commitment = if let Some(note) = input_1.as_ref() {
         derive_confidential_note_v2(asset_definition_id, note.amount, note.rho, owner_tag)?
     } else {
@@ -1162,10 +1411,19 @@ pub fn build_confidential_transfer_proof_v2(
     } else {
         [0u8; 32]
     };
-    let nullifier_0 =
-        derive_confidential_nullifier_v2(chain_id.as_str(), asset_definition_id, spend_key, input_0.rho);
+    let nullifier_0 = derive_confidential_nullifier_v2(
+        chain_id.as_str(),
+        asset_definition_id,
+        spend_key,
+        input_0.rho,
+    );
     let nullifier_1 = input_1.as_ref().map_or([0u8; 32], |note| {
-        derive_confidential_nullifier_v2(chain_id.as_str(), asset_definition_id, spend_key, note.rho)
+        derive_confidential_nullifier_v2(
+            chain_id.as_str(),
+            asset_definition_id,
+            spend_key,
+            note.rho,
+        )
     });
     let witness = ConfidentialTransferWitnessV2 {
         include_input_1: input_1.is_some(),
@@ -1194,7 +1452,10 @@ pub fn build_confidential_transfer_proof_v2(
         vec![scalar_from_repr(nullifier_1).unwrap_or(Scalar::ZERO)],
         vec![scalar_from_repr(output_0_commitment).expect("v2 commitment scalar")],
         vec![scalar_from_repr(output_1_commitment).unwrap_or(Scalar::ZERO)],
-        vec![scalar_from_repr(root_hint).ok_or_else(|| "root_hint must be a canonical Pasta scalar".to_owned())?],
+        vec![
+            scalar_from_repr(root_hint)
+                .ok_or_else(|| "root_hint must be a canonical Pasta scalar".to_owned())?,
+        ],
         vec![scalar_from_repr(asset_tag).expect("asset tag scalar")],
         vec![scalar_from_repr(chain_tag).expect("chain tag scalar")],
     ];
@@ -1269,12 +1530,8 @@ pub fn build_confidential_unshield_proof_v2(
         .cloned()
         .ok_or_else(|| "missing unshield input".to_owned())?;
     let input_1 = inputs.get(1).cloned();
-    let input_0_commitment = derive_confidential_note_v2(
-        asset_definition_id,
-        input_0.amount,
-        input_0.rho,
-        owner_tag,
-    )?;
+    let input_0_commitment =
+        derive_confidential_note_v2(asset_definition_id, input_0.amount, input_0.rho, owner_tag)?;
     let input_1_commitment = if let Some(note) = input_1.as_ref() {
         derive_confidential_note_v2(asset_definition_id, note.amount, note.rho, owner_tag)?
     } else {
@@ -1307,10 +1564,19 @@ pub fn build_confidential_unshield_proof_v2(
     if input_0_path.root != root_hint || input_1_path.root != root_hint {
         return Err("computed confidential Merkle path does not match root_hint".to_owned());
     }
-    let nullifier_0 =
-        derive_confidential_nullifier_v2(chain_id.as_str(), asset_definition_id, spend_key, input_0.rho);
+    let nullifier_0 = derive_confidential_nullifier_v2(
+        chain_id.as_str(),
+        asset_definition_id,
+        spend_key,
+        input_0.rho,
+    );
     let nullifier_1 = input_1.as_ref().map_or([0u8; 32], |note| {
-        derive_confidential_nullifier_v2(chain_id.as_str(), asset_definition_id, spend_key, note.rho)
+        derive_confidential_nullifier_v2(
+            chain_id.as_str(),
+            asset_definition_id,
+            spend_key,
+            note.rho,
+        )
     });
     let witness = ConfidentialUnshieldWitnessV2 {
         include_input_1: input_1.is_some(),
@@ -1330,7 +1596,10 @@ pub fn build_confidential_unshield_proof_v2(
         vec![scalar_from_repr(input_1_commitment).unwrap_or(Scalar::ZERO)],
         vec![scalar_from_repr(nullifier_0).expect("nullifier scalar")],
         vec![scalar_from_repr(nullifier_1).unwrap_or(Scalar::ZERO)],
-        vec![scalar_from_repr(root_hint).ok_or_else(|| "root_hint must be a canonical Pasta scalar".to_owned())?],
+        vec![
+            scalar_from_repr(root_hint)
+                .ok_or_else(|| "root_hint must be a canonical Pasta scalar".to_owned())?,
+        ],
         vec![scalar_from_u128(public_amount)],
         vec![scalar_from_repr(asset_tag).expect("asset tag scalar")],
         vec![scalar_from_repr(chain_tag).expect("chain tag scalar")],
