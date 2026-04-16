@@ -9371,6 +9371,46 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
+        circuit_id if confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id) => {
+            if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                confidential_v2::ConfidentialTransferCircuitV2::<
+                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+                >::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
+        circuit_id if confidential_v2::is_confidential_unshield_v2_circuit_id(circuit_id) => {
+            if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                confidential_v2::ConfidentialUnshieldCircuitV2::<
+                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+                >::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
         "halo2/pasta/anon-transfer-2x2" => {
             // Instances: 5 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf], 1 row
             if col_refs.len() < 5 {

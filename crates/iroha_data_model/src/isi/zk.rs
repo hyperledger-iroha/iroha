@@ -339,7 +339,15 @@ impl Unshield {
         proof: crate::proof::ProofAttachment,
         root_hint: Option<[u8; 32]>,
     ) -> Self {
-        Self::new_with_outputs(asset, to, public_amount, inputs, Vec::new(), proof, root_hint)
+        Self::new_with_outputs(
+            asset,
+            to,
+            public_amount,
+            inputs,
+            Vec::new(),
+            proof,
+            root_hint,
+        )
     }
 
     /// Construct a new Unshield instruction with explicit private change outputs.

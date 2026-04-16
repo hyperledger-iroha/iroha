@@ -11054,15 +11054,13 @@ fn torii_target_account_routes(
 ) -> Result<Vec<RoutingDecision>, Response> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let account_scope = world
-        .account_scope_entry(account_id)
-        .map_err(|error| {
-            torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "account_scope_unavailable",
-                format!("failed to resolve account scope for {account_id}: {error}"),
-            )
-        })?;
+    let account_scope = world.account_scope_entry(account_id).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "account_scope_unavailable",
+            format!("failed to resolve account scope for {account_id}: {error}"),
+        )
+    })?;
 
     let dataspaces: BTreeSet<_> = account_scope.map_or_else(
         || {
@@ -11877,10 +11875,14 @@ fn target_account_iterable_query(
 }
 
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::query::{QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions};
+    use iroha_data_model::query::{
+        QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions,
+    };
 
     if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box) {
+        if let Some(erased) =
+            iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box)
+        {
             return payload_matches_query::<FindTransactions>(erased.payload());
         }
         return false;
@@ -11889,7 +11891,9 @@ fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWith
     query
         .fast_dsl_parts()
         .is_some_and(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::CommittedTransaction => payload_matches_query::<FindTransactions>(payload),
+            QueryItemKind::CommittedTransaction => {
+                payload_matches_query::<FindTransactions>(payload)
+            }
             _ => false,
         })
 }

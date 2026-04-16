@@ -319,6 +319,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
     tools.push(iroha_contracts_deploy_tool());
+    tools.push(iroha_contracts_deploy_bundle_tool());
+    tools.push(iroha_contracts_deploy_bundles_get_tool());
     tools.push(iroha_contracts_call_tool());
     tools.push(iroha_contracts_call_and_wait_tool());
     tools.push(iroha_contracts_state_get_tool());
@@ -1271,6 +1273,20 @@ async fn handle_tools_call(
         }
         "iroha.contracts.deploy" => {
             match dispatch_iroha_contracts_deploy(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.contracts.deploy_bundle" => {
+            match dispatch_iroha_contracts_deploy_bundle(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.contracts.deploy_bundles.get" => {
+            match dispatch_iroha_contracts_deploy_bundles_get(&app, inbound_headers, &arguments)
+                .await
+            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4660,6 +4676,63 @@ async fn dispatch_iroha_contracts_deploy(
     dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/deploy").await
 }
 
+async fn dispatch_iroha_contracts_deploy_bundle(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(
+        arguments,
+        &["body", "headers", "accept", "query", "dry_run"],
+    )?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    let query = deploy_bundle_query(arguments)?;
+    let route = append_query("/v1/contracts/deploy-bundle".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_contracts_deploy_bundles_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let bundle_digest = extract_bundle_digest_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("bundle_digest".into(), Value::String(bundle_digest));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        "/v1/contracts/deploy-bundles/{bundle_digest}",
+        Some(&path_value),
+    )?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_contracts_call(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -7081,6 +7154,43 @@ fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
         .ok_or_else(|| {
             "`code_hash` is required (provide `code_hash`, `hash`, or `path.code_hash`)".to_owned()
         })
+}
+
+fn extract_bundle_digest_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(bundle_digest) = path.get("bundle_digest").and_then(Value::as_str) {
+            return Ok(bundle_digest.to_owned());
+        }
+    }
+    arguments
+        .get("bundle_digest")
+        .or_else(|| arguments.get("digest"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`bundle_digest` is required (provide `bundle_digest`, `digest`, or `path.bundle_digest`)".to_owned()
+        })
+}
+
+fn deploy_bundle_query(arguments: &Map) -> Result<Option<Value>, String> {
+    let mut query = Map::new();
+    if let Some(raw_query) = arguments.get("query") {
+        let raw_query = raw_query
+            .as_object()
+            .ok_or_else(|| "`query` must be an object".to_owned())?;
+        if let Some(dry_run) = raw_query.get("dry_run") {
+            query.insert("dry_run".to_owned(), dry_run.clone());
+        }
+    } else if let Some(dry_run) = arguments.get("dry_run") {
+        query.insert("dry_run".to_owned(), dry_run.clone());
+    }
+    if query.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Value::Object(query)))
 }
 
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
@@ -10249,6 +10359,80 @@ fn iroha_contracts_deploy_tool() -> ToolSpec {
     )
 }
 
+fn iroha_contracts_deploy_bundle_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.contracts.deploy_bundle".to_owned(),
+        description:
+            "Deploy a contract bundle (`/v1/contracts/deploy-bundle`; set `dry_run=true` for planning)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/contracts/deploy-bundle".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw DeployContractBundleDto payload. If provided, it takes precedence over flat top-level bundle fields."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Convenience shortcut for `?dry_run=true`."
+                },
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Optional query object. Only `dry_run` is forwarded by this curated alias."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_contracts_deploy_bundles_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.contracts.deploy_bundles.get".to_owned(),
+        description:
+            "Fetch a persisted contract deploy-bundle receipt (`bundle_digest` shortcut supported)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/contracts/deploy-bundles/{bundle_digest}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bundle_digest": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.bundle_digest`."
+                },
+                "digest": {
+                    "type": "string",
+                    "description": "Alias for `bundle_digest`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["bundle_digest"],
+                    "properties": {
+                        "bundle_digest": { "type": "string" }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.call",
@@ -13399,6 +13583,16 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.contracts.deploy")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.contracts.deploy_bundle")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.contracts.deploy_bundles.get")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.contracts.call"));
         assert!(
