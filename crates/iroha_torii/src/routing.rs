@@ -30458,6 +30458,8 @@ pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
 #[cfg(feature = "app_api")]
+const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/multisig/approve";
@@ -51965,8 +51967,21 @@ fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
     }
     let bytes =
         hex::decode(trimmed).map_err(|_| confidential_invalid_request("invalid signed_tx_hex"))?;
-    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
-        .map_err(|_| confidential_invalid_request("invalid signed transaction bytes"))
+    if let Ok(tx) =
+        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
+    {
+        return Ok(tx);
+    }
+    if let Ok(TransactionEntrypoint::External(tx)) =
+        <TransactionEntrypoint as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+            &bytes,
+        )
+    {
+        return Ok(tx);
+    }
+    Err(confidential_invalid_request(
+        "invalid signed transaction bytes",
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -52114,7 +52129,7 @@ pub async fn handle_v1_confidential_relay_submit(
     if let Some(attachments) = source_tx.attachments().cloned() {
         builder = builder.with_attachments(attachments);
     }
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52374,7 +52389,7 @@ pub async fn handle_v1_accounts_onboard(
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
         .with_instructions(instructions);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52530,7 +52545,7 @@ pub async fn handle_v1_accounts_faucet(
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
         .with_instructions(instructions);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&faucet.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52693,7 +52708,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             InstructionBox::from(register),
             InstructionBox::from(bind_alias),
         ]);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
