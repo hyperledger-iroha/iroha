@@ -49,7 +49,7 @@ use iroha::da::{
 use iroha_core::zk::{
     confidential_v2::{
         self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2,
-        ConfidentialUnshieldInputV2,
+        ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
     },
     hash_vk as hash_verifying_key_box,
     test_utils::halo2_fixture_envelope,
@@ -1407,6 +1407,76 @@ pub fn build_confidential_unshield_proof_v2(
     Ok(JsConfidentialUnshieldProofEnvelopeV2 {
         nullifiers: proof
             .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
+    })
+}
+
+/// Build a confidential unshield v3 proof envelope with optional private change.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_unshield_proof_v3(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    outputs: Vec<JsConfidentialUnshieldOutputV3>,
+    public_amount: String,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV3> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_unshield_inputs_v2(inputs)?;
+    let outputs = parse_confidential_unshield_outputs_v3(outputs)?;
+    let public_amount = parse_confidential_amount_u128("public_amount", &public_amount)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
+    let proof = confidential_v2::build_confidential_unshield_proof_v3(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialUnshieldProofEnvelopeV3 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        output_commitments: proof
+            .output_commitments
             .into_iter()
             .map(|entry| Buffer::from(entry.to_vec()))
             .collect(),
@@ -8202,6 +8272,16 @@ pub struct JsConfidentialTransferOutputV2 {
     pub owner_tag_hex: String,
 }
 
+/// Output note material for confidential unshield v3 change-note construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialUnshieldOutputV3 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Fresh note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+}
+
 /// Result of building a confidential transfer v2 proof envelope.
 #[napi(object)]
 pub struct JsConfidentialTransferProofEnvelopeV2 {
@@ -8220,6 +8300,19 @@ pub struct JsConfidentialTransferProofEnvelopeV2 {
 pub struct JsConfidentialUnshieldProofEnvelopeV2 {
     /// Nullifiers consumed by the proof.
     pub nullifiers: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+/// Result of building a confidential unshield v3 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialUnshieldProofEnvelopeV3 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the proof.
+    pub output_commitments: Vec<Buffer>,
     /// Merkle root bound into the proof.
     pub root: Buffer,
     /// Norito-encoded `OpenVerifyEnvelope` payload.
@@ -8480,6 +8573,24 @@ fn parse_confidential_transfer_outputs_v2(
                     &format!("outputs[{index}].owner_tag_hex"),
                     &output.owner_tag_hex,
                 )?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_unshield_outputs_v3(
+    outputs: Vec<JsConfidentialUnshieldOutputV3>,
+) -> napi::Result<Vec<ConfidentialUnshieldOutputV3>> {
+    outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            Ok(ConfidentialUnshieldOutputV3 {
+                amount: parse_confidential_amount_u128(
+                    &format!("outputs[{index}].amount"),
+                    &output.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
             })
         })
         .collect()

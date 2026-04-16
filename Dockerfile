@@ -78,7 +78,7 @@ COPY --from=builder /outbin/ $BIN_PATH
 COPY scripts/docker_entrypoint.sh $BIN_PATH
 COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
 COPY defaults /tmp/defaults
-RUN set -euo pipefail; \
+RUN set -eu; \
   case "${CONFIG_PROFILE}" in \
     single) \
       cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \
@@ -105,5 +105,5 @@ RUN set -euo pipefail; \
   chmod 755 "${BIN_PATH}/docker_entrypoint.sh"; \
   rm -rf /tmp/defaults
 WORKDIR $APP_DIR
-USER $USER
+USER ${UID}:${GID}
 ENTRYPOINT ["docker_entrypoint.sh"]

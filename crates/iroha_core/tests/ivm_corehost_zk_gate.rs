@@ -91,6 +91,7 @@ fn unshield_without_verify_is_rejected() {
         to: authority.clone(),
         public_amount: 1u128,
         inputs: vec![[0u8; 32]],
+        outputs: Vec::new(),
         proof: small_proof_attachment(),
         root_hint: None,
     };

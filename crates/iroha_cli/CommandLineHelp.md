@@ -787,11 +787,12 @@ List account permissions
 
 Grant an account permission using JSON input from stdin
 
-**Usage:** `iroha account permission grant --id <ID>`
+**Usage:** `iroha account permission grant [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
 
 
 
@@ -799,11 +800,12 @@ Grant an account permission using JSON input from stdin
 
 Revoke an account permission using JSON input from stdin
 
-**Usage:** `iroha account permission revoke --id <ID>`
+**Usage:** `iroha account permission revoke [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
 
 
 
@@ -1373,11 +1375,12 @@ List account permissions
 
 Grant an account permission using JSON input from stdin
 
-**Usage:** `iroha ledger account permission grant --id <ID>`
+**Usage:** `iroha ledger account permission grant [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
 
 
 
@@ -1385,11 +1388,12 @@ Grant an account permission using JSON input from stdin
 
 Revoke an account permission using JSON input from stdin
 
-**Usage:** `iroha ledger account permission revoke --id <ID>`
+**Usage:** `iroha ledger account permission revoke [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
 
 
 

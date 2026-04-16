@@ -5838,6 +5838,7 @@ export interface UnshieldInstructionInput {
   destinationAccountId: string;
   publicAmount: NumericLike;
   inputs: ReadonlyArray<BinaryLike>;
+  outputs?: ReadonlyArray<BinaryLike>;
   proof: ProofAttachmentInput;
   rootHint?: BinaryLike | null;
 }
@@ -6920,6 +6921,49 @@ export interface PrivateKaigiFeeSpendInput {
   anchorRootHex: string;
   feeAmount: NumericLike;
   verifyingKey: Record<string, unknown>;
+}
+
+export interface ConfidentialTransferProofInputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: BinaryLike;
+  leafIndex?: number;
+  leaf_index?: number;
+}
+
+export interface ConfidentialTransferProofOutputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: BinaryLike;
+  ownerTagHex?: string;
+  owner_tag_hex?: string;
+  ownerTag?: BinaryLike;
+}
+
+export interface ConfidentialTransferProofResultV2 {
+  nullifiers: ReadonlyArray<Buffer>;
+  outputCommitments: ReadonlyArray<Buffer>;
+  root: Buffer;
+  proof: Buffer;
+}
+
+export interface ConfidentialUnshieldProofOutputV3 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: BinaryLike;
+}
+
+export interface ConfidentialUnshieldProofResultV2 {
+  nullifiers: ReadonlyArray<Buffer>;
+  root: Buffer;
+  proof: Buffer;
+}
+
+export interface ConfidentialUnshieldProofResultV3 {
+  nullifiers: ReadonlyArray<Buffer>;
+  outputCommitments: ReadonlyArray<Buffer>;
+  root: Buffer;
+  proof: Buffer;
 }
 
 export interface PrivateCreateKaigiTransactionInput {
@@ -9053,6 +9097,37 @@ export function buildCreateKaigiTransaction(
 export function buildPrivateKaigiFeeSpend(
   input: PrivateKaigiFeeSpendInput,
 ): PrivateKaigiFeeSpendResult;
+export function buildConfidentialTransferProofV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: BinaryLike;
+  treeCommitments: ReadonlyArray<BinaryLike>;
+  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  outputs: ReadonlyArray<ConfidentialTransferProofOutputV2>;
+  rootHintHex: string;
+  verifyingKey: Record<string, unknown>;
+}): ConfidentialTransferProofResultV2;
+export function buildConfidentialUnshieldProofV2(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: BinaryLike;
+  treeCommitments: ReadonlyArray<BinaryLike>;
+  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  publicAmount: NumericLike;
+  rootHintHex: string;
+  verifyingKey: Record<string, unknown>;
+}): ConfidentialUnshieldProofResultV2;
+export function buildConfidentialUnshieldProofV3(input: {
+  chainId: string;
+  assetDefinitionId: string;
+  spendKey: BinaryLike;
+  treeCommitments: ReadonlyArray<BinaryLike>;
+  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  outputs?: ReadonlyArray<ConfidentialUnshieldProofOutputV3>;
+  publicAmount: NumericLike;
+  rootHintHex: string;
+  verifyingKey: Record<string, unknown>;
+}): ConfidentialUnshieldProofResultV3;
 export function buildPrivateCreateKaigiTransaction(
   input: PrivateCreateKaigiTransactionInput,
 ): PrivateKaigiEntrypointResult;

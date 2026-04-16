@@ -4719,6 +4719,7 @@ impl Compiler {
                                 to: acct,
                                 public_amount: amt as u128,
                                 inputs: ins,
+                                outputs: Vec::new(),
                                 proof: pa,
                                 root_hint: None,
                             };
