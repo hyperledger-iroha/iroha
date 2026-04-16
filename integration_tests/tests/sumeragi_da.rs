@@ -1248,6 +1248,9 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -1283,6 +1286,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
@@ -1309,6 +1313,10 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         return Ok(());
     };
     let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
         let peers = network.peers();
         let primary_peer = peers
             .first()
@@ -1318,11 +1326,25 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             .map(|cow| ConfigLayer(cow.into_owned()))
             .collect();
 
-        let client = primary_peer.client();
+        let status_timeout = da_commit_wait_timeout().saturating_add(Duration::from_secs(60));
+        let transaction_ttl = status_timeout.saturating_add(Duration::from_secs(30));
+        let mut client = primary_peer.client();
+        client.transaction_status_timeout = status_timeout;
+        client.transaction_ttl = Some(transaction_ttl);
+        configure_runtime_da(&client).await?;
         let status_before = fetch_status(&client).await?;
         let expected_height = status_before.blocks + 1;
         let roster_change_height = expected_height.saturating_add(1);
         let prf_seed = chain_epoch_seed(&network.chain_id());
+        let initial_leader = resolve_permissioned_leader_peer(
+            peers,
+            expected_height,
+            0,
+            Some(prf_seed),
+        )
+        .wrap_err_with(|| {
+            format!("resolve permissioned leader for initial height {expected_height}")
+        })?;
         let roster_change_leader = resolve_permissioned_leader_peer(
             peers,
             roster_change_height,
@@ -1384,12 +1406,18 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             "sumeragi_rbc_recovers_after_restart_with_roster_change",
             payload_bytes,
         );
-        let submit_client = client.clone();
+        let mut submit_client = initial_leader.client();
+        submit_client.transaction_status_timeout = status_timeout;
+        submit_client.transaction_ttl = Some(transaction_ttl);
+        let initial_leader_id = initial_leader.id();
         let submit_handle = tokio::task::spawn_blocking(move || {
             submit_client.submit(Log::new(Level::INFO, heavy_message))
         });
 
-        submit_handle.await.wrap_err("submit join")??;
+        submit_handle
+            .await
+            .wrap_err("submit initial log join")?
+            .wrap_err_with(|| format!("submit initial log through leader {initial_leader_id}"))?;
 
         let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
         let persisted =
@@ -1437,12 +1465,17 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         )
         .await?;
 
-        let unregister_client = client.clone();
+        let mut unregister_client = roster_change_leader.client();
+        unregister_client.transaction_status_timeout = status_timeout;
+        unregister_client.transaction_ttl = Some(transaction_ttl);
         tokio::task::spawn_blocking(move || {
             unregister_client.submit_blocking(Unregister::peer(removed_peer_id))
         })
         .await
-        .wrap_err("join unregister task")??;
+        .wrap_err("join unregister task")?
+        .wrap_err_with(|| {
+            format!("submit roster-change unregister through leader {roster_change_leader_id}")
+        })?;
 
         let roster_deadline = Instant::now() + Duration::from_secs(60);
         loop {

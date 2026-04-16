@@ -5534,6 +5534,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             client.transaction_committed(hash, entry_hash)
         });
 
@@ -11675,7 +11676,7 @@ mod subscription_http_tests {
             DomainId::try_new("commerce", "universal").unwrap(),
             "fixed_plan".parse().unwrap(),
         );
-        let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
+        let subscription_id: NftId = "sub-1$subscriptions.universal".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("pay", "universal").unwrap(),
@@ -11829,16 +11830,16 @@ mod subscription_http_tests {
                     (HttpMethod::GET, "/v1/subscriptions") => {
                         json_response(StatusCode::OK, &subscription_list_json)
                     }
-                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions.universal") => {
                         json_response(StatusCode::OK, &subscription_get_json)
                     }
                     (
                         HttpMethod::POST,
-                        "/v1/subscriptions/sub-1$subscriptions/pause"
-                        | "/v1/subscriptions/sub-1$subscriptions/resume"
-                        | "/v1/subscriptions/sub-1$subscriptions/cancel"
-                        | "/v1/subscriptions/sub-1$subscriptions/charge-now"
-                        | "/v1/subscriptions/sub-1$subscriptions/usage",
+                        "/v1/subscriptions/sub-1$subscriptions.universal/pause"
+                        | "/v1/subscriptions/sub-1$subscriptions.universal/resume"
+                        | "/v1/subscriptions/sub-1$subscriptions.universal/cancel"
+                        | "/v1/subscriptions/sub-1$subscriptions.universal/charge-now"
+                        | "/v1/subscriptions/sub-1$subscriptions.universal/usage",
                     ) => json_response(StatusCode::OK, &action_json),
                     _ => HttpResponse::builder()
                         .status(StatusCode::NOT_FOUND)
@@ -11925,19 +11926,19 @@ mod subscription_http_tests {
                         ]
                     );
                 }
-                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions.universal") => {
                     assert!(snapshot.body.is_empty());
                 }
                 (
                     HttpMethod::POST,
-                    "/v1/subscriptions/sub-1$subscriptions/pause"
-                    | "/v1/subscriptions/sub-1$subscriptions/resume"
-                    | "/v1/subscriptions/sub-1$subscriptions/cancel"
-                    | "/v1/subscriptions/sub-1$subscriptions/charge-now",
+                    "/v1/subscriptions/sub-1$subscriptions.universal/pause"
+                    | "/v1/subscriptions/sub-1$subscriptions.universal/resume"
+                    | "/v1/subscriptions/sub-1$subscriptions.universal/cancel"
+                    | "/v1/subscriptions/sub-1$subscriptions.universal/charge-now",
                 ) => {
                     match_body(snapshot, &action_request);
                 }
-                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
+                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions.universal/usage") => {
                     match_body(snapshot, &usage_request);
                 }
                 _ => {}

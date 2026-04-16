@@ -95,7 +95,39 @@ fn pick_submit_peer_index(
     }
 }
 
-fn submit_client_for_network(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
+fn ordered_submit_peer_indices(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> Vec<usize> {
+    if block_totals.is_empty() {
+        return Vec::new();
+    }
+
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    let mut ordered = Vec::with_capacity(block_totals.len());
+    if leader_connected
+        && let Some(leader_index) = leader_index
+        && leader_index < block_totals.len()
+    {
+        ordered.push(leader_index);
+    }
+
+    for offset in 0..block_totals.len() {
+        let idx = (fallback + offset) % block_totals.len();
+        if !ordered.contains(&idx) {
+            ordered.push(idx);
+        }
+    }
+
+    ordered
+}
+
+fn submit_peer_indices_for_network(
+    network: &sandbox::SerializedNetwork,
+    probe: &Client,
+) -> Vec<usize> {
     let peer_count = network.peers().len();
     let status = network
         .peers()
@@ -120,22 +152,12 @@ fn submit_client_for_network(network: &sandbox::SerializedNetwork, probe: &Clien
         })
         .collect::<Vec<_>>();
     let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
-    let selected_index = pick_submit_peer_index(
+    ordered_submit_peer_indices(
         leader_index,
         leader_is_connected,
         &fallback_totals,
         fallback_seed,
-    );
-    network
-        .peers()
-        .get(selected_index)
-        .unwrap_or_else(|| {
-            network
-                .peers()
-                .first()
-                .expect("network should have at least one peer")
-        })
-        .client()
+    )
 }
 
 fn validator_account_id_for_index(index: usize) -> AccountId {
@@ -193,6 +215,24 @@ fn pick_submit_peer_index_prefers_connected_leader() {
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
+}
+
+#[test]
+fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), true, &totals, 0),
+        vec![3, 1, 2, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), false, &totals, 0),
+        vec![1, 2, 3, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(None, true, &totals, 1),
+        vec![2, 3, 0, 1]
+    );
 }
 
 #[test]
@@ -318,8 +358,8 @@ async fn advance_to_height(
 ) -> eyre::Result<()> {
     let deadline = Instant::now() + HEIGHT_ADVANCE_RETRY;
     let mut tick = 0_u64;
-    let mut next_submit = Instant::now();
     let mut last_height = 0;
+    wait_for_submit_connectivity(network, Duration::from_secs(30)).await?;
 
     while Instant::now() <= deadline {
         let status = client.get_status()?;
@@ -327,18 +367,112 @@ async fn advance_to_height(
         if status.blocks >= target_height {
             return Ok(());
         }
-        if Instant::now() >= next_submit {
-            let submit_client = submit_client_for_network(network, client);
-            submit_client.submit(Log::new(Level::INFO, format!("{log_prefix} {tick}")))?;
-            tick = tick.saturating_add(1);
-            next_submit = Instant::now() + HEIGHT_ADVANCE_POLL;
+
+        submit_progress_log(network, client, format!("{log_prefix} {tick}")).await?;
+        tick = tick.saturating_add(1);
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let probe_timeout = remaining.min(Duration::from_secs(15));
+        let target_next_height = status.blocks.saturating_add(1).min(target_height);
+        match wait_for_client_height(client, target_next_height, probe_timeout).await {
+            Ok(height) => last_height = last_height.max(height),
+            Err(_) => sleep(HEIGHT_ADVANCE_POLL).await,
         }
-        sleep(HEIGHT_ADVANCE_POLL).await;
     }
 
     eyre::bail!(
         "client height did not reach {target_height} for {log_prefix}; last observed height={last_height}"
     );
+}
+
+async fn wait_for_client_height(
+    client: &Client,
+    target_height: u64,
+    timeout: Duration,
+) -> eyre::Result<u64> {
+    let deadline = Instant::now() + timeout;
+    let mut last_height = 0;
+
+    loop {
+        let status = client.get_status()?;
+        last_height = last_height.max(status.blocks);
+        if status.blocks >= target_height {
+            return Ok(status.blocks);
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "client height did not reach {target_height} within {:?}; last observed height={last_height}",
+                timeout
+            );
+        }
+        sleep(HEIGHT_ADVANCE_POLL).await;
+    }
+}
+
+async fn wait_for_submit_connectivity(
+    network: &sandbox::SerializedNetwork,
+    timeout: Duration,
+) -> eyre::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let expected = min_connected_peers_for_submit(network.peers().len());
+    let mut last_snapshot = Vec::new();
+
+    loop {
+        let peer_counts = network
+            .peers()
+            .iter()
+            .filter_map(|peer| peer.client().get_status().ok().map(|status| status.peers))
+            .collect::<Vec<_>>();
+        if !peer_counts.is_empty() {
+            last_snapshot.clone_from(&peer_counts);
+            if peer_counts.iter().all(|count| *count >= expected) {
+                return Ok(());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?}",
+                timeout
+            );
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn submit_progress_log(
+    network: &sandbox::SerializedNetwork,
+    probe: &Client,
+    message: String,
+) -> eyre::Result<()> {
+    let candidate_indices = submit_peer_indices_for_network(network, probe);
+    let transaction =
+        probe.build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default());
+
+    let mut accepted = false;
+    let mut errors = Vec::new();
+    for idx in candidate_indices {
+        let Some(peer) = network.peers().get(idx) else {
+            continue;
+        };
+        let peer_name = peer.mnemonic().to_owned();
+        let submit_client = peer.client();
+        let transaction = transaction.clone();
+        match tokio::task::spawn_blocking(move || submit_client.submit_transaction(&transaction))
+            .await
+        {
+            Ok(Ok(_)) => accepted = true,
+            Ok(Err(err)) => errors.push(format!("{peer_name}: {err:?}")),
+            Err(err) => errors.push(format!("{peer_name}: submit join error: {err}")),
+        }
+    }
+
+    ensure!(
+        accepted,
+        "progress log was not accepted by any candidate peer; errors={errors:?}"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

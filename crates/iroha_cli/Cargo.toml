@@ -49,6 +49,10 @@ name = "iroha"
 path = "src/bin/iroha.rs"
 required-features = ["build-i3"]
 
+[[bin]]
+name = "musubi"
+path = "src/bin/musubi.rs"
+
 [dependencies]
 iroha = { workspace = true }
 iroha_sccp = { workspace = true }

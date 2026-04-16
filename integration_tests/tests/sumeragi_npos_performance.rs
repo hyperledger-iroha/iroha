@@ -417,14 +417,17 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
-    let seed_start = start_non_empty.saturating_add(1);
-    for offset in 0..SAMPLE_BLOCKS {
+    // Keep only one baseline transaction outstanding so the latency budgets reflect
+    // steady-state 1 s block production rather than an artificial startup queue burst.
+    let mut next_seed = start_non_empty.saturating_add(1);
+    if next_seed <= target_non_empty {
         let submit_client = submit_client_for_network(&network, &client);
-        let message = format!("npos baseline seed {}", seed_start + offset);
+        let message = format!("npos baseline seed {next_seed}");
         tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, message)))
             .await
             .wrap_err("join baseline log submission")?
             .wrap_err("submit baseline log transaction")?;
+        next_seed = next_seed.saturating_add(1);
     }
 
     let http = reqwest::Client::new();
@@ -514,6 +517,19 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         last_status = client
             .get_status()
             .wrap_err("fetch status during sampling")?;
+        if next_seed <= target_non_empty
+            && last_status.blocks_non_empty.saturating_add(1) >= next_seed
+        {
+            let submit_client = submit_client_for_network(&network, &client);
+            let message = format!("npos baseline seed {next_seed}");
+            tokio::task::spawn_blocking(move || {
+                submit_client.submit(Log::new(Level::INFO, message))
+            })
+            .await
+            .wrap_err("join paced baseline log submission")?
+            .wrap_err("submit paced baseline log transaction")?;
+            next_seed = next_seed.saturating_add(1);
+        }
         if last_status.blocks_non_empty >= target_non_empty {
             break;
         }

@@ -33,6 +33,7 @@ Both tracks share the same core components, including Norito serialization, Sume
 ### Build and Test (Workspace)
 
 ```bash
+cargo test
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -41,6 +42,9 @@ cargo fmt --all
 
 Notes:
 
+- Plain `cargo test` runs the workspace `default-members`: a top-level
+  `iroha` library smoke build. Use `cargo test -p <crate>` for a focused crate
+  suite and `cargo test --workspace` for the full repository.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - The workspace targets `std` (WASM/no-std builds are not supported).

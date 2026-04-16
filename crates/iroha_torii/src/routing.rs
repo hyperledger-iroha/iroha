@@ -7346,6 +7346,37 @@ fn resolve_asset_definition_selector(
         })
 }
 
+#[cfg(feature = "app_api")]
+fn canonical_gas_asset_definition_id(state: &CoreState, asset_literal: &str) -> Result<String> {
+    let selector = asset_literal.trim();
+    if selector.is_empty() {
+        return Err(conversion_error(
+            "gas_asset_id must not be empty".to_owned(),
+        ));
+    }
+
+    let world = state.world_view();
+    let now_ms = asset_alias_observation_time_ms(state);
+    resolve_asset_definition_selector(&world, selector, now_ms)
+        .map(|asset_id| asset_id.to_string())
+        .map_err(|_| {
+            conversion_error(format!(
+                "invalid gas_asset_id `{selector}`; expected canonical Base58 asset definition id or active asset alias"
+            ))
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_contract_call_gas_asset_id(
+    state: &CoreState,
+    gas_asset_id: Option<&str>,
+) -> Result<Option<String>> {
+    match gas_asset_id {
+        Some(asset_id) => canonical_gas_asset_definition_id(state, asset_id).map(Some),
+        None => Ok(default_pipeline_gas_asset_id(state)),
+    }
+}
+
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
@@ -7653,6 +7684,30 @@ mod zk_roots_selector_tests {
         let resolved = resolve_asset_definition_selector(&view, &definition_id.to_string(), 0)
             .expect("base58 id should resolve");
         assert_eq!(resolved, definition_id);
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_canonicalizes_alias_literal() {
+        let (state, definition_id) = selector_state();
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#main"))
+            .expect("alias should canonicalize");
+
+        assert_eq!(normalized, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_uses_pipeline_default() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), None)
+            .expect("default gas asset should canonicalize");
+
+        assert_eq!(normalized, Some(definition_id.to_string()));
     }
 
     #[test]
@@ -10605,6 +10660,8 @@ async fn submit_contract_call_request(
     if gas_limit == 0 {
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
 
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
@@ -10884,6 +10941,8 @@ pub async fn handle_post_contract_call_simulate(
     if gas_limit == 0 {
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
 
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
@@ -12844,6 +12903,8 @@ fn prepare_bridge_message_settlement(
             "settlement gas_limit must be positive".to_owned(),
         ));
     }
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state, settlement.gas_asset_id.as_deref())?;
 
     let prepared = resolve_contract_call_target(
         state,
@@ -12911,7 +12972,7 @@ fn prepare_bridge_message_settlement(
         contract_alias.as_ref(),
         entrypoint,
         payload.as_ref(),
-        settlement.gas_asset_id.as_deref(),
+        gas_asset_id.as_deref(),
         settlement.fee_sponsor.as_ref(),
         gas_limit,
         &manifest,
@@ -17302,6 +17363,8 @@ pub async fn handle_post_contract_call_multisig_propose(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
     let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
     let selector_alias_literal = selected_multisig_alias_literal(&selector);
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -19977,7 +20040,7 @@ fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
     let key =
         Name::from_str("ivm_gas_accepted_assets").expect("static gas-accepted-assets parameter");
     let parameter_id = iroha_data_model::parameter::CustomParameterId(key);
-    world
+    let configured_asset = world
         .parameters()
         .custom()
         .get(&parameter_id)
@@ -19988,6 +20051,27 @@ fn default_pipeline_gas_asset_id(state: &CoreState) -> Option<String> {
                 .map(|asset| asset.trim().to_owned())
                 .find(|asset| !asset.is_empty())
         })
+        .or_else(|| {
+            state
+                .pipeline_snapshot()
+                .gas
+                .accepted_assets
+                .into_iter()
+                .map(|asset| asset.trim().to_owned())
+                .find(|asset| !asset.is_empty())
+        })?;
+
+    match canonical_gas_asset_definition_id(state, &configured_asset) {
+        Ok(asset_id) => Some(asset_id),
+        Err(err) => {
+            iroha_logger::warn!(
+                ?err,
+                asset = %configured_asset,
+                "failed to canonicalize default gas asset id"
+            );
+            Some(configured_asset)
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]

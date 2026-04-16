@@ -37,6 +37,119 @@ Last updated: 2026-04-16
 - `python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/mochi-local-sandbox`
   could not run in this shell because PyYAML is not installed (`ModuleNotFoundError: No module named 'yaml'`).
 
+## 2026-04-16 Follow-up: NPoS liveness, baseline telemetry, and stake-activation regressions rerun cleanly
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  now builds a single signed seed transaction and fans that same hash out to
+  the ordered candidate peers for each progress attempt. The liveness harness
+  still waits on converged heights, but it no longer depends on one early
+  submit path being the only route that forwards startup traffic.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  now waits for submit connectivity before driving stake-activation heights and
+  advances one block at a time instead of flooding progress logs every 200 ms.
+  Progress transactions are also replicated across the ordered candidate peers,
+  which restores `npos_entity_correlation_limits_validator_set`.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  now keeps only one baseline seed transaction outstanding while metrics are
+  sampled. That removes the artificial startup queue burst that was timing out
+  `npos_baseline_1s_k3_captures_metrics` and inflating the baseline phase EMAs.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposlive.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.fixed2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1` (pass)
+  - `cargo test` (pass)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
+## 2026-04-16 Follow-up: Musubi package-manager foundation landed
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  now defines the first Musubi registry data model: canonical
+  `namespace/package@version` references without leading `@`, exact semantic
+  versions, SoraFS-backed source archive references, source-library
+  dependencies, dapp namespace links, immutable release records, yanks, and
+  curated short aliases.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/bin/musubi.rs`
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/musubi.rs`
+  add a standalone `musubi` binary in the existing CLI package. The local
+  command surface can initialize `Musubi.toml`, add exact dependencies, seed a
+  registry-pending `Musubi.lock`, compile Kotodama `.ko` sources, hash package
+  source trees, inspect manifests, and emit dry-run publish/yank payloads.
+- `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md` documents
+  the package syntax, namespace-to-dapp alias link, current CLI workflow, and
+  anti-name-squatting policy.
+- Chain-backed publish/yank ISIs, release queries, namespace authority checks,
+  SoraFS upload integration, and compiler-level source-library import
+  resolution remain open follow-up work.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model musubi --lib -- --nocapture` (pass, 6 tests)
+  - `cargo test -p iroha_cli --bin musubi -- --nocapture` (pass, 6 tests; this
+    initially waited behind an unrelated `cargo test --lib` lock holder)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
+## 2026-04-16 Follow-up: plain `cargo test` reduced to a top-level smoke graph
+- `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml` now declares only
+  `crates/iroha` as the workspace default member. Plain `cargo test` still
+  compiles the top-level public library and its dependencies, but it no longer
+  builds every Norito, crypto, data-model, core, P2P, or IVM test binary by
+  default. Use `cargo test -p <crate>` for those focused suites and
+  `cargo test --workspace` for the full 94-member sweep.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  no longer directly depends on unused `halo2-base`, `halo2-ecc`, `crc64fast`,
+  `zeroize`, `async-trait`, `itoa`, or `uuid`; the
+  `zk-halo2-jemallocator` compatibility feature remains but no longer links
+  `halo2-ecc` through `iroha_core`.
+- `/Users/takemiyamakoto/soramitsudev/iroha/README.md` and
+  `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md` now distinguish the
+  reduced default smoke command from focused crate tests and the full workspace
+  command.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/src/{client.rs,config.rs}`
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha/tests/tx_ttl.rs`
+  now use dataspace-qualified test fixture domains and the existing
+  compatibility-test helper where required, so the narrowed root
+  `cargo test` command is green on the universal-account model.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  uses a style-compliant tuple enum variant plus a documented yank-info struct
+  for `MusubiReleaseStatus::Yanked`, which unblocks the local Musubi module
+  already wired into this checkout's data-model compile path.
+- Dependency graph snapshot on `aarch64-apple-darwin` after the reduction:
+  plain `cargo test` default graph is 664 unique packages; full
+  `cargo test --workspace` graph is 1108 unique packages. The default graph no
+  longer contains `eframe`, `pyo3`, `napi`, `cpal`, `qrcode`, `image`,
+  `halo2-base`, `halo2-ecc`, or `uuid`.
+- The local ignored `Cargo.lock` was refreshed with `cargo generate-lockfile`;
+  no tracked lockfile diff is expected in this repository.
+- Focused validation for this slice:
+  - `cargo check -p iroha_core --all-targets` (pass, 22m34s)
+  - `cargo test --no-run` with the earlier seven-member default set (pass,
+    49m16s; this exposed why the standalone IVM/core/Norito test suites should
+    not be part of the root default command)
+  - `cargo test --no-run` with the final top-level default set (pass)
+  - `cargo test --lib` (pass, 274 tests)
+  - `cargo test` (pass: `iroha` lib, 3 integration test binaries, and doctests)
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs crates/iroha/src/config.rs crates/iroha/tests/tx_ttl.rs crates/iroha_data_model/src/musubi.rs`
+  - `cargo metadata --locked --format-version 1 --no-deps`
+  - `cargo tree --target aarch64-apple-darwin --edges normal,build,dev`
+  - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
+  - `python3 scripts/check_dependency_budget.py`
+  - `git diff --check`
+
+## 2026-04-16 Follow-up: DA/RBC restart roster-change regression reruns cleanly
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now makes `sumeragi_rbc_recovers_after_restart_with_roster_change`
+  match the stricter DA/RBC localnet harness assumptions: DA is enabled in
+  both genesis and config, startup waits for the four peers to observe the
+  initial block before submitting, client confirmation TTL/timeout is extended
+  to the DA commit window, and the initial progress transaction plus the
+  roster-change unregister are submitted through the resolved leaders for
+  their target heights instead of pinning them to peer 0.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcroster.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change' -- --exact --nocapture --test-threads=1` (pass; the run had to wait for a concurrent shared-target Cargo build before starting the localnet)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: `iroha_crypto` secp256k1 default-test build restored
 - `/home/mtakemiya/dev/iroha/crates/iroha_crypto/src/signature/secp256k1.rs`
   now imports `sha2::Digest` unconditionally inside the test module so the

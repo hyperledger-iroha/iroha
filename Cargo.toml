@@ -284,6 +284,12 @@ clippy.wildcard_dependencies = "deny"
 
 [workspace]
 resolver = "2"
+# Keep plain `cargo test` focused on the top-level library smoke surface. Use
+# `cargo test -p <crate>` for focused crate suites and `cargo test --workspace`
+# for the full node/SDK/tool/UI/integration sweep.
+default-members = [
+    "crates/iroha",
+]
 members = [
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",

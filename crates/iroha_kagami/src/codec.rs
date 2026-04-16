@@ -16,7 +16,7 @@ use color_eyre::{
     eyre::{Result, eyre},
     owo_colors::OwoColorize,
 };
-use iroha_data_model::{account::NewAccount, domain::Domain, peer::Peer};
+use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
 use iroha_genesis::RawGenesisTransaction;
 use norito::{
     codec::{DecodeAll, Encode},
@@ -39,6 +39,7 @@ fn generate_map() -> ConverterMap {
     let mut map = ConverterMap::new();
 
     insert_converter::<NewAccount>(&mut map);
+    insert_converter::<AssetId>(&mut map);
     insert_converter::<Domain>(&mut map);
     insert_converter::<Peer>(&mut map);
 
@@ -381,7 +382,7 @@ mod tests {
     use std::{path::PathBuf, sync::Arc};
 
     use color_eyre::eyre::Result as EyreResult;
-    use iroha_data_model::{account::NewAccount, peer::Peer};
+    use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
     use iroha_genesis::RawGenesisTransaction;
     use iroha_schema::{Compact, TypeId};
 
@@ -425,6 +426,7 @@ mod tests {
         let map = generate_map();
         let expected = [
             <NewAccount as TypeId>::id(),
+            <AssetId as TypeId>::id(),
             <Peer as TypeId>::id(),
             <RawGenesisTransaction as TypeId>::id(),
         ];
