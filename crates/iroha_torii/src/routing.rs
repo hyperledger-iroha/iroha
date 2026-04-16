@@ -51484,6 +51484,7 @@ pub struct ConfidentialRelaySubmitRequestDto {
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 pub struct ConfidentialRelaySubmitResponseDto {
     pub tx_hash_hex: String,
+    pub source_tx_hash_hex: String,
     pub status: &'static str,
     pub relay_authority: String,
 }
@@ -52164,6 +52165,11 @@ pub async fn handle_v1_confidential_relay_submit(
             "signed transaction chain does not match this Torii",
         ));
     }
+    source_tx.verify_signature().map_err(|err| {
+        let reason = format!("signed transaction signature verification failed: {err}");
+        confidential_invalid_request(&reason)
+    })?;
+    let source_tx_hash_hex = hex::encode(source_tx.hash().as_ref());
     let instruction = relayable_zk_transfer_instruction(&source_tx)?;
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
@@ -52188,6 +52194,7 @@ pub async fn handle_v1_confidential_relay_submit(
 
     let response = ConfidentialRelaySubmitResponseDto {
         tx_hash_hex,
+        source_tx_hash_hex,
         status: "QUEUED",
         relay_authority: signer.authority.to_string(),
     };

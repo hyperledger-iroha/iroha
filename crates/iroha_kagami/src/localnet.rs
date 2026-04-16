@@ -13,12 +13,11 @@ use std::{
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
-use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
+use iroha_core::zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
-    confidential::ConfidentialStatus,
     isi::{
         RegisterBox, SetAssetDefinitionAlias,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -31,7 +30,6 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
     proof::{VerifyingKeyId, VerifyingKeyRecord},
-    zk::BackendTag,
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
@@ -505,7 +503,6 @@ fn localnet_fee_asset_literal() -> String {
 }
 
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_FEE_ZK_VK_CIRCUIT_ID: &str = "halo2/ipa:tiny-add";
 const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 
@@ -518,28 +515,15 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
 }
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
-    let fixture = halo2_fixture_envelope(LOCALNET_FEE_ZK_VK_CIRCUIT_ID, [0u8; 32]);
-    let vk_box = fixture
-        .vk_box(LOCALNET_FEE_ZK_VK_BACKEND)
-        .ok_or_else(|| eyre!("built-in Halo2 fixture must expose verifying key bytes"))?;
-    let mut record = VerifyingKeyRecord::new(
-        version,
-        LOCALNET_FEE_ZK_VK_CIRCUIT_ID,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        fixture.schema_hash,
-        hash_vk(&vk_box),
-    );
-    record.vk_len = u32::try_from(vk_box.bytes.len())
-        .wrap_err("fixture verifying key length overflowed u32")?;
-    record.max_proof_bytes = u32::try_from(fixture.proof_bytes.len())
-        .wrap_err("fixture proof length overflowed u32")?
-        .max(4_096);
-    record.gas_schedule_id = Some("halo2_default".to_owned());
-    record.key = Some(vk_box);
-    record.status = ConfidentialStatus::Active;
-    record.namespace = name.to_owned();
-    Ok(record)
+    match name {
+        LOCALNET_FEE_ZK_VK_TRANSFER_NAME => {
+            confidential_v2::confidential_transfer_v2_vk_record(name, version).map_err(Into::into)
+        }
+        LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
+            confidential_v2::confidential_unshield_v2_vk_record(name, version).map_err(Into::into)
+        }
+        _ => Err(eyre!("unknown localnet confidential verifier name: {name}")),
+    }
 }
 
 fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]>
@@ -5188,9 +5172,10 @@ mod tests {
                     && register.record.is_active()
                     && register.record.key.is_some()
                     && register.record.max_proof_bytes > 0
-                    && register.record.circuit_id == LOCALNET_FEE_ZK_VK_CIRCUIT_ID
+                    && register.record.circuit_id
+                        == confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
             }),
-            "generated fee asset must register an active transfer verifier fixture"
+            "generated fee asset must register an active confidential transfer verifier"
         );
         assert!(
             vk_registrations.iter().any(|register| {
@@ -5198,9 +5183,10 @@ mod tests {
                     && register.record.is_active()
                     && register.record.key.is_some()
                     && register.record.max_proof_bytes > 0
-                    && register.record.circuit_id == LOCALNET_FEE_ZK_VK_CIRCUIT_ID
+                    && register.record.circuit_id
+                        == confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
             }),
-            "generated fee asset must register an active unshield verifier fixture"
+            "generated fee asset must register an active confidential unshield verifier"
         );
     }
 

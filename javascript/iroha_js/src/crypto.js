@@ -400,9 +400,10 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
 /**
  * Derive the confidential v2 owner tag from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
+ * @param {{diversifierHex?: string, diversifier?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
  * @returns {Buffer}
  */
-export function deriveConfidentialOwnerTagV2(spendKey) {
+export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
   const native = ensureConfidentialV2Native(
     resolveNativeBinding(),
     "deriveConfidentialOwnerTagV2",
@@ -411,7 +412,64 @@ export function deriveConfidentialOwnerTagV2(spendKey) {
   if (spendKeyBuffer.length !== 32) {
     throw new Error("confidential spend key must be 32 bytes");
   }
-  return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer));
+  const diversifierHex =
+    options?.diversifierHex !== undefined || options?.diversifier !== undefined
+      ? normalizeFixed32HexInput(
+          options.diversifierHex ?? options.diversifier,
+          "diversifier",
+        )
+      : undefined;
+  return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer, diversifierHex));
+}
+
+/**
+ * Derive a canonical confidential v2 diversifier from seed material.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
+ * @returns {{diversifier: Buffer, diversifierHex: string}}
+ */
+export function deriveConfidentialDiversifierV2(seed) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialDiversifierV2",
+  );
+  const seedBuffer = toBuffer(seed, "seed");
+  if (seedBuffer.length === 0) {
+    throw new Error("seed must not be empty");
+  }
+  const diversifier = Buffer.from(native.deriveConfidentialDiversifierV2(seedBuffer));
+  return {
+    diversifier,
+    diversifierHex: diversifier.toString("hex"),
+  };
+}
+
+/**
+ * Derive diversified confidential v2 receive-address material.
+ * @param {{spendKey: ArrayBufferView | ArrayBuffer | Buffer, diversifierSeed: ArrayBufferView | ArrayBuffer | Buffer | string}} input
+ * @returns {{ownerTag: Buffer, ownerTagHex: string, diversifier: Buffer, diversifierHex: string}}
+ */
+export function deriveConfidentialReceiveAddressV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialReceiveAddressV2",
+  );
+  const spendKeyBuffer = toBuffer(input?.spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  const diversifierSeed = toBuffer(input?.diversifierSeed, "diversifierSeed");
+  if (diversifierSeed.length === 0) {
+    throw new Error("diversifierSeed must not be empty");
+  }
+  const raw = native.deriveConfidentialReceiveAddressV2(spendKeyBuffer, diversifierSeed);
+  const ownerTagHex = String(raw.ownerTagHex ?? raw.owner_tag_hex ?? "").trim();
+  const diversifierHex = String(raw.diversifierHex ?? raw.diversifier_hex ?? "").trim();
+  return {
+    ownerTag: Buffer.from(normalizeFixed32HexInput(ownerTagHex, "ownerTag"), "hex"),
+    ownerTagHex: normalizeFixed32HexInput(ownerTagHex, "ownerTag"),
+    diversifier: Buffer.from(normalizeFixed32HexInput(diversifierHex, "diversifier"), "hex"),
+    diversifierHex: normalizeFixed32HexInput(diversifierHex, "diversifier"),
+  };
 }
 
 /**

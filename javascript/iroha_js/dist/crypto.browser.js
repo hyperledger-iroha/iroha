@@ -154,6 +154,14 @@ export function deriveConfidentialOwnerTagV2() {
   return unsupported("deriveConfidentialOwnerTagV2");
 }
 
+export function deriveConfidentialDiversifierV2() {
+  return unsupported("deriveConfidentialDiversifierV2");
+}
+
+export function deriveConfidentialReceiveAddressV2() {
+  return unsupported("deriveConfidentialReceiveAddressV2");
+}
+
 export function deriveConfidentialNoteV2() {
   return unsupported("deriveConfidentialNoteV2");
 }
