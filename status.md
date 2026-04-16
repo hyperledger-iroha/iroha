@@ -48,6 +48,72 @@ Last updated: 2026-04-16
     shared build/package locks, so those validations did not complete during
     this slice.
 
+## 2026-04-16 Follow-up: benchmark and UI compile-test dependencies moved behind explicit features
+- Criterion benchmark dependencies are now opt-in through per-crate `bench`
+  features instead of default dev-dependencies. Bench targets across
+  `iroha_core`, `ivm`, `iroha_crypto`, `iroha_data_model`, `norito`, Torii,
+  and related helper crates declare `required-features = ["bench"]`, so normal
+  workspace test builds no longer need to compile Criterion just because the
+  crate has benchmark targets.
+- Proc-macro/UI compile-test harnesses now wire their existing
+  `trybuild-tests` features to the optional `trybuild` dependency and mark the
+  `ui`/`config_base_ui` test targets with `required-features`. Default
+  `cargo test --workspace` can skip those heavy compiler-harness tests, while
+  `cargo test --workspace --features trybuild-tests` still runs them
+  explicitly.
+- `iroha_crypto` parity/fuzz dependencies are now explicit opt-ins:
+  `crypto-parity-tests` enables the OpenSSL/AMCL/secp256k1 comparison paths,
+  and `sm_proptest` owns the SM property-test dependency. Default crypto tests
+  still cover the in-tree implementations without compiling those external
+  validation crates.
+- `scripts/check_dependency_budget.py` now reports total, registry, path, and
+  watched dependency counts using `cargo metadata`; it uses `--locked` by
+  default so dependency-budget checks do not rewrite `Cargo.lock`.
+- Validation in this slice:
+  - `python3 scripts/check_dependency_budget.py --help`
+  - `cargo metadata --locked --no-deps --format-version 1`
+  - `cargo metadata --locked --format-version 1`
+  - `cargo metadata --locked --no-deps --format-version 1 --manifest-path crates/iroha_crypto/Cargo.toml --features crypto-parity-tests,sm_proptest`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `git diff --check`
+  - Metadata target audit confirming all touched Criterion bench targets require
+    the `bench` feature.
+- The local ignored `Cargo.lock` was refreshed with `cargo generate-lockfile`;
+  because the repository ignores `Cargo.lock`, this produced no tracked diff.
+  Full locked graph metadata now passes.
+
+## 2026-04-16 Follow-up: grouped `consensus_and_da` exact regressions no longer depend on one startup attempt, one submit peer, or one balance reader
+- `/home/mtakemiya/dev/iroha/integration_tests/src/sandbox.rs` now gives
+  retryable serialized localnet startups one more chance before failing the
+  scenario. The shared async network bootstrap attempts increased from 2 to 3,
+  which absorbs the observed single-peer startup miss in
+  `sumeragi_adversarial_partial_chunk_withholding_stalls_delivery` without
+  masking hard failures.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_da.rs` now
+  searches every peer's Kura root when waiting for DA-evicted block bodies
+  instead of assuming the first peer is the authoritative store to inspect.
+  The DA/NPoS helpers in that file also gained focused filesystem coverage for
+  merged multi-root `da_blocks` discovery.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  and `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  now submit progress-driving transactions through the connected leader or a
+  best-height fallback peer instead of pinning all submissions to peer 0.
+  The performance harness also waits for submit connectivity before seeding
+  its sample window.
+- `/home/mtakemiya/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  now treats quorum-observed final balances as the authoritative end-state in
+  the combined downtime+timeout restart-pressure scenario, which matches the
+  test's existing tolerance for one lagging restarted peer.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.partialfix.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.daevict2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_da_eviction_rehydrates_block_bodies' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.zkcombo.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet' -- --exact --nocapture --test-threads=1`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: Soracloud/Torii integration response compatibility restored
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now applies Norito defaults to partial `soracloud_runtime.hf` config tables.

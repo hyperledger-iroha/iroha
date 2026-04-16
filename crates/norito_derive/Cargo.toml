@@ -16,7 +16,15 @@ heck = { workspace = true }
 
 [features]
 default = []
+trybuild-tests = ["dep:trybuild"]
+
+[dependencies.trybuild]
+workspace = true
+optional = true
 
 [dev-dependencies]
-trybuild = "1.0.114"
 norito = {path = "../norito"}
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]

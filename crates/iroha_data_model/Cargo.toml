@@ -40,7 +40,8 @@ transparent_api = ["iroha_data_model_derive/transparent_api"]
 # Enable fault injection to simulate malicious data tampering during testing.
 fault_injection = []
 fast_dsl = []
-trybuild-tests = []
+trybuild-tests = ["dep:trybuild"]
+bench = ["dep:criterion"]
 ids_projection = []
 governance = []
 zk-ballot = []
@@ -87,16 +88,16 @@ idna = { version = "1.1.0", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
+criterion = { workspace = true, optional = true }
+trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
 hex-literal = { workspace = true }
 ivm = { path = "../ivm" }
 
-criterion = { workspace = true }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 tempfile = { workspace = true }
-trybuild = { workspace = true }
 
 #[build-dependencies]
 # NOTE: This crate's build.rs only copies a file and does not require syn.
@@ -106,15 +107,22 @@ trybuild = { workspace = true }
 [[bench]]
 name = "time_event_filter"
 harness = false
+required-features = ["bench"]
 
 
 [[bench]]
 name = "decode_registry"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "enum_vs_trait"
 harness = false
+required-features = ["bench"]
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]
 
 [[bin]]
 name = "axt_fixtures"

@@ -225,6 +225,7 @@ impl Ed25519Sha512 {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "crypto-parity-tests")]
     use openssl::{
         pkey::{Id, PKey, Private, Public},
         sign::{Signer, Verifier as OpenSslVerifier},
@@ -251,10 +252,12 @@ mod test {
     const PRIVATE_KEY: &str = "1c1179a560d092b90458fe6ab8291215a427fcd6b3927cb240701778ef552019";
     const PUBLIC_KEY: &str = "27c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf";
 
+    #[cfg(feature = "crypto-parity-tests")]
     fn openssl_public_key(pk: &ed25519::PublicKey) -> PKey<Public> {
         PKey::public_key_from_raw_bytes(pk.as_bytes(), Id::ED25519).expect("openssl public key")
     }
 
+    #[cfg(feature = "crypto-parity-tests")]
     fn openssl_private_key(sk: &ed25519::PrivateKey) -> PKey<Private> {
         PKey::private_key_from_raw_bytes(&sk.to_bytes(), Id::ED25519).expect("openssl private key")
     }
@@ -305,10 +308,13 @@ mod test {
         Ed25519Sha512::verify(MESSAGE_1, hex::decode(SIGNATURE_1).unwrap().as_slice(), &p).unwrap();
 
         // Check if signatures produced here can be verified by OpenSSL.
-        let signature = hex::decode(SIGNATURE_1).unwrap();
-        let openssl_pk = openssl_public_key(&p);
-        let mut verifier = OpenSslVerifier::new_without_digest(&openssl_pk).unwrap();
-        assert!(verifier.verify_oneshot(&signature, MESSAGE_1).unwrap());
+        #[cfg(feature = "crypto-parity-tests")]
+        {
+            let signature = hex::decode(SIGNATURE_1).unwrap();
+            let openssl_pk = openssl_public_key(&p);
+            let mut verifier = OpenSslVerifier::new_without_digest(&openssl_pk).unwrap();
+            assert!(verifier.verify_oneshot(&signature, MESSAGE_1).unwrap());
+        }
     }
 
     #[test]
@@ -406,10 +412,13 @@ mod test {
         assert_eq!(hex::encode(sig.as_slice()), SIGNATURE_1);
 
         // Check if OpenSSL signs the message and this module still can verify it.
-        let openssl_sk = openssl_private_key(&s);
-        let mut signer = Signer::new_without_digest(&openssl_sk).unwrap();
-        let signature = signer.sign_oneshot_to_vec(MESSAGE_1).unwrap();
-        Ed25519Sha512::verify(MESSAGE_1, &signature, &p).unwrap();
+        #[cfg(feature = "crypto-parity-tests")]
+        {
+            let openssl_sk = openssl_private_key(&s);
+            let mut signer = Signer::new_without_digest(&openssl_sk).unwrap();
+            let signature = signer.sign_oneshot_to_vec(MESSAGE_1).unwrap();
+            Ed25519Sha512::verify(MESSAGE_1, &signature, &p).unwrap();
+        }
     }
 
     #[test]

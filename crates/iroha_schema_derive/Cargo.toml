@@ -11,7 +11,7 @@ license.workspace = true
 workspace = true
 
 [features]
-trybuild-tests = []
+trybuild-tests = ["dep:trybuild"]
 
 [lib]
 proc-macro = true
@@ -24,7 +24,11 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 manyhow = { workspace = true, features = ["darling"] }
 darling = { workspace = true }
+trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 iroha_schema = { workspace = true }
-trybuild = { workspace = true }
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]

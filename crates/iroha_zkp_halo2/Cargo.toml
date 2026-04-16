@@ -22,14 +22,20 @@ rayon = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 poseidon-primitives = "0.2.0"
+criterion = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex-literal = { workspace = true }
-criterion = { workspace = true }
 
 [features]
 default = []
+bench = ["dep:criterion"]
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
 schema-structural = ["dep:iroha_schema"]
 parallel = ["dep:rayon"]
 goldilocks_backend = []
+
+[[bench]]
+name = "bench_ipa"
+harness = false
+required-features = ["bench"]
