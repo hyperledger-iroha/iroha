@@ -2589,4 +2589,162 @@ mod tests {
         super::parse_vk_for_unshield_v2(&unshield.circuit_id, unshield_key)
             .expect("unshield key must parse as confidential unshield v2");
     }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0x11_u8; 32];
+        let input_0_rho = [0x21_u8; 32];
+        let input_1_rho = [0x22_u8; 32];
+        let output_0_rho = [0x31_u8; 32];
+        let output_1_rho = [0x32_u8; 32];
+        let input_0_diversifier = super::default_confidential_diversifier_v2();
+        let input_1_diversifier = super::derive_confidential_diversifier_v2(b"input-1");
+        let output_0_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_0_diversifier)
+                .expect("owner tag");
+        let output_1_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&[0x44_u8; 32], [0x55_u8; 32])
+                .expect("recipient owner tag");
+
+        let input_0_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            7,
+            input_0_rho,
+            output_0_owner_tag,
+        )
+        .expect("input 0 commitment");
+        let input_1_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_1_diversifier)
+                .expect("input 1 owner tag");
+        let input_1_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            5,
+            input_1_rho,
+            input_1_owner_tag,
+        )
+        .expect("input 1 commitment");
+
+        let mut tree_commitments = Vec::new();
+        tree_commitments.push(input_0_commitment);
+        tree_commitments.push([0x99_u8; 32]);
+        tree_commitments.push(input_1_commitment);
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+
+        let vk_record =
+            super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
+        let vk_box = vk_record.key.clone().expect("inline transfer vk");
+        let proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[
+                super::ConfidentialTransferInputV2 {
+                    amount: 7,
+                    rho: input_0_rho,
+                    diversifier: input_0_diversifier,
+                    leaf_index: 0,
+                },
+                super::ConfidentialTransferInputV2 {
+                    amount: 5,
+                    rho: input_1_rho,
+                    diversifier: input_1_diversifier,
+                    leaf_index: 2,
+                },
+            ],
+            &[
+                super::ConfidentialTransferOutputV2 {
+                    amount: 8,
+                    rho: output_0_rho,
+                    owner_tag: output_0_owner_tag,
+                },
+                super::ConfidentialTransferOutputV2 {
+                    amount: 4,
+                    rho: output_1_rho,
+                    owner_tag: output_1_owner_tag,
+                },
+            ],
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build transfer proof");
+
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn generated_confidential_transfer_v2_one_input_two_outputs_verifies_against_generated_vk() {
+        let chain_id = iroha_data_model::ChainId::from("confidential-transfer-v2-one-input-test");
+        let asset_definition_id = "zcoin#wonderland";
+        let spend_key = [0x61_u8; 32];
+        let input_rho = [0x71_u8; 32];
+        let recipient_output_rho = [0x81_u8; 32];
+        let change_output_rho = [0x82_u8; 32];
+        let input_diversifier = super::default_confidential_diversifier_v2();
+        let sender_owner_tag =
+            super::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_diversifier)
+                .expect("sender owner tag");
+        let recipient_diversifier = super::derive_confidential_diversifier_v2(b"recipient");
+        let recipient_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &[0x72_u8; 32],
+            recipient_diversifier,
+        )
+        .expect("recipient owner tag");
+        let input_commitment = super::derive_confidential_note_v2(
+            asset_definition_id,
+            2,
+            input_rho,
+            sender_owner_tag,
+        )
+        .expect("input commitment");
+        let tree_commitments = vec![input_commitment];
+        let root_hint =
+            super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
+
+        let vk_record =
+            super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
+        let vk_box = vk_record.key.clone().expect("inline transfer vk");
+        let proof = super::build_confidential_transfer_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &tree_commitments,
+            &[super::ConfidentialTransferInputV2 {
+                amount: 2,
+                rho: input_rho,
+                diversifier: input_diversifier,
+                leaf_index: 0,
+            }],
+            &[
+                super::ConfidentialTransferOutputV2 {
+                    amount: 1,
+                    rho: recipient_output_rho,
+                    owner_tag: recipient_owner_tag,
+                },
+                super::ConfidentialTransferOutputV2 {
+                    amount: 1,
+                    rho: change_output_rho,
+                    owner_tag: sender_owner_tag,
+                },
+            ],
+            root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect("build transfer proof");
+
+        assert!(
+            crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
+            "generated one-input confidential transfer v2 proof should verify against the generated VK"
+        );
+    }
 }
