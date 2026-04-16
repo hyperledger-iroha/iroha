@@ -87,7 +87,8 @@ jobs:
           build-args: |
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
-            "CARGO_BUILD_JOBS=4"
+            "CARGO_BUILD_JOBS=1"
+            "BINARIES=irohad"
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -133,6 +134,7 @@ jobs:
           build-args: |
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
-            "CARGO_BUILD_JOBS=4"
+            "CARGO_BUILD_JOBS=1"
+            "BINARIES=irohad"
           cache-from: type=gha
           cache-to: type=gha,mode=max

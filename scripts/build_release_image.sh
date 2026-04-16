@@ -10,6 +10,7 @@ Options:
   --config <config>       Configuration bundle to embed (single, nexus, or taira). Required.
   --features <list>       Optional comma-separated Cargo feature list passed to the Docker build.
   --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
+  --binaries "<list>"     Optional space-separated binary list passed as BINARIES.
   --tag <tag>             Docker image tag (default: hyperledger/iroha:<profile>-<version>).
   --artifacts-dir <dir>   Output directory for saved images/manifests (default: dist).
   --signing-key <path>    Optional PEM private key for signing the saved image tarball.
@@ -26,6 +27,7 @@ profile=""
 config=""
 features=""
 cargo_build_jobs=""
+binaries=""
 image_tag=""
 artifacts_dir="dist"
 signing_key=""
@@ -47,6 +49,10 @@ while (($#)); do
             ;;
         --cargo-build-jobs)
             cargo_build_jobs="${2:-}"
+            shift 2
+            ;;
+        --binaries)
+            binaries="${2:-}"
             shift 2
             ;;
         --tag)
@@ -124,6 +130,12 @@ case "$config" in
                 features="${features:+${features},}embedded-soracloud-runtime"
                 ;;
         esac
+        if [[ -z "$cargo_build_jobs" ]]; then
+            cargo_build_jobs="1"
+        fi
+        if [[ -z "$binaries" ]]; then
+            binaries="irohad"
+        fi
         ;;
     *)
         printf 'Unsupported config value: %s\n' "$config" >&2
@@ -140,6 +152,10 @@ docker_build_args=(
 
 if [[ -n "$cargo_build_jobs" ]]; then
     docker_build_args+=(--build-arg "CARGO_BUILD_JOBS=${cargo_build_jobs}")
+fi
+
+if [[ -n "$binaries" ]]; then
+    docker_build_args+=(--build-arg "BINARIES=${binaries}")
 fi
 
 docker build \

@@ -76,9 +76,18 @@ Local Taira image build example:
 scripts/build_release_image.sh --profile iroha3 --config taira
 ```
 
-On memory-constrained builders, pass `--cargo-build-jobs 4` to the helper or
-`--build-arg CARGO_BUILD_JOBS=4` to `docker build` to cap Cargo parallelism
-inside the image build.
+The Taira helper now defaults to `CARGO_BUILD_JOBS=1` and `BINARIES=irohad`
+so validator-image builds do not depend on unrelated `iroha_cli` health. For a
+direct Docker build, pass those explicitly:
+
+```bash
+docker build \
+  --build-arg CONFIG_PROFILE=taira \
+  --build-arg FEATURES=embedded-soracloud-runtime \
+  --build-arg CARGO_BUILD_JOBS=1 \
+  --build-arg BINARIES=irohad \
+  -t hyperledger/iroha:taira-local .
+```
 
 The Taira image automatically includes `embedded-soracloud-runtime` and uses a
 Taira-aware entrypoint. With no command override it starts:

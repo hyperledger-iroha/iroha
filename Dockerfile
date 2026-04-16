@@ -13,7 +13,17 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-RUN CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" --bin irohad --bin iroha --bin kagami
+ARG BINARIES="irohad iroha kagami"
+RUN set -e; \
+    set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
+    for bin in ${BINARIES}; do \
+        set -- "$@" --bin "$bin"; \
+    done; \
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run "$@"; \
+    mkdir -p /outbin; \
+    for bin in ${BINARIES}; do \
+        cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
+    done
 
 # final image
 FROM debian:bookworm-slim
@@ -55,9 +65,7 @@ RUN <<EOT
   chown -R $USER:$USER "$APP_DIR"
 EOT
 
-COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
-COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
-COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
+COPY --from=builder /outbin/ $BIN_PATH
 COPY scripts/docker_entrypoint.sh $BIN_PATH
 COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
 COPY defaults /tmp/defaults

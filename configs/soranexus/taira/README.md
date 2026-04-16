@@ -133,8 +133,9 @@ Manual publish prerequisites:
   - `HARBOR_USERNAME`
   - `HARBOR_TOKEN`
 - a self-hosted runner with enough RAM to finish the deploy-profile Rust
-  compile inside `docker build`; the local Colima smoke on this tree still OOMs
-  before the final image layer completes
+  compile inside `docker build`; the current Taira workflow now forces
+  `CARGO_BUILD_JOBS=1` and `BINARIES=irohad` so validator-image publishing is
+  not blocked by unrelated CLI build failures or Colima memory pressure
 - one explicit `workflow_dispatch` run against the chosen release ref so the
   first `hyperledger/iroha:taira-*` and
   `docker.soramitsu.co.jp/iroha3/iroha:taira-*` tags actually exist before
@@ -143,12 +144,12 @@ Manual publish prerequisites:
 If the Docker host is memory-constrained, cap Cargo parallelism during the
 image build:
 
-- `scripts/build_release_image.sh --profile iroha3 --config taira --cargo-build-jobs 4`
-- or `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=4 ...`
+- `scripts/build_release_image.sh --profile iroha3 --config taira`
+- or, for a direct Docker build, `docker build --build-arg CONFIG_PROFILE=taira --build-arg FEATURES=embedded-soracloud-runtime --build-arg CARGO_BUILD_JOBS=1 --build-arg BINARIES=irohad ...`
 
 The image ships:
 
-- `irohad`, `iroha`, and `kagami`
+- `irohad`
 - the checked-in static Taira bundle under `/opt/iroha/configs/soranexus/taira`
 - a Taira-aware entrypoint that defaults to:
   - `irohad --sora --config /config/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json`
