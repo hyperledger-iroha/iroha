@@ -2,6 +2,58 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 root `cargo test` dependency graph reduction):
+plain root `cargo test` is now a top-level `iroha` smoke build instead of an
+implicit sweep over every heavy core crate test suite. Full coverage is still
+available through `cargo test --workspace`, while crate owners can run focused
+suites with `cargo test -p <crate>`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo check -p iroha_core --all-targets`
+  - `cargo test --no-run` with the final top-level default set
+  - `cargo metadata --locked --format-version 1 --no-deps`
+  - `cargo tree --target aarch64-apple-darwin --edges normal,build,dev`
+  - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
+  - `python3 scripts/check_dependency_budget.py`
+- open work after this slice:
+  - split or gate the SoraFS QUIC proxy path so `quinn` does not have to appear
+    in the default client graph unless that transport is requested
+  - replace the CLI/Torii QR and image paths with small internal encoders so
+    `qrcode`, `image`, and related codecs can leave the workspace graph
+  - continue replacing direct `serde_json` callers with Norito JSON wrappers
+  - investigate whether ZK/PQ crypto helper stacks can be split into explicit
+    verification/test packages without changing deterministic node behavior
+
+Latest sync (2026-04-16 DA/RBC restart roster-change localnet fix):
+the reported
+`sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change`
+timeout was narrowed to brittle test-harness assumptions around startup
+readiness and submit peer selection. The case now explicitly enables DA in the
+genesis/config layers, waits for initial four-peer block visibility before
+driving the scenario, uses the DA commit window for transaction confirmation
+TTL/timeout, and sends both the initial progress transaction and the
+roster-change unregister through the resolved leaders for their target
+heights.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcroster.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change' -- --exact --nocapture --test-threads=1` (pass)
+- open work after this slice:
+  - rerun a broader `consensus_and_da` grouped sweep when a long localnet
+    window is available; this fix was validated against the exact reported
+    regression only.
+
 Latest sync (2026-04-16 `iroha_crypto` secp256k1 default-test compile fix):
 the reported `Sha256::digest` failure in
 `crates/iroha_crypto/src/signature/secp256k1.rs` was a feature-gated test

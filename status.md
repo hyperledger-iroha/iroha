@@ -2,6 +2,55 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: plain `cargo test` reduced to a top-level smoke graph
+- `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml` now declares only
+  `crates/iroha` as the workspace default member. Plain `cargo test` still
+  compiles the top-level public library and its dependencies, but it no longer
+  builds every Norito, crypto, data-model, core, P2P, or IVM test binary by
+  default. Use `cargo test -p <crate>` for those focused suites and
+  `cargo test --workspace` for the full 94-member sweep.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  no longer directly depends on unused `halo2-base`, `halo2-ecc`, `crc64fast`,
+  `zeroize`, `async-trait`, `itoa`, or `uuid`; the
+  `zk-halo2-jemallocator` compatibility feature remains but no longer links
+  `halo2-ecc` through `iroha_core`.
+- `/Users/takemiyamakoto/soramitsudev/iroha/README.md` and
+  `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md` now distinguish the
+  reduced default smoke command from focused crate tests and the full workspace
+  command.
+- Dependency graph snapshot on `aarch64-apple-darwin` after the reduction:
+  plain `cargo test` default graph is 664 unique packages; full
+  `cargo test --workspace` graph is 1108 unique packages. The default graph no
+  longer contains `eframe`, `pyo3`, `napi`, `cpal`, `qrcode`, `image`,
+  `halo2-base`, `halo2-ecc`, or `uuid`.
+- The local ignored `Cargo.lock` was refreshed with `cargo generate-lockfile`;
+  no tracked lockfile diff is expected in this repository.
+- Focused validation for this slice:
+  - `cargo check -p iroha_core --all-targets` (pass, 22m34s)
+  - `cargo test --no-run` with the earlier seven-member default set (pass,
+    49m16s; this exposed why the standalone IVM/core/Norito test suites should
+    not be part of the root default command)
+  - `cargo test --no-run` with the final top-level default set (pass)
+  - `cargo metadata --locked --format-version 1 --no-deps`
+  - `cargo tree --target aarch64-apple-darwin --edges normal,build,dev`
+  - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
+  - `python3 scripts/check_dependency_budget.py`
+
+## 2026-04-16 Follow-up: DA/RBC restart roster-change regression reruns cleanly
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now makes `sumeragi_rbc_recovers_after_restart_with_roster_change`
+  match the stricter DA/RBC localnet harness assumptions: DA is enabled in
+  both genesis and config, startup waits for the four peers to observe the
+  initial block before submitting, client confirmation TTL/timeout is extended
+  to the DA commit window, and the initial progress transaction plus the
+  roster-change unregister are submitted through the resolved leaders for
+  their target heights instead of pinning them to peer 0.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.rbcroster.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change' -- --exact --nocapture --test-threads=1` (pass; the run had to wait for a concurrent shared-target Cargo build before starting the localnet)
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: `iroha_crypto` secp256k1 default-test build restored
 - `/home/mtakemiya/dev/iroha/crates/iroha_crypto/src/signature/secp256k1.rs`
   now imports `sha2::Digest` unconditionally inside the test module so the
