@@ -3976,18 +3976,18 @@ impl Iroha {
         }
 
         let config_caps = build_consensus_config_caps(&config.sumeragi)?;
-        let consensus_caps_override = if block_count.0 == 0 {
-            genesis.as_ref().and_then(|block| {
-                consensus_caps_from_genesis(
-                    block,
-                    &config.common.chain,
-                    &config_caps,
-                    &config.sumeragi,
-                )
-            })
-        } else {
-            None
-        };
+        let consensus_caps_override =
+            stored_genesis_block
+                .as_ref()
+                .or(genesis.as_ref())
+                .and_then(|block| {
+                    consensus_caps_from_genesis(
+                        block,
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                });
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
 
         // Compute consensus handshake caps for gating peers
@@ -4016,18 +4016,23 @@ impl Iroha {
 
         if let Some(genesis_block) = genesis.as_ref() {
             let metadata_genesis = stored_genesis_block.as_ref().unwrap_or(genesis_block);
-            verify_genesis_metadata(
+            if let Err(err) = verify_genesis_metadata(
                 metadata_genesis,
                 &config,
                 &consensus_caps,
                 &computed_mode_tag,
                 &computed_bls_domain,
                 proto,
-            )
-            .map_err(|err| {
-                iroha_logger::error!(?err, "genesis consensus metadata validation failed");
-                Report::new(StartError::InitKura).attach(err)
-            })?;
+            ) {
+                if stored_genesis_block.is_none() && block_count.0 == 0 {
+                    iroha_logger::error!(?err, "genesis consensus metadata validation failed");
+                    return Err(Report::new(StartError::InitKura).attach(err));
+                }
+                iroha_logger::warn!(
+                    ?err,
+                    "stored genesis consensus metadata does not match runtime consensus caps; continuing with existing Kura state"
+                );
+            }
         }
 
         // If a genesis manifest JSON is provided via CLI, validate consensus fields.

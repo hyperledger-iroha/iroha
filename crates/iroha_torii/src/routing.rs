@@ -168,6 +168,7 @@ use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
+    core::DecodeFromSlice,
     json::{self, Map, Value},
     to_bytes,
 };
@@ -30458,6 +30459,8 @@ pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
 #[cfg(feature = "app_api")]
+const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/multisig/approve";
@@ -34154,6 +34157,28 @@ mod tx_query_integration_smoke {
 
     fn log_instruction() -> dm::InstructionBox {
         dm::Log::new(dm::Level::INFO, "test".to_string()).into()
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn confidential_relay_decodes_bare_norito_signed_transaction() {
+        let (authority, keypair) = account_with_key();
+        let chain: dm::ChainId = "test-chain".parse().unwrap();
+        let tx = dm::TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
+            .sign(keypair.private_key());
+        let bytes = norito::to_bytes(&tx).expect("encode signed transaction");
+        let raw_bytes = norito::codec::Encode::encode(&tx);
+
+        let decoded = decode_relay_signed_transaction(&hex::encode(bytes))
+            .expect("decode bare norito signed transaction");
+        let raw_decoded = decode_relay_signed_transaction(&hex::encode(raw_bytes))
+            .expect("decode raw encoded signed transaction");
+
+        assert_eq!(decoded.chain(), &chain);
+        assert_eq!(decoded.authority(), &authority);
+        assert_eq!(raw_decoded.chain(), &chain);
+        assert_eq!(raw_decoded.authority(), &authority);
     }
 
     #[tokio::test]
@@ -51965,8 +51990,41 @@ fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
     }
     let bytes =
         hex::decode(trimmed).map_err(|_| confidential_invalid_request("invalid signed_tx_hex"))?;
-    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
-        .map_err(|_| confidential_invalid_request("invalid signed transaction bytes"))
+    if let Ok(tx) =
+        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
+    {
+        return Ok(tx);
+    }
+    if let Ok((tx, used)) = SignedTransaction::decode_from_slice(&bytes) {
+        if used == bytes.len() {
+            return Ok(tx);
+        }
+    }
+    if let Ok(tx) = norito::decode_from_bytes::<SignedTransaction>(&bytes) {
+        return Ok(tx);
+    }
+    if let Ok(TransactionEntrypoint::External(tx)) =
+        <TransactionEntrypoint as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+            &bytes,
+        )
+    {
+        return Ok(tx);
+    }
+    if let Ok((TransactionEntrypoint::External(tx), used)) =
+        TransactionEntrypoint::decode_from_slice(&bytes)
+    {
+        if used == bytes.len() {
+            return Ok(tx);
+        }
+    }
+    if let Ok(TransactionEntrypoint::External(tx)) =
+        norito::decode_from_bytes::<TransactionEntrypoint>(&bytes)
+    {
+        return Ok(tx);
+    }
+    Err(confidential_invalid_request(
+        "invalid signed transaction bytes",
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -52114,7 +52172,7 @@ pub async fn handle_v1_confidential_relay_submit(
     if let Some(attachments) = source_tx.attachments().cloned() {
         builder = builder.with_attachments(attachments);
     }
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52374,7 +52432,7 @@ pub async fn handle_v1_accounts_onboard(
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
         .with_instructions(instructions);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52530,7 +52588,7 @@ pub async fn handle_v1_accounts_faucet(
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
         .with_instructions(instructions);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&faucet.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
@@ -52693,7 +52751,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             InstructionBox::from(register),
             InstructionBox::from(bind_alias),
         ]);
-    builder.set_ttl(Duration::from_secs(60));
+    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
