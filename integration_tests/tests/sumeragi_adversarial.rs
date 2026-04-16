@@ -105,6 +105,7 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     };
 
     let client = network.client();
+    let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
     configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
@@ -124,17 +125,31 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     .await
     .wrap_err("fetch RBC sessions after chunk-drop wait")??;
 
+    let status_after_all = collect_client_statuses_best_effort(&cluster_clients)?;
+    let min_blocks = status_after_all
+        .iter()
+        .map(|status| status.blocks)
+        .min()
+        .unwrap_or(status_after.blocks);
+    let max_blocks = status_after_all
+        .iter()
+        .map(|status| status.blocks)
+        .max()
+        .unwrap_or(status_after.blocks);
     let delivered = get_bool(&session, "delivered").unwrap_or(false)
         || any_delivered_session_for_height(&sessions_after, session_height);
-    if delivered || status_after.blocks >= expected_height {
+    let incomplete = session_has_missing_chunks(&session)
+        || any_incomplete_session_for_height(&sessions_after, session_height);
+    if max_blocks >= expected_height {
         ensure!(
-            status_after.blocks >= expected_height,
-            "chunk drop scenario delivered via local payload recovery; expected commit height to advance"
+            max_blocks.saturating_sub(min_blocks) <= 1,
+            "chunk drop recovery should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
         );
     } else {
         ensure!(
-            status_after.blocks == status_before.blocks,
-            "block height must remain unchanged when RBC delivery fails"
+            max_blocks == status_before.blocks && min_blocks == status_before.blocks,
+            "block height must remain unchanged when chunk loss prevents commit (before={}, min={min_blocks}, max={max_blocks}, delivered={delivered}, incomplete={incomplete})",
+            status_before.blocks
         );
     }
 
@@ -145,10 +160,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
         "status_before_blocks".into(),
         Value::from(status_before.blocks),
     );
-    summary_map.insert(
-        "status_after_blocks".into(),
-        Value::from(status_after.blocks),
-    );
+    summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
+    summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("delivered".into(), Value::from(delivered));
+    summary_map.insert("incomplete".into(), Value::from(incomplete));
     summary_map.insert("rbc_session".into(), session.clone());
     emit_summary("chunk_drop", &Value::Object(summary_map))?;
 
@@ -1751,6 +1766,18 @@ fn any_complete_session_for_height(value: &Value, target_height: u64) -> bool {
         })
 }
 
+fn session_has_missing_chunks(value: &Value) -> bool {
+    let total = get_u64(value, "total_chunks").unwrap_or_default();
+    let received = get_u64(value, "received_chunks").unwrap_or_default();
+    total > 0 && received < total
+}
+
+fn any_incomplete_session_for_height(value: &Value, target_height: u64) -> bool {
+    extract_sessions_for_height(value, target_height)
+        .iter()
+        .any(session_has_missing_chunks)
+}
+
 #[test]
 fn delivered_height_check_scans_all_sessions_for_the_height() {
     let sessions = norito::json!({
@@ -1779,6 +1806,20 @@ fn complete_height_check_accepts_full_chunk_telemetry_without_delivered_flag() {
     assert!(any_complete_session_for_height(&sessions, 3));
     assert!(any_complete_session_for_height(&sessions, 4));
     assert!(!any_complete_session_for_height(&sessions, 5));
+}
+
+#[test]
+fn incomplete_height_check_accepts_delivered_sessions_with_missing_chunks() {
+    let sessions = norito::json!({
+        "items": [
+            {"height": 3, "view": 0, "delivered": true, "total_chunks": 8, "received_chunks": 6},
+            {"height": 4, "view": 0, "delivered": false, "total_chunks": 2, "received_chunks": 2}
+        ]
+    });
+
+    assert!(any_incomplete_session_for_height(&sessions, 3));
+    assert!(!any_incomplete_session_for_height(&sessions, 4));
+    assert!(!any_incomplete_session_for_height(&sessions, 5));
 }
 
 fn consensus_message_total(status: &Value, kind: &str, outcome: &str, reason: &str) -> u64 {

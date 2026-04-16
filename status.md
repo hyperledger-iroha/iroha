@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-16
 
+## 2026-04-16 Follow-up: RBC chunk-loss harnesses account for local-payload recovery
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  no longer treats a single node's RBC `delivered` telemetry bit as proof that
+  the block must have committed. The chunk-drop scenario now checks cluster
+  height directly: progress is accepted when any peer reaches the expected
+  height, otherwise the stalled cluster must remain pinned at the prior height.
+  The summary also records whether delivery or incomplete chunk telemetry was
+  observed.
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  now probes RBC sessions and backlog gauges from every peer instead of only
+  the default client. It also treats a delivered session with
+  `received_chunks < total_chunks` as chunk-loss evidence, so local-payload
+  recovery no longer hides the fault before the polling loop sees it.
+- Added focused helper coverage for delivered-but-incomplete RBC session
+  detection in both affected integration test modules.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::incomplete_height_check_accepts_delivered_sessions_with_missing_chunks' -- --exact --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::tests::rbc_session_helpers_detect_delivered_missing_chunks' -- --exact --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::tests::rbc_session_missing_chunk_helper_requires_known_total' -- --exact --nocapture`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.chunkdrop2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_drop' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposchunkloss.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_rbc_chunk_loss_fault_reports_backlog' -- --exact --nocapture --test-threads=1`
+  - `git diff --check`
+- `cargo test --workspace` was not run in this slice because the repository
+  notes document it as a multi-hour validation pass.
+
 ## 2026-04-16 Follow-up: Soracloud CLI output-model duplicates no longer break the local app/service workspace commands
 - `/home/mtakemiya/dev/iroha/crates/iroha_cli/src/soracloud.rs` no longer carries
   the stale duplicate top-level DTO block that had drifted away from the

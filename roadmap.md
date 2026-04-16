@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-16
 
+Latest sync (2026-04-16 RBC chunk-loss harnesses account for local-payload recovery):
+the reported `sumeragi_adversarial_chunk_drop` failure was a stale harness
+assumption: an RBC session can be marked delivered on one node via local-payload
+recovery without implying that the block has committed. The chunk-drop harness
+now checks cluster height directly and accepts the expected stalled-height path
+when chunk loss prevents commit. The reported
+`npos_rbc_chunk_loss_fault_reports_backlog` timeout was narrowed to polling only
+one peer and only accepting undelivered/backlog-gauge evidence; the NPoS harness
+now probes all peer endpoints and also recognizes delivered sessions that still
+show missing chunks as chunk-loss evidence.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::incomplete_height_check_accepts_delivered_sessions_with_missing_chunks' -- --exact --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::tests::rbc_session_helpers_detect_delivered_missing_chunks' -- --exact --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::tests::rbc_session_missing_chunk_helper_requires_known_total' -- --exact --nocapture`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.chunkdrop2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_adversarial::sumeragi_adversarial_chunk_drop' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/soramitsudev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposchunkloss.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_rbc_chunk_loss_fault_reports_backlog' -- --exact --nocapture --test-threads=1`
+  - `git diff --check`
+- open work after this slice:
+  - rerun the broader `consensus_and_da` group and full workspace validation
+    when a longer localnet window is available; `cargo test --workspace` remains
+    a multi-hour pass per repository notes.
+
 Latest sync (2026-04-16 Soracloud CLI output-model duplicates removed):
 the user-reported `iroha_cli` Soracloud compile failure was caused by a stale
 duplicate DTO block in `crates/iroha_cli/src/soracloud.rs`, not by a new

@@ -129,6 +129,32 @@ where
     json::to_value(value).expect("serialize helper")
 }
 
+fn rbc_session_height_matches(entry: &Value, expected_height: u64) -> bool {
+    entry
+        .get("height")
+        .and_then(Value::as_u64)
+        .is_some_and(|height| height == expected_height)
+}
+
+fn rbc_session_delivered(entry: &Value) -> bool {
+    entry
+        .get("delivered")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn rbc_session_has_missing_chunks(entry: &Value) -> bool {
+    let total = entry
+        .get("total_chunks")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let received = entry
+        .get("received_chunks")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    total > 0 && received < total
+}
+
 #[derive(Debug, Clone)]
 struct Stats {
     samples: usize,
@@ -1362,16 +1388,20 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
 
     let http = reqwest::Client::new();
-    let sessions_url = client
-        .torii_url
-        .join("v1/sumeragi/rbc/sessions")
-        .wrap_err("compose RBC sessions URL")?;
-    let metrics_url = client
-        .torii_url
-        .join("metrics")
-        .wrap_err("compose metrics URL")?;
+    let probe_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
+    let sessions_urls = probe_clients
+        .iter()
+        .map(|client| client.torii_url.join("v1/sumeragi/rbc/sessions"))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .wrap_err("compose RBC sessions URLs")?;
+    let metrics_urls = probe_clients
+        .iter()
+        .map(|client| client.torii_url.join("metrics"))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .wrap_err("compose metrics URLs")?;
 
     let mut found_undelivered = false;
+    let mut found_missing_chunks = false;
     let mut pending_sessions_max: f64 = 0.0;
     let mut backlog_chunks_max: f64 = 0.0;
     let mut backlog_chunks_total: f64 = 0.0;
@@ -1385,63 +1415,83 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
             "timed out waiting for RBC chunk loss backlog"
         );
 
-        if let Ok(response) = http
-            .get(sessions_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            && response.status().is_success()
-        {
-            let body = response.text().await.wrap_err("read sessions body")?;
-            let parsed: Value = norito::json::from_str(&body).wrap_err("parse sessions JSON")?;
-            if let Some(items) = parsed.get("items").and_then(Value::as_array)
-                && let Some(entry) = items.iter().find(|entry| {
-                    let height_match = entry
-                        .get("height")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|height| height == expected_height);
-                    let delivered = entry
-                        .get("delivered")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true);
-                    height_match && !delivered
-                })
+        for sessions_url in &sessions_urls {
+            if let Ok(response) = http
+                .get(sessions_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                && response.status().is_success()
             {
-                found_undelivered = true;
-                session_view = entry.clone();
+                let body = response.text().await.wrap_err("read sessions body")?;
+                let parsed: Value =
+                    norito::json::from_str(&body).wrap_err("parse sessions JSON")?;
+                if let Some(items) = parsed.get("items").and_then(Value::as_array) {
+                    if matches!(session_view, Value::Null)
+                        && let Some(entry) = items
+                            .iter()
+                            .find(|entry| rbc_session_height_matches(entry, expected_height))
+                    {
+                        session_view = entry.clone();
+                    }
+                    if let Some(entry) = items.iter().find(|entry| {
+                        rbc_session_height_matches(entry, expected_height)
+                            && (!rbc_session_delivered(entry)
+                                || rbc_session_has_missing_chunks(entry))
+                    }) {
+                        if !rbc_session_delivered(entry) {
+                            found_undelivered = true;
+                        }
+                        if rbc_session_has_missing_chunks(entry) {
+                            found_missing_chunks = true;
+                        }
+                        session_view = entry.clone();
+                    }
+                }
             }
         }
 
-        let response = http
-            .get(metrics_url.clone())
-            .header("Accept", "text/plain")
-            .send()
-            .await
-            .wrap_err("fetch metrics snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "metrics endpoint returned status {}",
-            response.status()
-        );
-        let snapshot = response.text().await.wrap_err("read metrics body")?;
-        let reader = MetricsReader::new(&snapshot);
+        for metrics_url in &metrics_urls {
+            let response = http
+                .get(metrics_url.clone())
+                .header("Accept", "text/plain")
+                .send()
+                .await
+                .wrap_err("fetch metrics snapshot")?;
+            ensure!(
+                response.status().is_success(),
+                "metrics endpoint returned status {}",
+                response.status()
+            );
+            let snapshot = response.text().await.wrap_err("read metrics body")?;
+            let reader = MetricsReader::new(&snapshot);
 
-        if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_sessions_pending") {
-            pending_sessions_max = pending_sessions_max.max(value);
-        }
-        if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_total") {
-            backlog_chunks_total = backlog_chunks_total.max(value);
-        }
-        if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_max") {
-            backlog_chunks_max = backlog_chunks_max.max(value);
+            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_sessions_pending") {
+                pending_sessions_max = pending_sessions_max.max(value);
+            }
+            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_total") {
+                backlog_chunks_total = backlog_chunks_total.max(value);
+            }
+            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_max") {
+                backlog_chunks_max = backlog_chunks_max.max(value);
+            }
+
+            if found_undelivered
+                || found_missing_chunks
+                || pending_sessions_max >= 1.0
+                || backlog_chunks_total >= 1.0
+                || backlog_chunks_max >= 1.0
+            {
+                last_metrics_snapshot.get_or_insert(snapshot);
+            }
         }
 
         let backlog_observed = found_undelivered
+            || found_missing_chunks
             || pending_sessions_max >= 1.0
             || backlog_chunks_total >= 1.0
             || backlog_chunks_max >= 1.0;
         if backlog_observed {
-            last_metrics_snapshot.get_or_insert(snapshot);
             break;
         }
 
@@ -1449,6 +1499,7 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     }
 
     let backlog_observed = found_undelivered
+        || found_missing_chunks
         || pending_sessions_max >= 1.0
         || backlog_chunks_total >= 1.0
         || backlog_chunks_max >= 1.0;
@@ -1471,6 +1522,10 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     );
     metrics.insert("backlog_chunks_max".into(), json_value(&backlog_chunks_max));
     metrics.insert("found_undelivered".into(), json_value(&found_undelivered));
+    metrics.insert(
+        "found_missing_chunks".into(),
+        json_value(&found_missing_chunks),
+    );
     let metrics_snapshot = last_metrics_snapshot.unwrap_or_default();
     metrics.insert("last_snapshot".into(), json_value(&metrics_snapshot));
     root.insert("metrics".into(), Value::Object(metrics));
@@ -1504,12 +1559,47 @@ fn persist_summary_if_requested(scenario: &str, summary_pretty: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::Stats;
+    use super::{
+        Stats, rbc_session_delivered, rbc_session_has_missing_chunks, rbc_session_height_matches,
+    };
 
     #[test]
     fn stats_from_samples_computes_median() {
         let stats = Stats::from_samples(&[1.0, 3.0, 2.0]).expect("stats");
         assert!((stats.median - 2.0).abs() < f64::EPSILON);
         assert_eq!(stats.samples, 3);
+    }
+
+    #[test]
+    fn rbc_session_helpers_detect_delivered_missing_chunks() {
+        let session = norito::json!({
+            "height": 7,
+            "delivered": true,
+            "total_chunks": 4,
+            "received_chunks": 2
+        });
+
+        assert!(rbc_session_height_matches(&session, 7));
+        assert!(!rbc_session_height_matches(&session, 8));
+        assert!(rbc_session_delivered(&session));
+        assert!(rbc_session_has_missing_chunks(&session));
+    }
+
+    #[test]
+    fn rbc_session_missing_chunk_helper_requires_known_total() {
+        let complete = norito::json!({
+            "height": 7,
+            "delivered": false,
+            "total_chunks": 4,
+            "received_chunks": 4
+        });
+        let absent_total = norito::json!({
+            "height": 7,
+            "delivered": false,
+            "received_chunks": 1
+        });
+
+        assert!(!rbc_session_has_missing_chunks(&complete));
+        assert!(!rbc_session_has_missing_chunks(&absent_total));
     }
 }
