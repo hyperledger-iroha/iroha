@@ -11915,6 +11915,7 @@ fn unsupported_routed_query_response(message: impl Into<String>) -> Response {
 
 fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
     response.status() == StatusCode::NOT_FOUND
+        || torii_response_has_reject_code(response, "route_unavailable")
 }
 
 fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
@@ -12439,6 +12440,7 @@ async fn execute_torii_query_via_fanout_for_routes(
             let fanout_request = fanout_verified_query_request(&verified_query);
             let mut merged_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
             let mut last_not_found = None;
+            let mut last_route_unavailable = None;
             for route in routes {
                 match execute_torii_verified_query_exhaustive_for_route(
                     app,
@@ -12477,19 +12479,25 @@ async fn execute_torii_query_via_fanout_for_routes(
                         );
                     }
                     Err(response) if should_skip_iterable_routed_query_route_error(&response) => {
-                        last_not_found = Some(response);
+                        if torii_response_has_reject_code(&response, "route_unavailable") {
+                            last_route_unavailable = Some(response);
+                        } else {
+                            last_not_found = Some(response);
+                        }
                     }
                     Err(response) => return response,
                 }
             }
 
             let Some(batch) = merged_batch else {
-                return last_not_found.unwrap_or_else(|| {
-                    torii_proxy_error_response(
-                        StatusCode::NOT_FOUND,
-                        "not_found",
-                        "query result was not found in any dataspace",
-                    )
+                return last_route_unavailable.unwrap_or_else(|| {
+                    last_not_found.unwrap_or_else(|| {
+                        torii_proxy_error_response(
+                            StatusCode::NOT_FOUND,
+                            "not_found",
+                            "query result was not found in any dataspace",
+                        )
+                    })
                 });
             };
             let batch = canonicalize_query_batch_box(batch, start.params.pagination);
@@ -13398,9 +13406,16 @@ mod torii_routed_read_tests {
     }
 
     #[test]
-    fn iterable_routed_query_skips_not_found_route_errors_only() {
+    fn iterable_routed_query_skips_not_found_and_route_unavailable_errors() {
         assert!(should_skip_iterable_routed_query_route_error(
             &torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+        ));
+        assert!(should_skip_iterable_routed_query_route_error(
+            &torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "offline",
+            )
         ));
         assert!(!should_skip_iterable_routed_query_route_error(
             &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
