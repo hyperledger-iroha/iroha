@@ -51,6 +51,9 @@ manager; the CLI does not keep a shadow control-plane mirror.
   generic fallback path:
   - `https://taira.sora.org/soradns/docs.sora/`
   - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
+- On Taira, the shared public edge serves that fallback form generically for
+  active aliases. Do not replace it with invented per-service paths such as
+  `https://taira.sora.org/<service>/...`.
 - The `/soradns/<alias>/...` path is a compatibility gateway, not the
   canonical app origin. App manifests, frontend env vars, and release notes
   should continue to point at the vanity host itself.

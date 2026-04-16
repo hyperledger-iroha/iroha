@@ -530,8 +530,8 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
         fixture.schema_hash,
         hash_vk(&vk_box),
     );
-    record.vk_len =
-        u32::try_from(vk_box.bytes.len()).wrap_err("fixture verifying key length overflowed u32")?;
+    record.vk_len = u32::try_from(vk_box.bytes.len())
+        .wrap_err("fixture verifying key length overflowed u32")?;
     record.max_proof_bytes = u32::try_from(fixture.proof_bytes.len())
         .wrap_err("fixture proof length overflowed u32")?
         .max(4_096);
@@ -542,7 +542,8 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
     Ok(record)
 }
 
-fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]> {
+fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]>
+{
     Ok([
         (
             localnet_fee_vk_transfer_id(),
@@ -2328,8 +2329,7 @@ fn append_localnet_contract_permissions(
 ) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
-    let manage_verifying_keys =
-        Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
+    let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let client_account_id = localnet_client_account_id();
     let manage_account_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
@@ -5093,8 +5093,8 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
 
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-        let raw_genesis =
-            RawGenesisTransaction::from_path(temp.path().join("genesis.json")).expect("parse genesis");
+        let raw_genesis = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("parse genesis");
         let fee_asset_id = localnet_fee_asset_literal();
         let fee_asset = manifest
             .get("transactions")

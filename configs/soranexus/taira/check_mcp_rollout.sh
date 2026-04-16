@@ -52,7 +52,9 @@ unless --skip-write-canary is provided explicitly for read-only validation.
 
 Public checks intentionally require an explicit public node URL
 (`--public-root https://<taira-node>` or `--public-url https://<taira-node>/v1/mcp`).
-`https://taira.sora.org` is convenience-only and is no longer assumed here.
+`https://taira.sora.org` is the current public Torii root, but this script
+still requires an explicit URL so operators do not accidentally validate the
+wrong edge or validator hostname.
 EOF
 }
 
@@ -210,7 +212,7 @@ fi
 
 if [[ $SKIP_PUBLIC -eq 0 && -z "$PUBLIC_MCP_URL" ]]; then
   if [[ -z "$PUBLIC_TORII_ROOT" ]]; then
-    echo "public rollout checks require an explicit --public-root or --public-url; do not rely on https://taira.sora.org as the canonical API target" >&2
+    echo "public rollout checks require an explicit --public-root or --public-url; pass the exact Torii root you want to validate, for example https://taira.sora.org" >&2
     exit 1
   fi
   PUBLIC_MCP_URL="$(mcp_url_from_root "$PUBLIC_TORII_ROOT")"
