@@ -1577,14 +1577,28 @@ function decodeZkInstructionPayload(wireId, payload) {
       };
     }
     case "iroha_data_model::isi::zk::Unshield": {
-      const fields = decodeStructFields(payload, "zk.Unshield", [
-        "asset",
-        "to",
-        "public_amount",
-        "inputs",
-        "proof",
-        "root_hint",
-      ]);
+      let fields;
+      try {
+        fields = decodeStructFields(payload, "zk.Unshield", [
+          "asset",
+          "to",
+          "public_amount",
+          "inputs",
+          "outputs",
+          "proof",
+          "root_hint",
+        ]);
+      } catch (_error) {
+        fields = decodeStructFields(payload, "zk.Unshield", [
+          "asset",
+          "to",
+          "public_amount",
+          "inputs",
+          "proof",
+          "root_hint",
+        ]);
+        fields.outputs = encodeNoritoVec([], (entry) => entry);
+      }
       return {
         zk: {
           Unshield: {
@@ -1605,6 +1619,18 @@ function decodeZkInstructionPayload(wireId, payload) {
                   ),
                 ),
               "zk.Unshield.inputs",
+            ),
+            outputs: decodeNoritoVec(
+              fields.outputs,
+              (entry, index) =>
+                Array.from(
+                  decodeFixedByteArrayArchiveValue(
+                    entry,
+                    32,
+                    `zk.Unshield.outputs[${index}]`,
+                  ),
+                ),
+              "zk.Unshield.outputs",
             ),
             proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
             root_hint: decodeOptionValue(
@@ -2666,6 +2692,9 @@ function encodeUnshieldPayload(value) {
     [encodeU128Value(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
+    )],
+    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
+      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.outputs[${index}]`),
     )],
     [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
     [

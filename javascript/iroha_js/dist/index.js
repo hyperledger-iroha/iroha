@@ -122,6 +122,7 @@ export {
   buildPrivateKaigiFeeSpend,
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
+  buildConfidentialUnshieldProofV3,
   buildPrivateCreateKaigiTransaction,
   buildJoinKaigiTransaction,
   buildPrivateJoinKaigiTransaction,

@@ -1884,6 +1884,83 @@ export function buildConfidentialUnshieldProofV2({
 }
 
 /**
+ * Build a confidential unshield v3 proof envelope with optional private change.
+ */
+export function buildConfidentialUnshieldProofV3({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  outputs,
+  publicAmount,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialUnshieldProofV3 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialUnshieldProofV3",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedOutputs = Array.isArray(outputs)
+    ? outputs.map((output, index) => ({
+        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          output?.rhoHex ?? output?.rho,
+          `outputs[${index}].rho`,
+        ),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialUnshieldProofV3(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizedOutputs,
+    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
  * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Create)`.
  */
 export function buildPrivateCreateKaigiTransaction({

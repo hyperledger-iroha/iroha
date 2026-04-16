@@ -833,6 +833,120 @@ pub mod isi {
         Ok(())
     }
 
+    fn validate_confidential_unshield_v3_public_inputs(
+        unshield: &zk::Unshield,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        let Some(vk_record) = vk_record else {
+            return Ok(());
+        };
+        if !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Ok(());
+        }
+        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires halo2/ipa backend".into(),
+            ));
+        }
+        if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires 1-2 inputs".into(),
+            ));
+        }
+        if unshield.outputs().len() > 1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 supports at most one private change output".into(),
+            ));
+        }
+        let (
+            _input_commitments,
+            proof_nullifiers,
+            proof_outputs,
+            proof_root,
+            public_amount,
+            asset_tag,
+            chain_tag,
+        ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(&attachment.proof.bytes)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid confidential unshield v3 public inputs: {err}").into(),
+                )
+            })?;
+        let root_hint = (*unshield.root_hint()).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires root_hint".into(),
+            )
+        })?;
+        if proof_root != root_hint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 root_hint mismatch".into(),
+            ));
+        }
+        let expected_public_amount =
+            crate::zk::confidential_v2::encode_confidential_amount_v2(*unshield.public_amount());
+        if public_amount != expected_public_amount {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 public amount mismatch".into(),
+            ));
+        }
+        let zero = [0u8; 32];
+        for index in 0..2 {
+            let expected_nullifier = unshield.inputs().get(index).copied().unwrap_or(zero);
+            if proof_nullifiers[index] != expected_nullifier {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential unshield v3 nullifier mismatch".into(),
+                ));
+            }
+        }
+        let expected_output = unshield.outputs().first().copied().unwrap_or(zero);
+        if proof_outputs != expected_output {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 output commitment mismatch".into(),
+            ));
+        }
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &unshield.asset().to_string(),
+        );
+        if asset_tag != expected_asset_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 asset tag mismatch".into(),
+            ));
+        }
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
+        if chain_tag != expected_chain_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 chain tag mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_confidential_unshield_public_inputs(
+        unshield: &zk::Unshield,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        validate_confidential_unshield_v2_public_inputs(
+            unshield,
+            attachment,
+            state_transaction,
+            vk_record,
+        )?;
+        validate_confidential_unshield_v3_public_inputs(
+            unshield,
+            attachment,
+            state_transaction,
+            vk_record,
+        )
+    }
+
     fn extract_vote_public_inputs(
         backend: &str,
         proof_bytes: &[u8],
@@ -8527,6 +8641,7 @@ pub mod isi {
                 .cloned()
                 .unwrap_or_default();
             state_transaction.register_nullifiers(self.inputs().len())?;
+            state_transaction.register_commitments(self.outputs().len())?;
             let attachment = self.proof();
             if attachment.backend != attachment.proof.backend {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -8553,7 +8668,7 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
-            validate_confidential_unshield_v2_public_inputs(
+            validate_confidential_unshield_public_inputs(
                 &self,
                 attachment,
                 state_transaction,
@@ -8632,6 +8747,18 @@ pub mod isi {
                     ));
                 }
             }
+            let root_before = st.root_history.last().copied();
+            let mut outputs_sorted = self.outputs().clone();
+            outputs_sorted.sort_unstable();
+            for &commitment in &outputs_sorted {
+                let _ =
+                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
+            }
+            let _frontier_update = st.record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            );
             let mint = Mint::asset_numeric(
                 iroha_primitives::numeric::Numeric::new(*self.public_amount(), 0),
                 asset_id,
@@ -8712,7 +8839,7 @@ pub mod isi {
                     }),
                 ),
             ));
-            // No new root is produced by unshield (public credit)
+            let _ = root_before;
             Ok(())
         }
     }
