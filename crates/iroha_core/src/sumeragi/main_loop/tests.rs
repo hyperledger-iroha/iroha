@@ -22182,7 +22182,6 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
 async fn known_block_commit_qc_recovery_retry_reissues_fetch_for_local_payload() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
