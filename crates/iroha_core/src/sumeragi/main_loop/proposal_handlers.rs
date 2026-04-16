@@ -1788,7 +1788,10 @@ impl Actor {
         )
     }
 
-    fn retry_rbc_progress_after_block_created_hydration(&mut self, session_key: SessionKey) {
+    pub(super) fn retry_rbc_progress_after_block_created_hydration(
+        &mut self,
+        session_key: SessionKey,
+    ) {
         // Duplicate/alternate BlockCreated paths can return before later RBC recovery passes.
         // Retry READY/DELIVER immediately once the local payload has hydrated the session.
         if let Err(err) = self.maybe_emit_rbc_ready(session_key) {
@@ -2200,55 +2203,14 @@ impl Actor {
                         .unwrap_or_else(|| {
                             Hash::new(&super::proposals::block_payload_bytes(&block))
                         });
-                    let needs_retry = self
-                        .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .get(&session_key)
-                        .is_some_and(|session| {
-                            !session.is_invalid()
-                                && !session.delivered
-                                && (!session.sent_ready
-                                    || super::rbc_session_needs_payload(session, payload_hash))
-                        });
-                    if needs_retry
-                        && self
-                            .subsystems
-                            .da_rbc
-                            .rbc
-                            .sessions
-                            .get(&session_key)
-                            .is_some_and(|session| {
-                                super::rbc_session_needs_payload(session, payload_hash)
-                            })
-                    {
-                        let payload_bytes = super::proposals::block_payload_bytes(&block);
-                        self.hydrate_rbc_session_from_block(
-                            session_key,
-                            &payload_bytes,
-                            payload_hash,
-                            sender.as_ref(),
-                        )?;
-                    }
-                    if needs_retry {
-                        self.populate_rbc_session_metadata_from_block(session_key, &block);
-                        self.retry_rbc_progress_after_block_created_hydration(session_key);
-                    }
-                    if !self
-                        .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .get(&session_key)
-                        .is_some_and(|session| !session.is_invalid() && !session.delivered)
-                    {
-                        // The exact-frontier path already has a local pending block, so the live
-                        // RBC runtime can retire once no further READY/DELIVER progress is needed.
-                        // Keep the persisted snapshot and operator summary until commit or TTL
-                        // cleanup so restart recovery still has durable payload state.
-                        self.clear_rbc_runtime_state(session_key, false);
-                    }
+                    let payload_bytes = super::proposals::block_payload_bytes(&block);
+                    self.retain_exact_frontier_rbc_session_for_block_created(
+                        session_key,
+                        &block,
+                        &payload_bytes,
+                        payload_hash,
+                        sender.as_ref(),
+                    )?;
                     self.publish_rbc_backlog_snapshot();
                 } else {
                     let payload_hash = self
@@ -3496,7 +3458,6 @@ impl Actor {
             (seed_ms, hydrate_ms)
         } else {
             if da_enabled && exact_frontier_block_created {
-                self.clear_rbc_runtime_state(session_key, false);
                 self.persist_exact_frontier_rbc_recovery_snapshot(
                     session_key,
                     &block,
@@ -3593,6 +3554,23 @@ impl Actor {
                 }
                 vac.insert(pending);
             }
+        }
+        if da_enabled
+            && exact_frontier_block_created
+            && !stale_payload_only
+            && let Some(pending_block) = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .map(|pending| pending.block.clone())
+        {
+            self.retain_exact_frontier_rbc_session_for_block_created(
+                session_key,
+                &pending_block,
+                &payload_bytes,
+                payload_hash,
+                sender.as_ref(),
+            )?;
         }
         if stale_payload_only {
             self.slot_tracker.note_retained_branch(

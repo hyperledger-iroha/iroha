@@ -1887,6 +1887,49 @@ impl Actor {
         Ok(())
     }
 
+    pub(super) fn retain_exact_frontier_rbc_session_for_block_created(
+        &mut self,
+        key: SessionKey,
+        block: &SignedBlock,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+        sender: Option<&PeerId>,
+    ) -> Result<()> {
+        let pending_rbc = self.subsystems.da_rbc.rbc.pending.contains_key(&key);
+        let has_session = self.subsystems.da_rbc.rbc.sessions.contains_key(&key);
+        if !has_session && !pending_rbc {
+            return Ok(());
+        }
+
+        if !has_session {
+            self.seed_rbc_session_from_block(key, block, payload_hash, pending_rbc)?;
+            return Ok(());
+        }
+
+        let needs_payload = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash));
+        if needs_payload {
+            self.hydrate_rbc_session_from_block(key, payload_bytes, payload_hash, sender)?;
+        } else {
+            self.populate_rbc_session_metadata_from_block(key, block);
+        }
+
+        if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
+            self.flush_pending_rbc(key)?;
+        }
+        self.retry_rbc_progress_after_block_created_hydration(key);
+        if pending_rbc && let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+        {
+            self.rebroadcast_rbc_payload_for_missing_init(key, &session);
+        }
+        Ok(())
+    }
+
     pub(super) fn insert_stub_rbc_session_from_block(
         &mut self,
         key: SessionKey,
@@ -2848,7 +2891,13 @@ impl Actor {
                 .outbound_chunks
                 .contains_key(&key)
             || self.subsystems.da_rbc.rbc.persisted_sessions.contains(&key)
-            || self.subsystems.da_rbc.rbc.persist_inflight.contains(&key);
+            || self.subsystems.da_rbc.rbc.persist_inflight.contains(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .contains_key(&key);
         if has_rbc_state {
             self.purge_rbc_state(key, key.0, key.1, key.2);
         }
@@ -6400,6 +6449,7 @@ impl Actor {
                 self.subsystems.da_rbc.rbc.persist_tx = Some(handle.work_tx);
                 self.subsystems.da_rbc.rbc.persist_rx = Some(handle.result_rx);
                 self.subsystems.da_rbc.rbc.persist_inflight.clear();
+                self.subsystems.da_rbc.rbc.persist_pending_refresh.clear();
                 Some(handle.join_handle)
             }
             Err(err) => {
@@ -6429,7 +6479,7 @@ impl Actor {
 
     pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
-            return false;
+            return self.flush_rbc_pending_persist_refreshes();
         };
         let mut drained = Vec::new();
         let mut disconnected = false;
@@ -6448,9 +6498,7 @@ impl Actor {
             self.subsystems.da_rbc.rbc.persist_rx = None;
             self.subsystems.da_rbc.rbc.persist_inflight.clear();
         }
-        if drained.is_empty() {
-            return false;
-        }
+        let mut progress = !drained.is_empty();
         for result in drained {
             self.subsystems
                 .da_rbc
@@ -6479,8 +6527,18 @@ impl Actor {
                     warn!(?err, ?result.key, "failed to persist RBC session snapshot");
                 }
             }
+            if let Some(persisted) = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .remove(&result.key)
+            {
+                self.enqueue_rbc_persist_snapshot(result.key, persisted);
+            }
         }
-        true
+        progress |= self.flush_rbc_pending_persist_refreshes();
+        progress
     }
 
     pub(in crate::sumeragi) fn poll_rbc_seed_results_inner(&mut self) -> bool {
@@ -6700,46 +6758,113 @@ impl Actor {
         if session_roster.is_empty() {
             return;
         }
+        let persisted = session.to_persisted(
+            key,
+            self.chain_hash,
+            &self.subsystems.da_rbc.rbc.manifest,
+            session_roster.as_slice(),
+        );
         if self.subsystems.da_rbc.rbc.persist_inflight.contains(&key) {
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .insert(key, persisted);
             return;
         }
-        if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
-            let persisted = session.to_persisted(
-                key,
-                self.chain_hash,
-                &self.subsystems.da_rbc.rbc.manifest,
-                session_roster.as_slice(),
-            );
-            if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
-                match tx.try_send(RbcPersistWork { key, persisted }) {
-                    Ok(()) => {
-                        self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
+        self.enqueue_rbc_persist_snapshot(key, persisted);
+    }
+
+    fn enqueue_rbc_persist_snapshot(&mut self, key: SessionKey, persisted: PersistedSession) {
+        if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
+            match tx.try_send(RbcPersistWork { key, persisted }) {
+                Ok(()) => {
+                    self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .persist_pending_refresh
+                        .remove(&key);
+                    return;
+                }
+                Err(mpsc::TrySendError::Full(work)) => {
+                    debug!(
+                        ?key,
+                        "RBC persist queue full; deferring session persistence"
+                    );
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .persist_pending_refresh
+                        .insert(key, work.persisted);
+                    status::inc_rbc_store_persist_drops();
+                    if let Some(telemetry) = self.telemetry_handle() {
+                        telemetry.inc_rbc_persist_drops();
                     }
-                    Err(mpsc::TrySendError::Full(_work)) => {
-                        debug!(
-                            ?key,
-                            "RBC persist queue full; deferring session persistence"
-                        );
-                        status::inc_rbc_store_persist_drops();
-                        if let Some(telemetry) = self.telemetry_handle() {
-                            telemetry.inc_rbc_persist_drops();
-                        }
-                    }
-                    Err(mpsc::TrySendError::Disconnected(_work)) => {
-                        warn!(
-                            ?key,
-                            "RBC persist worker disconnected; falling back to sync persistence"
-                        );
-                        self.subsystems.da_rbc.rbc.persist_tx = None;
-                        self.subsystems.da_rbc.rbc.persist_inflight.clear();
-                    }
+                    return;
+                }
+                Err(mpsc::TrySendError::Disconnected(work)) => {
+                    warn!(
+                        ?key,
+                        "RBC persist worker disconnected; falling back to sync persistence"
+                    );
+                    self.subsystems.da_rbc.rbc.persist_tx = None;
+                    self.subsystems.da_rbc.rbc.persist_inflight.clear();
+                    self.subsystems.da_rbc.rbc.persist_pending_refresh.clear();
+                    self.persist_rbc_snapshot_sync(key, &work.persisted);
+                    return;
                 }
             }
-            if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
-                return;
+        }
+        self.persist_rbc_snapshot_sync(key, &persisted);
+    }
+
+    fn flush_rbc_pending_persist_refreshes(&mut self) -> bool {
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .is_empty()
+        {
+            return false;
+        }
+
+        let keys = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut progress = false;
+        for key in keys {
+            if self.subsystems.da_rbc.rbc.persist_inflight.contains(&key) {
+                continue;
+            }
+            let Some(persisted) = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .remove(&key)
+            else {
+                continue;
+            };
+            self.enqueue_rbc_persist_snapshot(key, persisted);
+            progress = true;
+            if self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .contains_key(&key)
+            {
+                break;
             }
         }
-        self.persist_rbc_session_sync(key, session, &session_roster);
+        progress
     }
 
     fn persist_rbc_session_sync(
@@ -6781,6 +6906,39 @@ impl Actor {
         }
     }
 
+    fn persist_rbc_snapshot_sync(&mut self, key: SessionKey, persisted: &PersistedSession) {
+        if !self.ensure_rbc_chunk_store() {
+            trace!(
+                ?key,
+                "RBC chunk store unavailable; skipping persistence for session"
+            );
+            return;
+        }
+
+        let store = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .chunk_store
+            .as_ref()
+            .expect("chunk store should be initialised");
+        match store.persist_snapshot(persisted) {
+            Ok(outcome) => {
+                self.handle_rbc_store_evictions(&outcome.removed);
+                self.update_rbc_store_pressure(outcome.pressure);
+                self.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .persist_pending_refresh
+                    .remove(&key);
+            }
+            Err(err) => {
+                warn!(?err, "failed to persist RBC session snapshot");
+            }
+        }
+    }
+
     pub(super) fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
         if removed.is_empty() {
             return;
@@ -6809,6 +6967,11 @@ impl Actor {
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems.da_rbc.rbc.persisted_sessions.remove(key);
             self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .remove(key);
             if existed {
                 debug!(
                     block_hash = ?key.0,
@@ -6863,6 +7026,11 @@ impl Actor {
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems.da_rbc.rbc.persisted_sessions.remove(key);
             self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .remove(key);
         }
 
         let chunk_store = if self.ensure_rbc_chunk_store() {

@@ -5592,6 +5592,19 @@ impl Actor {
             || self.has_residual_round_backlog_for_height(frontier_height)
     }
 
+    fn frontier_consensus_ingress_queued(
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+    }
+
+    fn frontier_ingress_drain_grace(&self, _da_enabled: bool) -> Duration {
+        saturating_mul_duration(self.rebroadcast_cooldown(), 5).max(Duration::from_millis(750))
+    }
+
     fn same_height_dependency_backlog_active_in_frontier_window(
         &self,
         frontier_height: u64,
@@ -5790,6 +5803,13 @@ impl Actor {
                 .rbc
                 .persist_inflight
                 .iter()
+                .any(|key| key.1 == frontier_height)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .keys()
                 .any(|key| key.1 == frontier_height)
             || self
                 .subsystems
@@ -10141,6 +10161,8 @@ struct RbcState {
     persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
     persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
     persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
+    persist_pending_refresh:
+        BTreeMap<super::rbc_store::SessionKey, super::rbc_store::PersistedSession>,
     seed_tx: Option<mpsc::SyncSender<rbc::RbcSeedWork>>,
     seed_rx: Option<mpsc::Receiver<rbc::RbcSeedResult>>,
     seed_inflight: BTreeMap<super::rbc_store::SessionKey, RbcSeedIntent>,
@@ -14805,6 +14827,11 @@ impl Actor {
         if !self.exact_frontier_block_created_owner_active(key) {
             return false;
         }
+        if key.1 > self.committed_height_snapshot()
+            && self.has_local_pending_candidate_for_rbc_key(key)
+        {
+            return false;
+        }
         if !session.delivered && !session.is_invalid() {
             return false;
         }
@@ -16430,6 +16457,7 @@ impl Actor {
             persist_tx: None,
             persist_rx: None,
             persist_inflight: BTreeSet::new(),
+            persist_pending_refresh: BTreeMap::new(),
             seed_tx: None,
             seed_rx: None,
             seed_inflight: BTreeMap::new(),
@@ -17362,12 +17390,16 @@ impl Actor {
         if rbc.sessions.is_empty()
             && rbc.pending.is_empty()
             && rbc.persist_inflight.is_empty()
+            && rbc.persist_pending_refresh.is_empty()
             && rbc.outbound_chunks.is_empty()
         {
             return None;
         }
 
         let mut next_due: Option<Instant> = None;
+        if !rbc.persist_pending_refresh.is_empty() {
+            next_due = Self::merge_deadline(next_due, Some(now));
+        }
         let payload_cooldown = self.payload_rebroadcast_cooldown();
         let ready_cooldown = self.rebroadcast_cooldown();
 
@@ -29473,6 +29505,15 @@ impl Actor {
             self.subsystems
                 .da_rbc
                 .rbc
+                .persist_pending_refresh
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
                 .seed_inflight
                 .keys()
                 .copied()
@@ -29583,6 +29624,15 @@ impl Actor {
                 .rbc
                 .persist_inflight
                 .iter()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_pending_refresh
+                .keys()
                 .copied()
                 .filter(|key| matches_block(*key)),
         );
@@ -31089,6 +31139,42 @@ impl Actor {
             return false;
         }
         let contiguous_frontier_height = committed_height.saturating_add(1);
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && Self::frontier_consensus_ingress_queued(queue_depths)
+        {
+            let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
+            let ingress_deadline = timeout.saturating_add(ingress_grace);
+            if age < ingress_deadline {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    ingress_grace_ms = ingress_grace.as_millis(),
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
+                    "deferring empty-frontier idle rotation while consensus ingress drains"
+                );
+                return false;
+            }
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                ingress_grace_ms = ingress_grace.as_millis(),
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "allowing empty-frontier idle rotation after consensus ingress drain grace"
+            );
+        }
         if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
             height,
             current_view,
@@ -31849,6 +31935,11 @@ impl Actor {
             self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
         }
         self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .remove(&key);
         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
     }
 

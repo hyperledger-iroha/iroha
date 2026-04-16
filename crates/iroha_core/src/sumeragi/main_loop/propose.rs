@@ -2733,6 +2733,32 @@ impl Actor {
             return false;
         }
 
+        if height == self.committed_height_snapshot().saturating_add(1) && view_idx > 0 {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            if Self::frontier_consensus_ingress_queued(queue_depths) {
+                let view_age = self.phase_tracker.view_age(height, now).unwrap_or_default();
+                let ingress_grace = self.frontier_ingress_drain_grace(da_enabled);
+                if view_age < ingress_grace {
+                    self.subsystems.propose.pacemaker.next_deadline = now
+                        .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                        .unwrap_or(now);
+                    debug!(
+                        height,
+                        view = view_idx,
+                        view_age_ms = view_age.as_millis(),
+                        ingress_grace_ms = ingress_grace.as_millis(),
+                        vote_rx_depth = queue_depths.vote_rx,
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                        block_rx_depth = queue_depths.block_rx,
+                        queue_len = pending_queue_len,
+                        "deferring fresh frontier proposal while consensus ingress drains"
+                    );
+                    return false;
+                }
+            }
+        }
+
         if height == self.committed_height_snapshot().saturating_add(1) {
             let _ = self.seed_frontier_slot_from_same_height_evidence(
                 height,

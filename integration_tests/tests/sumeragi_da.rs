@@ -3965,7 +3965,6 @@ async fn wait_for_persisted_rbc_session_metadata(
     start: Instant,
 ) -> Result<rbc_store::PersistedSessionMetadata> {
     let timeout = da_rbc_persist_timeout();
-    let manifest = rbc_store::SoftwareManifest::current();
     let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
     loop {
         if start.elapsed() > timeout {
@@ -3977,7 +3976,7 @@ async fn wait_for_persisted_rbc_session_metadata(
                 store_dir.display()
             ));
         }
-        match rbc_store::load_session_metadata_from_dir(store_dir, &key, &chain_hash, &manifest) {
+        match rbc_store::inspect_session_metadata_from_dir(store_dir, &key, &chain_hash) {
             Ok(Some(metadata))
                 if u64::from(metadata.persisted_chunk_count) >= min_received_chunks
                     && !metadata.invalid =>

@@ -26,6 +26,7 @@ const PACEMAKER_RTT_FLOOR_MULTIPLIER: u64 = 2;
 const PACEMAKER_MAX_BACKOFF_MS: u64 = 5_000;
 const PACEMAKER_JITTER_FRAC_PERMILLE: u64 = 25;
 const PACEMAKER_FALLBACK_JITTER_MS: u64 = 125;
+const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 20;
 
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
@@ -145,6 +146,52 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
     }
 }
 
+async fn wait_for_submit_connectivity(network: &Network, timeout: Duration) -> Result<Vec<u64>> {
+    let deadline = Instant::now() + timeout;
+    let expected = min_connected_peers_for_submit(network.peers().len());
+    let mut last_snapshot = Vec::new();
+    let mut last_error = None;
+
+    loop {
+        let mut peer_counts = Vec::new();
+        for peer in network.peers() {
+            let status = tokio::time::timeout(Duration::from_secs(5), peer.status()).await;
+            match status {
+                Ok(Ok(status)) => peer_counts.push(status.peers),
+                Ok(Err(error)) => {
+                    last_error = Some(format!("peer {} status failed: {error:?}", peer.mnemonic()));
+                    peer_counts.clear();
+                    break;
+                }
+                Err(_) => {
+                    last_error = Some(format!(
+                        "peer {} status timed out after 5s",
+                        peer.mnemonic()
+                    ));
+                    peer_counts.clear();
+                    break;
+                }
+            }
+        }
+
+        if !peer_counts.is_empty() {
+            last_snapshot.clone_from(&peer_counts);
+            if peer_counts.iter().all(|count| *count >= expected) {
+                return Ok(peer_counts);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?} last_error={last_error:?}",
+                timeout,
+            ));
+        }
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn wait_for_converged_heights(
     network: &Network,
     min_height: u64,
@@ -221,6 +268,13 @@ fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> b
         && max.saturating_sub(min) <= allowed_skew
 }
 
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
 fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
     let storage_dir = peer
         .latest_stdout_log_path()
@@ -264,6 +318,15 @@ fn heights_meet_target_respects_skew_and_min_height() {
     assert!(heights_meet_target(&[3, 4, 4], 4, 1));
     assert!(!heights_meet_target(&[3, 4, 6], 4, 1));
     assert!(!heights_meet_target(&[], 4, 1));
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -375,17 +438,47 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .all(|height| *height == baseline_height),
             "post-restart peers should settle on baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
         );
-        let resumed_client = primary_peer.client();
-        for i in 0..3 {
-            let message = format!("npos pacemaker resume seed {i}");
-            resumed_client
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
-                .wrap_err_with(|| format!("submit pacemaker resume seed {i}"))?;
-        }
-        let _resumed_heights =
-            wait_for_converged_heights(&network, baseline_height + 1, sync_timeout)
-                .await
-                .wrap_err("post-restart heights did not converge")?;
+        wait_for_submit_connectivity(&network, sync_timeout)
+            .await
+            .wrap_err("submit connectivity not ready after restart")?;
+        let resume_deadline = Instant::now() + sync_timeout;
+        let mut resume_attempt = 0_u64;
+        let mut last_resume_error = None;
+        let peer_count = network.peers().len();
+        ensure!(peer_count > 0, "network must have at least one peer");
+        let _resumed_heights = loop {
+            for offset in 0..3 {
+                let submit_peer = network
+                    .peers()
+                    .get((resume_attempt as usize + offset) % peer_count)
+                    .ok_or_else(|| eyre!("network must have at least one peer"))?;
+                let message = format!("npos pacemaker resume seed {resume_attempt}-{offset}");
+                submit_peer
+                    .client()
+                    .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                    .wrap_err_with(|| {
+                        format!("submit pacemaker resume seed {resume_attempt}-{offset}")
+                    })?;
+            }
+            resume_attempt = resume_attempt.saturating_add(1);
+
+            let now = Instant::now();
+            if now >= resume_deadline {
+                return Err(eyre!(
+                    "post-restart heights did not converge after {resume_attempt} resume batches; last_error={last_resume_error:?}"
+                ));
+            }
+            let remaining = resume_deadline.saturating_duration_since(now);
+            let probe_timeout =
+                remaining.min(Duration::from_secs(POST_RESTART_PROGRESS_PROBE_SECS));
+            match wait_for_converged_heights(&network, baseline_height + 1, probe_timeout).await {
+                Ok(heights) => break heights,
+                Err(err) => {
+                    last_resume_error = Some(format!("{err:?}"));
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        };
 
         let pacemaker_after = fetch_pacemaker_status(&http, &pacemaker_url).await?;
 

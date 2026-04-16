@@ -4199,6 +4199,104 @@ async fn rbc_persist_worker_refreshes_partial_session_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_persist_worker_coalesces_refresh_while_write_inflight() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(1, Some(cfg)).await;
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x15; 32])),
+        6,
+        1,
+    );
+    let mut session = RbcSession::test_new(2, None, None, 0);
+    session.test_note_chunk(0, vec![0xCA; 16], 0);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    harness.actor.persist_rbc_session(key, &session);
+
+    session.test_note_chunk(1, vec![0xFE; 16], 0);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    harness.actor.persist_rbc_session(key, &session);
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .contains_key(&key),
+        "newer snapshot should be retained while the first write is in flight"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        harness.actor.poll_rbc_persist_results_inner();
+        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+            rbc_dir.path(),
+            &key,
+            &harness.actor.chain_hash,
+            &harness.actor.subsystems.da_rbc.rbc.manifest,
+        )
+        .expect("reload session");
+        if persisted
+            .as_ref()
+            .is_some_and(|persisted| persisted.chunks.len() == 2)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for coalesced RBC persistence worker snapshot"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .contains_key(&key)
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_persist_worker_wakes_on_result() {
     let rbc_dir = tempfile::tempdir().expect("tempdir");
     let cfg = crate::sumeragi::RbcStoreConfig {
@@ -65996,6 +66094,82 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_empty_frontier_while_block_ingress_is_queued() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.slot_tracker.proposals_seen.clear();
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+    actor.frontier_recovery = None;
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Blocks);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle rotation must let queued block/control ingress drain before starting a competing view"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "the view must remain unchanged while block ingress is queued"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Blocks, 1);
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_defers_contiguous_frontier_after_lock_lag_prune() {
     use std::borrow::Cow;
 
@@ -84363,6 +84537,69 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_defers_fresh_frontier_proposal_while_vote_ingress_is_queued() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let mut highest_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    highest_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(highest_qc);
+
+    let tracked_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(1),
+        "test setup should advance to the post-missing-QC view"
+    );
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    let proposed = actor.on_pacemaker_propose_ready(Instant::now());
+    assert!(
+        !proposed,
+        "pacemaker must let queued same-height vote ingress drain before assembling a competing frontier proposal"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 1)
+            .is_none(),
+        "deferred proposal should not populate the post-rotation proposal cache"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_frontier_owner() {
     use std::borrow::Cow;
 
@@ -92102,6 +92339,162 @@ async fn duplicate_block_created_delivers_when_local_ready_closes_quorum() {
             .iter()
             .any(|entry| entry.msg_kind == Some("RbcDeliver")),
         "duplicate BlockCreated should queue DELIVER traffic in the same call"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_frontier_block_created_retains_delivered_rbc_session_until_commit() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let key = Actor::session_key(&block_hash, height, view);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("rbc session");
+    session.test_set_block_header_and_signature(&block);
+    session.test_set_delivered(true);
+    actor.record_rbc_session_roster(
+        key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Derived,
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle exact-frontier BlockCreated");
+
+    assert!(
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "uncommitted exact-frontier RBC session should stay live to absorb late READY/DELIVER"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should still install the pending block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_frontier_block_created_flushes_ready_stashed_before_body() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let key = Actor::session_key(&block_hash, height, view);
+    let seeded = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("rbc session");
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let ready_sender = 1usize.min(signature_topology.as_ref().len().saturating_sub(1));
+    let ready_peer = signature_topology
+        .as_ref()
+        .get(ready_sender)
+        .expect("ready signer exists");
+    let ready_key = harness
+        .key_pairs
+        .iter()
+        .find(|key_pair| key_pair.public_key() == ready_peer.public_key())
+        .expect("ready signer key exists");
+    let mut ready = crate::sumeragi::consensus::RbcReady {
+        block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        roster_hash: super::rbc::rbc_roster_hash(&roster),
+        chunk_root: seeded.chunk_root().expect("chunk root"),
+        sender: u32::try_from(ready_sender).expect("ready sender index fits u32"),
+        signature: Vec::new(),
+    };
+    let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
+    let signature = Signature::new(ready_key.private_key(), &preimage);
+    ready.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_ready(ready).expect("stash ready");
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "READY should be stashed while the exact-frontier body is missing"
+    );
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle exact-frontier BlockCreated");
+
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "BlockCreated should rebuild the exact-frontier session and flush stashed READY"
+    );
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("RBC session retained after stashed READY flush");
+    assert!(
+        !session.ready_signatures.is_empty(),
+        "flushed READY should be recorded on the rebuilt session"
     );
 
     harness.shutdown.send();
