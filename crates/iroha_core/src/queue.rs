@@ -56,8 +56,8 @@ use norito::core::{self as ncore, NoritoSerialize};
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
-    evaluate_policy, evaluate_policy_with_catalog, resolve_query_routing_decision,
-    resolve_routing_decision,
+    evaluate_policy, evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{

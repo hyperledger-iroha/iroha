@@ -356,6 +356,7 @@ mod gov;
 mod iso20022_bridge;
 mod limits;
 mod mcp;
+mod musubi;
 #[cfg(feature = "tx_predicates")]
 mod predicates;
 mod router;
@@ -28022,6 +28023,38 @@ impl Torii {
         });
     }
 
+    /// Musubi Kotodama package-registry routes.
+    #[allow(clippy::unused_self)]
+    fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
+        builder.apply(|router| {
+            router
+                .route("/v1/musubi/packages", get(musubi::handler_search_packages))
+                .route("/v1/musubi/release", get(musubi::handler_get_release))
+                .route("/v1/musubi/releases", get(musubi::handler_list_releases))
+                .route("/v1/musubi/versions", get(musubi::handler_list_versions))
+                .route(
+                    "/v1/musubi/aliases/{alias}",
+                    get(musubi::handler_resolve_alias),
+                )
+                .route(
+                    "/v1/musubi/instructions/publish-release",
+                    post(musubi::handler_build_publish_release_instruction),
+                )
+                .route(
+                    "/v1/musubi/instructions/yank-release",
+                    post(musubi::handler_build_yank_release_instruction),
+                )
+                .route(
+                    "/v1/musubi/instructions/set-alias",
+                    post(musubi::handler_build_set_alias_instruction),
+                )
+                .route(
+                    "/v1/musubi/instructions/assert-release-exists",
+                    post(musubi::handler_build_assert_release_exists_instruction),
+                )
+        });
+    }
+
     /// Contracts and VK registry routes
     #[allow(clippy::unused_self)]
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
@@ -30529,6 +30562,7 @@ impl Torii {
         // Signed Norito query and proof endpoints
         self.add_query_routes(&mut builder);
         self.add_proof_routes(&mut builder);
+        self.add_musubi_routes(&mut builder);
         self.add_mcp_routes(&mut builder);
         // Streams and P2P websocket fallback
         self.add_network_stream_routes(&mut builder);
