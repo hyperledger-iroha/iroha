@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Taira MCP Musubi coverage closure
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/musubi.rs`
+  now disambiguates Musubi query execution through
+  `ValidSingularQuery::execute`, fixing the Torii build after the native
+  Musubi REST handlers were added.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/mcp.rs`
+  explicitly permits the four Musubi pre-signing instruction-builder tools in
+  the read-only MCP profile. This keeps public Taira MCP useful for local
+  signing workflows while still blocking transaction submission and other
+  mutating POST tools by default.
+- The read-only exception is exact-name scoped to
+  `iroha.musubi.instructions.publish_release`,
+  `iroha.musubi.instructions.yank_release`,
+  `iroha.musubi.instructions.set_alias`, and
+  `iroha.musubi.instructions.assert_release_exists`; these tools return
+  unsigned instruction envelopes and do not accept `private_key` or `authority`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii -p iroha_core --target-dir /tmp/iroha-musubi-torii-target`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib mcp::tests:: --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+- Full workspace test, strict clippy, and a live public Taira
+  `check_mcp_rollout.sh` canary still need a longer runtime validation window.
+
 ## 2026-04-17 Follow-up: iroha_core routing compile fix
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/block.rs`
   now passes the block-scoped `WorldBlock` directly into state-aware lane
