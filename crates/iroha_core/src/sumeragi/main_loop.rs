@@ -716,7 +716,7 @@ impl VoteVerifyKey {
 
     fn from_vote_with_signer_public_key(
         vote: &crate::sumeragi::consensus::Vote,
-        signer_public_key: Option<PublicKey>,
+        _signer_public_key: Option<PublicKey>,
     ) -> Self {
         Self {
             phase: vote.phase,
@@ -724,7 +724,7 @@ impl VoteVerifyKey {
             view: vote.view,
             epoch: vote.epoch,
             signer: vote.signer,
-            signer_public_key,
+            signer_public_key: None,
             signature_hash: Hash::new(&vote.bls_sig),
             block_hash: vote.block_hash,
             parent_state_root: vote.parent_state_root,
@@ -9422,7 +9422,9 @@ where
     for vote in votes {
         if !matches!(
             vote.phase,
-            crate::sumeragi::consensus::Phase::Prepare | crate::sumeragi::consensus::Phase::Commit
+            crate::sumeragi::consensus::Phase::Prepare
+                | crate::sumeragi::consensus::Phase::Commit
+                | crate::sumeragi::consensus::Phase::NewView
         ) {
             continue;
         }
@@ -12992,7 +12994,7 @@ impl Actor {
                 None,
             );
             self.state
-                .record_commit_roster(&cert, &checkpoint, stake_snapshot);
+                .record_commit_roster_with_sidecar(&cert, &checkpoint, stake_snapshot);
         }
     }
 
@@ -14095,7 +14097,7 @@ impl Actor {
             }
         };
         self.state
-            .record_commit_roster(&qc, &checkpoint, stake_snapshot);
+            .record_commit_roster_with_sidecar(&qc, &checkpoint, stake_snapshot);
         info!(
             height = GENESIS_HEIGHT,
             block = %genesis_hash,
@@ -32674,7 +32676,7 @@ fn missing_qc_rotation_hard_cap(timeout: Duration, reacquire_window: Duration) -
         .max(Duration::from_millis(1))
 }
 
-fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {
+pub(super) fn saturating_mul_duration(duration: Duration, mul: u32) -> Duration {
     let millis = duration.as_millis();
     let scaled = millis.saturating_mul(u128::from(mul));
     let capped = scaled.min(u128::from(u64::MAX));

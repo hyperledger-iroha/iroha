@@ -1356,7 +1356,17 @@ impl Actor {
             return false;
         }
         let zero_vote_progress_window = reschedule_backoff.max(Duration::from_millis(1));
-        if no_commit_evidence && progress_age < zero_vote_progress_window {
+        let zero_vote_fast_reschedule_allowed = self.config.pacemaker.da_fast_reschedule
+            && self.runtime_da_enabled()
+            && Self::payload_available_for_da(
+                &self.subsystems.da_rbc.rbc.sessions,
+                &self.subsystems.da_rbc.rbc.status_handle,
+                &pending,
+            );
+        if no_commit_evidence
+            && progress_age < zero_vote_progress_window
+            && !zero_vote_fast_reschedule_allowed
+        {
             debug!(
                 block = %block_hash,
                 height,

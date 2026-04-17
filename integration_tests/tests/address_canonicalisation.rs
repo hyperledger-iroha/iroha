@@ -2120,7 +2120,7 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
             domain_id.name().clone(),
         )),
-        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     );
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());

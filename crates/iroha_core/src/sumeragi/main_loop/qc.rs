@@ -4147,7 +4147,11 @@ impl Actor {
                 // QC rebuild is a replay path over cached local votes. It must not drive sidecar
                 // mismatch observation/quarantine for uncommitted competing branches.
                 let mut commit_roster =
-                    self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+                    if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
+                        self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+                    } else {
+                        self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+                    };
                 if commit_roster.is_empty() && !commit_topology.is_empty() {
                     commit_roster = commit_topology.to_vec();
                 }

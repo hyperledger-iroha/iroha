@@ -3039,6 +3039,17 @@ impl Actor {
                         }
                     }
                     match extends {
+                        Some(false) if authoritative_recovery_supersede => {
+                            debug!(
+                                locked_qc_height = lock.height,
+                                locked_qc_view = lock.view,
+                                locked_qc_hash = %locked_hash,
+                                height,
+                                view,
+                                block = %block_hash,
+                                "accepting BlockCreated without hint: authoritative same-height recovery supersedes lock-conflicting local frontier owner"
+                            );
+                        }
                         Some(false) => {
                             let (
                                 pending_conflicts_purged,
