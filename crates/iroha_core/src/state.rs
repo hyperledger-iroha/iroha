@@ -27021,9 +27021,7 @@ impl StateTransaction<'_, '_> {
                     alias_domains
                         .iter()
                         .find(|domain| {
-                            let (name, _) = domain
-                                .split_once('.')
-                                .unwrap_or((domain.as_str(), ""));
+                            let (name, _) = domain.split_once('.').unwrap_or((domain.as_str(), ""));
                             matches!(name, "banka" | "bankb" | "sbp")
                         })
                         .cloned()

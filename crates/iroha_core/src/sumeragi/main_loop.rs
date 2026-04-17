@@ -9422,7 +9422,9 @@ where
     for vote in votes {
         if !matches!(
             vote.phase,
-            crate::sumeragi::consensus::Phase::Prepare | crate::sumeragi::consensus::Phase::Commit
+            crate::sumeragi::consensus::Phase::Prepare
+                | crate::sumeragi::consensus::Phase::Commit
+                | crate::sumeragi::consensus::Phase::NewView
         ) {
             continue;
         }
