@@ -29,6 +29,8 @@ mod iroha_cli;
 mod misc;
 #[path = "multisig.rs"]
 mod multisig;
+#[path = "musubi_registry.rs"]
+mod musubi_registry;
 #[path = "nft.rs"]
 mod nft;
 #[path = "non_mintable.rs"]
@@ -59,6 +61,8 @@ mod telemetry;
 mod threshold_escrow;
 #[path = "torii_failure.rs"]
 mod torii_failure;
+#[path = "torii_load_profile.rs"]
+mod torii_load_profile;
 #[path = "transactions_filter.rs"]
 mod transactions_filter;
 #[path = "transfer_asset.rs"]

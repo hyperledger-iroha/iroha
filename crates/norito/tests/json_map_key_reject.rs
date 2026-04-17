@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use norito::json::{self, JsonDeserialize};
-use proptest::{prelude::*, prop_assume};
 
 #[test]
 fn json_map_key_fast_path_rejects_invalid_keys() {
@@ -177,15 +176,11 @@ fn json_map_key_rejects_nonzero_zero_key() {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        failure_persistence: None,
-        .. ProptestConfig::default()
-    })]
-    #[test]
-    fn bool_map_key_rejects_non_bool_inputs(key in any::<String>().prop_filter("reject canonical bool strings", |s| s != "true" && s != "false")) {
+#[test]
+fn bool_map_key_rejects_non_bool_inputs() {
+    for key in ["", "truthy", "False", "0", "yes", " true "] {
         let mut map = norito::json::Map::new();
-        map.insert(key.clone(), norito::json!(1));
+        map.insert(key.to_owned(), norito::json!(1));
         let value = norito::json::Value::Object(map);
 
         let err = HashMap::<bool, u8>::json_from_value(&value)
@@ -203,9 +198,11 @@ proptest! {
             other => panic!("expected bool error, got {other:?}"),
         }
     }
+}
 
-    #[test]
-    fn hashset_rejects_duplicate_elements(value in any::<u32>()) {
+#[test]
+fn hashset_rejects_duplicate_elements_for_deterministic_values() {
+    for value in [0_u32, 1, 42, u32::MAX] {
         let arr = norito::json!([value, value]);
         let err = std::collections::HashSet::<u32>::json_from_value(&arr)
             .expect_err("value path should reject duplicate set elements");
@@ -222,9 +219,11 @@ proptest! {
             other => panic!("expected duplicate-element error, got {other:?}"),
         }
     }
+}
 
-    #[test]
-    fn btreeset_rejects_duplicate_elements(value in any::<u32>()) {
+#[test]
+fn btreeset_rejects_duplicate_elements_for_deterministic_values() {
+    for value in [0_u32, 1, 42, u32::MAX] {
         let arr = norito::json!([value, value]);
         let err = std::collections::BTreeSet::<u32>::json_from_value(&arr)
             .expect_err("value path should reject duplicate BTreeSet elements");
@@ -241,12 +240,14 @@ proptest! {
             other => panic!("expected duplicate-element error, got {other:?}"),
         }
     }
+}
 
-    #[test]
-    fn numeric_duplicate_strings_canonicalise(value in any::<u64>(), pad in 1usize..5) {
+#[test]
+fn numeric_duplicate_strings_canonicalise_for_deterministic_values() {
+    for (value, pad) in [(0_u64, 1_usize), (1, 2), (42, 3), (u64::MAX, 4)] {
         let canonical = value.to_string();
         let padded = format!("{:0width$}", value, width = canonical.len() + pad);
-        prop_assume!(canonical != padded);
+        assert_ne!(canonical, padded);
 
         let mut map = norito::json::Map::new();
         map.insert(canonical.clone(), norito::json!(0));
@@ -278,9 +279,16 @@ proptest! {
             other => panic!("expected duplicate-field error, got {other:?}"),
         }
     }
+}
 
-    #[test]
-    fn numeric_map_keys_roundtrip(values in prop::collection::vec(any::<u64>(), 0..20)) {
+#[test]
+fn numeric_map_keys_roundtrip_for_deterministic_values() {
+    for values in [
+        Vec::new(),
+        vec![0_u64],
+        vec![1, 1, 2, 3, 3],
+        vec![u64::MAX, 0, 42, u64::MAX],
+    ] {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();

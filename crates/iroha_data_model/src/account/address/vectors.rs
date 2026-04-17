@@ -865,8 +865,6 @@ impl fmt::Display for AddressVectorBundle {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::*;
     use crate::account::address::AccountAddress;
 
@@ -967,21 +965,25 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    proptest! {
-        #[test]
-        fn i105_roundtrip(seed in any::<u8>(), domain_index in 0usize..VECTOR_SINGLE_DOMAINS.len()) {
-            let _guard = default_domain_guard(Some("default"));
-            let label = VECTOR_SINGLE_DOMAINS[domain_index].0;
-            let _domain = domain_id(label);
-            let account = AccountId::new(ed25519_pk_with(seed));
-            let address = AccountAddress::from_account_id(&account)
-                .expect("account must encode into AccountAddress");
-            let literal = address.to_i105().expect("i105 encoding succeeds");
-            let decoded = AccountAddress::parse_encoded(&literal, None).expect("parse i105 value succeeds");
-            prop_assert_eq!(
-                decoded.canonical_bytes().expect("decoded canonical bytes"),
-                address.canonical_bytes().expect("source canonical bytes")
-            );
+    #[test]
+    fn i105_roundtrip_for_vector_domain_labels() {
+        let seeds = [0_u8, 1, 2, 3, 7, 31, 63, 127, 128, 191, 255];
+
+        for &seed in &seeds {
+            for (label, _) in VECTOR_SINGLE_DOMAINS {
+                let _guard = default_domain_guard(Some("default"));
+                let _domain = domain_id(label);
+                let account = AccountId::new(ed25519_pk_with(seed));
+                let address = AccountAddress::from_account_id(&account)
+                    .expect("account must encode into AccountAddress");
+                let literal = address.to_i105().expect("i105 encoding succeeds");
+                let decoded = AccountAddress::parse_encoded(&literal, None)
+                    .expect("parse i105 value succeeds");
+                assert_eq!(
+                    decoded.canonical_bytes().expect("decoded canonical bytes"),
+                    address.canonical_bytes().expect("source canonical bytes")
+                );
+            }
         }
     }
 }

@@ -51,7 +51,6 @@ rodio = { version = "0.21.1", optional = true }
 k256 = { version = "0.13.4", features = ["ecdsa"] }
 signature = "2.2.0"
 cust = { version = "0.3.2", optional = true }
-proptest = { version = "1.9.0", optional = true, default-features = false, features = ["std"] }
 criterion = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
@@ -103,8 +102,6 @@ merkle_incremental = []
 ## This is a noop here; present only to silence unexpected-cfg warnings from
 ## proc-macros that reference `feature = "schema-structural"`.
 schema-structural = []
-## Dev-only: enable property-based testing skeleton in tests. No deps added by default.
-ivm_prop = ["dep:proptest"]
 ## Dev-only test gate used by poseidon_simd.rs; declared to silence unexpected-cfg warnings.
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.

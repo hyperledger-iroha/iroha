@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use axum::http::Request;
+use axum::{extract::ConnectInfo, http::Request};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
     kura::Kura,
@@ -16,8 +16,25 @@ use iroha_data_model::ChainId;
 use iroha_torii::MaybeTelemetry;
 use tower::util::ServiceExt as _;
 
+mod fixtures;
+
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
+}
+
+fn signed_loopback_get(
+    cfg: &iroha_config::parameters::actual::Root,
+    uri: &'static str,
+) -> Request<axum::body::Body> {
+    let request = Request::builder()
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mut request = fixtures::operator_signed_request(&cfg.common.key_pair, request, &[]);
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+    request
 }
 
 fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Torii {
@@ -60,12 +77,7 @@ async fn rbc_status_json_shape() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
     let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/rbc")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+        .oneshot(signed_loopback_get(&cfg, "/v1/sumeragi/rbc"))
         .await
         .unwrap();
     assert!(resp.status().is_success());
@@ -86,12 +98,7 @@ async fn pacemaker_status_json_shape() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
     let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sumeragi/pacemaker")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+        .oneshot(signed_loopback_get(&cfg, "/v1/sumeragi/pacemaker"))
         .await
         .unwrap();
     assert!(resp.status().is_success());

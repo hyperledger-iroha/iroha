@@ -84,6 +84,25 @@ RBC DELIVER is emitted after the first READY, keeping the throughput checks
 focused on payload transport. Leave the knob disabled in production to preserve
 the full 2f+1 READY quorum.
 
+### RS16 initial fanout
+
+RS16-encoded RBC sessions can reduce the first chunk-send wave with
+`sumeragi.advanced.rbc.rs16_initial_fanout`:
+
+- `full` sends every encoded shard to every selected chunk target. This is the
+  default and preserves the existing transport profile.
+- `data` sends exactly `data_shards` deterministic shard indices per RS16
+  stripe to each selected target.
+- `data_plus_one` sends `data_shards + 1` shard indices per stripe, capped at
+  the stripe width, giving one extra shard of tolerance while avoiding the full
+  parity fanout.
+
+The selection is deterministic from the RBC session key and validator index, so
+all nodes derive the same target/shard plan without runtime randomness. The
+large-payload RS16 integration scenarios opt into `data_plus_one` for
+measurement; keep the production default at `full` until before/after samples
+show the reduced fanout improves delivery latency on representative networks.
+
 ## Expected baselines
 
 With the default `sumeragi.advanced.rbc.chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB

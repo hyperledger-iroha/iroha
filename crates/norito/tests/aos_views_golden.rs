@@ -138,13 +138,7 @@ fn aos_enum_view_invalid_tag_detected() {
     let mut body = norito::aos::encode_rows_u64_enum_bool(&rows);
     // Locate the tag byte and set it to an invalid value (2)
     let mut off = 0usize;
-    #[cfg(feature = "compact-len")]
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
-    #[cfg(not(feature = "compact-len"))]
-    let (_n, used) = {
-        assert!(body.len() >= 8);
-        (1usize, 8usize)
-    };
     off += used; // after [len]
     off += 8; // id
     assert!(off < body.len());
@@ -167,27 +161,13 @@ fn aos_enum_view_invalid_utf8_detected() {
 
     // Walk the AoS enum body to locate the string byte and corrupt it
     let mut off = 0usize;
-    #[cfg(feature = "compact-len")]
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
-    #[cfg(not(feature = "compact-len"))]
-    let (_n, used) = {
-        assert!(body.len() >= 8);
-        (1usize, 8usize)
-    };
     off += used; // after [len]
     assert!(off + 8 < body.len());
     off += 8; // id
     assert_eq!(body[off], 0u8, "expected NAME tag");
     off += 1; // tag
-    #[cfg(feature = "compact-len")]
     let (slen, used) = norito::core::read_len_from_slice(&body[off..]).expect("slen");
-    #[cfg(not(feature = "compact-len"))]
-    let (slen, used) = {
-        assert!(off + 8 <= body.len());
-        let mut lb = [0u8; 8];
-        lb.copy_from_slice(&body[off..off + 8]);
-        (u64::from_le_bytes(lb) as usize, 8usize)
-    };
     off += used; // start of string bytes
     assert!(slen >= 1 && off + slen <= body.len());
     // Corrupt first byte to invalid UTF-8 (0xFF)
@@ -209,17 +189,11 @@ fn aos_view_str_invalid_utf8_detected() {
     let mut body = norito::aos::encode_rows_u64_str_bool(&rows);
     // Locate start of string bytes and corrupt first byte
     let mut off = 0usize;
-    #[cfg(feature = "compact-len")]
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
-    #[cfg(not(feature = "compact-len"))]
-    let (_n, used) = (1usize, 8usize);
     off += used; // after [len]
     off += 1; // version byte
     off += 8; // id
-    #[cfg(feature = "compact-len")]
     let (_slen, used) = norito::core::read_len_from_slice(&body[off..]).expect("slen");
-    #[cfg(not(feature = "compact-len"))]
-    let (_slen, used) = (1usize, 8usize);
     off += used; // start of str bytes
     assert!(off < body.len());
     body[off] = 0xff; // invalidate utf8
@@ -238,17 +212,11 @@ fn aos_view_str_u32_invalid_utf8_detected() {
     let mut body = norito::aos::encode_rows_u64_str_u32_bool(&rows);
     // Locate start of string bytes and corrupt first byte
     let mut off = 0usize;
-    #[cfg(feature = "compact-len")]
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
-    #[cfg(not(feature = "compact-len"))]
-    let (_n, used) = (1usize, 8usize);
     off += used; // after [len]
     off += 1; // version byte
     off += 8; // id
-    #[cfg(feature = "compact-len")]
     let (_slen, used) = norito::core::read_len_from_slice(&body[off..]).expect("slen");
-    #[cfg(not(feature = "compact-len"))]
-    let (_slen, used) = (1usize, 8usize);
     off += used; // start of str bytes
     assert!(off < body.len());
     body[off] = 0xff; // invalidate utf8
@@ -269,13 +237,7 @@ fn aos_optstr_view_invalid_utf8_detected() {
 
     // Walk the AoS opt-str body to locate the string byte and corrupt it
     let mut off = 0usize;
-    #[cfg(feature = "compact-len")]
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
-    #[cfg(not(feature = "compact-len"))]
-    let (_n, used) = {
-        assert!(body.len() >= 8);
-        (1usize, 8usize)
-    };
     off += used; // after [len]
     // Skip version nibble for opt-str AoS
     assert!(off < body.len());
@@ -285,15 +247,7 @@ fn aos_optstr_view_invalid_utf8_detected() {
     off += 8; // id
     assert_eq!(body[off], 1u8, "expected present=Some tag");
     off += 1; // tag
-    #[cfg(feature = "compact-len")]
     let (slen, used) = norito::core::read_len_from_slice(&body[off..]).expect("slen");
-    #[cfg(not(feature = "compact-len"))]
-    let (slen, used) = {
-        assert!(off + 8 <= body.len());
-        let mut lb = [0u8; 8];
-        lb.copy_from_slice(&body[off..off + 8]);
-        (u64::from_le_bytes(lb) as usize, 8usize)
-    };
     off += used; // start of string bytes
     assert!(slen >= 1 && off + slen <= body.len());
     // Corrupt first byte to invalid UTF-8 (0xFF)

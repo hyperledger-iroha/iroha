@@ -19,15 +19,6 @@ ratatui = { version = "0.29", default-features = false, features = ["crossterm"]
 norito = {workspace = true}
 unicode-width = "0.2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-cpal = { version = "0.16" }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-cpal = { version = "0.16" }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-cpal = { version = "0.16", optional = true }
-
 [features]
 default = []
-linux-builtin-synth = ["dep:cpal"]
+linux-builtin-synth = []

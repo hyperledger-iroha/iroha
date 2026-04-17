@@ -644,6 +644,7 @@ pub struct OrchestratorConfig {
     /// Optional circuit manager configuration. `None` disables lifecycle management.
     pub circuit_manager: Option<CircuitManagerConfig>,
     /// Optional local QUIC proxy configuration used by browser integrations.
+    /// Runtime spawning requires the `local-quic-proxy` crate feature.
     pub local_proxy: Option<LocalQuicProxyConfig>,
     /// Optional downgrade remediation policy triggered by telemetry.
     pub downgrade_remediation: Option<DowngradeRemediationConfig>,
@@ -5993,6 +5994,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
     async fn downgrade_remediator_switches_proxy_mode() {
         test_logger();
@@ -9118,6 +9120,7 @@ mod tests {
         assert!(parsed_hint.masque_bypass_allowed);
     }
 
+    #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_ndjson_and_updates_metrics() {
         test_logger();

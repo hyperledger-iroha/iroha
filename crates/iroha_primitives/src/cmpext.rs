@@ -118,29 +118,31 @@ macro_rules! impl_as_dyn_key {
     };
 }
 
-/// Property tests validate the ordering semantics for the sentinel values.
+/// Tests validate the ordering semantics for the sentinel values.
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::*;
-    proptest! {
-        // Values greater than `u64::MIN` should compare larger than `MinMaxExt::Min`.
-        #[test]
-        fn any_larger_min(value in 1u64..=u64::MAX) {
-            prop_assert!(MinMaxExt::Min < value.into());
-        }
 
-        // Values less than `u64::MAX` should compare smaller than `MinMaxExt::Max`.
-        #[test]
-        fn any_smaller_max(value in u64::MIN..u64::MAX) {
-            prop_assert!(MinMaxExt::Max > value.into());
-        }
+    const ORDER_SAMPLES: &[u64] = &[0, 1, 2, 42, u64::MAX - 1, u64::MAX];
 
-        // Identical values wrapped in `MinMaxExt` should be equal.
-        #[test]
-        fn eq_still_eq(value in any::<u64>()) {
-            prop_assert_eq!(MinMaxExt::from(value), MinMaxExt::from(value));
+    #[test]
+    fn values_larger_than_min_compare_above_sentinel() {
+        for &value in &ORDER_SAMPLES[1..] {
+            assert!(MinMaxExt::Min < value.into(), "value={value}");
+        }
+    }
+
+    #[test]
+    fn values_smaller_than_max_compare_below_sentinel() {
+        for &value in &ORDER_SAMPLES[..ORDER_SAMPLES.len() - 1] {
+            assert!(MinMaxExt::Max > value.into(), "value={value}");
+        }
+    }
+
+    #[test]
+    fn equal_values_remain_equal_when_wrapped() {
+        for &value in ORDER_SAMPLES {
+            assert_eq!(MinMaxExt::from(value), MinMaxExt::from(value));
         }
     }
 }

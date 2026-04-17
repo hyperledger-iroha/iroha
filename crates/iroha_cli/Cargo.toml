@@ -28,6 +28,7 @@ maintenance = { status = "actively-developed" }
 default = ["build-i3"]
 build-i2 = []
 build-i3 = []
+offline-visual-codecs = ["dep:image"]
 # Experimental selector support. Forwarded to client/data-model crates when enabled.
 ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
 # Hooks used only by integration tests.
@@ -48,10 +49,6 @@ required-features = ["build-i2"]
 name = "iroha"
 path = "src/bin/iroha.rs"
 required-features = ["build-i3"]
-
-[[bin]]
-name = "musubi"
-path = "src/bin/musubi.rs"
 
 [dependencies]
 iroha = { workspace = true }
@@ -99,8 +96,7 @@ serde = { workspace = true, features = ["derive"] }
 tiny-keccak = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
-qrcode = { version = "0.14.1", default-features = false, features = ["svg", "image"] }
-image = { version = "0.25.9", default-features = false, features = ["png", "gif"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
 png = "0.18.0"
 pathdiff = "0.2.3"
 

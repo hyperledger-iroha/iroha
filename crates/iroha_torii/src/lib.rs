@@ -65,6 +65,8 @@ mod identifier_resolution;
 mod offline_lineage;
 mod operator_auth;
 mod operator_signatures;
+#[doc(hidden)]
+pub mod profile_stats;
 #[cfg(feature = "push")]
 mod push;
 mod vpn;
@@ -287,7 +289,7 @@ use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
 #[cfg(feature = "app_api")]
-use iroha_primitives::soradns::taira_mon_pretty_gateway_suffix;
+use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_torii_shared::{
     AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
     PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot, uri,
@@ -383,6 +385,8 @@ pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_c
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
+#[cfg(feature = "bench")]
+pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
@@ -418,6 +422,12 @@ pub use routing::{
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+};
+#[cfg(feature = "bench")]
+pub use routing::{
+    accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
+    handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
+    verify_signed_query_request as verify_signed_query_request_for_bench,
 };
 #[cfg(feature = "telemetry")]
 pub use routing::{
@@ -1258,6 +1268,7 @@ struct AppState {
     da_receipt_log: Arc<da::DaReceiptLog>,
     da_receipt_signer: KeyPair,
     da_ingest: iroha_config::parameters::actual::DaIngest,
+    da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
@@ -25175,50 +25186,40 @@ async fn handler_signed_query(
     let query_scope = signed_query_scope(&query_request.payload);
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    match &query_scope {
+    let should_nexus_fanout = match &query_scope {
         SignedQueryScope::CrossDataspaceFanout
             if torii_all_dataspace_routes(app.as_ref()).len() > 1 =>
         {
-            let verified_query = routing::verify_signed_query_request(&query_request)?;
-            return Ok(execute_torii_query_via_nexus_fanout(&app, verified_query, format).await);
+            true
         }
         SignedQueryScope::TargetAccount(account_id) => {
             let routes = match torii_target_account_routes(app.as_ref(), account_id) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                let verified_query = routing::verify_signed_query_request(&query_request)?;
-                return Ok(
-                    execute_torii_query_via_nexus_fanout(&app, verified_query, format).await,
-                );
-            }
+            routes.len() > 1
         }
         SignedQueryScope::TargetAlias(alias) => {
             let routes = match torii_target_alias_routes(app.as_ref(), alias) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                let verified_query = routing::verify_signed_query_request(&query_request)?;
-                return Ok(
-                    execute_torii_query_via_nexus_fanout(&app, verified_query, format).await,
-                );
-            }
+            routes.len() > 1
         }
         SignedQueryScope::TargetDomain(domain_id) => {
             let routes = match torii_target_domain_routes(app.as_ref(), domain_id) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                let verified_query = routing::verify_signed_query_request(&query_request)?;
-                return Ok(
-                    execute_torii_query_via_nexus_fanout(&app, verified_query, format).await,
-                );
-            }
+            routes.len() > 1
         }
-        _ => {}
+        _ => false,
+    };
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    if should_nexus_fanout {
+        let verified_query = routing::verify_signed_query_request(query_request)?;
+        return Ok(execute_torii_query_via_nexus_fanout(&app, verified_query, format).await);
     }
 
     let routing_decision = match &query_scope {
@@ -30145,6 +30146,11 @@ impl Torii {
                 );
             }
         });
+        let da_spooler = Some(da::DaSpooler::spawn(
+            self.da_ingest.spool_queue_capacity,
+            self.da_ingest.spool_batch_max,
+            self.telemetry.clone(),
+        ));
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
@@ -30253,6 +30259,7 @@ impl Torii {
             da_receipt_log,
             da_receipt_signer: self.da_receipt_signer.clone(),
             da_ingest: self.da_ingest.clone(),
+            da_spooler,
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: self.p2p.clone(),
@@ -33771,6 +33778,7 @@ pub(crate) mod tests_runtime_handlers {
             da_receipt_log,
             da_receipt_signer,
             da_ingest,
+            da_spooler: None,
             #[cfg(feature = "app_api")]
             sorafs_cache,
             #[cfg(feature = "app_api")]

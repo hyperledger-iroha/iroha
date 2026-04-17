@@ -3605,8 +3605,8 @@ pub struct QueryOptions {
 }
 
 /// Verify a signed query and return the authenticated request payload.
-pub(crate) fn verify_signed_query_request(
-    query: &SignedQuery,
+pub fn verify_signed_query_request(
+    query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
     sig.verify(query.payload.authority.signatory(), &query.payload)
@@ -3615,16 +3615,52 @@ pub(crate) fn verify_signed_query_request(
                 "query signature failed verification".to_string(),
             ))
         })?;
-    let bytes = norito::to_bytes(&query.payload).map_err(|error| {
-        Error::from(ValidationFail::InternalError(format!(
-            "failed to encode verified query request payload: {error}"
-        )))
-    })?;
-    norito::decode_from_bytes(&bytes).map_err(|error| {
-        Error::from(ValidationFail::InternalError(format!(
-            "failed to decode verified query request payload: {error}"
-        )))
-    })
+    Ok(query.payload)
+}
+
+#[cfg(test)]
+mod signed_query_verification_tests {
+    use iroha_data_model::{
+        account::AccountId,
+        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+    };
+
+    use super::*;
+
+    fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    #[test]
+    fn verified_signed_query_returns_authenticated_payload() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let signed = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority.clone())
+            .sign(&key_pair);
+
+        let verified = verify_signed_query_request(signed).expect("signed query should verify");
+        let (verified_authority, verified_request) = verified.into_parts();
+
+        assert_eq!(verified_authority, authority);
+        assert!(matches!(
+            verified_request,
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
+        ));
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_mismatched_authority() {
+        let signer = KeyPair::random();
+        let other = KeyPair::random();
+        let mut signed = signed_find_abi_version(&signer);
+        signed.payload.authority = AccountId::new(other.public_key().clone());
+
+        assert!(verify_signed_query_request(signed).is_err());
+    }
 }
 
 /// Execute a previously verified query request with the provided options.
@@ -3737,31 +3773,26 @@ pub(crate) async fn execute_verified_query_with_opts(
     #[cfg(feature = "telemetry")]
     if tel.is_enabled() {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
-        let metrics = tel.metrics().await;
-        metrics
-            .torii_query_snapshot_requests
-            .with_label_values(&[mode_label])
-            .inc();
-        if matches!(resp, QueryResponse::Iterable(_)) {
-            metrics
-                .torii_query_snapshot_first_batch_ms
-                .with_label_values(&[mode_label])
-                .observe(ms);
-        }
+        let first_batch_ms = matches!(resp, QueryResponse::Iterable(_)).then_some(ms);
+        let mut gas_units = [0_u64; 2];
+        let mut gas_count = 0_usize;
         if matches!(mode, LaneCursorMode::Stored) {
             if let Some(units) = opts.gas_units {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
+                gas_units[gas_count] = units;
+                gas_count += 1;
             }
             if let Some(units) = continue_budget {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
+                gas_units[gas_count] = units;
+                gas_count += 1;
             }
         }
+        let _ = tel.with_metrics(|telemetry| {
+            telemetry.observe_torii_query_snapshot(
+                mode_label,
+                first_batch_ms,
+                &gas_units[..gas_count],
+            );
+        });
     }
 
     Ok(resp)
@@ -8944,7 +8975,8 @@ mod multisig_guard_tests {
     }
 }
 
-pub(crate) fn accept_transaction_for_ingress(
+/// Validate a transaction at Torii ingress and return the accepted form.
+pub fn accept_transaction_for_ingress(
     chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -8952,7 +8984,20 @@ pub(crate) fn accept_transaction_for_ingress(
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
+    #[cfg(feature = "telemetry")]
+    let decode_started = std::time::Instant::now();
     let tx = tx.into();
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        telemetry,
+        "transaction",
+        "decode_or_build",
+        "ok",
+        decode_started.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
 
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
@@ -8981,6 +9026,14 @@ pub(crate) fn accept_transaction_for_ingress(
             };
             tel.inc_torii_signature_limit_reject(signature_count, signature_limit, authority_label);
         });
+        #[cfg(feature = "telemetry")]
+        observe_route_stage_latency(
+            telemetry,
+            "transaction",
+            "verify",
+            "error",
+            verify_started.elapsed(),
+        );
         return Err(Error::AcceptTransaction(rejection));
     }
     drop(state_view);
@@ -9010,7 +9063,17 @@ pub(crate) fn accept_transaction_for_ingress(
         tx_limits,
         crypto_cfg.as_ref(),
     ) {
-        Ok(tx) => Ok(tx),
+        Ok(tx) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "ok",
+                verify_started.elapsed(),
+            );
+            Ok(tx)
+        }
         Err(err) => {
             iroha_logger::warn!(?err, "transaction rejected during admission");
             #[cfg(feature = "telemetry")]
@@ -9028,6 +9091,14 @@ pub(crate) fn accept_transaction_for_ingress(
                     tel.inc_torii_nts_unhealthy_reject();
                 }
             });
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "error",
+                verify_started.elapsed(),
+            );
             Err(Error::AcceptTransaction(err))
         }
     }
@@ -9075,7 +9146,18 @@ async fn handle_transaction_inner(
         tx = %accepted_tx.hash(),
         "transaction accepted by Torii; enqueuing"
     );
-    push_accepted_transaction_for_ingress(queue, state, accepted_tx)
+    #[cfg(feature = "telemetry")]
+    let enqueue_started = std::time::Instant::now();
+    let result = push_accepted_transaction_for_ingress(queue, state, accepted_tx);
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        _telemetry,
+        "transaction",
+        "enqueue",
+        if result.is_ok() { "ok" } else { "error" },
+        enqueue_started.elapsed(),
+    );
+    result
 }
 
 pub async fn handle_transaction(
@@ -9091,38 +9173,32 @@ pub async fn handle_transaction(
 }
 
 #[cfg(feature = "telemetry")]
-const TELEMETRY_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-
-#[cfg(feature = "telemetry")]
-async fn observe_lane_admission_latency(
+fn observe_lane_admission_latency(
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
     lane_id: iroha_data_model::nexus::LaneId,
     elapsed_seconds: f64,
 ) {
-    if !telemetry.is_enabled() {
-        return;
-    }
+    let _ = telemetry.with_metrics(|telemetry| {
+        telemetry.observe_torii_lane_admission_latency(endpoint, lane_id, elapsed_seconds);
+    });
+}
 
-    let Ok(metrics) = tokio::time::timeout(TELEMETRY_SYNC_TIMEOUT, telemetry.metrics()).await
-    else {
-        iroha_logger::warn!(
-            lane = %lane_id.as_u32(),
-            endpoint,
-            timeout_ms = TELEMETRY_SYNC_TIMEOUT.as_millis(),
-            "telemetry sync timed out; skipping lane admission latency record"
-        );
-        return;
-    };
-
-    let lane_label = lane_id.as_u32().to_string();
-    metrics
-        .torii_lane_admission_latency_seconds
-        .with_label_values(&[lane_label.as_str(), endpoint])
-        .observe(elapsed_seconds);
+#[cfg(feature = "telemetry")]
+fn observe_route_stage_latency(
+    telemetry: &MaybeTelemetry,
+    route_kind: &'static str,
+    stage: &'static str,
+    outcome: &'static str,
+    duration: Duration,
+) {
+    let _ = telemetry.with_metrics(|telemetry| {
+        telemetry.observe_torii_route_stage_latency(route_kind, stage, outcome, duration);
+    });
 }
 
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+/// Handle a transaction and record direct Torii admission metrics when telemetry is enabled.
 pub async fn handle_transaction_with_metrics(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
@@ -9137,14 +9213,22 @@ pub async fn handle_transaction_with_metrics(
     let result = handle_transaction_inner(chain_id, queue, state, tx, &telemetry).await;
 
     #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &telemetry,
+        "transaction",
+        "handle",
+        if result.is_ok() { "ok" } else { "error" },
+        start.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
     if let Ok(decision) = &result {
         observe_lane_admission_latency(
             &telemetry,
             endpoint,
             decision.lane_id,
             start.elapsed().as_secs_f64(),
-        )
-        .await;
+        );
     }
 
     result
@@ -9156,28 +9240,48 @@ mod lane_admission_latency_tests {
     use iroha_core::telemetry::{StateTelemetry, Telemetry};
     use iroha_data_model::nexus::LaneId;
     use iroha_telemetry::metrics::global_or_default;
-    use tokio::time::timeout;
 
     use super::*;
 
-    #[tokio::test]
-    async fn telemetry_timeout_prevents_hanging_observation() {
+    #[test]
+    fn telemetry_observation_records_without_actor_sync() {
         let metrics = global_or_default();
-        // Do not start the telemetry actor; use a raw handle to simulate a dead channel.
-        let telemetry = Telemetry::from(StateTelemetry::new(metrics, true));
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
+        let histogram = metrics
+            .torii_lane_admission_latency_seconds
+            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+        let before = histogram.get_sample_count();
 
-        timeout(
-            TELEMETRY_SYNC_TIMEOUT.saturating_mul(2),
-            observe_lane_admission_latency(
-                &gate,
-                iroha_torii_shared::uri::TRANSACTION,
-                LaneId::SINGLE,
-                0.0,
-            ),
-        )
-        .await
-        .expect("observation must complete even when telemetry actor is missing");
+        observe_lane_admission_latency(
+            &gate,
+            iroha_torii_shared::uri::TRANSACTION,
+            LaneId::SINGLE,
+            0.25,
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn route_stage_observation_records_without_actor_sync() {
+        let metrics = global_or_default();
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
+        let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
+        let histogram = metrics
+            .torii_route_stage_latency_seconds
+            .with_label_values(&["transaction", "enqueue", "ok"]);
+        let before = histogram.get_sample_count();
+
+        observe_route_stage_latency(
+            &gate,
+            "transaction",
+            "enqueue",
+            "ok",
+            Duration::from_micros(10),
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
     }
 }
 
@@ -9192,9 +9296,63 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    let query = verify_signed_query_request(&query)?;
-    let resp = execute_verified_query_with_opts(live_query_store, state, query, tel, opts).await?;
-    Ok(crate::utils::respond_with_format(resp, format))
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
+    let query = match verify_signed_query_request(query) {
+        Ok(query) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(&tel, "query", "verify", "ok", verify_started.elapsed());
+            query
+        }
+        Err(err) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(&tel, "query", "verify", "error", verify_started.elapsed());
+            return Err(err);
+        }
+    };
+
+    #[cfg(feature = "telemetry")]
+    let handle_started = std::time::Instant::now();
+    let resp =
+        match execute_verified_query_with_opts(live_query_store, state, query, tel.clone(), opts)
+            .await
+        {
+            Ok(resp) => {
+                #[cfg(feature = "telemetry")]
+                observe_route_stage_latency(
+                    &tel,
+                    "query",
+                    "handle",
+                    "ok",
+                    handle_started.elapsed(),
+                );
+                resp
+            }
+            Err(err) => {
+                #[cfg(feature = "telemetry")]
+                observe_route_stage_latency(
+                    &tel,
+                    "query",
+                    "handle",
+                    "error",
+                    handle_started.elapsed(),
+                );
+                return Err(err);
+            }
+        };
+
+    #[cfg(feature = "telemetry")]
+    let response_started = std::time::Instant::now();
+    let response = crate::utils::respond_with_format(resp, format);
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &tel,
+        "query",
+        "encode_or_response",
+        "ok",
+        response_started.elapsed(),
+    );
+    Ok(response)
 }
 
 /// Simple liveness probe. Returns a constant string when Torii is up.
@@ -31378,7 +31536,7 @@ fn literal_is_local8(literal: &str) -> bool {
 }
 
 #[cfg(feature = "app_api")]
-fn explorer_qr_error(err: qrcode::types::QrError) -> Error {
+fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
 
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -46468,6 +46626,356 @@ mod lane_admission_metrics_tests {
         assert!(
             histogram.get_sample_count() >= 1,
             "expected at least one latency observation"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "telemetry"))]
+mod hot_path_load_profile_tests {
+    use std::{
+        num::NonZeroUsize,
+        sync::{Arc, Mutex as StdMutex},
+        time::{Duration, Instant},
+    };
+
+    use iroha_config::parameters::actual::TelemetryProfile;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State, World},
+        telemetry::{StateTelemetry, Telemetry},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        prelude::*,
+        query::{
+            QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
+            runtime::prelude::FindAbiVersion,
+        },
+    };
+    use iroha_logger::Level;
+    use iroha_telemetry::metrics::Metrics;
+
+    use super::*;
+
+    const VERIFY_WARMUP_SAMPLES: usize = 128;
+    const VERIFY_SAMPLES: usize = 4_096;
+    const QUERY_WARMUP_SAMPLES: usize = 64;
+    const QUERY_SAMPLES: usize = 2_048;
+    const TX_WARMUP_SAMPLES: usize = 32;
+    const TX_SAMPLES: usize = 1_024;
+    const LIMITER_WARMUP_SAMPLES: usize = 128;
+    const LIMITER_WORKERS: usize = 16;
+    const LIMITER_OPS_PER_WORKER: usize = 1_024;
+
+    fn direct_metrics_telemetry() -> MaybeTelemetry {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics, true));
+        MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator)
+    }
+
+    fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn print_hot_profile(
+        kind: &str,
+        samples: Vec<Duration>,
+        warmup_samples: usize,
+        concurrency: usize,
+        wall_time: Duration,
+    ) {
+        crate::profile_stats::print_profile(
+            "hot_path",
+            kind,
+            samples,
+            warmup_samples,
+            concurrency,
+            wall_time,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "load profile; run explicitly with --ignored --nocapture"]
+    async fn torii_hot_path_load_profile() {
+        let key_pair = KeyPair::random();
+        for _ in 0..VERIFY_WARMUP_SAMPLES {
+            let signed_query = signed_find_abi_version(&key_pair);
+            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            std::hint::black_box(verified);
+        }
+        let signed_queries = (0..VERIFY_SAMPLES)
+            .map(|_| signed_find_abi_version(&key_pair))
+            .collect::<Vec<_>>();
+        let mut verify_samples = Vec::with_capacity(VERIFY_SAMPLES);
+        let wall_start = Instant::now();
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            std::hint::black_box(verified);
+            verify_samples.push(start.elapsed());
+        }
+        print_hot_profile(
+            "signed_query_verify_direct",
+            verify_samples,
+            VERIFY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
+
+        let query_store = LiveQueryStore::start_test();
+        let query_state = Arc::new(State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query_store.clone(),
+        ));
+        let query_telemetry = direct_metrics_telemetry();
+        for _ in 0..QUERY_WARMUP_SAMPLES {
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_find_abi_version(&key_pair),
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("warmup query should complete");
+            std::hint::black_box(response);
+        }
+        let signed_queries = (0..QUERY_SAMPLES)
+            .map(|_| signed_find_abi_version(&key_pair))
+            .collect::<Vec<_>>();
+        let mut query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        let wall_start = Instant::now();
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_query,
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("query should complete");
+            std::hint::black_box(response);
+            query_samples.push(start.elapsed());
+        }
+        print_hot_profile(
+            "query_find_abi_norito_with_direct_metrics",
+            query_samples,
+            QUERY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
+
+        for _ in 0..QUERY_WARMUP_SAMPLES {
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_find_parameters(&key_pair),
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("parameter warmup query should complete");
+            std::hint::black_box(response);
+        }
+        let signed_queries = (0..QUERY_SAMPLES)
+            .map(|_| signed_find_parameters(&key_pair))
+            .collect::<Vec<_>>();
+        let mut parameter_query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        let wall_start = Instant::now();
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_query,
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("parameter query should complete");
+            std::hint::black_box(response);
+            parameter_query_samples.push(start.elapsed());
+        }
+        print_hot_profile(
+            "query_find_parameters_norito_with_direct_metrics",
+            parameter_query_samples,
+            QUERY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
+
+        let tx_state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let tx_capacity = (TX_SAMPLES + TX_WARMUP_SAMPLES) * 2;
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(tx_capacity).0;
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(tx_capacity).expect("non-zero queue capacity"),
+            capacity_per_user: NonZeroUsize::new(tx_capacity)
+                .expect("non-zero user queue capacity"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let tx_queue = Arc::new(Queue::from_config(queue_cfg, events));
+        let chain_id: Arc<ChainId> =
+            Arc::new("torii_load_profile_chain".parse().expect("valid chain id"));
+        let tx_key_pair = KeyPair::random();
+        let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
+        let tx_telemetry = direct_metrics_telemetry();
+        for index in 0..TX_WARMUP_SAMPLES {
+            let instruction = Log::new(Level::INFO, format!("torii-load-profile-warmup-{index}"));
+            let tx = TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+                .with_instructions([InstructionBox::from(instruction)])
+                .sign(tx_key_pair.private_key());
+            let decision = handle_transaction_with_metrics(
+                Arc::clone(&chain_id),
+                Arc::clone(&tx_queue),
+                Arc::clone(&tx_state),
+                tx,
+                tx_telemetry.clone(),
+                iroha_torii_shared::uri::TRANSACTION,
+            )
+            .await
+            .expect("warmup transaction should be admitted");
+            std::hint::black_box(decision);
+        }
+        let transactions = (0..TX_SAMPLES)
+            .map(|index| {
+                let instruction = Log::new(Level::INFO, format!("torii-load-profile-{index}"));
+                TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+                    .with_instructions([InstructionBox::from(instruction)])
+                    .sign(tx_key_pair.private_key())
+            })
+            .collect::<Vec<_>>();
+        let mut tx_samples = Vec::with_capacity(TX_SAMPLES);
+        let wall_start = Instant::now();
+        for tx in transactions {
+            let start = Instant::now();
+            let decision = handle_transaction_with_metrics(
+                Arc::clone(&chain_id),
+                Arc::clone(&tx_queue),
+                Arc::clone(&tx_state),
+                tx,
+                tx_telemetry.clone(),
+                iroha_torii_shared::uri::TRANSACTION,
+            )
+            .await
+            .expect("transaction should be admitted");
+            std::hint::black_box(decision);
+            tx_samples.push(start.elapsed());
+        }
+        print_hot_profile(
+            "transaction_admission_with_direct_metrics",
+            tx_samples,
+            TX_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
+
+        let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        for index in 0..LIMITER_WARMUP_SAMPLES {
+            let key = format!("load-profile-warmup-{index}");
+            assert!(limiter.allow(&key).await, "warmup limiter key admitted");
+        }
+        let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
+            LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
+        )));
+        let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        let wall_start = Instant::now();
+        for worker in 0..LIMITER_WORKERS {
+            let limiter = limiter.clone();
+            let limiter_samples = Arc::clone(&limiter_samples);
+            handles.push(tokio::spawn(async move {
+                for index in 0..LIMITER_OPS_PER_WORKER {
+                    let key = format!("load-profile-{worker}-{index}");
+                    let start = Instant::now();
+                    let allowed = limiter.allow(&key).await;
+                    let elapsed = start.elapsed();
+                    assert!(allowed, "fresh limiter key should be admitted");
+                    limiter_samples
+                        .lock()
+                        .expect("limiter samples lock")
+                        .push(elapsed);
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("limiter worker should complete");
+        }
+        let limiter_samples = Arc::try_unwrap(limiter_samples)
+            .expect("all limiter sample handles dropped")
+            .into_inner()
+            .expect("limiter samples lock");
+        print_hot_profile(
+            "preauth_rate_limiter_distinct_keys_concurrent",
+            limiter_samples,
+            LIMITER_WARMUP_SAMPLES,
+            LIMITER_WORKERS,
+            wall_start.elapsed(),
+        );
+
+        let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        for _ in 0..LIMITER_WARMUP_SAMPLES {
+            assert!(
+                limiter.allow("load-profile-shared-key").await,
+                "warmup shared limiter key admitted"
+            );
+        }
+        let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
+            LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
+        )));
+        let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        let wall_start = Instant::now();
+        for _ in 0..LIMITER_WORKERS {
+            let limiter = limiter.clone();
+            let limiter_samples = Arc::clone(&limiter_samples);
+            handles.push(tokio::spawn(async move {
+                for _ in 0..LIMITER_OPS_PER_WORKER {
+                    let start = Instant::now();
+                    let allowed = limiter.allow("load-profile-shared-key").await;
+                    let elapsed = start.elapsed();
+                    assert!(allowed, "shared limiter key should be admitted");
+                    limiter_samples
+                        .lock()
+                        .expect("limiter samples lock")
+                        .push(elapsed);
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("limiter worker should complete");
+        }
+        let limiter_samples = Arc::try_unwrap(limiter_samples)
+            .expect("all limiter sample handles dropped")
+            .into_inner()
+            .expect("limiter samples lock");
+        print_hot_profile(
+            "preauth_rate_limiter_same_key_concurrent",
+            limiter_samples,
+            LIMITER_WARMUP_SAMPLES,
+            LIMITER_WORKERS,
+            wall_start.elapsed(),
         );
     }
 }

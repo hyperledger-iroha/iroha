@@ -5,6 +5,7 @@ mod ingest;
 mod persistence;
 pub mod pin_intents;
 mod rs16;
+mod spool;
 mod taikai;
 
 pub use ingest::{
@@ -12,6 +13,9 @@ pub use ingest::{
 };
 use iroha_data_model::sorafs::pin_registry::StorageClass;
 pub use persistence::{DaReceiptLog, DaReceiptLogEntry, ReceiptInsertOutcome, ReplayCursorStore};
+pub(crate) use spool::{
+    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, DaSpooler,
+};
 pub use taikai::{compute_taikai_ingest_tags, spawn_anchor_worker};
 
 fn storage_class_label(class: StorageClass) -> &'static str {

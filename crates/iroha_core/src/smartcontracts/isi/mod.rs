@@ -13,6 +13,8 @@ pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
 pub mod multisig;
+/// Musubi package registry instruction handlers.
+pub mod musubi;
 pub mod nft;
 /// Offline allowance settlement instruction handlers.
 pub mod offline;
@@ -156,6 +158,10 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiRelease>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::YankMusubiRelease>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiShortAlias>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AssertMusubiReleaseExists>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ClaimIdentifier>,

@@ -874,6 +874,7 @@ mod tests {
                 data_shards: 0,
                 parity_shards: 0,
                 chunk_fanout: None,
+                rs16_initial_fanout: iroha_config::parameters::actual::RbcRs16InitialFanout::Full,
                 pending_max_chunks: 0,
                 pending_max_bytes: 0,
                 pending_session_limit: 0,

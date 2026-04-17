@@ -35,6 +35,10 @@ path = "tests/consensus_and_da.rs"
 name = "nexus_and_streaming"
 path = "tests/nexus_and_streaming.rs"
 
+[[test]]
+name = "torii_load_profile"
+path = "tests/torii_load_profile.rs"
+
 [features]
 default = ["telemetry"]
 fault_injection = []
@@ -75,8 +79,8 @@ futures-util = "0.3.31"
 nonzero_ext = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_genesis = { workspace = true }
-iroha_core = { workspace = true, features = ["quic", "iroha-core-tests"] }
-iroha_p2p = { workspace = true, features = ["quic"] }
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_p2p = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10.9"
 

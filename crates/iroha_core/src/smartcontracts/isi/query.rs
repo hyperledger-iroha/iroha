@@ -502,6 +502,21 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDataspaceNameOwnerById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindMusubiReleaseByRef(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiPackageVersions(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiPackageReleases(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::SearchMusubiPackages(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiShortAliasByName(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindDomainById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

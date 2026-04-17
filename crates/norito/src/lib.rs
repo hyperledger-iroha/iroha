@@ -67,7 +67,7 @@ pub use core::{
         Heuristics as HeuristicsConfig, get as get_heuristics,
         select_layout_flags_for_size_with as select_layout_flags_with,
     },
-    to_bytes, to_bytes_auto, to_compressed_bytes,
+    to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes,
 };
 
 pub use codec::disable_packed_struct_layout;
@@ -310,6 +310,9 @@ pub mod codec {
 
         /// Return the encoded length for `self` without allocating a buffer.
         fn encoded_len(&self) -> usize {
+            if let Some(len) = self.encoded_len_exact() {
+                return len;
+            }
             let mut sink = std::io::sink();
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
@@ -531,6 +534,7 @@ pub mod codec {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
 
         #[derive(Clone, Copy)]
         struct Hinted(u8);
@@ -551,6 +555,20 @@ pub mod codec {
             }
         }
 
+        struct ExactLenOnly(u8);
+
+        impl NoritoSerialize for ExactLenOnly {
+            fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), crate::Error> {
+                writer.write_all(&[self.0])?;
+                Ok(())
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                EXACT_CALLS.fetch_add(1, Ordering::Relaxed);
+                Some(1)
+            }
+        }
+
         #[test]
         fn encode_to_matches_encode() {
             let value = vec![1u8, 2, 3, 4, 5];
@@ -565,6 +583,14 @@ pub mod codec {
             let value = (42u32, vec![7u8, 8, 9]);
             let bytes = value.encode();
             assert_eq!(value.encoded_len(), bytes.len());
+        }
+
+        #[test]
+        fn encoded_len_uses_exact_len_when_available() {
+            EXACT_CALLS.store(0, Ordering::Relaxed);
+            let value = ExactLenOnly(7);
+            assert_eq!(value.encoded_len(), 1);
+            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
         }
 
         #[test]
@@ -675,6 +701,24 @@ pub mod codec {
         }
 
         decode_from_aligned::<T>(aligned_slice, flags, logical_len)
+    }
+
+    /// Bare decode from an exact slice using a type-provided slice decoder.
+    ///
+    /// Unlike [`Decode::decode`], this avoids copying when the caller already
+    /// has the full payload in memory. The type's [`core::DecodeFromSlice`]
+    /// implementation must prove that all bytes are consumed.
+    pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
+    where
+        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+    {
+        core::reset_decode_state();
+        let _reset = DecodeResetGuard;
+        let (value, used) = core::decode_field_canonical_from_slice::<T>(bytes)?;
+        if used != bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        Ok(value)
     }
 
     struct DecodeResetGuard;
@@ -8910,11 +8954,17 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
     value: &T,
     compression: Compression,
 ) -> Result<(), Error> {
-    let bytes = match compression {
-        Compression::None => to_bytes(value)?,
-        Compression::Zstd => to_compressed_bytes(value, Some(CompressionConfig::default()))?,
-    };
-    writer.write_all(&bytes)?;
+    match compression {
+        Compression::None => {
+            let mut bytes = Vec::new();
+            core::to_bytes_in(value, &mut bytes)?;
+            writer.write_all(&bytes)?;
+        }
+        Compression::Zstd => {
+            let bytes = to_compressed_bytes(value, Some(CompressionConfig::default()))?;
+            writer.write_all(&bytes)?;
+        }
+    }
     Ok(())
 }
 

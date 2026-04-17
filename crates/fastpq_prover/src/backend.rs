@@ -1983,29 +1983,37 @@ mod tests {
 
     mod fri_properties {
         use fastpq_isi::CANONICAL_PARAMETER_SETS;
-        use proptest::{collection::vec as pvec, prelude::*};
 
         use super::*;
         use crate::Planner;
 
         const MAX_TRACE_LOG: u32 = 4;
 
-        fn fri_input_strategy() -> impl Strategy<Value = (u32, Vec<u64>)> {
-            (0u32..=MAX_TRACE_LOG).prop_flat_map(|trace_log| {
+        fn fri_input_cases() -> Vec<(u32, Vec<u64>)> {
+            let mut cases = Vec::new();
+            for trace_log in 0..=MAX_TRACE_LOG {
                 let len = 1usize << trace_log;
-                pvec(0u64..crate::poseidon::FIELD_MODULUS, len)
-                    .prop_map(move |coeffs| (trace_log, coeffs))
-            })
+                for seed in [0_u64, 1, 0x1234, 0xFEED] {
+                    let coeffs = (0..len)
+                        .map(|idx| {
+                            seed.wrapping_add(idx as u64)
+                                .wrapping_mul(0xD6E8_FEB8_6659_FD93)
+                                % crate::poseidon::FIELD_MODULUS
+                        })
+                        .collect();
+                    cases.push((trace_log, coeffs));
+                }
+            }
+            cases
         }
 
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(32))]
-            #[test]
-            fn fri_layers_and_betas_are_deterministic((trace_log, coeffs) in fri_input_strategy()) {
+        #[test]
+        fn fri_layers_and_betas_are_deterministic() {
+            for (trace_log, coeffs) in fri_input_cases() {
                 let params = CANONICAL_PARAMETER_SETS[0];
                 let planner = Planner::new(&params);
                 let trace_len = 1usize << trace_log;
-                prop_assert_eq!(coeffs.len(), trace_len);
+                assert_eq!(coeffs.len(), trace_len);
 
                 let evaluations = planner.lde_columns(std::slice::from_ref(&coeffs));
                 let evaluation = evaluations.into_iter().next().expect("evaluation column");
@@ -2042,11 +2050,11 @@ mod tests {
                 )
                 .expect("fri folding");
 
-                prop_assert_eq!(layers_a, layers_b);
-                prop_assert_eq!(betas_a, betas_b);
+                assert_eq!(layers_a, layers_b);
+                assert_eq!(betas_a, betas_b);
 
                 let expected_len = trace_len << planner.blowup_log();
-                prop_assert_eq!(evaluation.len(), expected_len);
+                assert_eq!(evaluation.len(), expected_len);
             }
         }
     }

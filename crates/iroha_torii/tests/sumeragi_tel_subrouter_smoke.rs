@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::http::Request;
+use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
@@ -15,6 +15,23 @@ use iroha_core::{
 };
 use iroha_torii::{MaybeTelemetry, Torii};
 use tower::ServiceExt as _;
+
+mod fixtures;
+
+fn signed_loopback_get(
+    cfg: &iroha_config::parameters::actual::Root,
+    uri: &'static str,
+) -> Request<axum::body::Body> {
+    let request = Request::builder()
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mut request = fixtures::operator_signed_request(&cfg.common.key_pair, request, &[]);
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+    request
+}
 
 #[tokio::test]
 async fn sumeragi_tel_subrouter_exposes_endpoints() {
@@ -61,12 +78,7 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
     ] {
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(signed_loopback_get(&cfg, uri))
             .await
             .unwrap();
         assert!(matches!(

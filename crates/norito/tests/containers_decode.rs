@@ -23,10 +23,19 @@ fn vec_nested_roundtrip_sequential() {
 
     let payload = (outer.clone(), 0xfeed_beefu64);
     let bytes = to_bytes(&payload).expect("encode sequential payload");
+    let flags = bytes[core::Header::SIZE - 1];
     assert_eq!(
-        bytes[core::Header::SIZE - 1],
+        flags
+            & (core::header_flags::PACKED_STRUCT
+                | core::header_flags::FIELD_BITSET
+                | core::header_flags::PACKED_SEQ),
         0,
-        "sequential layout must not set header flags"
+        "sequential layout must not set packed layout flags"
+    );
+    assert_eq!(
+        flags & core::header_flags::COMPACT_LEN,
+        core::header_flags::COMPACT_LEN,
+        "sequential default should advertise compact lengths"
     );
 
     let decoded: (Vec<Vec<u8>>, u64) = decode_from_bytes(&bytes).expect("decode");

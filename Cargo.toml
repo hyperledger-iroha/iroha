@@ -121,8 +121,6 @@ owo-colors = "4.2.3"
 supports-color = "3.0.2"
 humantime = "2.3.0"
 crossterm = "0.29"
-eframe = { version = "0.33.0", default-features = true }
-
 criterion = "0.8.0"
 expect-test = "1.5.1"
 assertables = "9.8.2"
@@ -221,6 +219,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("json"))',
     'cfg(feature, values("json-raw-value"))',
     'cfg(feature, values("json-std-io"))',
+    'cfg(feature, values("local-quic-proxy"))',
     'cfg(feature, values("metal-stage1"))',
     'cfg(feature, values("packed-seq"))',
     'cfg(feature, values("packed-struct"))',
@@ -284,11 +283,25 @@ clippy.wildcard_dependencies = "deny"
 
 [workspace]
 resolver = "2"
-# Keep plain `cargo test` focused on the top-level library smoke surface. Use
-# `cargo test -p <crate>` for focused crate suites and `cargo test --workspace`
-# for the full node/SDK/tool/UI/integration sweep.
 default-members = [
+    "crates/norito",
+    "crates/norito_derive",
+    "crates/iroha_primitives",
+    "crates/iroha_crypto",
+    "crates/iroha_data_model",
+    "crates/iroha_config_base",
+    "crates/iroha_config",
+    "crates/iroha_logger",
+    "crates/iroha_p2p",
+    "crates/iroha_core",
+    "crates/iroha_torii_shared",
+    "crates/iroha_torii",
     "crates/iroha",
+    "crates/irohad",
+    "crates/iroha_cli",
+    "crates/ivm",
+    "crates/ivm_abi",
+    "crates/kotodama_lang",
 ]
 members = [
     "crates/*",

@@ -1,9 +1,10 @@
 //! Musubi package registry data types for Kotodama source packages.
 //!
-//! Musubi uses canonical package names of the form `namespace/package` and exact
-//! release references of the form `namespace/package@version`. The namespace is
-//! intentionally the same suffix format used by Kotodama dapp contract aliases:
-//! `<dataspace>` or `<domain>.<dataspace>`.
+//! Musubi uses canonical package names of the form `namespace/package`, release
+//! references of the form `namespace/package@version`, and local manifest
+//! requirements such as `^1.2.3`. The namespace is intentionally the same
+//! suffix format used by Kotodama dapp contract aliases: `<dataspace>` or
+//! `<domain>.<dataspace>`.
 
 use std::{fmt, str::FromStr, string::String, vec::Vec};
 
@@ -255,6 +256,16 @@ impl MusubiVersion {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Compare this version with another using semantic-version precedence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if a validated version cannot be interpreted for
+    /// precedence comparison.
+    pub fn precedence_cmp(&self, other: &Self) -> Result<core::cmp::Ordering, ParseError> {
+        compare_semver(self.as_str(), other.as_str())
+    }
 }
 
 impl AsRef<str> for MusubiVersion {
@@ -275,6 +286,69 @@ impl FromStr for MusubiVersion {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         validate_clean_literal(raw, "musubi version")?;
         validate_semver(raw)?;
+        Ok(Self(raw.to_owned()))
+    }
+}
+
+/// Version requirement accepted by Musubi manifests and resolved into exact releases.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(transparent))]
+pub struct MusubiVersionReq(String);
+
+impl MusubiVersionReq {
+    /// Parse and validate a version requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the requirement is not an exact, caret,
+    /// tilde, wildcard, or comparator-list requirement.
+    pub fn new(raw: &str) -> Result<Self, ParseError> {
+        raw.parse()
+    }
+
+    /// Return the canonical requirement string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Return an exact version when this requirement pins a single release.
+    #[must_use]
+    pub fn exact_version(&self) -> Option<MusubiVersion> {
+        let raw = self.0.strip_prefix('=').unwrap_or(self.0.as_str());
+        MusubiVersion::new(raw).ok()
+    }
+
+    /// Returns true when `version` satisfies this requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if a validated requirement or version cannot be
+    /// interpreted for precedence comparison.
+    pub fn matches(&self, version: &MusubiVersion) -> Result<bool, ParseError> {
+        version_req_matches(self.as_str(), version.as_str())
+    }
+}
+
+impl AsRef<str> for MusubiVersionReq {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for MusubiVersionReq {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MusubiVersionReq {
+    type Err = ParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        validate_clean_literal(raw, "musubi version requirement")?;
+        validate_version_req(raw)?;
         Ok(Self(raw.to_owned()))
     }
 }
@@ -343,16 +417,136 @@ pub struct MusubiArchiveRef {
     /// BLAKE3-256 hash of the canonical source archive payload.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub archive_hash_blake3_256: [u8; 32],
+    /// Total bytes included in the canonical source archive.
+    pub source_bytes: u64,
+    /// Total regular files included in the canonical source archive.
+    pub source_file_count: u32,
 }
 
 impl MusubiArchiveRef {
     /// Construct a source archive reference.
     #[must_use]
-    pub const fn new(sorafs_manifest: ManifestDigest, archive_hash_blake3_256: [u8; 32]) -> Self {
+    pub const fn new(
+        sorafs_manifest: ManifestDigest,
+        archive_hash_blake3_256: [u8; 32],
+        source_bytes: u64,
+        source_file_count: u32,
+    ) -> Self {
         Self {
             sorafs_manifest,
             archive_hash_blake3_256,
+            source_bytes,
+            source_file_count,
         }
+    }
+
+    /// Returns true when this archive can back a first-class registry release.
+    #[must_use]
+    pub const fn is_non_empty(&self) -> bool {
+        self.source_bytes > 0 && self.source_file_count > 0
+    }
+}
+
+/// Chunk commitment in a canonical Musubi source archive plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceChunkPlan {
+    /// Absolute byte offset of the chunk within the canonical concatenated payload.
+    pub offset: u64,
+    /// Chunk length in bytes.
+    pub length: u32,
+    /// BLAKE3-256 digest of the chunk payload.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub digest_blake3_256: [u8; 32],
+}
+
+impl MusubiSourceChunkPlan {
+    /// Construct a chunk plan entry.
+    #[must_use]
+    pub const fn new(offset: u64, length: u32, digest_blake3_256: [u8; 32]) -> Self {
+        Self {
+            offset,
+            length,
+            digest_blake3_256,
+        }
+    }
+}
+
+/// File range in a canonical Musubi source archive plan.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceFilePlan {
+    /// UTF-8 relative path components under the package source root.
+    pub path: Vec<String>,
+    /// First chunk index belonging to this file.
+    pub first_chunk: u32,
+    /// Number of consecutive chunks belonging to this file.
+    pub chunk_count: u32,
+    /// File size in bytes.
+    pub size: u64,
+}
+
+impl MusubiSourceFilePlan {
+    /// Construct a file plan entry.
+    #[must_use]
+    pub const fn new(path: Vec<String>, first_chunk: u32, chunk_count: u32, size: u64) -> Self {
+        Self {
+            path,
+            first_chunk,
+            chunk_count,
+            size,
+        }
+    }
+}
+
+/// Deterministic reconstruction plan for a Musubi source archive.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceArchivePlan {
+    /// BLAKE3-256 digest of the concatenated source payload.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub payload_hash_blake3_256: [u8; 32],
+    /// Total concatenated source payload length in bytes.
+    pub content_length: u64,
+    /// BLAKE3-256 digest of the generated CAR archive bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub car_hash_blake3_256: [u8; 32],
+    /// Generated CAR archive size in bytes.
+    pub car_size: u64,
+    /// Ordered source chunk commitments.
+    pub chunks: Vec<MusubiSourceChunkPlan>,
+    /// Ordered source file ranges.
+    pub files: Vec<MusubiSourceFilePlan>,
+}
+
+impl MusubiSourceArchivePlan {
+    /// Construct a source archive plan.
+    #[must_use]
+    pub const fn new(
+        payload_hash_blake3_256: [u8; 32],
+        content_length: u64,
+        car_hash_blake3_256: [u8; 32],
+        car_size: u64,
+        chunks: Vec<MusubiSourceChunkPlan>,
+        files: Vec<MusubiSourceFilePlan>,
+    ) -> Self {
+        Self {
+            payload_hash_blake3_256,
+            content_length,
+            car_hash_blake3_256,
+            car_size,
+            chunks,
+            files,
+        }
+    }
+
+    /// Returns true when the plan can reconstruct at least one non-empty file.
+    #[must_use]
+    pub fn is_non_empty(&self) -> bool {
+        self.content_length > 0
+            && self.car_size > 0
+            && !self.chunks.is_empty()
+            && !self.files.is_empty()
     }
 }
 
@@ -371,6 +565,32 @@ impl MusubiDependency {
     #[must_use]
     pub const fn new(alias: Name, package: MusubiPackageRef) -> Self {
         Self { alias, package }
+    }
+}
+
+/// Exported Kotodama library symbols for a Musubi release.
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiExportSet {
+    /// Functions callable by downstream packages as `alias::function(...)`.
+    pub functions: Vec<Name>,
+}
+
+impl MusubiExportSet {
+    /// Construct an export set from function names.
+    #[must_use]
+    pub fn new(mut functions: Vec<Name>) -> Self {
+        functions.sort();
+        functions.dedup();
+        Self { functions }
+    }
+
+    /// Returns true if no source-library symbols are exported.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.functions.is_empty()
     }
 }
 
@@ -429,6 +649,71 @@ impl MusubiReleaseStatus {
     }
 }
 
+/// Compact release metadata returned by package listing queries.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiReleaseSummary {
+    /// Exact release identifier.
+    pub package: MusubiPackageRef,
+    /// Off-chain archive commitment.
+    pub archive: MusubiArchiveRef,
+    /// Current lifecycle status.
+    pub status: MusubiReleaseStatus,
+    /// Exported library functions.
+    pub exports: Vec<Name>,
+    /// Account that published the release.
+    pub published_by: AccountId,
+    /// Ledger timestamp in milliseconds when the release was published.
+    pub published_at_ms: u64,
+}
+
+impl MusubiReleaseSummary {
+    /// Build a summary from a full release record.
+    #[must_use]
+    pub fn from_release(release: &MusubiRelease) -> Self {
+        Self {
+            package: release.package.clone(),
+            archive: release.archive,
+            status: release.status.clone(),
+            exports: release.exports.clone(),
+            published_by: release.published_by.clone(),
+            published_at_ms: release.published_at_ms,
+        }
+    }
+}
+
+/// Compact package metadata returned by package search.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiPackageSummary {
+    /// Canonical package identifier.
+    pub package: MusubiPackageId,
+    /// Highest active version, if one exists.
+    pub latest_active: Option<MusubiVersion>,
+    /// Total release count, including yanked releases.
+    pub release_count: u32,
+    /// Yanked release count.
+    pub yanked_count: u32,
+}
+
+impl MusubiPackageSummary {
+    /// Construct a package summary.
+    #[must_use]
+    pub const fn new(
+        package: MusubiPackageId,
+        latest_active: Option<MusubiVersion>,
+        release_count: u32,
+        yanked_count: u32,
+    ) -> Self {
+        Self {
+            package,
+            latest_active,
+            release_count,
+            yanked_count,
+        }
+    }
+}
+
 /// Metadata attached when a Musubi release is yanked.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -440,13 +725,16 @@ pub struct MusubiYankInfo {
 }
 
 /// Immutable registry record for a single package release.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiRelease {
     /// Exact package release identifier.
     pub package: MusubiPackageRef,
     /// Off-chain source archive reference.
     pub archive: MusubiArchiveRef,
+    /// Deterministic source archive plan required for fetch and cache reconstruction.
+    #[norito(default)]
+    pub source_archive_plan: Option<MusubiSourceArchivePlan>,
     /// Source-library dependencies imported by this release.
     pub dependencies: Vec<MusubiDependency>,
     /// Exported Kotodama functions available to downstream packages.
@@ -477,13 +765,63 @@ impl MusubiRelease {
         Self {
             package,
             archive,
+            source_archive_plan: None,
             dependencies,
-            exports,
+            exports: MusubiExportSet::new(exports).functions,
             dapp,
             published_by,
             published_at_ms,
             status: MusubiReleaseStatus::Active,
         }
+    }
+
+    /// Validate this release as a publishable registry record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when anti-squatting release requirements fail.
+    pub fn validate_publishable(&self) -> Result<(), ParseError> {
+        if !self.archive.is_non_empty() {
+            return Err(ParseError::new(
+                "musubi release archive must contain at least one source file and one byte",
+            ));
+        }
+        let Some(source_archive_plan) = self.source_archive_plan.as_ref() else {
+            return Err(ParseError::new(
+                "musubi release must include a deterministic source archive plan",
+            ));
+        };
+        if !source_archive_plan.is_non_empty() {
+            return Err(ParseError::new(
+                "musubi release source archive plan must contain files and chunks",
+            ));
+        }
+        if source_archive_plan.content_length != self.archive.source_bytes {
+            return Err(ParseError::new(
+                "musubi release source archive plan length must match archive source bytes",
+            ));
+        }
+        if source_archive_plan.files.len() != self.archive.source_file_count as usize {
+            return Err(ParseError::new(
+                "musubi release source archive plan file count must match archive file count",
+            ));
+        }
+        if self.exports.is_empty() {
+            return Err(ParseError::new(
+                "musubi release must export at least one Kotodama function",
+            ));
+        }
+        if let Some(dapp) = &self.dapp {
+            MusubiDappLink::new(dapp.namespace.clone(), dapp.contracts.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Attach a deterministic source archive plan to this release.
+    #[must_use]
+    pub fn with_source_archive_plan(mut self, plan: MusubiSourceArchivePlan) -> Self {
+        self.source_archive_plan = Some(plan);
+        self
     }
 
     /// Mark the release as yanked while preserving the immutable archive record.
@@ -523,6 +861,9 @@ fn validate_clean_literal(raw: &str, label: &'static str) -> Result<(), ParseErr
                 ParseError::new("musubi package reference must not be empty")
             }
             "musubi version" => ParseError::new("musubi version must not be empty"),
+            "musubi version requirement" => {
+                ParseError::new("musubi version requirement must not be empty")
+            }
             _ => ParseError::new("musubi literal must not be empty"),
         });
     }
@@ -546,6 +887,239 @@ fn parse_namespace_segment(raw: &str) -> Result<Name, ParseError> {
         ));
     }
     Name::from_str(raw).map_err(|_| ParseError::new("musubi namespace segment is invalid"))
+}
+
+fn validate_version_req(raw: &str) -> Result<(), ParseError> {
+    if raw == "*" {
+        return Ok(());
+    }
+    if let Some(rest) = raw.strip_prefix('^').or_else(|| raw.strip_prefix('~')) {
+        validate_semver(rest)?;
+        return Ok(());
+    }
+    if raw.ends_with(".*") {
+        validate_wildcard_req(raw)?;
+        return Ok(());
+    }
+    if raw.contains(',') || is_comparator_req(raw) {
+        for comparator in raw.split(',') {
+            validate_comparator_req(comparator.trim())?;
+        }
+        return Ok(());
+    }
+    validate_semver(raw.strip_prefix('=').unwrap_or(raw))
+}
+
+fn validate_wildcard_req(raw: &str) -> Result<(), ParseError> {
+    let prefix = raw
+        .strip_suffix(".*")
+        .ok_or_else(|| ParseError::new("musubi wildcard requirement must end in `.*`"))?;
+    let parts = prefix.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [major] => validate_numeric_identifier(major),
+        [major, minor] => {
+            validate_numeric_identifier(major)?;
+            validate_numeric_identifier(minor)
+        }
+        _ => Err(ParseError::new(
+            "musubi wildcard requirement must be `MAJOR.*` or `MAJOR.MINOR.*`",
+        )),
+    }
+}
+
+fn is_comparator_req(raw: &str) -> bool {
+    [">=", "<=", ">", "<", "="]
+        .iter()
+        .any(|prefix| raw.starts_with(prefix))
+}
+
+fn validate_comparator_req(raw: &str) -> Result<(), ParseError> {
+    let version = raw
+        .strip_prefix(">=")
+        .or_else(|| raw.strip_prefix("<="))
+        .or_else(|| raw.strip_prefix('>'))
+        .or_else(|| raw.strip_prefix('<'))
+        .or_else(|| raw.strip_prefix('='))
+        .ok_or_else(|| {
+            ParseError::new("musubi comparator requirement must start with >=, <=, >, <, or =")
+        })?;
+    validate_semver(version)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SemverPrecedence<'a> {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: Option<&'a str>,
+}
+
+fn parse_semver_precedence(raw: &str) -> Result<SemverPrecedence<'_>, ParseError> {
+    validate_semver(raw)?;
+    let without_build = raw.split_once('+').map_or(raw, |(left, _)| left);
+    let (core, prerelease) = without_build
+        .split_once('-')
+        .map_or((without_build, None), |(left, right)| (left, Some(right)));
+    let mut parts = core.split('.');
+    let major = parse_u64_identifier(parts.next().expect("validated major"))?;
+    let minor = parse_u64_identifier(parts.next().expect("validated minor"))?;
+    let patch = parse_u64_identifier(parts.next().expect("validated patch"))?;
+    Ok(SemverPrecedence {
+        major,
+        minor,
+        patch,
+        prerelease,
+    })
+}
+
+fn parse_u64_identifier(raw: &str) -> Result<u64, ParseError> {
+    raw.parse::<u64>()
+        .map_err(|_| ParseError::new("musubi version core identifiers exceed u64"))
+}
+
+fn version_req_matches(req: &str, version: &str) -> Result<bool, ParseError> {
+    if req == "*" {
+        return Ok(true);
+    }
+    if let Some(base) = req.strip_prefix('^') {
+        return range_matches(version, base, caret_upper_bound(base)?);
+    }
+    if let Some(base) = req.strip_prefix('~') {
+        return range_matches(version, base, tilde_upper_bound(base)?);
+    }
+    if req.ends_with(".*") {
+        return wildcard_matches(req, version);
+    }
+    if req.contains(',') || is_comparator_req(req) {
+        for comparator in req.split(',') {
+            if !comparator_matches(comparator.trim(), version)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    compare_semver(version, req.strip_prefix('=').unwrap_or(req)).map(|ordering| ordering.is_eq())
+}
+
+fn range_matches(
+    version: &str,
+    lower: &str,
+    upper: SemverPrecedence<'static>,
+) -> Result<bool, ParseError> {
+    Ok(compare_semver(version, lower)?.is_ge()
+        && compare_precedence(&parse_semver_precedence(version)?, &upper).is_lt())
+}
+
+fn caret_upper_bound(base: &str) -> Result<SemverPrecedence<'static>, ParseError> {
+    let base = parse_semver_precedence(base)?;
+    let (major, minor, patch) = if base.major > 0 {
+        (base.major + 1, 0, 0)
+    } else if base.minor > 0 {
+        (0, base.minor + 1, 0)
+    } else {
+        (0, 0, base.patch + 1)
+    };
+    Ok(SemverPrecedence {
+        major,
+        minor,
+        patch,
+        prerelease: None,
+    })
+}
+
+fn tilde_upper_bound(base: &str) -> Result<SemverPrecedence<'static>, ParseError> {
+    let base = parse_semver_precedence(base)?;
+    Ok(SemverPrecedence {
+        major: base.major,
+        minor: base.minor + 1,
+        patch: 0,
+        prerelease: None,
+    })
+}
+
+fn wildcard_matches(req: &str, version: &str) -> Result<bool, ParseError> {
+    let version = parse_semver_precedence(version)?;
+    let prefix = req.trim_end_matches(".*");
+    let parts = prefix.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [major] => Ok(version.major == parse_u64_identifier(major)?),
+        [major, minor] => Ok(version.major == parse_u64_identifier(major)?
+            && version.minor == parse_u64_identifier(minor)?),
+        _ => Err(ParseError::new(
+            "musubi wildcard requirement must be `MAJOR.*` or `MAJOR.MINOR.*`",
+        )),
+    }
+}
+
+fn comparator_matches(req: &str, version: &str) -> Result<bool, ParseError> {
+    let (operator, expected) = if let Some(version) = req.strip_prefix(">=") {
+        (">=", version)
+    } else if let Some(version) = req.strip_prefix("<=") {
+        ("<=", version)
+    } else if let Some(version) = req.strip_prefix('>') {
+        (">", version)
+    } else if let Some(version) = req.strip_prefix('<') {
+        ("<", version)
+    } else if let Some(version) = req.strip_prefix('=') {
+        ("=", version)
+    } else {
+        return Err(ParseError::new(
+            "musubi comparator requirement must start with >=, <=, >, <, or =",
+        ));
+    };
+    let ordering = compare_semver(version, expected)?;
+    Ok(match operator {
+        ">=" => ordering.is_ge(),
+        "<=" => ordering.is_le(),
+        ">" => ordering.is_gt(),
+        "<" => ordering.is_lt(),
+        "=" => ordering.is_eq(),
+        _ => false,
+    })
+}
+
+fn compare_semver(left: &str, right: &str) -> Result<core::cmp::Ordering, ParseError> {
+    Ok(compare_precedence(
+        &parse_semver_precedence(left)?,
+        &parse_semver_precedence(right)?,
+    ))
+}
+
+fn compare_precedence(
+    left: &SemverPrecedence<'_>,
+    right: &SemverPrecedence<'_>,
+) -> core::cmp::Ordering {
+    left.major
+        .cmp(&right.major)
+        .then_with(|| left.minor.cmp(&right.minor))
+        .then_with(|| left.patch.cmp(&right.patch))
+        .then_with(|| compare_prerelease(left.prerelease, right.prerelease))
+}
+
+fn compare_prerelease(left: Option<&str>, right: Option<&str>) -> core::cmp::Ordering {
+    match (left, right) {
+        (None, None) => core::cmp::Ordering::Equal,
+        (None, Some(_)) => core::cmp::Ordering::Greater,
+        (Some(_), None) => core::cmp::Ordering::Less,
+        (Some(left), Some(right)) => compare_prerelease_parts(left, right),
+    }
+}
+
+fn compare_prerelease_parts(left: &str, right: &str) -> core::cmp::Ordering {
+    for (left, right) in left.split('.').zip(right.split('.')) {
+        let left_num = left.parse::<u64>().ok();
+        let right_num = right.parse::<u64>().ok();
+        let ordering = match (left_num, right_num) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => core::cmp::Ordering::Less,
+            (None, Some(_)) => core::cmp::Ordering::Greater,
+            (None, None) => left.cmp(right),
+        };
+        if !ordering.is_eq() {
+            return ordering;
+        }
+    }
+    left.split('.').count().cmp(&right.split('.').count())
 }
 
 fn validate_semver(raw: &str) -> Result<(), ParseError> {
@@ -637,6 +1211,21 @@ mod tests {
     use super::*;
     use crate::{Decode, Encode};
 
+    fn sample_source_plan(source_bytes: u64, file_count: u32) -> MusubiSourceArchivePlan {
+        let chunks = vec![MusubiSourceChunkPlan::new(0, source_bytes as u32, [3; 32])];
+        let files = (0..file_count)
+            .map(|index| {
+                MusubiSourceFilePlan::new(
+                    vec![format!("file-{index}.ko")],
+                    0,
+                    1,
+                    source_bytes / u64::from(file_count),
+                )
+            })
+            .collect();
+        MusubiSourceArchivePlan::new([4; 32], source_bytes, [5; 32], 256, chunks, files)
+    }
+
     #[test]
     fn package_reference_uses_namespace_slash_name_at_version() {
         let reference: MusubiPackageRef = "dex.universal/swap-core@1.2.3"
@@ -697,11 +1286,75 @@ mod tests {
     }
 
     #[test]
+    fn version_requirements_match_supported_cargo_like_forms() {
+        let version = "1.4.2".parse::<MusubiVersion>().expect("version");
+
+        assert!(
+            "^1.2.0"
+                .parse::<MusubiVersionReq>()
+                .expect("caret")
+                .matches(&version)
+                .expect("match")
+        );
+        assert!(
+            "~1.4.0"
+                .parse::<MusubiVersionReq>()
+                .expect("tilde")
+                .matches(&version)
+                .expect("match")
+        );
+        assert!(
+            "1.*"
+                .parse::<MusubiVersionReq>()
+                .expect("wildcard")
+                .matches(&version)
+                .expect("match")
+        );
+        assert!(
+            ">=1.2.0,<2.0.0"
+                .parse::<MusubiVersionReq>()
+                .expect("comparators")
+                .matches(&version)
+                .expect("match")
+        );
+        assert!(
+            !"^2.0.0"
+                .parse::<MusubiVersionReq>()
+                .expect("caret")
+                .matches(&version)
+                .expect("match")
+        );
+    }
+
+    #[test]
+    fn prerelease_precedence_is_lower_than_release() {
+        let prerelease = "1.2.3-alpha.1"
+            .parse::<MusubiVersion>()
+            .expect("prerelease");
+        let release = "1.2.3".parse::<MusubiVersion>().expect("release");
+
+        assert!(
+            ">=1.2.3-alpha.1,<1.2.3"
+                .parse::<MusubiVersionReq>()
+                .expect("range")
+                .matches(&prerelease)
+                .expect("match")
+        );
+        assert!(
+            ">=1.2.3"
+                .parse::<MusubiVersionReq>()
+                .expect("range")
+                .matches(&release)
+                .expect("match")
+        );
+    }
+
+    #[test]
     fn release_roundtrips_through_norito() {
         let package = "dex.universal/swap-core@1.2.3"
             .parse::<MusubiPackageRef>()
             .expect("package ref");
-        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32]);
+        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2);
         let dependency = MusubiDependency::new(
             "math".parse().expect("alias"),
             "std.universal/math@1.0.0".parse().expect("dep"),
@@ -731,5 +1384,83 @@ mod tests {
         assert!(cursor.is_empty());
         assert_eq!(decoded, release);
         assert!(!decoded.status.is_active());
+    }
+
+    #[test]
+    fn release_validation_rejects_empty_archive_or_exports() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 0, 0),
+            Vec::new(),
+            Vec::new(),
+            None,
+            publisher,
+            42,
+        );
+
+        let err = release.validate_publishable().expect_err("empty archive");
+        assert!(err.reason().contains("archive"));
+    }
+
+    #[test]
+    fn release_validation_requires_source_archive_plan() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            None,
+            publisher,
+            42,
+        );
+
+        let err = release
+            .validate_publishable()
+            .expect_err("missing source plan");
+        assert!(err.reason().contains("source archive plan"));
+    }
+
+    #[test]
+    fn release_validation_accepts_matching_source_archive_plan() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            None,
+            publisher,
+            42,
+        )
+        .with_source_archive_plan(sample_source_plan(128, 2));
+
+        release.validate_publishable().expect("publishable");
+    }
+
+    #[test]
+    fn export_set_sorts_and_deduplicates_functions() {
+        let exports = MusubiExportSet::new(vec![
+            "quote".parse().expect("name"),
+            "swap".parse().expect("name"),
+            "quote".parse().expect("name"),
+        ]);
+
+        assert_eq!(exports.functions.len(), 2);
+        assert_eq!(exports.functions[0].as_ref(), "quote");
+        assert_eq!(exports.functions[1].as_ref(), "swap");
     }
 }

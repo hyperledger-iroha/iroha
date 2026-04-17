@@ -55,6 +55,12 @@ Flag scoping rules:
 
 These flags are independent; no heuristic cross-effects are permitted.
 
+Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
+version byte fixed at `0x00`. The header flag byte is therefore the source of
+truth for compact per-value lengths; decoders must not infer compactness from
+the version or from payload heuristics. Legacy fixed-width per-value prefixes
+remain supported when a caller explicitly encodes with `flags = 0x00`.
+
 ## Length Prefixes
 
 Norito uses length prefixes in multiple places, with explicit flags deciding the

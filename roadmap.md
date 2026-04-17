@@ -1,6 +1,285 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-16
+Last updated: 2026-04-17
+
+Latest sync (2026-04-17 Musubi live gateway fetch and registry integration):
+Musubi now hydrates lockfile sources from live SoraFS gateway providers as well
+as local provider payloads. Gateway provider specs are runtime-only inputs,
+package/manifest scoped for multi-package fetches, and cannot be mixed with
+`--provider-payload`. A 4-peer integration smoke now covers the on-chain
+registry path for publish, dependency recording, search/list queries, short
+aliases, and yanking from another peer.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/musubi_registry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p musubi -p iroha -p iroha_data_model -p iroha_core --target-dir /tmp/iroha-musubi-impl-target`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo test -p iroha_data_model --lib musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo check -p integration_tests --test core_api --target-dir /tmp/iroha-musubi-integration-target`
+  - `cargo test -p integration_tests --test core_api musubi_registry --target-dir /tmp/iroha-musubi-integration-target -- --nocapture --test-threads=1`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
+Latest sync (2026-04-17 dependency budget and no-gate proptest removal):
+The dependency-reduction pass is now implemented without adding feature gates.
+Plain root `cargo test` uses an explicit default-member set for the main Iroha
+node/tooling graph, `proptest` is removed from Rust manifests and converted
+tests, stale proptest regression seeds are gone, and the dependency budget now
+denies `proptest` by default.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_compile_unit_budget.py`
+  - converted deterministic regression tests across Norito, IVM, crypto,
+    data-model, FastPQ, primitives, and core replay cache
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted Rust formatting on touched Rust files
+  - `python3 -m py_compile scripts/check_dependency_budget.py scripts/check_compile_unit_budget.py`
+  - `cargo metadata --format-version 1 --manifest-path Cargo.toml --locked`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+  - `python3 scripts/check_compile_unit_budget.py --target-dir /tmp/iroha-dep-pass-target` reported `compile_units=1455`, `artifact_packages=512`, `registry_packages=456`, `path_packages=56`
+  - focused deterministic replacements passed for `iroha_primitives`,
+    `norito`, `iroha_data_model`, `fastpq_prover`, `iroha_core`, `ivm`, and
+    `iroha_crypto --features sm`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p norito --tests --locked`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+  - decide and enforce an initial `--max-compile-units` threshold for the new
+    compile-unit budget script after collecting CI-machine baselines
+  - keep `quinn`, `rcgen`, and `serde_json` on the budget watch list for the
+    next high-win removal pass
+
+Latest sync (2026-04-17 Norito compact default and chain decode closure):
+Norito now emits `COMPACT_LEN` (`flags = 0x02`) by default while keeping the
+v1 minor byte at `0x00`. Representative chain payloads now decode from
+canonical, compact-length, packed-struct, and packed-all framed layouts, and
+the `chain_wire` benchmark registers decode benches for each candidate after
+mandatory preflight. The chain-layout regression suite now also pins default
+framing to the compact-length layout, checks the compact size reduction on
+signed transactions, transaction entrypoints, and signed blocks, rejects packed
+payloads whose headers omit packed flags, rejects truncated frames, enforces
+compact size budgets, and verifies that the public `SignedBlock` wire path
+accepts only default layout flags. The follow-up mixed corpus now covers
+transactions with 0, 1, 4, 8, 16, and 32 instructions, verifies canonical block
+wire rejects tampered header flags/length/checksum, and adds larger Criterion
+groups for `signed_transaction_32` and `signed_block_mixed`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/core.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/streaming.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito_derive/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/norito_chain_layout.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/signed_block_roundtrip.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/norito.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted `rustfmt --edition 2024` on touched Rust files
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_primitives reencode_and_verify_respects_packed_seq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test norito_chain_layout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test signed_block_roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model decode_versioned_signed_block_handles_genesis_like_payload --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
+  - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; the reduced sample is noisy, but it confirms all candidate decode paths run
+  - bounded 30-sample Criterion filters passed for signed transactions,
+    transaction entrypoints, and signed blocks with `--measurement-time 3
+    --warm-up-time 1`
+  - measured compact framed transaction size: 1023 bytes vs 1809 canonical
+    framed bytes; compact encode/decode point estimates: 8.2071 us / 30.190 us
+  - measured compact framed transaction-entrypoint size: 1029 bytes vs 1821
+    canonical framed bytes; compact encode/decode point estimates: 8.6052 us /
+    31.929 us
+  - measured compact framed signed-block size: 8374 bytes, or 8375 bytes on
+    the versioned block wire, vs 17051 canonical framed bytes; compact
+    encode/decode point estimates: 84.448 us / 324.64 us and public wire
+    decode point estimate: 307.09 us
+  - measured compact framed 32-instruction transaction size: 3133 bytes vs
+    4591 canonical framed bytes; compact encode/decode point estimates:
+    23.330 us / 71.953 us vs canonical 41.346 us / 117.85 us
+  - measured compact framed mixed-block size: 22126 bytes, or 22127 bytes on
+    the versioned block wire, vs 38104 canonical framed bytes; compact
+    encode/decode point estimates: 209.77 us / 736.16 us and public wire
+    decode point estimate: 756.23 us
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_transaction_32 --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_block_mixed --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `cargo fmt -p iroha_data_model -- --check`
+  - `git diff --check --`
+  - `bash scripts/check_no_scale.sh`
+- open work after this slice:
+  - run full Criterion before/after samples on a quiet machine before using the
+    timing deltas as release-grade performance claims
+  - keep profiling compact encode overhead versus canonical encode and packed
+    framed decode overhead if Norito remains hot in block propagation
+  - run full workspace test and clippy during a longer validation window
+
+Latest sync (2026-04-17 DA/RBC reduced-fanout closure and Torii DA spool batching):
+the remaining DA/RBC performance gaps are now closed in-tree. RS16 reduced
+initial fanout refreshes reconstruction progress before READY deferral checks,
+RBC emits initial target planned/posted/skipped metrics by encoding and fanout,
+Torii signed-query fanout no longer forces request cloning or move-after-use
+workarounds, and `/v1/da/ingest` persists spool artifacts through a bounded
+async batching worker while still awaiting acknowledgement before returning.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/rbc.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_telemetry/src/metrics.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/da/{ingest.rs,mod.rs,spool.rs,tests.rs}`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha_torii da_spooler_executes_batch_before_ack -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry --lib rbc_initial_chunk_target_metrics_record_outcomes -- --nocapture`
+  - `cargo test -p iroha_core --lib rs16_initial_chunk_indices_are_reconstructable_and_deterministic -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::rbc::tests:: -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::commit::tests::payload_available_for_da -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::status::tests::rbc -- --nocapture`
+  - `cargo test -p iroha_core --lib model_rbc -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::ingest::tests:: -- --nocapture`
+  - `cargo test -p iroha_torii --lib signed_query -- --nocapture`
+  - `cargo test -p iroha_torii --lib torii_routed_read_tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_telemetry_endpoints -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_rbc_delivered_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_tel_subrouter_smoke -- --nocapture`
+  - `cargo test -p iroha_config da -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da npos_happy_path_enforces_da_and_metrics_bounds -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+  - `cargo test -p integration_tests --test torii_load_profile torii_http_hot_path_load_profile -- --ignored --nocapture`
+  - measured 4-peer hot-path profile: 64 `FindParameters` samples averaged
+    11.34 ms with p95 14.21 ms and p99 14.23 ms; 32 transaction submissions
+    averaged 13.00 ms with p95 15.01 ms and p99 15.37 ms
+- open work after this slice:
+  - run four- and six-peer 10.5 MiB before/after samples for plain fanout vs
+    RS16 `data_plus_one` on a quiet host before considering any default change;
+    the 4-peer 1 MiB multi-chunk RBC regression now passes in 49.35s of test
+    body time on this machine
+  - capture live Torii DA ingest latency/queue-depth samples under socket load
+    to tune the default spool queue and batch sizes
+  - run full workspace test and clippy during a longer validation window
+
+Latest sync (2026-04-17 Musubi source archive plans and graph locking):
+Musubi now records deterministic source archive plans in lockfile v3, resolves
+transitive package graphs from full release records, links dependency functions
+with package-key prefixes, rejects non-function library items, and keeps
+Musubi registry queries on package/release indexes instead of scanning all
+smart-contract state. Publish now emits default CAR/manifest/source-plan
+artifacts, rejects digest-only releases, and can upload through Torii's SoraFS
+storage-pin endpoint before registering the pin.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted `rustfmt --edition 2024` on touched Rust files
+  - `cargo check -p musubi -p iroha_data_model -p iroha_core --target-dir /tmp/iroha-musubi-gap-check-target`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture`
+  - `cargo test -p iroha_data_model --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture`
+- open work after this slice:
+  - superseded by the later Musubi live gateway fetch and registry integration
+    sync above
+  - run full workspace test and clippy during a longer validation window
+
+Latest sync (2026-04-17 WSV no-op MV commit gaps closed):
+MV block commits now skip publishing unchanged map/cell data, restore clean
+dirty state after aborted transactions, and avoid marking missing-key map
+removes as data changes. The large-world no-op WSV commit benchmark now has a
+scratch before/after comparison against old MV always-commit behavior.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/storage.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/cell.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/benches/blocks/apply_blocks_benchmark.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted `rustfmt --edition 2024` on touched Rust files
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-release-test cargo test -p mv --release`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo check -p iroha_telemetry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_view_returns_when_view_lock_held -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_view_lock_tests -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_commit_lock_order_tests -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-data-model-check cargo check -p iroha_data_model --features bench`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-data-model-check cargo test -p iroha_data_model musubi --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv consistent_with_btreemap -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib block_and_revert -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib block_hashes -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - 30-sample Criterion comparison for `state_commit/world_commit_noop_large_world`: old MV always-commit scratch baseline 490.40 us point estimate; current MV dirty-skip tree 432.81 us point estimate
+  - longer 10-second Criterion runs were noisy but still directionally lower
+    by median point estimate across collected runs: current tree 426.96 us vs
+    old-MV scratch baseline 490.40 us
+  - direct Criterion binary repetitions with `--measurement-time 10
+    --warm-up-time 3` produced current-tree point estimates of 408.17 us,
+    387.47 us, and 393.56 us, versus old-MV scratch estimates of 440.79 us,
+    427.45 us, and 468.06 us
+- open work after this slice:
+  - run full workspace test and clippy during a longer validation window
+  - repeat the WSV commit benchmark on a quiet machine before using the numbers
+    for release-grade performance claims
+  - continue WSV profiling around remaining `state.view()` lock windows and any
+    read-only post-commit work still in critical sections
+
+Latest sync (2026-04-17 Norito chain-wire benchmark corpus, superseded):
+the Norito chain-wire benchmark now uses deterministic key material and reports
+candidate layout sizes for signed transactions, transaction entrypoints, and
+signed blocks. This earlier decode-preflight gap is now closed by the later
+Norito compact-default sync above, which added chain-layout regressions and
+enabled compact and packed framed decodes for the representative payloads.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --test exact_slice`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
+  - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; noncanonical candidate decode benches were skipped after preflight because they returned `LengthMismatch`
+  - `git diff --check` passed for the Norito/data-model/status/roadmap files touched in this slice
+- open work after this slice:
+  - superseded; remaining Norito validation/performance work is tracked in the
+    latest compact-default section above
 
 Latest sync (2026-04-16 Mochi local sandbox startup/runtime smoke completed):
 the Mochi helper now behaves like a localton/Ganache-style sandbox launcher for
@@ -69,7 +348,350 @@ only one seed transaction outstanding while it samples metrics.
     window is available so these NPoS harness fixes are exercised together
     instead of only as exact reruns
 
-Latest sync (2026-04-16 Musubi package-manager foundation):
+Latest sync (2026-04-16 DA/RBC reduced initial fanout profile):
+DA/RBC planning now removes duplicate hot-path work and adds an opt-in RS16
+initial fanout profile. RBC allocation planning reuses precomputed transaction
+byte sizes, trusted local/hydrated chunks can be seeded with precomputed
+digests, complete sessions reuse authoritative chunk roots, and RS16 initial
+chunk sends can target deterministic `full`, `data`, or `data_plus_one` shard
+sets per validator.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/actual.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/tests/fixtures.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/rbc.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/propose.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/da/rs16.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/sumeragi_da.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - `cargo check -p iroha_config`
+  - `cargo check -p iroha_config --target-dir /tmp/iroha-da-perf-check`
+  - `cargo test -p iroha_config --target-dir /tmp/iroha-da-perf-check rbc_rs16_initial_fanout_config_tests -- --nocapture`
+  - `cargo check -p iroha_core --lib --target-dir /tmp/iroha-da-perf-check`
+  - focused `iroha_core` RBC digest-ingest, RS16 fanout, and allocation tests passed
+  - the dirty-worktree Torii signed-query compile break that blocked
+    `iroha_torii` checking was resolved in the Torii core-latency follow-up
+- open work after this slice:
+  - run four- and six-peer 10.5 MiB before/after samples for plain fanout vs
+    RS16 `data_plus_one` before considering any default change
+  - use the new RBC fanout and Torii DA spool metrics in the next localnet
+    before/after run so the operator-facing dashboards capture target savings
+    and ingest queue behavior
+
+Latest sync (2026-04-17 IVM prepared interpreter validation closure):
+IVM now keeps prepared instruction metadata in a bounded cache, reuses it
+across repeated `load_program` calls, preserves prefix-relative instruction
+alignment for compiled artifacts, and routes precomputed-op gas charging
+through the same helper as `cost_of_with_params`. Straight-line IVM run
+benchmarks now cover short and longer simple-instruction blocks. The follow-up
+closure preserves ABI pointer-policy errors during TLV decode fallback and
+clears the host, CoreHost, memory, and mock WSV regressions that blocked the
+broad IVM library suite and CoreHost pointer-ABI integration fixture.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/ivm.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/gas.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/benches/bench_vm.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/core_host.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/host.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/memory.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/tests/core_host_pointer_abi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - focused gas, prepared-cache, predecode, and runtime-diagnostic tests passed
+  - quick Criterion smoke for `ivm_run_straight_line_simple_{8,64}` passed
+  - focused host, CoreHost, memory, mock WSV, NFT, signatory, and name-decode regressions passed
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm --lib` passed with 264 tests
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm --test core_host_pointer_abi -- --nocapture` passed with 11 tests
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo check -p ivm --tests --message-format short`
+  - earlier `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo test -p ivm --lib` passed with 262 tests
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo check -p ivm --tests --message-format short`
+  - non-quick Criterion for `ivm_run_straight_line_simple_{8,64}` passed; this local run measured 122.07-130.53 ms for 8 instructions and 93.933-94.690 ms for 64 instructions
+- open work after this slice:
+  - no confirmed correctness gap remains from the prepared-interpreter slice;
+    broader before/after Criterion comparisons on a quiet machine are optional
+    tuning work if the small-block ILP cutoff needs another pass
+
+Latest sync (2026-04-16 WSV no-op MV commit optimization):
+WSV commits now avoid republishing unchanged MV storage data when a block write
+handle commits without touching the underlying map or cell. The revert journal
+still advances on every block commit, preserving `block_and_revert` rollback
+semantics while shortening the no-op commit path inside WSV state/world commit
+windows.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/storage.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/cell.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/benches/blocks/apply_blocks.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/benches/blocks/apply_blocks_benchmark.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo bench -p iroha_core
+    --features bench --bench apply_blocks -- state_commit --sample-size 10`
+  - focused `iroha_core` test execution is currently blocked by unrelated
+    dirty-workspace compile errors in Sumeragi main-loop code
+- open work after this slice:
+  - capture clean before/after benchmark samples once the workspace baseline
+    compiles without the unrelated Sumeragi and data-model changes
+  - continue WSV commit latency work by profiling remaining `state.view()`
+    lock windows and splitting any heavy read-only post-commit work out of the
+    critical path
+
+Latest sync (2026-04-16 SoraFS QUIC proxy dependency split):
+SoraFS keeps local browser/SDK QUIC proxy functionality, but the `quinn` and
+`rcgen` runtime edge now requires the explicit `local-quic-proxy` feature.
+Default builds retain proxy config/manifest types and report
+`ProxyError::Unavailable` if a config attempts to spawn the runtime without the
+feature. SoraDNS resolver also dropped unused direct `quinn`/`rcgen` manifest
+entries.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/sorafs_orchestrator/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/sorafs_orchestrator/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/sorafs_orchestrator/src/proxy.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/tools/soradns-resolver/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - formatted touched Rust files with direct `rustfmt --edition 2024`
+  - `cargo metadata --format-version 1 --manifest-path Cargo.toml` refreshed
+    resolver metadata and produced no `Cargo.lock` diff
+  - `python3 -m py_compile scripts/check_dependency_budget.py`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+    passed with `total_packages=801`, `registry_packages=704`,
+    `path_packages=97`, and `git_packages=0`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p sorafs_orchestrator --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-feature cargo check -p sorafs_orchestrator --features local-quic-proxy --locked`
+- open work after this slice:
+  - only feature-split the SoraNet relay/VPN QUIC tool binaries if operators
+    agree that default full-workspace tests can skip those executable targets
+
+Latest sync (2026-04-17 Torii core latency fast paths):
+Torii now removes avoidable work from the `/transaction` and `/query` hot
+paths. Signed query verification returns the authenticated payload directly,
+accepted transaction lane-admission metrics and snapshot-query metrics record
+through direct telemetry helpers, and the API rate limiter uses sharded
+short-held locks instead of one global async mutex. An ignored release-mode
+load profile now samples those paths inside the Torii library test harness, and
+an ignored four-peer HTTP smoke now exercises signed `FindParameters` queries
+and transaction submissions through real Torii sockets.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/limits.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target signed_query_verification_tests --
+    --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --lib --target-dir
+    /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently --
+    --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_core --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
+  - release-mode load profiling passed:
+    `cargo test -p iroha_torii --features telemetry --release --lib
+    --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile --
+    --ignored --nocapture`
+  - ignored four-peer HTTP load smoke passed:
+    `cargo test -p integration_tests --test core_api
+    torii_http_hot_path_load_profile --target-dir
+    /tmp/iroha-torii-http-load-target -- --ignored --nocapture`
+  - `cargo check -p iroha_core --lib --target-dir
+    /tmp/iroha-torii-gap-plan-core-check`
+  - profile sample on this host: signed-query verify p50/p95/p99
+    1.500/1.625/1.792 us; Norito `FindAbiVersion` query handling with direct
+    metrics 27.792/47.417/66.333 us; Norito `FindParameters` query handling
+    with direct metrics 29.166/48.375/57.333 us; transaction admission with
+    direct metrics 79.750/86.042/106.958 us; concurrent distinct-key pre-auth
+    limiter 0.500/1.125/3.792 us; concurrent same-key pre-auth limiter
+    0.250/1.458/13.875 us
+  - HTTP smoke sample on this host: `FindParameters` query p50/p95/p99
+    14.075/16.102/16.401 ms; transaction submit p50/p95/p99
+    11.067/13.271/13.804 ms
+  - `git diff --check` passed for the Torii/integration/status/roadmap files
+    touched in this slice
+- open work after this slice:
+  - repeat the HTTP smoke on a quiet host and add higher-volume before/after
+    samples before treating the timing numbers as release-grade capacity data
+  - keep `/status` and `/metrics` actor sync behavior intact while moving only
+    pure hot-path observations to direct telemetry helpers
+
+Latest sync (2026-04-17 Musubi composable package flow):
+Musubi now resolves Cargo-like dependency requirements into exact active
+registry releases, records those selections in lockfile v2, imports verified
+source trees into a local cache, and links cached Kotodama library functions
+into the program AST before compilation. The registry rejects yanked
+dependencies, requires active SoraFS pin manifests for package archives, checks
+linked dapp contract aliases, and makes global short aliases permission-gated
+instead of namespace-owner fallback curation. `musubi publish` now registers a
+generated SoraFS pin before submitting the Musubi release, so the default
+publish path satisfies the hardened on-chain checks.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/isi/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/isi/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/isi/registry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/query/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/visit/visit_query.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/query.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_executor_data_model/src/permission.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/executor.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/sorafs_car/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo check -p musubi -p sorafs_car --target-dir /tmp/iroha-musubi-impl-check-target`
+  - `cargo test -p musubi -p sorafs_car chunk_plan_digest_depends_on_ordered_chunk_metadata --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+  - `cargo test -p iroha_data_model --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+  - `cargo test -p iroha_core --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+  - `cargo fmt --all --check`
+- open work after this slice:
+  - add a SoraFS gateway fetch path so `musubi install` can fill the cache
+    directly from active pin providers; today the lockfile records archive
+    commitments and `musubi cache import` verifies source trees that were
+    fetched or checked out separately
+  - add integration coverage that drives publish, dependency resolution, yank,
+    cache import/build, and short-alias lookup through a real multi-peer
+    network
+
+Latest sync (2026-04-16 Norito exact-slice chain decode performance):
+Norito now has a root exact-slice decode facade for hot in-memory bare payloads,
+and chain versioned decoders use it for signed transactions, transaction
+entrypoints, and signed blocks. This removes the signed-block decode-time
+canonical re-encode check while keeping trailing/truncated payload rejection
+inside the `DecodeFromSlice` path.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/tests/exact_slice.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/transaction/signed.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/block/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `rustfmt --edition 2024 crates/norito/src/lib.rs crates/norito/tests/exact_slice.rs crates/iroha_data_model/src/transaction/signed.rs crates/iroha_data_model/src/block/mod.rs crates/iroha_data_model/benches/chain_wire.rs`
+  - `git diff --check -- crates/norito/src/lib.rs crates/norito/tests/exact_slice.rs crates/norito/README.md crates/iroha_data_model/src/transaction/signed.rs crates/iroha_data_model/src/block/mod.rs crates/iroha_data_model/Cargo.toml crates/iroha_data_model/benches/chain_wire.rs status.md roadmap.md`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --test exact_slice`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito encoded_len_uses_exact_len_when_available`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --test basic`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model decode_versioned_signed_block_handles_genesis_like_payload --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model signed_transaction_decode_from_slice_rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model versioned_decode_rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run` (pass; emitted an unrelated `ivm::PreparedProgram::from_decoded` dead-code warning)
+- open work after this slice:
+  - use `chain_wire` benchmarks to evaluate `COMPACT_LEN`, packed struct, and
+    packed sequence default-layout candidates before changing any canonical
+    v1 defaults
+  - extend exact slice decoding to more chain hot paths only when the
+    representative benchmarks show a measurable p95 gain
+
+Latest sync (2026-04-16 default workspace UI/media dependency edges removed):
+the default full-workspace graph now moves non-consensus UI/media stacks behind
+explicit features or in-tree code. QR generation is implemented in
+`iroha_torii_shared`, CLI QR GIF output uses a small local encoder, Petal
+visual codecs require `iroha_cli/offline-visual-codecs`, Mochi's egui desktop
+shell requires `mochi-ui/gui`, and monitor audio no longer links CPAL.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii_shared/src/qr.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii_shared/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/offline.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/offline/qr.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/explorer.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_monitor/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_monitor/src/theme.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/mochi/mochi-ui-egui/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/mochi/mochi-ui-egui/src/main.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/mochi/mochi-ui-egui/src/gui.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - formatted touched Rust files with direct `rustfmt --edition 2024`
+  - `python3 -m py_compile scripts/check_dependency_budget.py`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+    passed with `total_packages=801`, `registry_packages=704`,
+    `path_packages=97`, and `git_packages=0`
+  - `git diff --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p iroha_torii_shared --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-monitor cargo check -p iroha_monitor --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-mochi cargo check -p mochi-ui --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-mochi cargo check -p mochi-ui --features gui --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-cli cargo check -p iroha_cli --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-cli cargo check -p iroha_cli --features offline-visual-codecs --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-torii cargo check -p iroha_torii --locked`
+- open work after this slice:
+  - continue the next dependency reductions in the consensus-adjacent order:
+    direct `reqwest` replacement, Norito JSON cleanup, and only then PQ/ZK
+    primitive replacement under conformance vectors
+
+Latest sync (2026-04-16 root `cargo test` workspace default restored):
+plain root `cargo test` once again uses Cargo's normal virtual-workspace
+selection and runs every workspace member. `cargo test --workspace` remains a
+clear explicit spelling for the same package sweep, while crate owners can run
+focused suites with `cargo test -p <crate>`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/AGENTS.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo metadata --format-version 1 --no-deps`
+  - `git diff --check`
+- open work after this slice:
+  - run the multi-hour root `cargo test` / `cargo test --workspace` sweep when
+    the validation window is available
+  - continue reducing expensive dependency edges so the full workspace test
+    path remains practical without changing deterministic node behavior
+
+Prior sync (2026-04-16 Musubi package-manager foundation):
 Musubi now has a typed package identity model and a standalone local CLI
 workflow for Kotodama source packages. Package references use
 `namespace/package@version` with no leading `@`, and package namespaces share
@@ -79,31 +701,25 @@ contract aliases.
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/lib.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/Cargo.toml`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/bin/musubi.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - verified in this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_data_model musubi --lib -- --nocapture`
-  - `cargo test -p iroha_cli --bin musubi -- --nocapture`
+  - `cargo test -p musubi -- --nocapture`
 - open work after this slice:
-  - add chain-side Musubi registry ISIs and queries for publish, yank, release
-    lookup, and curated short aliases
-  - enforce namespace publish authority through the same ownership/delegation
-    model used for Kotodama dapp namespaces
-  - wire SoraFS upload/pin registration into `musubi publish`
-  - add compiler-level source-library import resolution and export checking
-  - decide whether to split the `musubi` binary into a publishable `musubi`
-    crate once `Cargo.lock` churn is acceptable
+  - chain-side Musubi registry ISIs, queries, namespace authority checks, and
+    the standalone `musubi` crate are now addressed by the registry follow-up
+    above
+  - SoraFS upload/pin registration and compiler-level source-library import
+    resolution remain open
 
-Latest sync (2026-04-16 root `cargo test` dependency graph reduction):
-plain root `cargo test` is now a top-level `iroha` smoke build instead of an
-implicit sweep over every heavy core crate test suite. Full coverage is still
-available through `cargo test --workspace`, while crate owners can run focused
-suites with `cargo test -p <crate>`.
+Superseded sync (2026-04-16 root `cargo test` dependency graph reduction):
+the temporary `default-members = ["crates/iroha"]` narrowing has been removed.
+The dependency-reduction follow-ups below are still useful for keeping the
+full workspace test path practical.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
@@ -126,11 +742,9 @@ suites with `cargo test -p <crate>`.
   - `cargo tree --workspace --target aarch64-apple-darwin --edges normal,build,dev`
   - `python3 scripts/check_dependency_budget.py`
   - `git diff --check`
-- open work after this slice:
+- remaining follow-up work:
   - split or gate the SoraFS QUIC proxy path so `quinn` does not have to appear
-    in the default client graph unless that transport is requested
-  - replace the CLI/Torii QR and image paths with small internal encoders so
-    `qrcode`, `image`, and related codecs can leave the workspace graph
+    in the client graph unless that transport is requested
   - continue replacing direct `serde_json` callers with Norito JSON wrappers
   - investigate whether ZK/PQ crypto helper stacks can be split into explicit
     verification/test packages without changing deterministic node behavior

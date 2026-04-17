@@ -32,7 +32,7 @@ impl<V: Value> Cell<V> {
 
         *revert.get_mut() = None;
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, false)
     }
 
     /// Create block to aggregate updates and revert changes made in latest block
@@ -47,7 +47,7 @@ impl<V: Value> Cell<V> {
             }
         }
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, true)
     }
 }
 
@@ -100,15 +100,30 @@ mod block {
     pub struct Block<'storage, V: Value> {
         pub(crate) revert: EbrCellWriteTxn<'storage, Option<V>>,
         pub(crate) blocks: EbrCellWriteTxn<'storage, V>,
+        pub(super) dirty: bool,
     }
 
     impl<'storage, V: Value> Block<'storage, V> {
+        pub(super) fn new(
+            revert: EbrCellWriteTxn<'storage, Option<V>>,
+            blocks: EbrCellWriteTxn<'storage, V>,
+            dirty: bool,
+        ) -> Self {
+            Self {
+                revert,
+                blocks,
+                dirty,
+            }
+        }
+
         /// Create transaction for the block
         pub fn transaction<'block>(&'block mut self) -> Transaction<'block, 'storage, V>
         where
             'storage: 'block,
         {
             Transaction {
+                applied: false,
+                dirty_before: self.dirty,
                 block: self,
                 revert: None,
             }
@@ -116,15 +131,23 @@ mod block {
 
         /// Apply aggregated changes to the storage
         pub fn commit(self) {
+            let Self {
+                revert,
+                blocks,
+                dirty,
+            } = self;
             // Commit fields in the inverse order
-            self.blocks.commit();
-            self.revert.commit();
+            if dirty {
+                blocks.commit();
+            }
+            revert.commit();
         }
 
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.blocks.get_mut();
             self.revert.get_or_insert(value.clone());
+            self.dirty = true;
             value
         }
 
@@ -150,6 +173,8 @@ mod block {
 
     /// Part of block's aggregated changes which applied or aborted at the same time
     pub struct Transaction<'block, 'storage, V: Value> {
+        pub(crate) applied: bool,
+        pub(crate) dirty_before: bool,
         pub(crate) revert: Option<V>,
         pub(crate) block: &'block mut Block<'storage, V>,
     }
@@ -160,12 +185,14 @@ mod block {
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
                 self.block.revert.get_or_insert(prev_value);
             }
+            self.applied = true;
         }
 
         /// Get mutable access to the value stored in cell
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.block.blocks.get_mut();
             self.revert.get_or_insert(value.clone());
+            self.block.dirty = true;
             value
         }
 
@@ -177,11 +204,15 @@ mod block {
 
     impl<'block, 'store: 'block, V: Value> Drop for Transaction<'block, 'store, V> {
         fn drop(&mut self) {
-            // revert changes made so fur by current transaction
+            if self.applied {
+                return;
+            }
+            // revert changes made so far by current transaction
             // if transaction was applied set would be empty
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
                 *self.block.blocks.get_mut() = prev_value;
             }
+            self.block.dirty = self.dirty_before;
         }
     }
 
@@ -303,5 +334,66 @@ mod tests {
         assert_eq!(view1.get(), &2);
         // Revert is visible in the view created after revert was applied
         assert_eq!(view2.get(), &1);
+    }
+
+    #[test]
+    fn noop_commit_clears_revert_history() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            *block.get_mut() = 1;
+            block.commit();
+        }
+
+        {
+            let block = cell.block();
+            block.commit();
+        }
+
+        {
+            let block = cell.block_and_revert();
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &1);
+    }
+
+    #[test]
+    fn aborted_transaction_dirty_commit_keeps_state_unchanged() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            {
+                let mut transaction = block.transaction();
+                *transaction.get_mut() = 1;
+            }
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &0);
+    }
+
+    #[test]
+    fn aborted_transaction_preserves_existing_dirty_state() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            *block.get_mut() = 1;
+            {
+                let mut transaction = block.transaction();
+                *transaction.get_mut() = 2;
+            }
+            assert!(block.dirty);
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &1);
     }
 }

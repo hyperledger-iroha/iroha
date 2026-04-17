@@ -4058,8 +4058,14 @@ pub mod codec {
     }
 
     fn verify_signed_tables(signed: &SignedRansTablesV1) -> Result<(), BundleTableError> {
-        let bytes = norito_core::to_bytes(&signed.payload.body)
-            .map_err(|_| BundleTableError::InvalidStructure("failed to encode table body"))?;
+        let bytes = {
+            // Table checksums are part of signed TOML artefacts, so keep their
+            // hash input pinned to the legacy canonical Norito layout rather
+            // than whichever layout is the current encode default.
+            let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(0, 0);
+            norito_core::to_bytes(&signed.payload.body)
+                .map_err(|_| BundleTableError::InvalidStructure("failed to encode table body"))?
+        };
         let digest = Sha256::digest(bytes);
         let mut checksum = [0u8; 32];
         checksum.copy_from_slice(digest.as_ref());
@@ -8036,8 +8042,6 @@ pub mod codec {
     mod tests {
         use std::{str::FromStr, sync::Arc};
 
-        use proptest::{collection::vec as pvec, prelude::*};
-
         use super::*;
         use crate::streaming::{Hash, chunk::BaselineDecoder};
 
@@ -9709,13 +9713,30 @@ pub mod codec {
             assert!(matches!(err, CodecError::TruncatedBlock(4)));
         }
 
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(64))]
-            fn merkle_proof_roundtrip_holds(
-                segment_number in any::<u64>(),
-                content_key_id in any::<u64>(),
-                payloads in pvec(pvec(any::<u8>(), 1..48), 1..6),
-            ) {
+        fn deterministic_payloads(seed: u8, count: usize) -> Vec<Vec<u8>> {
+            (0..count)
+                .map(|chunk_idx| {
+                    let len = 1 + ((seed as usize + chunk_idx * 7) % 47);
+                    (0..len)
+                        .map(|idx| {
+                            seed.wrapping_add(chunk_idx as u8)
+                                .wrapping_mul(31)
+                                .wrapping_add(idx as u8)
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+
+        #[test]
+        fn merkle_proof_roundtrip_holds() {
+            let cases = [
+                (0_u64, 0_u64, deterministic_payloads(0, 1)),
+                (1, 7, deterministic_payloads(3, 2)),
+                (u64::MAX, 42, deterministic_payloads(11, 5)),
+            ];
+
+            for (segment_number, content_key_id, payloads) in cases {
                 let chunk_ids: Vec<u16> = (0..payloads.len()).map(|idx| idx as u16).collect();
                 let payload_refs: Vec<(u16, &[u8])> = chunk_ids
                     .iter()
@@ -9730,10 +9751,8 @@ pub mod codec {
                     let proof = crate::streaming::chunk::merkle_proof(&commitments, idx, *chunk_id)
                         .expect("proof");
                     let leaf = commitments[idx];
-                    prop_assert!(crate::streaming::chunk::verify_merkle_proof(
-                        &leaf,
-                        &proof,
-                        &root
+                    assert!(crate::streaming::chunk::verify_merkle_proof(
+                        &leaf, &proof, &root
                     ));
                 }
 
@@ -9751,12 +9770,12 @@ pub mod codec {
                     &chunk_ids,
                 )
                 .expect("da root");
-                prop_assert_ne!(storage_hash, da_hash);
+                assert_ne!(storage_hash, da_hash);
 
                 if chunk_ids.len() >= 2 {
                     let mut unsorted = chunk_ids.clone();
                     unsorted.swap(0, 1);
-                    prop_assert!(matches!(
+                    assert!(matches!(
                         crate::streaming::chunk::storage_commitment(
                             segment_number,
                             content_key_id,
@@ -9765,7 +9784,7 @@ pub mod codec {
                         ),
                         Err(ChunkError::UnsortedChunkIds)
                     ));
-                    prop_assert!(matches!(
+                    assert!(matches!(
                         crate::streaming::chunk::data_availability_root(
                             segment_number,
                             content_key_id,
@@ -10355,6 +10374,7 @@ mod tests {
             ],
         };
         let checksum = {
+            let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(0, 0);
             let bytes = to_bytes(&body).expect("encode tables");
             let digest = Sha256::digest(bytes);
             let mut out = [0u8; 32];

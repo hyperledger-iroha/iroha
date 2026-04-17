@@ -8,6 +8,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Shared QR Code encoder used by Torii and CLI offline flows.
+pub mod qr;
 
 /// Latest Torii API version advertised by default (`major.minor`).
 pub const API_VERSION_DEFAULT: &str = "1.1";

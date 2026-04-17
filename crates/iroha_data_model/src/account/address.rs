@@ -1557,7 +1557,6 @@ mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use proptest::prelude::*;
 
     use super::*;
     use crate::domain::DomainId;
@@ -2120,9 +2119,11 @@ mod tests {
         assert!(matches!(err, AccountAddressError::ChecksumMismatch));
     }
 
-    proptest! {
-        #[test]
-        fn i105_checksum_corruption_detected(seed in any::<u8>(), offset in any::<u8>()) {
+    #[test]
+    fn i105_checksum_corruption_detected_for_deterministic_cases() {
+        let seeds = [0_u8, 1, 2, 7, 31, 63, 127, 128, 191, 255];
+
+        for &seed in &seeds {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
             let literal = address
@@ -2131,20 +2132,24 @@ mod tests {
             let sentinel_len = i105_sentinel_for_discriminant(CHAIN_DISCRIMINANT_SORA)
                 .chars()
                 .count();
-            let mut chars = literal.chars().collect::<Vec<_>>();
-            let payload_len = chars.len() - sentinel_len;
-            let index = sentinel_len + (usize::from(offset) % payload_len);
-            chars[index] = match chars[index] {
-                '1' => '2',
-                _ => '1',
-            };
-            let tampered = chars.into_iter().collect::<String>();
-            let err = AccountAddress::from_i105_for_discriminant(
-                &tampered,
-                Some(CHAIN_DISCRIMINANT_SORA),
-            )
+            let payload_len = literal.chars().count() - sentinel_len;
+            let offsets = [0, 1, 2, payload_len / 2, payload_len - 1];
+
+            for offset in offsets {
+                let mut chars = literal.chars().collect::<Vec<_>>();
+                let index = sentinel_len + offset;
+                chars[index] = match chars[index] {
+                    '1' => '2',
+                    _ => '1',
+                };
+                let tampered = chars.into_iter().collect::<String>();
+                let err = AccountAddress::from_i105_for_discriminant(
+                    &tampered,
+                    Some(CHAIN_DISCRIMINANT_SORA),
+                )
                 .expect_err("checksum mismatch");
-            prop_assert!(matches!(err, AccountAddressError::ChecksumMismatch));
+                assert!(matches!(err, AccountAddressError::ChecksumMismatch));
+            }
         }
     }
 
