@@ -565,8 +565,14 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
 
     let mut lane_universal = Table::new();
     lane_universal.insert("index".into(), TomlValue::Integer(0));
-    lane_universal.insert("alias".into(), TomlValue::String("lane-universal".to_owned()));
-    lane_universal.insert("dataspace".into(), TomlValue::String("universal".to_owned()));
+    lane_universal.insert(
+        "alias".into(),
+        TomlValue::String("lane-universal".to_owned()),
+    );
+    lane_universal.insert(
+        "dataspace".into(),
+        TomlValue::String("universal".to_owned()),
+    );
     lane_universal.insert("visibility".into(), TomlValue::String("public".to_owned()));
     lane_universal.insert("metadata".into(), TomlValue::Table(Table::new()));
 

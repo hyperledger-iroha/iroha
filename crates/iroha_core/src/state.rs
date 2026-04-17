@@ -16219,7 +16219,14 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, false, true)
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            false,
+            false,
+            true,
+        )
     }
 
     fn restore_commit_roster_history(&self) {
