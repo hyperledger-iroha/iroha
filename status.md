@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: iroha_config fixture regressions
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
+  now validates `default_account_domain_label` during `Root::parse()` without
+  mutating process-global account-address defaults, and uses a thread-local chain
+  discriminant guard while parsing configured account literals. This removes the
+  parallel-test race that could leak `default.universal` into unrelated tests.
+- `/Users/takemiyamakoto/soramitsudev/iroha/defaults/nexus/config.toml` now uses
+  `nexus.fees.fee_asset_id = "xor#universal"`, matching the XOR-only Nexus fee
+  selector validation.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/tests/fixtures.rs`
+  has the minimal config snapshot refreshed for the current parsed defaults and
+  debug output.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `UPDATE_EXPECT=1 cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures nexus_profile_template_enables_multilane_defaults -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures parse_applies_default_account_domain_override_during_config_parse -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+
 ## 2026-04-17 Follow-up: iroha_cli regression fixes
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/contracts.rs`
   debug-call fixtures now use `domain.dataspace` domain literals so Kotodama
