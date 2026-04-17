@@ -294,8 +294,7 @@ fn execute_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
 where
     Q: ValidSingularQuery + SingularQuery,
 {
-    query
-        .execute(&app.state.view())
+    ValidSingularQuery::execute(&query, &app.state.view())
         .map_err(|err| Error::Query(ValidationFail::QueryFailed(err)))
 }
 
