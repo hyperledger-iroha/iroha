@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: IVM AES raw-key decryption parity fix
+- `/home/mtakemiya/dev/iroha/crates/ivm/src/aes.rs` now implements the
+  accelerated `aesdec` round with the same raw round-key contract as
+  `aesdec_impl` instead of calling the platform decryption-round intrinsic
+  directly. The x86 and AArch64 paths now apply `AddRoundKey` and
+  `InvMixColumns` explicitly, then finish with an inverse "last" round so the
+  public API remains the inverse of `aesenc` for the same round key bytes.
+- `crates/ivm/src/aes.rs` also adds a focused regression that pins the public
+  `aesdec(aesenc(state, rk), rk) == state` behavior for a fixed round vector.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib aes::tests_accel:: -- --nocapture`
+  - `cargo test -p ivm --test crypto_vectors aes_rounds_match_scalar_impl -- --nocapture`
+
 ## 2026-04-17 Follow-up: Norito schema doctest compact-layout sync
 - `/home/mtakemiya/dev/iroha/crates/norito/src/schema/mod.rs` now pins the
   `SamplePayload` doctest to Norito's current v1 default header flags
