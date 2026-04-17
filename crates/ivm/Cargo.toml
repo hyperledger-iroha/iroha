@@ -51,7 +51,6 @@ rodio = { version = "0.21.1", optional = true }
 k256 = { version = "0.13.4", features = ["ecdsa"] }
 signature = "2.2.0"
 cust = { version = "0.3.2", optional = true }
-criterion = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 sha2 = { version = "0.10.9", features = ["asm"] }
@@ -63,6 +62,7 @@ objc2-foundation = { version = "0.3.2", optional = true }
 
 
 [dev-dependencies]
+criterion = { workspace = true }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 hex-literal = "1.1.0"
 
@@ -73,7 +73,7 @@ hex-literal = "1.1.0"
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
 default = ["halo2"]
-bench = ["dep:criterion"]
+bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
 beep = ["dep:rodio"]
@@ -113,136 +113,113 @@ goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend"]
 name = "bench_vm"
 path = "benches/bench_vm.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_wsv"
 path = "benches/bench_wsv.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_parallel"
 path = "benches/bench_parallel.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_zk"
 path = "benches/bench_zk.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_dex"
 path = "benches/bench_dex.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_voting"
 path = "benches/bench_voting.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_poseidon"
 path = "benches/bench_poseidon.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_vector"
 path = "benches/bench_vector.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_memory"
 path = "benches/bench_memory.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_commit"
 path = "benches/bench_commit.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_kotodama"
 path = "benches/bench_kotodama.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_field"
 path = "benches/bench_field.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_registers_merkle"
 path = "benches/bench_registers_merkle.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "gas_calibration"
 path = "benches/gas_calibration.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_aes"
 path = "benches/bench_aes.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_vector_slices"
 path = "benches/bench_vector_slices.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_sha256"
 path = "benches/bench_sha256.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_merkle_crossover"
 path = "benches/bench_merkle_crossover.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_aes_cuda"
 path = "benches/bench_aes_cuda.rs"
 harness = false
-required-features = ["bench", "cuda"]
 
 [[bench]]
 name = "bench_bn254_cuda"
 path = "benches/bench_bn254_cuda.rs"
 harness = false
-required-features = ["bench", "cuda"]
 
 [[bench]]
 name = "bench_vm_aes"
 path = "benches/bench_vm_aes.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_aes_stream"
 path = "benches/bench_aes_stream.rs"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "bench_aes128_stream"
 path = "benches/bench_aes128_stream.rs"
 harness = false
-required-features = ["bench"]

@@ -1,5 +1,4 @@
 //! Criterion benchmarks for Torii hot paths.
-#![cfg(feature = "telemetry")]
 
 use std::{
     num::NonZeroUsize,

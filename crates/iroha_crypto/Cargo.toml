@@ -25,7 +25,7 @@ sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
-bench = ["dep:criterion"]
+bench = []
 # Enable support for BLS signatures. Disabled by default due to long compile times.
 # Backend selection:
 # - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
@@ -116,7 +116,6 @@ arrayref = { version = "0.3.9", default-features = false }
 
 aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
-criterion = { workspace = true, optional = true }
 
 elliptic-curve = { version = "0.13.8", default-features = false, features = ["std"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
@@ -129,6 +128,7 @@ pqcrypto-traits = { version = "0.3.5" }
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"
@@ -156,14 +156,13 @@ required-features = ["sm"]
 [[bench]]
 name = "gost_sign"
 harness = false
-required-features = ["bench", "gost"]
+required-features = ["gost"]
 
 [[bench]]
 name = "sm_perf"
 harness = false
-required-features = ["bench", "sm"]
+required-features = ["sm"]
 
 [[bench]]
 name = "soranet_handshake"
 harness = false
-required-features = ["bench"]
