@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Norito stage-1 tail parity fix
+- `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs` now resumes the scalar
+  JSON structural-index scan from arbitrary byte boundaries with preserved
+  in-string state and trailing backslash parity instead of restarting the tail
+  scan from a fresh scalar state.
+- The AVX2 and NEON stage-1 builders now feed their post-SIMD tails through the
+  resumable scalar helper, fixing parity when a 16-byte or 32-byte block ends
+  inside a string or in the middle of a closing backslash run.
+- Focused unit regressions now pin resumed scalar scanning and SIMD tail
+  continuation at both plain string-boundary and trailing-backslash-boundary
+  cutovers.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-lib-target cargo test -p norito --lib accel_tape_validation_tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito random_adversarial_parity -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito --test struct_index_random_x86 -- --nocapture`
+
 ## 2026-04-17 Follow-up: Nexus routing composability hardening
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue/router.rs`
   now infers dataspace-routed write targets for domain, asset-definition, and

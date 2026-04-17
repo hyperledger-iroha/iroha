@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 Norito stage-1 tail parity fix):
+Norito's JSON stage-1 tail handling no longer restarts scalar scanning from a
+blank state after the AVX2 or NEON loop. Tail continuation now preserves
+whether the vector pass ended inside a string and how many trailing
+backslashes were still active, so accelerated structural indexing matches the
+scalar reference when a SIMD block boundary lands in the middle of a string or
+closing escape run.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-lib-target cargo test -p norito --lib accel_tape_validation_tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito random_adversarial_parity -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito --test struct_index_random_x86 -- --nocapture`
+- open work after this slice:
+  - run the full `cargo test --workspace` and strict clippy pass during a longer
+    clean validation window
+  - audit the optional parallel JSON stage-1 path separately because chunk
+    splitting still deserves its own cross-boundary parity review
+
 Latest sync (2026-04-17 Nexus routing composability hardening):
 Nexus write routing now derives dataspace targets for domain and
 asset-definition writes instead of leaving them entirely to authority-based
