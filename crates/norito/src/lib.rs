@@ -25,10 +25,11 @@
 //!   authoritative layout selection (unknown bits are rejected). Bare,
 //!   headerless decoders (`codec::Decode`) are internal-only for hashing/bench
 //!   scenarios and use the fixed v1 default flags.
-//! - Packed-seq/packed-struct and compact-length layouts are opt-in via header
-//!   flags; v1 defaults to `flags = 0x00`. `COMPACT_LEN` governs per-value
-//!   length prefixes; sequence length headers and packed-seq offsets are fixed
-//!   `u64` in v1, and reserved layout bits are rejected when decoding headers.
+//! - Packed-seq and packed-struct remain opt-in via header flags. The v1
+//!   default header layout advertises `COMPACT_LEN` (`flags = 0x02`) for
+//!   per-value length prefixes; sequence length headers and packed-seq offsets
+//!   stay fixed `u64` in v1, and reserved layout bits are rejected when
+//!   decoding headers.
 
 //!
 //! Helpers
@@ -5034,8 +5035,8 @@ pub mod json {
         use std::{ptr, slice};
 
         use super::{
-            StructIndex, build_struct_index_scalar, stage1_helper_self_test,
-            try_build_struct_index_with_helper, validate_accel,
+            StructIndex, build_struct_index_scalar, extend_struct_index_scalar,
+            stage1_helper_self_test, try_build_struct_index_with_helper, validate_accel,
         };
 
         #[test]
@@ -5147,6 +5148,91 @@ pub mod json {
         fn helper_builder_rejects_invalid_reported_length() {
             let input = "{\"a\":1}";
             assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
+        }
+
+        fn pad_to_align(doc: &str, target_sub: &str, lane: usize, width: usize) -> String {
+            let bytes = doc.as_bytes();
+            let sub = target_sub.as_bytes();
+            let pos = bytes
+                .windows(sub.len())
+                .position(|w| w == sub)
+                .expect("substring present");
+            let cur = pos % width;
+            let want = lane % width;
+            let pad = (width + want - cur) % width;
+            let mut s = String::with_capacity(pad + doc.len());
+            for _ in 0..pad {
+                s.push(' ');
+            }
+            s.push_str(doc);
+            s
+        }
+
+        #[test]
+        fn scalar_resume_matches_full_scan_across_mid_string_split() {
+            let input = r#"{"s":"abc\\\"def\\\\ghi"}"#;
+            let split = input.find("\\\"").expect("escape in input") + 1;
+            let mut resumed = Vec::new();
+            let (in_string, carry_bs_run_len) =
+                extend_struct_index_scalar(&input.as_bytes()[..split], 0, &mut resumed, false, 0);
+            let (tail_in_string, tail_carry_bs_run_len) = extend_struct_index_scalar(
+                &input.as_bytes()[split..],
+                split,
+                &mut resumed,
+                in_string,
+                carry_bs_run_len,
+            );
+            let full = build_struct_index_scalar(input);
+            assert_eq!(resumed, full.offsets);
+            assert!(!tail_in_string);
+            assert_eq!(tail_carry_bs_run_len, 0);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn avx2_tail_resume_matches_scalar_at_string_boundary() {
+            if !std::arch::is_x86_feature_detected!("avx2") {
+                return;
+            }
+            let doc = pad_to_align(r#"{"s":"abcdefghijklmnopqrstuvwxyz"}"#, r#""}"#, 0, 32);
+            let scalar = build_struct_index_scalar(&doc);
+            let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
+            assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn avx2_tail_resume_matches_scalar_with_backslash_carry() {
+            if !std::arch::is_x86_feature_detected!("avx2") {
+                return;
+            }
+            let doc = pad_to_align(
+                r#"{"s":"abcdefghijklmnopqrstuvwx\\\\"}"#,
+                r#"\\\\"}"#,
+                29,
+                32,
+            );
+            let scalar = build_struct_index_scalar(&doc);
+            let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
+            assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
+        }
+
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        #[test]
+        fn neon_tail_resume_matches_scalar_at_string_boundary() {
+            let doc = pad_to_align(r#"{"s":"abcdefghijklmnop"}"#, r#""}"#, 0, 16);
+            let scalar = build_struct_index_scalar(&doc);
+            let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
+            assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
+        }
+
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        #[test]
+        fn neon_tail_resume_matches_scalar_with_backslash_carry() {
+            let doc = pad_to_align(r#"{"s":"abcdefghijklm\\\\"}"#, r#"\\\\"}"#, 13, 16);
+            let scalar = build_struct_index_scalar(&doc);
+            let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
+            assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
         }
     }
 
@@ -5486,48 +5572,62 @@ pub mod json {
         StructIndex { offsets: out }
     }
 
+    // Continue the scalar structural scan from an arbitrary byte boundary while
+    // preserving quote state and a trailing run of backslashes from the prior chunk.
+    fn extend_struct_index_scalar(
+        input: &[u8],
+        base: usize,
+        offsets: &mut Vec<u32>,
+        mut in_string: bool,
+        mut carry_bs_run_len: usize,
+    ) -> (bool, usize) {
+        if !in_string {
+            carry_bs_run_len = 0;
+        }
+        for (idx, &byte) in input.iter().enumerate() {
+            let off = (base + idx) as u32;
+            if in_string {
+                match byte {
+                    b'\\' => {
+                        carry_bs_run_len += 1;
+                    }
+                    b'"' => {
+                        if (carry_bs_run_len & 1) == 0 {
+                            in_string = false;
+                            offsets.push(off);
+                        }
+                        carry_bs_run_len = 0;
+                    }
+                    _ => {
+                        carry_bs_run_len = 0;
+                    }
+                }
+                continue;
+            }
+
+            match byte {
+                b'"' => {
+                    in_string = true;
+                    offsets.push(off);
+                }
+                b'{' | b'}' | b'[' | b']' | b':' | b',' => offsets.push(off),
+                _ => {}
+            }
+        }
+        if !in_string {
+            carry_bs_run_len = 0;
+        }
+        (in_string, carry_bs_run_len)
+    }
+
     /// Reference scalar builder used for correctness and as a fallback.
     ///
     /// The fast paths (`build_struct_index_neon` / `build_struct_index_avx2`) already
     /// implement the nibble-LUT SIMD classification. This scalar implementation
     /// remains the canonical, portable baseline.
     fn build_struct_index_scalar(input: &str) -> StructIndex {
-        let b = input.as_bytes();
         let mut offsets = Vec::new();
-        let mut i = 0usize;
-        let mut in_str = false;
-        while i < b.len() {
-            let c = b[i];
-            if in_str {
-                if c == b'\\' {
-                    i = i.saturating_add(2);
-                    continue;
-                }
-                if c == b'"' {
-                    in_str = false;
-                    offsets.push(i as u32);
-                    i += 1;
-                    continue;
-                }
-                i += 1;
-                continue;
-            } else {
-                match c {
-                    b'"' => {
-                        in_str = true;
-                        offsets.push(i as u32);
-                        i += 1;
-                    }
-                    b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                        offsets.push(i as u32);
-                        i += 1;
-                    }
-                    _ => {
-                        i += 1;
-                    }
-                }
-            }
-        }
+        let _ = extend_struct_index_scalar(input.as_bytes(), 0, &mut offsets, false, 0);
         StructIndex { offsets }
     }
 
@@ -5650,8 +5750,13 @@ pub mod json {
             }
 
             if i < bytes.len() {
-                let rem = build_struct_index_scalar(&input[i..]);
-                offsets.extend(rem.offsets.into_iter().map(|off| off + i as u32));
+                let _ = extend_struct_index_scalar(
+                    &bytes[i..],
+                    i,
+                    &mut offsets,
+                    in_string,
+                    carry_bs_run_len,
+                );
             }
             Some(StructIndex { offsets })
         }
@@ -5769,8 +5874,13 @@ pub mod json {
             }
 
             if i < bytes.len() {
-                let rem = build_struct_index_scalar(&input[i..]);
-                offsets.extend(rem.offsets.into_iter().map(|off| off + i as u32));
+                let _ = extend_struct_index_scalar(
+                    &bytes[i..],
+                    i,
+                    &mut offsets,
+                    in_string,
+                    carry_bs_run_len,
+                );
             }
             Some(StructIndex { offsets })
         }

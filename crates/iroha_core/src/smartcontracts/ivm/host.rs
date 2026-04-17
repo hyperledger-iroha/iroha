@@ -4308,6 +4308,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         gas
     }
 
+    fn asset_definition_name_for_syscall(id: &AssetDefinitionId) -> String {
+        id.try_name()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| id.canonical_address())
+    }
+
     #[cfg(test)]
     fn queue_instructions<I>(&mut self, instrs: I) -> u64
     where
@@ -5038,7 +5044,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         .iter()
                         .copied()
                         .next()
-                        .unwrap_or(DataSpaceId::GLOBAL);
+                        .unwrap_or(DataSpaceId::UNIVERSAL);
                     let (elapsed_ms_ceil, budget_ms_ceil) = match err {
                         analysis::AmxBudgetError::PerDataspaceBudgetExceeded {
                             estimated_ns,
@@ -5441,10 +5447,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let ptr = vm.register(10);
                 let id: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                let name = Self::asset_definition_name_for_syscall(&id);
                 let isi = Register::asset_definition({
                     let __asset_definition_id = id;
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+                    AssetDefinition::numeric(__asset_definition_id.clone()).with_name(name)
                 });
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -8225,7 +8231,7 @@ mod pointer_abi_tests {
             iroha_data_model::account::address::chain_discriminant(),
             &host.authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::ActivateContractInstance {
@@ -8256,7 +8262,7 @@ mod pointer_abi_tests {
             iroha_data_model::account::address::chain_discriminant(),
             &host.authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::DeactivateContractInstance {
@@ -8354,9 +8360,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
+        let expected_name = CoreHost::asset_definition_name_for_syscall(&expected_asset_def);
         let expected = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(expected_asset_def.clone())
-                .with_name(expected_asset_def.name().to_string()),
+            AssetDefinition::numeric(expected_asset_def.clone()).with_name(expected_name),
         ));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
@@ -9262,7 +9268,7 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             authority,
             nonce,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         activate_instance(authority, contract_address.clone(), code_hash, &mut tx)
@@ -9721,7 +9727,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-0$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-0$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -9948,7 +9954,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-usage$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-usage$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10071,7 +10077,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-fail$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-fail$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10249,7 +10255,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-suspend$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-suspend$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10558,7 +10564,7 @@ mod tests {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let alias_domain = fixture_domain_id();
-        let alias_domain_label = alias_domain.to_string();
+        let alias_domain_label = alias_domain.name().to_string();
         let alias_label: Name = "banking".parse().expect("alias label");
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
@@ -10567,7 +10573,7 @@ mod tests {
             .with_label(Some(AccountAlias::new(
                 alias_label.clone(),
                 Some(AccountAliasDomain::new(alias_domain.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )))
             .build(&authority);
         let kura = Kura::blank_kura_for_testing();
@@ -10580,7 +10586,7 @@ mod tests {
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
@@ -10852,11 +10858,15 @@ seiyaku Callee {
         result.expect("unit nested contract call should succeed");
         assert_eq!(vm.register(10), 0, "unit return should clear r10");
         assert!(
-            durable_state_overlay.contains_key("backlog"),
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/backlog")),
             "state overlay should include nested unit-return writes",
         );
         assert!(
-            durable_state_overlay.contains_key("safe_mode"),
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/safe_mode")),
             "state overlay should include all nested unit-return writes",
         );
     }
@@ -11416,7 +11426,7 @@ seiyaku Vault {
             iroha_data_model::account::address::chain_discriminant(),
             &outer_authority,
             99,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         let context = ContractRuntimeExecutionContext {
@@ -11649,7 +11659,7 @@ seiyaku Vault {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             41,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract A");
         host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
@@ -11671,7 +11681,7 @@ seiyaku Vault {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             42,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract B");
         host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
@@ -11740,7 +11750,7 @@ seiyaku Vault {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             43,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract");
         host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
@@ -12817,7 +12827,7 @@ seiyaku Vault {
         let authority: AccountId = fixture_account("alice");
         let authority_clone = authority.clone();
         let owner: AccountId = fixture_account("bob");
-        let nft_id: NftId = "gold$wonderland".parse().unwrap();
+        let nft_id: NftId = "gold$wonderland.universal".parse().unwrap();
         let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
         let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
 

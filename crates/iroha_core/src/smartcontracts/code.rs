@@ -348,7 +348,7 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
@@ -420,7 +420,7 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             1,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)

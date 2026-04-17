@@ -351,7 +351,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let nft_id: NftId = "nft1$wonderland".parse().unwrap();
+            let nft_id: NftId = "nft1$wonderland.universal".parse().unwrap();
             let err = Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("missing domain should be rejected");
@@ -365,7 +365,7 @@ pub mod isi {
         #[test]
         fn unregister_nft_rejects_missing_domain() {
             let mut world = World::default();
-            let nft_id: NftId = "nft1$wonderland".parse().unwrap();
+            let nft_id: NftId = "nft1$wonderland.universal".parse().unwrap();
             let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
             let (id, value) = nft.into_key_value();
             world.nfts.insert(id, value);
@@ -409,7 +409,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
-            let nft_id: NftId = "cleanup$nft-cleanup".parse().expect("nft id");
+            let nft_id: NftId = "cleanup$nft-cleanup.universal".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register nft");
@@ -500,7 +500,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user2 account");
 
-            let nft_id: NftId = "ticket$users".parse().expect("nft id");
+            let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
                 .execute(&user1, &mut stx)
                 .expect("register nft");
@@ -549,7 +549,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user2 account");
 
-            let nft_id: NftId = "ticket$users".parse().expect("nft id");
+            let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
                 .execute(&user1, &mut stx)
                 .expect("register nft");
@@ -664,8 +664,8 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let nft1_id: NftId = "nft1$wonderland".parse().unwrap();
-            let nft2_id: NftId = "nft2$wonderland".parse().unwrap();
+            let nft1_id: NftId = "nft1$wonderland.universal".parse().unwrap();
+            let nft2_id: NftId = "nft2$wonderland.universal".parse().unwrap();
             Register::nft(Nft::new(nft1_id.clone(), Metadata::default()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();

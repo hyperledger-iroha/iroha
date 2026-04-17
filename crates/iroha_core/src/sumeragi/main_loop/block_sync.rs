@@ -160,6 +160,76 @@ impl Actor {
         )
     }
 
+    fn maybe_cache_frontier_payload_sender_vote_roster(
+        &mut self,
+        block: &SignedBlock,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        consensus_mode: ConsensusMode,
+        sender: Option<&PeerId>,
+    ) -> Option<Vec<PeerId>> {
+        if !matches!(consensus_mode, ConsensusMode::Npos)
+            || self.vote_roster_cache.contains_key(&block_hash)
+        {
+            return None;
+        }
+        let sender = sender?;
+        let roster = {
+            let world = self.state.world_view();
+            let sender_lane_ids = crate::state::validator_lane_ids_for_peer(&world, sender);
+            if sender_lane_ids.is_empty() {
+                None
+            } else {
+                let roster = super::roster::canonicalize_roster_for_mode(
+                    super::roster::filter_roster_with_live_consensus_keys_at_height_world(
+                        &world,
+                        super::roster::stake_active_validator_roster_for_lanes_from_world(
+                            &world,
+                            &sender_lane_ids,
+                        ),
+                        block_height,
+                    ),
+                    consensus_mode,
+                );
+                if roster.is_empty() {
+                    None
+                } else {
+                    let topology = super::network_topology::Topology::new(roster.clone());
+                    let (_, mode_tag, prf_seed) = self.consensus_context_for_height(block_height);
+                    match super::validated_block_signers_from_world(
+                        block, &topology, &world, mode_tag, prf_seed,
+                    ) {
+                        Ok(_) => Some(roster),
+                        Err(err) => {
+                            debug!(
+                                ?err,
+                                height = block_height,
+                                view = block_view,
+                                block = %block_hash,
+                                sender = %sender,
+                                "ignoring sender-lane roster candidate for frontier payload-only block sync"
+                            );
+                            None
+                        }
+                    }
+                }
+            }
+        };
+        if let Some(roster) = roster.as_ref() {
+            self.cache_vote_roster(block_hash, block_height, block_view, roster.clone());
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                sender = %sender,
+                roster_len = roster.len(),
+                "cached sender-lane vote roster before frontier payload-only block sync validation"
+            );
+        }
+        roster
+    }
+
     pub(super) fn has_missing_block_request_for_height(&self, height: u64) -> bool {
         self.pending
             .missing_block_requests
@@ -2162,6 +2232,14 @@ impl Actor {
                 processed_votes = commit_votes_processed,
                 "routing payload-only frontier-lane BlockSyncUpdate through BlockCreated owner"
             );
+            let _ = self.maybe_cache_frontier_payload_sender_vote_roster(
+                &block,
+                block_hash,
+                block_height,
+                block_view,
+                consensus_mode,
+                sender.as_ref(),
+            );
             let creation_result = self.handle_block_created_from_block_sync(
                 super::message::BlockCreated {
                     block: block.clone(),
@@ -2178,12 +2256,19 @@ impl Actor {
             let payload_materialized = creation_result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(&block, None);
             if creation_result.is_ok() {
-                let mut roster = self.roster_for_vote_with_mode(
-                    block_hash,
-                    block_height,
-                    block_view,
-                    consensus_mode,
-                );
+                let mut roster = self
+                    .vote_roster_cache
+                    .get(&block_hash)
+                    .map(|entry| entry.roster.clone())
+                    .unwrap_or_default();
+                if roster.is_empty() {
+                    roster = self.roster_for_vote_with_mode(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        consensus_mode,
+                    );
+                }
                 if roster.is_empty() {
                     roster = self.effective_commit_topology();
                 }

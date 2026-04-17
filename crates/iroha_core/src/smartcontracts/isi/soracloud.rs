@@ -2461,7 +2461,7 @@ fn apply_service_config_mutation(
             &deployment.service_configs,
             &deployment.service_secrets,
         )
-        .map_err(|err| invalid_parameter(err.to_string()))?;
+        .map_err(|err| InstructionExecutionError::InvariantViolation(err.to_string().into()))?;
     record_deployment_state(state_transaction, deployment.clone())?;
     Ok((deployment, bundle))
 }
@@ -2502,7 +2502,7 @@ fn apply_service_secret_mutation(
             &deployment.service_configs,
             &deployment.service_secrets,
         )
-        .map_err(|err| invalid_parameter(err.to_string()))?;
+        .map_err(|err| InstructionExecutionError::InvariantViolation(err.to_string().into()))?;
     record_deployment_state(state_transaction, deployment.clone())?;
     Ok((deployment, bundle))
 }
@@ -11480,6 +11480,56 @@ mod tests {
         }
     }
 
+    fn sample_inrou_manifest() -> SoraInrouManifestV1 {
+        SoraInrouManifestV1 {
+            schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: SoraInrouGuestOsV1::DebianSlim,
+            guest_images: std::collections::BTreeMap::from([
+                (
+                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                    iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
+                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
+                        initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
+                    },
+                ),
+                (
+                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
+                    iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
+                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
+                        initrd_image_path: None,
+                        distribution: Default::default(),
+                        published_artifact: None,
+                    },
+                ),
+            ]),
+            bootstrap_user_data_path: None,
+            ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
+        }
+    }
+
+    fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
+        vec![
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/".to_string(),
+                max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+            },
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "service_state".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/var/lib/sora".to_string(),
+                max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+            },
+        ]
+    }
+
     fn bundle_provenance(bundle: &SoraDeploymentBundleV1) -> ManifestProvenance {
         let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
             bundle,
@@ -14100,6 +14150,7 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let mut bundle = sample_bundle("portal", "1.0.0", 0);
         bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+        bundle.container.inrou = Some(sample_inrou_manifest());
         bundle.container.capabilities.network = SoraNetworkPolicyV1::Open;
         bundle.service.execution_plane =
             iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
@@ -14113,6 +14164,7 @@ mod tests {
             egress_nanos_per_mib: NonZeroU64::new(5_000).expect("nonzero"),
             lease_duration_sequences: NonZeroU64::new(100).expect("nonzero"),
         };
+        bundle.service.lease_volumes = sample_inrou_lease_volumes();
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         bundle.service.artifacts[0].handler_name = None;
@@ -15835,13 +15887,13 @@ mod tests {
         );
         assert_eq!(ops_record.autonomy_budget_remaining_units, 380);
         assert_eq!(ops_record.autonomy_run_history.len(), 1);
+        let canonical_workflow_input_json =
+            "{\"inputs\":{\"messages\":[{\"content\":\"nightly-batch-1\",\"role\":\"user\"}]}}";
         assert_eq!(
             ops_record.autonomy_run_history[0]
                 .workflow_input_json
                 .as_deref(),
-            Some(
-                "{\"inputs\":{\"messages\":[{\"role\":\"user\",\"content\":\"nightly-batch-1\"}]}}"
-            )
+            Some(canonical_workflow_input_json)
         );
         let autonomy_event = world
             .soracloud_agent_apartment_audit_events()
@@ -15849,9 +15901,7 @@ mod tests {
             .expect("autonomy audit event");
         assert_eq!(
             autonomy_event.payload_hash,
-            Some(Hash::new(
-                b"{\"inputs\":{\"messages\":[{\"role\":\"user\",\"content\":\"nightly-batch-1\"}]}}"
-            ))
+            Some(Hash::new(canonical_workflow_input_json.as_bytes()))
         );
         assert_eq!(ops_record.checkpoint_count, 1);
         assert_eq!(ops_record.last_checkpoint_sequence, Some(8));

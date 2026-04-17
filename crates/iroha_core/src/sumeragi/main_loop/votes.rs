@@ -3301,33 +3301,75 @@ impl Actor {
             }
             None
         };
-        'candidates: for cert in candidates {
+        let roll_forward_roster =
+            |mut roster: Vec<PeerId>,
+             mut current_height: u64,
+             mut current_hash: HashOf<BlockHeader>| {
+                while current_height < height {
+                    let mut topology = super::network_topology::Topology::new(roster.clone());
+                    topology.block_committed(roster.clone(), current_hash);
+                    roster = topology.as_ref().to_vec();
+                    current_height = current_height.saturating_add(1);
+                    if current_height == height {
+                        let world = self.state.world_view();
+                        roster =
+                            super::roster::filter_roster_with_live_consensus_keys_at_height_world(
+                                &world, roster, height,
+                            );
+                        if roster.is_empty() {
+                            return None;
+                        }
+                        roster =
+                            super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+                        return (!roster.is_empty()).then_some(roster);
+                    }
+                    let next_hash = hash_for_height(current_height)?;
+                    current_hash = next_hash;
+                }
+                None
+            };
+        if let Some(target_hash) = target_parent_hash {
+            let allow_sidecar = !self.sidecar_quarantined_for_height(target_parent);
+            let exact_parent_selection = super::persisted_roster_for_block(
+                self.state.as_ref(),
+                &self.kura,
+                consensus_mode,
+                target_parent,
+                target_hash,
+                None,
+                &self.roster_validation_cache,
+                None,
+                allow_sidecar,
+            )
+            .or_else(|| {
+                super::block_sync_history_roster_for_block(
+                    consensus_mode,
+                    target_hash,
+                    target_parent,
+                    None,
+                    &self.chain_id,
+                    &self.roster_validation_cache,
+                )
+            });
+            if let Some(selection) = exact_parent_selection {
+                if !selection.roster.is_empty()
+                    && let Some(rolled) =
+                        roll_forward_roster(selection.roster, target_parent, target_hash)
+                {
+                    return Some(rolled);
+                }
+            }
+        }
+        for cert in candidates {
             if cert.validator_set.is_empty() {
                 continue;
             }
-            let mut roster = cert.validator_set.clone();
-            let mut current_height = cert.height;
-            let mut current_hash = cert.subject_block_hash;
-            while current_height < height {
-                let mut topology = super::network_topology::Topology::new(roster.clone());
-                topology.block_committed(roster.clone(), current_hash);
-                roster = topology.as_ref().to_vec();
-                current_height = current_height.saturating_add(1);
-                if current_height == height {
-                    let world = self.state.world_view();
-                    roster = super::roster::filter_roster_with_live_consensus_keys_at_height_world(
-                        &world, roster, height,
-                    );
-                    if roster.is_empty() {
-                        continue 'candidates;
-                    }
-                    roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
-                    return Some(roster);
-                }
-                let Some(next_hash) = hash_for_height(current_height) else {
-                    continue 'candidates;
-                };
-                current_hash = next_hash;
+            if let Some(rolled) = roll_forward_roster(
+                cert.validator_set.clone(),
+                cert.height,
+                cert.subject_block_hash,
+            ) {
+                return Some(rolled);
             }
         }
         None
@@ -3410,14 +3452,6 @@ impl Actor {
         let canonicalize =
             |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
-        // Roster changes committed at height N must be visible for votes at N+1 immediately.
-        if height == committed_height.saturating_add(1) {
-            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
-            if !live.is_empty() {
-                return canonicalize(live);
-            }
-        }
         if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
             if !cached.roster.is_empty() {
                 return canonicalize(cached.roster.clone());
@@ -3447,6 +3481,15 @@ impl Actor {
         }) {
             if !selection.roster.is_empty() {
                 return canonicalize(selection.roster);
+            }
+        }
+        // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
+        // Roster changes committed at height N must be visible for votes at N+1 immediately, but
+        // a block-specific cached or persisted roster snapshot must win when present.
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return canonicalize(live);
             }
         }
         if height <= committed_height {

@@ -9887,7 +9887,7 @@ mod tests {
         let status = super::LaneManifestStatus {
             lane: LaneId::new(3),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -9901,7 +9901,7 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         let entry = &snapshot[0];
         assert_eq!(entry.lane_id, 3);
-        assert_eq!(entry.dataspace_id, DataSpaceId::GLOBAL.as_u64());
+        assert_eq!(entry.dataspace_id, DataSpaceId::UNIVERSAL.as_u64());
         assert_eq!(entry.visibility, LaneVisibility::Public.as_str());
         assert_eq!(
             entry.storage_profile,

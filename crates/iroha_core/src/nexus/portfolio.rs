@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(snapshot.totals.positions, 1);
         assert_eq!(snapshot.dataspaces.len(), 1);
         let dataspace = &snapshot.dataspaces[0];
-        assert_eq!(dataspace.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(dataspace.dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(dataspace.accounts.len(), 1);
         assert_eq!(dataspace.accounts[0].account_id, account);
         assert_eq!(
@@ -227,7 +227,7 @@ mod tests {
         let second_dataspace = DataSpaceId::new(11);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 ..DataSpaceMetadata::default()
             },

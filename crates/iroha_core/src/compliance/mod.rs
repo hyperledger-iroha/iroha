@@ -443,7 +443,7 @@ mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed(hash_bytes)),
             version: 1,
             lane_id,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: deny
                 .iter()
@@ -488,7 +488,7 @@ mod tests {
 
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
             uaid: None,
             capability_tags: &[],
@@ -502,7 +502,7 @@ mod tests {
 
         let ctx_beta = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &beta,
             uaid: None,
             capability_tags: &[],
@@ -549,7 +549,7 @@ mod tests {
         let statuses = vec![LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "confidential".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::CommitmentOnly,
             governance: None,
@@ -563,7 +563,7 @@ mod tests {
         let registry = LanePrivacyRegistry::from_statuses(&statuses);
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
             uaid: None,
             capability_tags: &[],
@@ -612,7 +612,7 @@ mod tests {
 
         let ctx_missing_tag = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
             uaid: None,
             capability_tags: &[],

@@ -2663,12 +2663,23 @@ fn validate_block_for_voting_with_timings(
     Result<Option<StateRoots>, BlockValidationError>,
     ValidationTimings,
 ) {
+    fn signature_remap_recoverable(err: &BlockValidationError) -> bool {
+        matches!(
+            err,
+            BlockValidationError::SignatureVerification(
+                crate::block::SignatureVerificationError::UnknownSignature
+                    | crate::block::SignatureVerificationError::UnknownSignatory
+                    | crate::block::SignatureVerificationError::LeaderMissing
+            )
+        )
+    }
+
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let time_source = TimeSource::new_system();
     let mut timings = ValidationTimings::new();
-    let validation = ValidBlock::validate_keep_voting_block_with_timing(
+    let mut validation = ValidBlock::validate_keep_voting_block_with_timing(
         block,
         topology,
         chain_id,
@@ -2680,6 +2691,26 @@ fn validate_block_for_voting_with_timings(
         &mut timings,
     )
     .unpack(|_| {});
+    if let Err((failed_block, err)) = &validation
+        && signature_remap_recoverable(err)
+    {
+        let mut recovered = (**failed_block).clone();
+        if crate::state::remap_block_signature_indices_to_topology(&mut recovered, topology).is_ok()
+        {
+            validation = ValidBlock::validate_keep_voting_block_with_timing(
+                recovered,
+                topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                voting_block,
+                false,
+                &mut timings,
+            )
+            .unpack(|_| {});
+        }
+    }
 
     let result = match validation {
         Ok((_validated, mut state_block)) => {
@@ -3957,10 +3988,11 @@ impl Actor {
             .propose
             .highest_qc_missing_defer_markers
             .iter()
-            .filter(|(height, _, hash)| {
+            .filter(|(height, view, hash)| {
                 *height == frontier_height
                     && !self.missing_hash_is_non_actionable_dependency(
                         *height,
+                        *view,
                         *hash,
                         committed_height,
                         now,
@@ -3987,16 +4019,21 @@ impl Actor {
         )
     }
 
+    fn frontier_sidecar_hint_can_override_stall_gate(reason: &'static str) -> bool {
+        matches!(reason, "vote_roster_lookup" | "deferred_vote_roster_lookup")
+    }
+
     fn should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
         &self,
         frontier_height: u64,
         local_height: u64,
+        reason: &'static str,
     ) -> bool {
         if self.sidecar_quarantined_for_height(frontier_height) {
             return false;
         }
         if self.frontier_catchup_stall_mode_active_at_frontier(frontier_height, local_height) {
-            return false;
+            return Self::frontier_sidecar_hint_can_override_stall_gate(reason);
         }
         let dependency_progress_now =
             self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
@@ -6145,51 +6182,34 @@ impl Actor {
     }
 
     fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
-        self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == frontier_height
-                && !matches!(
-                    slot.mode,
-                    FrontierSlotMode::PassiveCatchup | FrontierSlotMode::Finalized
-                )
-                && (slot.body_present
-                    || slot.block_created_seen
-                    || slot.frontier_info.is_some()
-                    || slot.quorum_progress.votes_observed
-                    || slot.quorum_progress.commit_qc_observed
-                    || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
-        }) || self
-            .subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .keys()
-            .any(|(height, _)| *height == frontier_height)
+        let frontier_view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .or_else(|| {
+                self.frontier_slot
+                    .as_ref()
+                    .and_then(|slot| (slot.height == frontier_height).then_some(slot.view))
+            })
+            .unwrap_or(0);
+        let strong_exact_slot_evidence = self
+            .slot_has_authoritative_payload(frontier_height, frontier_view)
+            || self
+                .slot_tracker
+                .proposals_seen
+                .contains(&(frontier_height, frontier_view))
             || self
                 .subsystems
                 .propose
                 .proposal_cache
-                .proposals
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .proposals_seen
-                .iter()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_slots
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_frontiers
-                .keys()
-                .any(|(height, _, _)| *height == frontier_height)
+                .get_proposal(frontier_height, frontier_view)
+                .is_some();
+        self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+            || strong_exact_slot_evidence
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.validation_status != ValidationStatus::Invalid
                     && pending.height == frontier_height
+                    && pending.view == frontier_view
             })
             || self
                 .subsystems
@@ -6200,6 +6220,7 @@ impl Actor {
                     !inflight.pending.aborted
                         && inflight.pending.validation_status != ValidationStatus::Invalid
                         && inflight.pending.height == frontier_height
+                        && inflight.pending.view == frontier_view
                 })
     }
 
@@ -11385,6 +11406,17 @@ fn selection_from_roster_artifacts(
     }
 }
 
+fn roster_artifact_selection_view(
+    block_view: Option<u64>,
+    commit_qc: Option<&Qc>,
+    checkpoint: Option<&ValidatorSetCheckpoint>,
+) -> Option<u64> {
+    commit_qc
+        .map(|cert| cert.view)
+        .or_else(|| checkpoint.map(|chk| chk.view))
+        .or(block_view)
+}
+
 fn block_sync_history_roster_for_block(
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
@@ -11448,7 +11480,8 @@ fn block_sync_history_roster_for_block(
         BlockSyncRosterSource::ValidatorCheckpointHistory
     };
     let mut roster_height = block_height;
-    let mut roster_view = block_view;
+    let mut roster_view =
+        roster_artifact_selection_view(block_view, cert.as_ref(), checkpoint.as_ref());
     let mut checkpoint = checkpoint.as_ref();
     if let Some(cert) = cert.as_ref() {
         if cert.height != block_height {
@@ -11512,7 +11545,12 @@ fn persisted_roster_for_block(
     };
     let mut selection_cache = selection_cache;
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-        let key_view = block_view.unwrap_or(snapshot.commit_qc.view);
+        let selection_view = roster_artifact_selection_view(
+            block_view,
+            Some(&snapshot.commit_qc),
+            Some(&snapshot.validator_checkpoint),
+        );
+        let key_view = selection_view.unwrap_or(snapshot.commit_qc.view);
         let cache_key = BlockSyncRosterCacheKey::from_hints(
             block_hash,
             block_height,
@@ -11533,7 +11571,7 @@ fn persisted_roster_for_block(
             snapshot.stake_snapshot.as_ref(),
             block_hash,
             block_height,
-            block_view,
+            selection_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
             &state.chain_id,
@@ -11575,14 +11613,17 @@ fn persisted_roster_for_block(
                 );
             }
         } else {
-            let key_view = block_view
-                .or_else(|| sidecar.commit_qc.as_ref().map(|cert| cert.view))
-                .unwrap_or_else(|| {
-                    sidecar
-                        .validator_checkpoint
-                        .as_ref()
-                        .map_or(0, |checkpoint| checkpoint.view)
-                });
+            let selection_view = roster_artifact_selection_view(
+                block_view,
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+            );
+            let key_view = selection_view.unwrap_or_else(|| {
+                sidecar
+                    .validator_checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.view)
+            });
             let cache_key = BlockSyncRosterCacheKey::from_hints(
                 block_hash,
                 block_height,
@@ -11603,7 +11644,7 @@ fn persisted_roster_for_block(
                 sidecar.stake_snapshot.as_ref(),
                 block_hash,
                 block_height,
-                block_view,
+                selection_view,
                 BlockSyncRosterSource::RosterSidecar,
                 consensus_mode,
                 &state.chain_id,
@@ -11662,7 +11703,12 @@ fn persisted_roster_for_block(
                     .stake_snapshot
                     .as_ref()
                     .map(stake_snapshot_from_previous_roster_evidence);
-                let key_view = block_view.unwrap_or(evidence.validator_checkpoint.view);
+                let selection_view = roster_artifact_selection_view(
+                    block_view,
+                    None,
+                    Some(&evidence.validator_checkpoint),
+                );
+                let key_view = selection_view.unwrap_or(evidence.validator_checkpoint.view);
                 let cache_key = BlockSyncRosterCacheKey::from_hints(
                     block_hash,
                     block_height,
@@ -11683,7 +11729,7 @@ fn persisted_roster_for_block(
                     stake_snapshot.as_ref(),
                     block_hash,
                     block_height,
-                    block_view,
+                    selection_view,
                     BlockSyncRosterSource::PreviousBlockEvidence,
                     consensus_mode,
                     &state.chain_id,
@@ -22757,14 +22803,77 @@ impl Actor {
                 .is_some_and(|committed_hash| committed_hash != block_hash)
     }
 
+    fn missing_hash_is_superseded_by_live_same_height_owner(
+        &self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        let Some(current_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if view >= current_view {
+            return false;
+        }
+        if self
+            .frontier_slot_live_local_owner_for_round(height, current_view)
+            .is_some_and(|(owner_hash, _)| owner_hash != block_hash)
+        {
+            return true;
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            *hash != block_hash
+                && !pending.is_consensus_inactive()
+                && pending.validation_status != ValidationStatus::Invalid
+                && pending.height == height
+                && pending.view >= current_view
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+                && self.pending_block_has_consensus_evidence(*hash, pending)
+        }) || self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.block_hash != block_hash
+                    && !inflight.pending.is_consensus_inactive()
+                    && inflight.pending.validation_status != ValidationStatus::Invalid
+                    && inflight.pending.height == height
+                    && inflight.pending.view >= current_view
+                    && pending_extends_tip(
+                        inflight.pending.height,
+                        inflight.pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+                    && self.pending_block_has_consensus_evidence(
+                        inflight.block_hash,
+                        &inflight.pending,
+                    )
+            })
+    }
+
     fn missing_hash_is_non_actionable_dependency(
         &self,
         height: u64,
+        view: u64,
         block_hash: HashOf<BlockHeader>,
         committed_height: u64,
         now: Instant,
     ) -> bool {
         self.missing_hash_is_obsolete_committed_edge_conflict(height, block_hash, committed_height)
+            || self.missing_hash_is_superseded_by_live_same_height_owner(height, view, block_hash)
             || self
                 .lock_rejected_block_sinks
                 .get(&(height, block_hash))
@@ -22789,6 +22898,7 @@ impl Actor {
         &self,
         phase: crate::sumeragi::consensus::Phase,
         height: u64,
+        view: u64,
         block_hash: HashOf<BlockHeader>,
         committed_height: u64,
         now: Instant,
@@ -22796,6 +22906,7 @@ impl Actor {
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         self.missing_hash_is_non_actionable_dependency(
             subject_height,
+            view,
             block_hash,
             committed_height,
             now,
@@ -22811,7 +22922,24 @@ impl Actor {
         self.missing_qc_dependency_is_non_actionable(
             entry.qc.phase,
             entry.qc.height,
+            entry.qc.view,
             entry.qc.subject_block_hash,
+            committed_height,
+            now,
+        )
+    }
+
+    fn deferred_roster_qc_is_non_actionable_dependency(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_qc_dependency_is_non_actionable(
+            qc.phase,
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
             committed_height,
             now,
         )
@@ -22827,6 +22955,7 @@ impl Actor {
         self.missing_qc_dependency_is_non_actionable(
             request.phase,
             request.height,
+            request.view,
             block_hash,
             committed_height,
             now,
@@ -23354,6 +23483,7 @@ impl Actor {
                         && !self.authoritative_block_payload_available(*hash)
                         && !self.missing_hash_is_non_actionable_dependency(
                             *marker_height,
+                            0,
                             *hash,
                             committed_height,
                             now,
@@ -28255,6 +28385,7 @@ impl Actor {
                     && self.should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
                         contiguous_frontier_height,
                         committed_height,
+                        reason,
                     );
                 let retargeted_frontier_sidecar = allow_frontier_sidecar_retarget
                     && self.retarget_missing_block_request_to_canonical_hash(
@@ -28633,6 +28764,7 @@ impl Actor {
                     || self.block_known_locally(*hash)
                     || self.missing_hash_is_non_actionable_dependency(
                         *height,
+                        0,
                         *hash,
                         committed_height,
                         now,
@@ -28658,6 +28790,7 @@ impl Actor {
         self.prune_highest_qc_missing_defer_markers(committed_height);
         if self.missing_hash_is_non_actionable_dependency(
             highest_qc.height,
+            highest_qc.view,
             highest_qc.subject_block_hash,
             committed_height,
             now,

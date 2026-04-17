@@ -13,9 +13,15 @@ use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::{Mint, Register, SetKeyValue},
+    isi::{Grant, Mint, Register, SetKeyValue},
     kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
     name::Name,
+    nexus::DataSpaceId,
+    permission::Permission,
+};
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::json::Json;
@@ -221,6 +227,15 @@ fn append_bootstrap_authority_overlay(
     manifest: RawGenesisTransaction,
     authority: &BootstrapAuthority,
 ) -> RawGenesisTransaction {
+    let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
+    let manage_alias: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
+    let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: DataSpaceId::UNIVERSAL,
+    }
+    .into();
     let authority_account = Account::new(authority.account_id.clone());
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
@@ -232,6 +247,18 @@ fn append_bootstrap_authority_overlay(
         .append_instruction(Mint::asset_numeric(
             authority.fee_amount,
             authority_fee_asset,
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_soracloud,
+            authority.account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_alias,
+            authority.account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            publish_manifest,
+            authority.account_id.clone(),
         ))
         .build_raw()
 }

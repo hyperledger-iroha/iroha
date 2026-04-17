@@ -377,7 +377,7 @@ mod tests {
                 crate::query::account::prelude::FindAccountByAlias::new(
                     crate::account::AccountAlias::domainless(
                         "alice".parse().expect("alias label"),
-                        crate::nexus::DataSpaceId::GLOBAL,
+                        crate::nexus::DataSpaceId::UNIVERSAL,
                     ),
                 ),
             ),

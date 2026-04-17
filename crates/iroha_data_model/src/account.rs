@@ -1287,7 +1287,7 @@ mod tests {
             Some(rekey::AccountAliasDomain::new(
                 "wonderland".parse::<Name>().expect("alias domain"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let account = Account {
             id: account_id.clone(),
@@ -1339,7 +1339,7 @@ mod tests {
                 Some(rekey::AccountAliasDomain::new(
                     "wonderland".parse::<Name>().expect("alias domain"),
                 )),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )),
             uaid: None,
             opaque_ids: Vec::new(),
@@ -1577,7 +1577,7 @@ mod json_tests {
             Some(rekey::AccountAliasDomain::new(
                 "wonderland".parse::<Name>().expect("alias domain"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
 
@@ -1626,7 +1626,7 @@ mod json_tests {
             Some(rekey::AccountAliasDomain::new(
                 "wonderland".parse::<Name>().expect("alias domain"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
         let opaque_id = OpaqueAccountId::from_hash(Hash::prehashed([0xCD; 32]));

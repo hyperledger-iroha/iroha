@@ -48,7 +48,7 @@ The check fails unless:
   - GET /status returns healthy Torii/Sumeragi counters
   - /status reports at least 4 validators in the commit QC set
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
-    public-lane, and contract routes on the same node URL
+    public-lane, contract, and Musubi routes on the same node URL
 
 When diagnosing public write failures, prefer `/status` fields such as
 `blocks`, `queue_size`, `sumeragi.commit_qc_height`,
@@ -216,6 +216,9 @@ REQUIRED_TOOL_NAMES=(
   "iroha.status"
   "iroha.sumeragi.status"
   "iroha.time.now"
+  "iroha.musubi.search"
+  "iroha.musubi.release.get"
+  "iroha.musubi.instructions.yank_release"
   "iroha.transactions.submit"
   "iroha.transactions.submit_and_wait"
 )
@@ -649,6 +652,11 @@ check_route_parity() {
     "public-lane stake snapshot route"
   check_route_status "$label" GET "${root_url}/v1/contracts/state" "400" \
     "contract state route should be mounted and reject missing query selectors"
+  check_route_status "$label" GET "${root_url}/v1/musubi/packages?query=&limit=1" "200" \
+    "Musubi package search route"
+  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
+    "Musubi pre-signing instruction builder route" \
+    '{"package":"dex.universal/swap-core@1.2.3","reason":"rollout preflight"}'
   check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "400 401 403 415 422" \
     "contract deploy route should reject an empty preflight body, not be missing" '{}'
   check_route_status "$label" POST "${root_url}/v1/bridge/messages" "400 401 403 415 422" \

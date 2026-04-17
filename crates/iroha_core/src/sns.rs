@@ -36,9 +36,7 @@ use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
 use thiserror::Error;
 
-use crate::state::{
-    State, StateReadOnly, StateTransaction, World, WorldReadOnly, WorldTransaction,
-};
+use crate::state::{State, StateReadOnly, StateTransaction, World, WorldReadOnly};
 
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
@@ -73,7 +71,7 @@ pub enum SnsError {
 pub enum SnsNamespace {
     /// Full account-alias key (`name@domain.dataspace` or `name@dataspace`).
     AccountAlias,
-    /// Canonical domain literal.
+    /// Canonical `domain.dataspace` literal.
     Domain,
     /// Canonical dataspace alias.
     Dataspace,
@@ -253,40 +251,38 @@ fn bootstrap_steward_for_world(world: &World) -> AccountId {
         .unwrap_or_else(fixtures::steward_account)
 }
 
-/// Ensures an active SNS name lease exists for the given account alias,
-/// creating one if it is absent. This is called when the authority already
-/// holds `CanManageAccountAlias` — that permission serves as implicit
-/// authorisation, so no separate SNS payment is required.
+/// Ensures an active SNS name lease exists for the given account alias.
 pub fn ensure_account_alias_lease(
-    world: &mut WorldTransaction<'_, '_>,
-    owner: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    _owner: &AccountId,
     label: &AccountAlias,
-    catalog: &DataSpaceCatalog,
-) -> Result<(), iroha_data_model::error::ParseError> {
-    let selector = selector_for_account_alias(label, catalog)?;
+) -> Result<(), SnsError> {
+    let selector = selector_for_account_alias(label, &state_transaction.nexus.dataspace_catalog)
+        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     let storage_key = record_storage_key(&selector);
-    if world
+    let bytes = state_transaction
+        .world
         .smart_contract_state
-        .view()
         .get(&storage_key)
-        .is_none()
-    {
-        let address = AccountAddress::from_account_id(owner)
-            .expect("account id should convert to account address");
-        let record = NameRecordV1::new(
-            selector,
-            owner.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        world
-            .smart_contract_state
-            .insert(storage_key, record.encode());
+        .ok_or_else(|| {
+            SnsError::NotFound(format!(
+                "active SNS lease required for account alias `{}`",
+                selector.normalized_label()
+            ))
+        })?;
+    let mut slice = bytes.as_slice();
+    let record = NameRecordV1::decode(&mut slice).map_err(|err| {
+        SnsError::Internal(format!(
+            "failed to decode SNS lease for account alias `{}`: {err}",
+            selector.normalized_label()
+        ))
+    })?;
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    if !matches!(effective_status(&record, now_ms), NameStatus::Active) {
+        return Err(SnsError::Conflict(format!(
+            "active SNS lease required for account alias `{}`",
+            selector.normalized_label()
+        )));
     }
     Ok(())
 }
@@ -732,10 +728,13 @@ fn canonicalize_request_selector(
     let namespace = SnsNamespace::from_suffix_id(selector.suffix_id)?;
     let canonical = match namespace {
         SnsNamespace::AccountAlias => selector_for_account_alias_literal(&selector.label, catalog)?,
-        SnsNamespace::Domain | SnsNamespace::Dataspace => {
-            NameSelectorV1::new(selector.suffix_id, selector.label)
-                .map_err(|err| SnsError::BadRequest(err.to_string()))?
+        SnsNamespace::Domain => {
+            let domain = DomainId::parse_fully_qualified(selector.label.trim())
+                .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
+            selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))?
         }
+        SnsNamespace::Dataspace => NameSelectorV1::new(selector.suffix_id, selector.label)
+            .map_err(|err| SnsError::BadRequest(err.to_string()))?,
     };
     Ok((namespace, canonical))
 }
@@ -1365,7 +1364,7 @@ mod tests {
         let label = AccountAlias::new(
             "gas".parse().expect("label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -1388,7 +1387,7 @@ mod tests {
                     alias: Some(AccountAlias::new(
                         "ops".parse().expect("label"),
                         Some(AccountAliasDomain::new(domain_id.name().clone())),
-                        DataSpaceId::GLOBAL,
+                        DataSpaceId::UNIVERSAL,
                     )),
                     lease_expiry_ms: None,
                 }),
@@ -1413,7 +1412,7 @@ mod tests {
             &AccountAlias::new(
                 "ops".parse().expect("label"),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             ),
             &dataspace_catalog,
         )
@@ -1572,7 +1571,7 @@ mod tests {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
-                        label: "soraswap".to_owned(),
+                        label: "soraswap.universal".to_owned(),
                     },
                     owner: owner.clone(),
                     controllers: vec![controller(&owner)],
@@ -1593,6 +1592,43 @@ mod tests {
         assert!(
             record.expires_at_ms > before_ms + MS_PER_DAY,
             "one-year registration should not appear expired immediately"
+        );
+    }
+
+    #[test]
+    fn register_domain_name_rejects_bare_domain_literal() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        let err = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "soraswap".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect_err("bare domain labels must be rejected");
+
+        assert!(
+            err.to_string().contains("domain.dataspace"),
+            "unexpected error: {err}"
         );
     }
 
@@ -1691,7 +1727,7 @@ mod tests {
             &view,
             &DataSpaceCatalog::default(),
             SnsNamespace::Domain,
-            "trade",
+            "trade.universal",
             11,
         )
         .expect("fetch record");

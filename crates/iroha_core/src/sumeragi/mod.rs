@@ -5731,17 +5731,19 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_adapts_block_drain_caps_on_block_backlog() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        const BLOCK_BACKLOG_DEPTH: usize = 20;
+        let (block_tx, block_rx) = mpsc::sync_channel(BLOCK_BACKLOG_DEPTH);
         let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
-        for _ in 0..20 {
+        for _ in 0..BLOCK_BACKLOG_DEPTH {
             block_tx
                 .send(inbound(BlockMessage::ConsensusParams(
                     message::ConsensusParamsAdvert {
@@ -5799,9 +5801,14 @@ mod tests {
             &background_rx,
         );
 
+        let remaining = block_rx.try_iter().count();
+        status::record_worker_queue_drain(status::WorkerQueueKind::Blocks, remaining);
+
         let expected_cap = config
             .block_rx_drain_max_messages
-            .min(block_backlog_drain_cap(20));
+            .min(block_backlog_drain_cap(
+                u64::try_from(BLOCK_BACKLOG_DEPTH).expect("test backlog depth fits in u64"),
+            ));
         assert_eq!(stats.blocks_handled, expected_cap);
     }
 

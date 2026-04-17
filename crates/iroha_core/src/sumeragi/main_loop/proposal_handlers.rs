@@ -1174,6 +1174,15 @@ impl Actor {
         {
             superseded.insert((owner_hash, view));
         }
+        superseded.extend(
+            self.slot_tracker
+                .authoritative_block_slots
+                .iter()
+                .filter_map(|(&(entry_height, entry_view), &owner_hash)| {
+                    (entry_height == height && owner_hash != incoming_hash)
+                        .then_some((owner_hash, entry_view))
+                }),
+        );
         for (hash, old_view) in superseded {
             let retain_payload = self
                 .pending
@@ -1223,6 +1232,16 @@ impl Actor {
                 "dropping superseded contiguous-frontier owner after stronger same-height evidence"
             );
         }
+        self.slot_tracker
+            .authoritative_block_slots
+            .retain(|(entry_height, _), block_hash| {
+                *entry_height != height || *block_hash == incoming_hash
+            });
+        self.slot_tracker.authoritative_block_frontiers.retain(
+            |(entry_height, _, entry_hash), _| {
+                *entry_height != height || *entry_hash == incoming_hash
+            },
+        );
     }
 
     fn should_retain_superseded_contiguous_frontier_payload(

@@ -2771,6 +2771,38 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly domains query MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.musubi.search"),
+        "expected agent-friendly Musubi search MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.musubi.release.get"),
+        "expected agent-friendly Musubi release detail MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.musubi.package.releases"),
+        "expected agent-friendly Musubi package releases MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.musubi.package.versions"),
+        "expected agent-friendly Musubi package versions MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.musubi.alias.resolve"),
+        "expected agent-friendly Musubi alias resolve MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.musubi.instructions.yank_release"),
+        "expected agent-friendly Musubi yank instruction MCP tool"
+    );
+    assert!(
         names
             .iter()
             .any(|name| name == "iroha.subscriptions.plans.list"),
@@ -4714,6 +4746,122 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_musubi_search_accepts_flat_query_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10622301,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.musubi.search",
+                "arguments": {
+                    "query": "swap",
+                    "namespace": "dex.universal",
+                    "limit": 10
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "Musubi search alias with flat query fields should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    assert!(
+        structured
+            .get("body")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "empty registry should return an empty package list"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_musubi_yank_instruction_builds_unsigned_payload() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 10622302,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.musubi.instructions.yank_release",
+                "arguments": {
+                    "package": "dex.universal/swap-core@1.2.3",
+                    "reason": "bad archive"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "Musubi yank instruction builder should return an unsigned payload"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    let body = structured
+        .get("body")
+        .and_then(Value::as_object)
+        .expect("instruction response body");
+    assert_eq!(
+        body.get("wire_id").and_then(Value::as_str),
+        Some("iroha.musubi.release.yank")
+    );
+    assert!(
+        body.get("instruction_base64")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "instruction base64 should be present"
+    );
+    assert!(
+        !body.contains_key("private_key"),
+        "instruction builders must not accept or return private keys"
+    );
+}
+
+#[tokio::test]
+async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+
+    let app = build_router(cfg);
+    for tool_name in [
+        "iroha.musubi.instructions.publish_release",
+        "iroha.musubi.instructions.yank_release",
+        "iroha.musubi.instructions.set_alias",
+        "iroha.musubi.instructions.assert_release_exists",
+    ] {
+        let tool = find_tool(&app, tool_name).await;
+        let schema = tool.get("inputSchema").expect("input schema");
+        let encoded = norito::json::to_string(schema).expect("schema JSON");
+        assert!(
+            !encoded.contains("private_key") && !encoded.contains("authority"),
+            "Musubi pre-signing tool `{tool_name}` must not publish server-side signing fields"
+        );
+    }
 }
 
 #[tokio::test]

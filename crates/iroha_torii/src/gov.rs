@@ -3031,7 +3031,7 @@ mod tests {
                 0,
                 &authority,
                 0,
-                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
             let contract_address_literal = contract_address.to_string();
