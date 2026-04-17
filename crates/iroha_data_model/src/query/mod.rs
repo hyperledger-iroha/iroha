@@ -1023,11 +1023,32 @@ mod model {
 
     impl Clone for QueryWithParams {
         fn clone(&self) -> Self {
-            use norito::codec::{Decode, Encode};
+            #[cfg(feature = "fast_dsl")]
+            {
+                return Self {
+                    query: (),
+                    query_payload: self.query_payload.clone(),
+                    item: self.item,
+                    predicate_bytes: self.predicate_bytes.clone(),
+                    selector_bytes: self.selector_bytes.clone(),
+                    params: self.params.clone(),
+                };
+            }
 
-            let encoded = self.encode();
-            let mut cursor: &[u8] = &encoded;
-            Self::decode(&mut cursor).expect("QueryWithParams::clone: decode failed")
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let type_name = self.query.type_name_key();
+                let payload = self.query.encode_bytes();
+                let query = query_registry()
+                    .decode(type_name, &payload)
+                    .expect("QueryWithParams::clone: query type is not registered")
+                    .expect("QueryWithParams::clone: failed to decode boxed query");
+
+                Self {
+                    query,
+                    params: self.params.clone(),
+                }
+            }
         }
     }
 
@@ -2362,6 +2383,33 @@ mod json_roundtrip_tests {
         }
     }
 
+    #[cfg(not(feature = "fast_dsl"))]
+    #[test]
+    fn query_with_params_clone_preserves_boxed_query_in_non_fast_dsl() {
+        set_query_registry(crate::query_registry![ErasedIterQuery<Domain>]);
+
+        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
+            Box::new(FindDomains),
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+        );
+        let original = QueryWithParams {
+            query: qwf.into(),
+            params: parameters::QueryParams::default(),
+        };
+
+        let cloned = original.clone();
+        let Some(query_box) = cloned.query_box() else {
+            panic!("cloned query must retain boxed query");
+        };
+
+        assert_eq!(
+            (**query_box).type_name_key(),
+            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
+        );
+        assert_eq!(cloned.params, original.params);
+    }
+
     #[cfg(feature = "fast_dsl")]
     #[test]
     fn signed_query_json_roundtrip_start_fastdsl() {
@@ -2390,6 +2438,30 @@ mod json_roundtrip_tests {
             }
             _ => panic!("expected Start request"),
         }
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn query_with_params_clone_preserves_fast_dsl_parts() {
+        use crate::query::QueryItemKind;
+
+        let pred = norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS);
+        let sel = norito::codec::Encode::encode(&SelectorTuple::<Domain>::default());
+        let original = QueryWithParams {
+            query: (),
+            query_payload: vec![1, 2, 3, 4],
+            item: QueryItemKind::Permission,
+            predicate_bytes: pred,
+            selector_bytes: sel,
+            params: parameters::QueryParams::default(),
+        };
+
+        let cloned = original.clone();
+        assert_eq!(cloned.item, QueryItemKind::Permission);
+        assert_eq!(cloned.query_payload, vec![1, 2, 3, 4]);
+        assert_eq!(cloned.predicate_bytes, original.predicate_bytes);
+        assert_eq!(cloned.selector_bytes, original.selector_bytes);
+        assert_eq!(cloned.params, original.params);
     }
 }
 /// Use a custom syntax to implement [`Query`] for applicable types

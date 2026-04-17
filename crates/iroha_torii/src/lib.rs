@@ -34945,6 +34945,57 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[tokio::test]
+    async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
+        let authority_key_pair = KeyPair::random();
+        let authority = AccountId::new(authority_key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        let (restricted_lane, restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        let query = iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindDomainById(
+                iroha_data_model::query::domain::prelude::FindDomainById::new(
+                    iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
+                        .expect("domain id"),
+                ),
+            ),
+        )
+        .with_authority(authority)
+        .sign(&authority_key_pair);
+
+        assert_eq!(
+            super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
+                .expect("target-domain signed query should resolve a routed dataspace"),
+            RoutingDecision::new(restricted_lane, restricted_dataspace)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
+        let authority_key_pair = KeyPair::random();
+        let authority = AccountId::new(authority_key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        let (restricted_lane, restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "banking".parse().expect("alias label"),
+            restricted_dataspace,
+        );
+        let query = iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
+                iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias),
+            ),
+        )
+        .with_authority(authority)
+        .sign(&authority_key_pair);
+
+        assert_eq!(
+            super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
+                .expect("target-alias signed query should resolve a routed dataspace"),
+            RoutingDecision::new(restricted_lane, restricted_dataspace)
+        );
+    }
+
     #[test]
     fn signed_query_scope_classifies_target_account_queries() {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
