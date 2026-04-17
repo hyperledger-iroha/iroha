@@ -165,6 +165,19 @@ fn validate_asset_definition_selector_literal(value: &str) -> core::result::Resu
         })
 }
 
+fn validate_nexus_fee_asset_selector_literal(value: &str) -> core::result::Result<String, String> {
+    let value = validate_asset_definition_selector_literal(value)?;
+    let is_xor_selector = value == defaults::nexus::fees::fee_asset_id()
+        || value.eq_ignore_ascii_case("xor#universal");
+    if !is_xor_selector {
+        return Err(
+            "Nexus fees must be charged in XOR; use xor#universal or the canonical XOR asset definition id"
+                .to_owned(),
+        );
+    }
+    Ok(value)
+}
+
 fn parse_asset_definition_selector_literal(field_path: &str, value: &str) -> String {
     validate_asset_definition_selector_literal(value)
         .unwrap_or_else(|err| panic!("invalid {field_path} `{value}`: {err}"))
@@ -11814,7 +11827,7 @@ impl Default for NexusFees {
 
 impl NexusFees {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusFees> {
-        let fee_asset_id = match validate_asset_definition_selector_literal(&self.fee_asset_id) {
+        let fee_asset_id = match validate_nexus_fee_asset_selector_literal(&self.fee_asset_id) {
             Ok(value) => value,
             Err(err) => {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -11869,6 +11882,32 @@ mod nexus_asset_selector_tests {
     fn nexus_fees_parse_rejects_invalid_asset_selector() {
         let cfg = NexusFees {
             fee_asset_id: "invalid selector".to_owned(),
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        assert!(cfg.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_accepts_xor_alias_selector() {
+        let cfg = NexusFees {
+            fee_asset_id: "xor#universal".to_owned(),
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
+
+        assert_eq!(parsed.fee_asset_id, "xor#universal");
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_non_xor_asset_selector() {
+        let cfg = NexusFees {
+            fee_asset_id: "pkr#sbp".to_owned(),
             ..NexusFees::default()
         };
 

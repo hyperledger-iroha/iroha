@@ -10919,6 +10919,7 @@ async fn submit_contract_call_request(
     }
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
+    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
 
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
@@ -10942,7 +10943,7 @@ async fn submit_contract_call_request(
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
-        fee_sponsor.as_ref(),
+        fee_sponsor_literal.as_deref(),
         gas_limit,
     );
 
@@ -11200,6 +11201,7 @@ pub async fn handle_post_contract_call_simulate(
     }
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
+    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
 
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
@@ -11222,7 +11224,7 @@ pub async fn handle_post_contract_call_simulate(
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
-        fee_sponsor.as_ref(),
+        fee_sponsor_literal.as_deref(),
         gas_limit,
     );
 
@@ -12788,7 +12790,7 @@ fn build_contract_call_metadata(
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    fee_sponsor: Option<&str>,
     gas_limit: u64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
@@ -12848,10 +12850,39 @@ fn build_contract_call_metadata(
     }
     if let Some(sponsor) = fee_sponsor {
         let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
-        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_string()));
+        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_owned()));
     }
     let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
     metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
+    metadata
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_fee_sponsor_literal(fee_sponsor: Option<String>) -> Result<Option<String>> {
+    let Some(fee_sponsor) = fee_sponsor else {
+        return Ok(None);
+    };
+    let fee_sponsor = fee_sponsor.trim();
+    if fee_sponsor.is_empty() {
+        return Err(conversion_error(
+            "fee_sponsor must be a non-empty account literal".to_owned(),
+        ));
+    }
+    if fee_sponsor.chars().any(char::is_whitespace) {
+        return Err(conversion_error(
+            "fee_sponsor must not contain whitespace".to_owned(),
+        ));
+    }
+    Ok(Some(fee_sponsor.to_owned()))
+}
+
+#[cfg(feature = "app_api")]
+fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
+    let mut metadata = Metadata::default();
+    if let Some(fee_sponsor) = fee_sponsor {
+        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
+        metadata.insert(sponsor_key, IrohaJson::new(fee_sponsor.to_owned()));
+    }
     metadata
 }
 
@@ -12862,16 +12893,14 @@ fn derive_multisig_contract_call_trigger_id(
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    fee_sponsor: Option<&str>,
     gas_limit: u64,
     code_hash: &Hash,
 ) -> Result<iroha_data_model::trigger::TriggerId> {
     let payload_repr = payload
         .map(|value| norito::json::to_json(value).unwrap_or_else(|_| "<payload>".to_owned()))
         .unwrap_or_default();
-    let fee_sponsor_repr = fee_sponsor
-        .map(std::string::ToString::to_string)
-        .unwrap_or_default();
+    let fee_sponsor_repr = fee_sponsor.map(str::to_owned).unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
         "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
@@ -12892,7 +12921,7 @@ fn build_multisig_contract_call_instructions(
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    fee_sponsor: Option<&str>,
     gas_limit: u64,
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
@@ -12975,7 +13004,7 @@ fn build_ephemeral_contract_call_instructions(
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    fee_sponsor: Option<&str>,
     gas_limit: u64,
     manifest: &manifest::ContractManifest,
 ) -> Vec<iroha_data_model::isi::InstructionBox> {
@@ -13230,7 +13259,11 @@ fn prepare_bridge_message_settlement(
         entrypoint,
         payload.as_ref(),
         gas_asset_id.as_deref(),
-        settlement.fee_sponsor.as_ref(),
+        settlement
+            .fee_sponsor
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         gas_limit,
         &manifest,
     );
@@ -14476,6 +14509,7 @@ mod multisig_contract_call_tests {
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
         let asset_definition =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
+        let sponsor = multisig.to_string();
 
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
@@ -14484,7 +14518,7 @@ mod multisig_contract_call_tests {
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
-            Some(&multisig),
+            Some(sponsor.as_str()),
             5_000,
             &manifest,
             &code_hash,
@@ -14514,6 +14548,7 @@ mod multisig_contract_call_tests {
         let sponsor = iroha_data_model::account::AccountId::of(
             iroha_crypto::KeyPair::random().public_key().clone(),
         );
+        let sponsor = sponsor.to_string();
 
         let metadata = build_contract_call_metadata(
             &manifest,
@@ -14522,7 +14557,7 @@ mod multisig_contract_call_tests {
             Some("create_mint_request"),
             None,
             Some("xor#test"),
-            Some(&sponsor),
+            Some(sponsor.as_str()),
             300_000,
         );
         assert_eq!(
@@ -17202,6 +17237,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_123),
+                fee_sponsor: None,
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -17241,6 +17277,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_124),
+                fee_sponsor: None,
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -17317,6 +17354,7 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_125),
+                fee_sponsor: None,
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
             }),
@@ -17521,6 +17559,7 @@ seiyaku BlobPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
+                fee_sponsor: None,
                 instructions: vec![instruction],
             }),
         )
@@ -17563,6 +17602,7 @@ seiyaku BlobPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_456),
+                fee_sponsor: None,
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -17622,6 +17662,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
+    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let selector_alias_literal = selected_multisig_alias_literal(&selector);
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -17660,7 +17701,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         Some(&entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
-        fee_sponsor.as_ref(),
+        fee_sponsor.as_deref(),
         gas_limit,
     );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
@@ -17670,7 +17711,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &entrypoint,
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
-        fee_sponsor.as_ref(),
+        fee_sponsor.as_deref(),
         gas_limit,
         &manifest,
         &code_hash,
@@ -17825,9 +17866,11 @@ pub async fn handle_post_contract_call_multisig_approve(
         public_key_hex,
         signature_b64,
         creation_time_ms,
+        fee_sponsor,
         proposal_id,
         instructions_hash,
     } = req;
+    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
@@ -17854,7 +17897,9 @@ pub async fn handle_post_contract_call_multisig_approve(
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_instructions([dm::InstructionBox::from(approve_instruction)]);
+    let builder = builder
+        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
         if private_key.is_some() {
@@ -17973,9 +18018,11 @@ pub async fn handle_post_multisig_cancel(
         public_key_hex,
         signature_b64,
         creation_time_ms,
+        fee_sponsor,
         proposal_id,
         instructions_hash,
     } = req;
+    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (target_hash_literal, target_instructions_hash) =
@@ -18019,7 +18066,9 @@ pub async fn handle_post_multisig_cancel(
             "APPROVE".to_owned(),
             will_execute,
             creation_time_ms,
-            builder.with_instructions([dm::InstructionBox::from(approve_instruction)]),
+            builder
+                .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+                .with_instructions([dm::InstructionBox::from(approve_instruction)]),
         )
     } else {
         let mut approvals = BTreeSet::new();
@@ -18035,7 +18084,9 @@ pub async fn handle_post_multisig_cancel(
             "PROPOSE".to_owned(),
             will_execute,
             creation_time_ms,
-            builder.with_instructions([dm::InstructionBox::from(propose_instruction)]),
+            builder
+                .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+                .with_instructions([dm::InstructionBox::from(propose_instruction)]),
         )
     };
 
@@ -18173,8 +18224,10 @@ pub async fn handle_post_multisig_propose(
         public_key_hex,
         signature_b64,
         creation_time_ms,
+        fee_sponsor,
         instructions,
     } = req;
+    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
@@ -18192,7 +18245,9 @@ pub async fn handle_post_multisig_propose(
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
+    let builder = builder
+        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
         if private_key.is_some() {
@@ -18322,9 +18377,11 @@ pub async fn handle_post_multisig_approve(
         public_key_hex,
         signature_b64,
         creation_time_ms,
+        fee_sponsor,
         proposal_id,
         instructions_hash,
     } = req;
+    let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
@@ -18348,7 +18405,9 @@ pub async fn handle_post_multisig_approve(
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_instructions([dm::InstructionBox::from(approve_instruction)]);
+    let builder = builder
+        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
         if private_key.is_some() {
@@ -21216,6 +21275,9 @@ pub struct MultisigProposeDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional fee sponsor account literal forwarded to transaction metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
@@ -21247,6 +21309,9 @@ pub struct MultisigApproveDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional fee sponsor account literal forwarded to transaction metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
     /// Optional proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -21296,9 +21361,9 @@ pub struct MultisigContractCallProposeDto {
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
-    /// Optional fee sponsor account for gas/fees.
+    /// Optional fee sponsor account literal for gas/fees.
     #[norito(default)]
-    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    pub fee_sponsor: Option<String>,
     /// Optional gas limit (must be > 0 when provided).
     #[norito(default)]
     pub gas_limit: Option<u64>,
@@ -21331,6 +21396,9 @@ pub struct MultisigContractCallApproveDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional fee sponsor account literal forwarded to transaction metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
     /// Optional proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -21366,6 +21434,9 @@ pub struct MultisigCancelRequestDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional fee sponsor account literal forwarded to transaction metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
     /// Optional target proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
