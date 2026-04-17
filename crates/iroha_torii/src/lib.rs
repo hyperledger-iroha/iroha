@@ -12049,7 +12049,11 @@ fn target_scope_singular_query(
 
     match query {
         SingularQueryBox::FindAssetById(query) => {
-            Some(SignedQueryScope::TargetAccount(query.id.account().clone()))
+            target_asset_definition_scope(query.id.definition())
+                .or_else(|| Some(SignedQueryScope::TargetAccount(query.id.account().clone())))
+        }
+        SingularQueryBox::FindAssetDefinitionById(query) => {
+            target_asset_definition_scope(&query.id)
         }
         SingularQueryBox::FindAccountById(query) => {
             Some(SignedQueryScope::TargetAccount(query.account_id().clone()))
@@ -12071,6 +12075,15 @@ fn target_scope_singular_query(
         }
         _ => None,
     }
+}
+
+fn target_asset_definition_scope(
+    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Option<SignedQueryScope> {
+    asset_definition_id
+        .try_domain()
+        .cloned()
+        .map(SignedQueryScope::TargetDomain)
 }
 
 fn target_account_iterable_query(
@@ -12131,6 +12144,35 @@ fn target_account_iterable_query(
             QueryItemKind::Role | QueryItemKind::RoleId => {
                 decode_query_payload::<FindRolesByAccountId>(payload)
                     .map(|query| query.account_id().clone())
+            }
+            _ => None,
+        })
+}
+
+fn target_domain_iterable_query(
+    query: &iroha_data_model::query::QueryWithParams,
+) -> Option<iroha_data_model::domain::DomainId> {
+    use iroha_data_model::{
+        account::Account,
+        prelude::FindAccountsWithAsset,
+        query::{QueryItemKind, iter_query_inner},
+    };
+
+    if let Some(query_box) = query.query_box() {
+        if let Some(erased) = iter_query_inner::<Account>(query_box)
+            && let Some(query) = decode_query_payload::<FindAccountsWithAsset>(erased.payload())
+        {
+            return query.asset_definition_id().try_domain().cloned();
+        }
+        return None;
+    }
+
+    query
+        .fast_dsl_parts()
+        .and_then(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::Account => {
+                let query: FindAccountsWithAsset = decode_query_payload(payload)?;
+                query.asset_definition_id().try_domain().cloned()
             }
             _ => None,
         })
@@ -12207,8 +12249,9 @@ fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope 
         {
             SignedQueryScope::LocalReplicated
         }
-        iroha_data_model::query::QueryRequest::Start(query) => target_account_iterable_query(query)
-            .map(SignedQueryScope::TargetAccount)
+        iroha_data_model::query::QueryRequest::Start(query) => target_domain_iterable_query(query)
+            .map(SignedQueryScope::TargetDomain)
+            .or_else(|| target_account_iterable_query(query).map(SignedQueryScope::TargetAccount))
             .unwrap_or_else(|| {
                 if is_authority_routed_iterable_query(query) {
                     SignedQueryScope::AuthorityRouted
@@ -33058,6 +33101,22 @@ pub(crate) mod tests_runtime_handlers {
         executor.into_query()
     }
 
+    fn build_find_accounts_with_asset_query_for_test(
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::account::prelude::FindAccountsWithAsset::new(
+                asset_definition_id,
+            ),
+        )
+        .execute();
+        executor.into_query()
+    }
+
     fn build_find_nfts_by_account_query_for_test(
         account_id: AccountId,
     ) -> iroha_data_model::query::QueryWithParams {
@@ -34486,14 +34545,27 @@ pub(crate) mod tests_runtime_handlers {
                     iroha_data_model::query::SingularQueryBox::FindAssetById(
                         iroha_data_model::query::asset::prelude::FindAssetById::new(
                             iroha_data_model::asset::AssetId::new(
-                                asset_definition_id,
+                                asset_definition_id.clone(),
                                 account_id.clone(),
                             ),
                         ),
                     ),
                 ),
             )),
-            super::SignedQueryScope::TargetAccount(account_id.clone())
+            super::SignedQueryScope::TargetDomain(domain_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Singular(
+                    iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
+                        iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                            asset_definition_id.clone(),
+                        ),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetDomain(domain_id.clone())
         );
         assert_eq!(
             super::signed_query_scope(&request_for_test(
@@ -34503,6 +34575,15 @@ pub(crate) mod tests_runtime_handlers {
                 ),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_accounts_with_asset_query_for_test(asset_definition_id.clone()),
+                ),
+            )),
+            super::SignedQueryScope::TargetDomain(domain_id.clone())
         );
         assert_eq!(
             super::signed_query_scope(&request_for_test(
