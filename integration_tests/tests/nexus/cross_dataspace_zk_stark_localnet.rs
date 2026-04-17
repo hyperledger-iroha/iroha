@@ -3,6 +3,8 @@
 //! Cross-dataspace STARK verification tests that validate proof outcomes while
 //! ensuring proof payload details are not exposed to other dataspaces.
 
+use super::localnet_npos::npos_override_transactions;
+
 use std::{collections::BTreeSet, time::Duration};
 
 use base64::Engine as _;
@@ -145,7 +147,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                Vec::new(),
+                npos_override_transactions(TOTAL_PEERS, TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,
@@ -284,19 +286,6 @@ fn localnet_builder() -> NetworkBuilder {
                 )
                 .write(["nexus", "staking", "max_validators"], TOTAL_PEERS as i64)
                 .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    TOTAL_PEERS as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                )
                 .write(["zk", "stark", "enabled"], true);
         })
 }

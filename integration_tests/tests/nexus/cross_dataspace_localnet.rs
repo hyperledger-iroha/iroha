@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet cross-dataspace atomic swap regression test.
 
+use super::localnet_npos::npos_override_transactions;
+
 use std::{
     collections::BTreeSet,
     num::{NonZeroU32, NonZeroU64},
@@ -170,7 +172,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                Vec::new(),
+                npos_override_transactions(VALIDATORS_PER_LANE, TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,
@@ -311,20 +313,7 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
                 )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
         })
 }
 
@@ -631,19 +620,7 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
 }
 
 fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Numeric>> {
-    let mut matches = client
-        .query(FindAssets::new())
-        .execute_all()?
-        .into_iter()
-        .filter(|asset: &Asset| asset.id == *asset_id)
-        .map(|asset| asset.value().clone())
-        .collect::<Vec<_>>();
-    if matches.is_empty() {
-        matches.push(Numeric::zero());
-    }
-    matches.sort();
-    matches.dedup();
-    Ok(matches)
+    Ok(vec![asset_balance(client, asset_id)?])
 }
 
 #[derive(Debug)]
@@ -1806,7 +1783,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         })?;
     }
 
-    {
+    let setup_grants_tx = {
         let submitter = nexus_alice_submitter.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let setup_grants_tx = submitter.build_transaction(
@@ -1819,9 +1796,38 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             Metadata::default(),
         );
         submitter.submit_transaction(&setup_grants_tx)?;
-    }
+        setup_grants_tx
+    };
+    {
+        let _phase = phase_timings.phase("setup grants: tx committed outcome");
+        let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
+        let setup_grants_pre_barrier_height = alice
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height
+            .max(
+                bob.get_sumeragi_status_wire()
+                    .map_err(|err| eyre!(err))?
+                    .commit_qc
+                    .height,
+            );
+        wait_for_committed_success_or_height_fallback(
+            &nexus_bob_submitter,
+            &nexus_alice_submitter,
+            setup_grants_entry_hash,
+            "setup grants committed outcome",
+            "setup grants commit barrier",
+            setup_grants_pre_barrier_height,
+            BLOCKING_CONFIRMATION_TIMEOUT,
+            BLOCKING_CONFIRMATION_TIMEOUT,
+        )?;
+    };
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
+        // Commit-QC hashes are lane-local in this 3-lane topology, so the grant transaction's
+        // observed Nexus-lane barrier cannot be compared directly against DS2-lane peers.
+        // Poll the Bob-facing permission view instead; that is the state the swap depends on.
         wait_for_account_permissions(
             &nexus_bob_submitter,
             &nexus_bob_submitter,
