@@ -57,7 +57,7 @@ use crate::{
         LaneIdentityMetadataError,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog,
+    queue::{evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world},
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -2243,11 +2243,12 @@ impl StateBlock<'_> {
             }
         }
 
-        let routing_decision = evaluate_policy_with_catalog(
+        let routing_decision = evaluate_policy_with_catalog_and_world(
             &state_transaction.nexus.routing_policy,
             &state_transaction.nexus.lane_catalog,
             &state_transaction.nexus.dataspace_catalog,
             &tx,
+            &state_transaction.world,
         )
         .map_err(|err| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
