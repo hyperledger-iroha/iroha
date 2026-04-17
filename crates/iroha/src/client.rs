@@ -18686,7 +18686,8 @@ mod tests {
                 SccpCodecCapability {
                     id: iroha_sccp::SCCP_CODEC_TON_RAW,
                     key: "ton_raw".to_owned(),
-                    description: "TON raw addresses in workchain:account_hex form.".to_owned(),
+                    description: "Canonical TON raw addresses in workchain:account_hex form."
+                        .to_owned(),
                 },
             ],
             counterparties: vec![

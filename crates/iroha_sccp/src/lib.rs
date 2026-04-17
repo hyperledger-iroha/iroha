@@ -1537,9 +1537,9 @@ pub fn sccp_codec_key(codec_id: u8) -> Option<&'static str> {
 pub fn sccp_codec_description(codec_id: u8) -> Option<&'static str> {
     match codec_id {
         SCCP_CODEC_TEXT_UTF8 => Some("Logical UTF-8 identifiers for SORA and route-local names."),
-        SCCP_CODEC_EVM_HEX => Some("0x-prefixed 20-byte EVM account addresses."),
+        SCCP_CODEC_EVM_HEX => Some("0x-prefixed canonical EIP-55 EVM account addresses."),
         SCCP_CODEC_SOLANA_BASE58 => Some("Base58 Solana public keys."),
-        SCCP_CODEC_TON_RAW => Some("TON raw addresses in workchain:account_hex form."),
+        SCCP_CODEC_TON_RAW => Some("Canonical TON raw addresses in workchain:account_hex form."),
         SCCP_CODEC_TRON_BASE58CHECK => Some("Tron base58check account addresses."),
         _ => None,
     }
@@ -3768,10 +3768,6 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure(
     })
 }
 
-fn is_ascii_hex_digit(byte: u8) -> bool {
-    byte.is_ascii_hexdigit()
-}
-
 fn decode_ascii_hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -3794,10 +3790,47 @@ fn is_ascii_base58_digit(byte: u8) -> bool {
 }
 
 fn validate_evm_hex_codec(bytes: &[u8]) -> bool {
-    bytes.len() == 42
-        && bytes.first() == Some(&b'0')
-        && matches!(bytes.get(1), Some(b'x' | b'X'))
-        && bytes[2..].iter().copied().all(is_ascii_hex_digit)
+    if bytes.len() != 42 || bytes[..2] != *b"0x" {
+        return false;
+    }
+
+    let payload = &bytes[2..];
+    for chunk in payload.chunks_exact(2) {
+        if decode_ascii_hex_nibble(chunk[0]).is_none()
+            || decode_ascii_hex_nibble(chunk[1]).is_none()
+        {
+            return false;
+        }
+    }
+
+    let lowercase_payload = payload
+        .iter()
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let checksum = keccak256_bytes(&lowercase_payload);
+
+    for (idx, byte) in payload.iter().copied().enumerate() {
+        if byte.is_ascii_digit() {
+            continue;
+        }
+
+        let checksum_nibble = if idx % 2 == 0 {
+            checksum[idx / 2] >> 4
+        } else {
+            checksum[idx / 2] & 0x0f
+        };
+        let should_be_uppercase = checksum_nibble >= 8;
+
+        if should_be_uppercase {
+            if !byte.is_ascii_uppercase() {
+                return false;
+            }
+        } else if !byte.is_ascii_lowercase() {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn validate_base58_codec(bytes: &[u8], min_len: usize, max_len: usize) -> bool {
@@ -3814,10 +3847,36 @@ fn validate_ton_raw_codec(bytes: &[u8]) -> bool {
     let Some((workchain, account)) = value.split_once(':') else {
         return false;
     };
-    !workchain.is_empty()
-        && workchain.parse::<i32>().is_ok()
+    validate_canonical_i32_decimal(workchain)
         && account.len() == 64
-        && account.as_bytes().iter().copied().all(is_ascii_hex_digit)
+        && account
+            .as_bytes()
+            .iter()
+            .copied()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn validate_canonical_i32_decimal(value: &str) -> bool {
+    if value.is_empty() || value.starts_with('+') {
+        return false;
+    }
+
+    let digits = if let Some(digits) = value.strip_prefix('-') {
+        if digits.is_empty() || digits == "0" {
+            return false;
+        }
+        digits
+    } else {
+        value
+    };
+
+    digits
+        .as_bytes()
+        .iter()
+        .copied()
+        .all(|byte| byte.is_ascii_digit())
+        && (digits.len() == 1 || digits.as_bytes()[0] != b'0')
+        && value.parse::<i32>().is_ok()
 }
 
 fn validate_tron_base58_codec(bytes: &[u8]) -> bool {
@@ -5590,6 +5649,13 @@ mod tests {
     #[test]
     #[allow(clippy::similar_names)]
     fn codec_validation_accepts_chain_specific_v1_formats() {
+        assert!(validate_evm_hex_codec(
+            b"0x52908400098527886E0F7030069857D2E4169EE7"
+        ));
+        assert!(validate_evm_hex_codec(
+            b"0xde709f2102306220921060314715629080e2fb77"
+        ));
+
         let evm_transfer = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
@@ -5667,6 +5733,13 @@ mod tests {
     #[test]
     #[allow(clippy::similar_names)]
     fn codec_validation_rejects_malformed_chain_specific_v1_formats() {
+        assert!(!validate_evm_hex_codec(
+            b"0x52908400098527886e0f7030069857d2e4169ee7"
+        ));
+        assert!(!validate_evm_hex_codec(
+            b"0X52908400098527886E0F7030069857D2E4169EE7"
+        ));
+
         let bad_evm = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
@@ -5685,11 +5758,29 @@ mod tests {
         });
         assert!(!verify_sccp_payload_structure(&bad_evm));
 
+        let non_canonical_evm = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 2,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 10,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"bridge@sora".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x52908400098527886e0f7030069857d2e4169ee7".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        assert!(!verify_sccp_payload_structure(&non_canonical_evm));
+
         let invalid_ton_recipient_payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
             dest_domain: SCCP_DOMAIN_TON,
-            nonce: 2,
+            nonce: 3,
             asset_home_domain: SCCP_DOMAIN_SORA,
             asset_id_codec: SCCP_CODEC_TEXT_UTF8,
             asset_id: b"xor#universal".to_vec(),
@@ -5705,11 +5796,19 @@ mod tests {
             &invalid_ton_recipient_payload
         ));
 
+        for non_canonical_ton in [
+            b"+0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".as_slice(),
+            b"00:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".as_slice(),
+            b"0:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef".as_slice(),
+        ] {
+            assert!(!validate_ton_raw_codec(non_canonical_ton));
+        }
+
         let invalid_tron_recipient_payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
             dest_domain: SCCP_DOMAIN_TRON,
-            nonce: 3,
+            nonce: 4,
             asset_home_domain: SCCP_DOMAIN_SORA,
             asset_id_codec: SCCP_CODEC_TEXT_UTF8,
             asset_id: b"xor#universal".to_vec(),

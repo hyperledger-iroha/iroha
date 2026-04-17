@@ -9,7 +9,10 @@ use iroha::{
         governance::RegisterCitizen,
     },
 };
-use iroha_sccp::{SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes, sccp_message_id};
+use iroha_sccp::{
+    SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes, sccp_message_id,
+    verify_sccp_payload_structure,
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -73,6 +76,48 @@ fn print_tx_stdin_json(bytes: &[u8]) {
     println!("[\"{encoded}\"]");
 }
 
+#[allow(clippy::too_many_arguments)]
+fn record_sccp_transfer_payload_bytes(
+    source_domain: u32,
+    dest_domain: u32,
+    nonce: u64,
+    asset_home_domain: u32,
+    asset_id_codec: u8,
+    asset_id: String,
+    amount: u128,
+    sender_codec: u8,
+    sender: String,
+    recipient_codec: u8,
+    recipient: String,
+    route_id_codec: u8,
+    route_id: String,
+) -> Result<(String, Vec<u8>)> {
+    let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+        version: 1,
+        source_domain,
+        dest_domain,
+        nonce,
+        asset_home_domain,
+        asset_id_codec,
+        asset_id: asset_id.into_bytes(),
+        amount,
+        sender_codec,
+        sender: sender.into_bytes(),
+        recipient_codec,
+        recipient: recipient.into_bytes(),
+        route_id_codec,
+        route_id: route_id.into_bytes(),
+    });
+    if !verify_sccp_payload_structure(&payload) {
+        return Err(eyre!(
+            "SCCP transfer payload failed structural verification"
+        ));
+    }
+    let message_id = hex::encode(sccp_message_id(&payload));
+    let payload_bytes = canonical_sccp_payload_bytes(&payload);
+    Ok((message_id, payload_bytes))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
@@ -118,29 +163,76 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         } => {
-            let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
-                version: 1,
+            let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
                 source_domain,
                 dest_domain,
                 nonce,
                 asset_home_domain,
                 asset_id_codec,
-                asset_id: asset_id.into_bytes(),
+                asset_id,
                 amount,
                 sender_codec,
-                sender: sender.into_bytes(),
+                sender,
                 recipient_codec,
-                recipient: recipient.into_bytes(),
+                recipient,
                 route_id_codec,
-                route_id: route_id.into_bytes(),
-            });
-            let message_id = hex::encode(sccp_message_id(&payload));
+                route_id,
+            )?;
             eprintln!("message_id={message_id}");
-            let payload_bytes = canonical_sccp_payload_bytes(&payload);
             let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
             let bytes = norito::to_bytes(&instruction).wrap_err("failed to encode instruction")?;
             print_tx_stdin_json(&bytes);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_sccp_transfer_payload_rejects_noncanonical_evm_recipient() {
+        let err = record_sccp_transfer_payload_bytes(
+            0,
+            1,
+            7,
+            0,
+            1,
+            "xor#universal".to_owned(),
+            42,
+            1,
+            "sora:bridge".to_owned(),
+            2,
+            "0x52908400098527886e0f7030069857d2e4169ee7".to_owned(),
+            1,
+            "nexus:eth:xor".to_owned(),
+        )
+        .expect_err("noncanonical EVM recipient should be rejected");
+
+        assert!(err.to_string().contains("structural verification"));
+    }
+
+    #[test]
+    fn record_sccp_transfer_payload_accepts_canonical_ton_recipient() {
+        let (message_id, payload_bytes) = record_sccp_transfer_payload_bytes(
+            0,
+            4,
+            7,
+            0,
+            1,
+            "xor#universal".to_owned(),
+            42,
+            1,
+            "sora:bridge".to_owned(),
+            4,
+            "0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            1,
+            "nexus:ton:xor".to_owned(),
+        )
+        .expect("canonical TON recipient should be accepted");
+
+        assert_eq!(message_id.len(), 64);
+        assert!(!payload_bytes.is_empty());
+    }
 }

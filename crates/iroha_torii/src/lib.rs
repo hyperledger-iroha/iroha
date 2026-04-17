@@ -36420,6 +36420,64 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn publish_sccp_message_bundle_rejects_structurally_invalid_payload() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = mk_app_state_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 12,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x52908400098527886e0f7030069857d2e4169ee7".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+
+        let err = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload)
+            .expect_err("invalid SCCP payload should be rejected before publishing");
+        assert!(
+            query_conversion_message(&err)
+                .is_some_and(|message| message
+                    .contains("SCCP message payload failed structural verification")),
+            "unexpected error: {err:?}"
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_rejects_noncanonical_message_id_hex() {
+        let app = mk_app_state_for_tests();
+
+        for message_id in [
+            format!("0X{}", "11".repeat(32)),
+            "AA".repeat(32),
+            format!("0x0x{}", "11".repeat(32)),
+        ] {
+            let err =
+                match routing::handle_v1_sccp_message_bundle(app.state.as_ref(), message_id, None)
+                    .await
+                {
+                    Err(err) => err,
+                    Ok(_) => panic!("non-canonical SCCP message id should be rejected"),
+                };
+            assert!(
+                query_conversion_message(&err).is_some_and(
+                    |message| message.contains("message_id must be lowercase 32-byte hex")
+                ),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn sccp_message_artifact_endpoint_rejects_disabled_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {

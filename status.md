@@ -1,6 +1,36 @@
 # Status
 
-Last updated: 2026-04-16
+Last updated: 2026-04-17
+
+## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
+- `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
+  `0x`-prefixed canonical EIP-55 addresses instead of accepting arbitrary
+  lowercase or uppercase hex spellings, and rejects `0X` prefixes.
+- TON raw SCCP codec validation now requires canonical signed decimal
+  workchains and lowercase 64-hex account IDs, rejecting malleable forms such
+  as `+0`, `00`, and uppercase account hex.
+- SCCP capability descriptions and SDK/CLI fixtures were updated to advertise
+  the canonical EVM and TON forms.
+- `iroha_cli`'s `gov_instruction record-sccp-transfer` helper now runs the
+  shared SCCP structural verifier before emitting `RecordSccpMessage`
+  transaction JSON, so non-canonical operator inputs fail before submission.
+- Torii SCCP message proof endpoints now reject non-canonical message-id path
+  spellings; IDs must be lowercase 32-byte hex with at most one lowercase `0x`
+  prefix.
+- Torii's SCCP message bundle publisher now applies the shared structural
+  verifier before building and caching a proof bundle, preventing malformed
+  in-memory bundles from bypassing the canonical payload checks.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp codec_validation_ -- --nocapture`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha get_sccp_ --lib -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `cargo test -p iroha_cli --bin gov_instruction record_sccp_transfer_payload -- --nocapture`
+  - `cargo test -p iroha_torii sccp_message_bundle_endpoint_rejects_noncanonical_message_id_hex --lib -- --nocapture`
+  - `cargo test -p iroha_torii publish_sccp_message_bundle_rejects_structurally_invalid_payload --lib -- --nocapture`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_capabilities"`
+  - `node --test --test-name-pattern "getSccpCapabilities" test/toriiClient.test.js`
 
 ## 2026-04-16 Follow-up: Mochi local sandbox now completes a detached Ganache-style startup and MCP smoke
 - `mochi/mochi-core/src/{genesis.rs,lib.rs,supervisor.rs,torii.rs}` now keeps
