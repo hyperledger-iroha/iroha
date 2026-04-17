@@ -17353,7 +17353,19 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         !commit_topology.is_empty(),
         "test needs a non-empty commit topology"
     );
-    let leader_peer = commit_topology.first().expect("commit topology not empty");
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        PERMISSIONED_TAG,
+        Some(prf_seed_for_chain(&actor.common_config.chain)),
+    );
+    let signature_roster = signature_topology.as_ref().to_vec();
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signature topology not empty");
     let leader_kp = harness
         .key_pairs
         .iter()
@@ -17374,15 +17386,6 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
     pending.parent_state_root = Some(zero_state_root());
     pending.post_state_root = Some(zero_state_root());
 
-    let topology = super::network_topology::Topology::new(commit_topology.clone());
-    let signature_topology = super::topology_for_view(
-        &topology,
-        height,
-        view,
-        PERMISSIONED_TAG,
-        Some(prf_seed_for_chain(&actor.common_config.chain)),
-    );
-    let signature_roster = signature_topology.as_ref().to_vec();
     let required = topology.min_votes_for_commit().max(1);
     let mut view_signers = BTreeSet::new();
     for idx in 0..required {
@@ -17418,28 +17421,6 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
             .vote_log
             .insert((Phase::Commit, height, view, 0, *signer), vote);
     }
-    let accepted_votes = actor.accepted_votes_for_qc_slot(
-        Phase::Commit,
-        block_hash,
-        height,
-        view,
-        0,
-        &signature_topology,
-    );
-    eprintln!(
-        "debug signers={signers:?} view_signers={view_signers:?} accepted={:?} aggregate={:?}",
-        accepted_votes.keys().collect::<Vec<_>>(),
-        super::aggregate_vote_signatures(
-            &accepted_votes,
-            Phase::Commit,
-            block_hash,
-            height,
-            view,
-            0,
-            &view_signers
-        )
-    );
-
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
@@ -17516,15 +17497,6 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
     assert!(
         actor.poll_commit_results(),
         "commit outcome should be applied"
-    );
-    eprintln!(
-        "debug after poll precommit_history={:?} commit_history_len={} sidecar={}",
-        status::precommit_signer_history()
-            .iter()
-            .map(|record| (record.height, record.view, record.block_hash, record.signers.clone()))
-            .collect::<Vec<_>>(),
-        status::commit_qc_history().len(),
-        actor.kura.read_roster_metadata(height).is_some()
     );
     let snapshot = actor
         .state
