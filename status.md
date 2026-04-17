@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Nexus routing composability hardening
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue/router.rs`
+  now infers dataspace-routed write targets for domain, asset-definition, and
+  single-dataspace account metadata flows, promotes rule-matched writes onto the
+  inferred dataspace when the rule omitted one, canonical-routes ruleless
+  domain writes to their owning dataspace, and rejects mixed-dataspace write
+  batches with a deterministic routing error instead of silently inheriting an
+  unrelated route.
+- Transfer instruction matchers with `transfer::*@scope` now treat
+  `transfer::domain` and `transfer::asset_definition` as matching the
+  transferred object's scope, not only the destination account scope.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now
+  recomputes proxied signed-query routes with the same target-aware app state
+  classification used at ingress and prefers the receiver's validated route over
+  the ingress hint when they diverge.
+- Focused regressions now pin the state-required routing edges that were still
+  easy to miss: single-scope and multi-scope account metadata writes, opaque
+  asset-definition unregister and metadata-remove flows, and target-domain /
+  target-alias signed-query route resolution on private ingress.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router --lib`
+  - `cargo test -p iroha_torii effective_proxy_signed_query_routing_decision --lib`
+  - `cargo test -p iroha_torii resolve_signed_query_routing_for_app_uses_target_ --lib`
+
 ## 2026-04-17 Follow-up: iroha_core routing compile fix
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/block.rs`
   now passes the block-scoped `WorldBlock` directly into state-aware lane

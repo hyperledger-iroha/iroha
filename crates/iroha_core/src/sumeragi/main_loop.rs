@@ -2663,12 +2663,23 @@ fn validate_block_for_voting_with_timings(
     Result<Option<StateRoots>, BlockValidationError>,
     ValidationTimings,
 ) {
+    fn signature_remap_recoverable(err: &BlockValidationError) -> bool {
+        matches!(
+            err,
+            BlockValidationError::SignatureVerification(
+                crate::block::SignatureVerificationError::UnknownSignature
+                    | crate::block::SignatureVerificationError::UnknownSignatory
+                    | crate::block::SignatureVerificationError::LeaderMissing
+            )
+        )
+    }
+
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let time_source = TimeSource::new_system();
     let mut timings = ValidationTimings::new();
-    let validation = ValidBlock::validate_keep_voting_block_with_timing(
+    let mut validation = ValidBlock::validate_keep_voting_block_with_timing(
         block,
         topology,
         chain_id,
@@ -2680,6 +2691,26 @@ fn validate_block_for_voting_with_timings(
         &mut timings,
     )
     .unpack(|_| {});
+    if let Err((failed_block, err)) = &validation
+        && signature_remap_recoverable(err)
+    {
+        let mut recovered = (**failed_block).clone();
+        if crate::state::remap_block_signature_indices_to_topology(&mut recovered, topology).is_ok()
+        {
+            validation = ValidBlock::validate_keep_voting_block_with_timing(
+                recovered,
+                topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                voting_block,
+                false,
+                &mut timings,
+            )
+            .unpack(|_| {});
+        }
+    }
 
     let result = match validation {
         Ok((_validated, mut state_block)) => {
@@ -22812,6 +22843,21 @@ impl Actor {
             entry.qc.phase,
             entry.qc.height,
             entry.qc.subject_block_hash,
+            committed_height,
+            now,
+        )
+    }
+
+    fn deferred_roster_qc_is_non_actionable_dependency(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_qc_dependency_is_non_actionable(
+            qc.phase,
+            qc.height,
+            qc.subject_block_hash,
             committed_height,
             now,
         )

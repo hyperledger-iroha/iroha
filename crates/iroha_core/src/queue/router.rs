@@ -3895,4 +3895,220 @@ mod tests {
             RoutingDecision::new(LaneId::new(1), dataspace_id)
         );
     }
+
+    #[test]
+    fn account_metadata_write_routes_to_single_scope_dataspace_with_state() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(RemoveKeyValue::account(
+                target_id.clone(),
+                "routing".parse().expect("metadata key"),
+            ))],
+        );
+
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("account metadata writes should defer until account scope is loaded"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("single-scope account metadata writes should route to that dataspace"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn account_metadata_write_with_multiple_scopes_falls_back_to_default_route() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(1);
+        let second_dataspace = DataSpaceId::new(10);
+        let catalog = dataspace_catalog(&[
+            (first_dataspace, "governance"),
+            (second_dataspace, "restricted"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), first_dataspace),
+            (LaneId::new(2), second_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(RemoveKeyValue::account(
+                target_id.clone(),
+                "routing".parse().expect("metadata key"),
+            ))],
+        );
+
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(first_dataspace);
+        scope_entry.ensure_dataspace(second_dataspace);
+        let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multi-scope account metadata writes should defer until scope is loaded"),
+            None
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()).expect(
+                "multi-scope account metadata writes should fall back to the default route"
+            ),
+            RoutingDecision::default()
+        );
+    }
+
+    #[test]
+    fn opaque_asset_definition_unregister_routes_to_resolved_target_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("vault", "restricted").expect("domain id"),
+            "voucher".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Unregister::asset_definition(
+                opaque_asset_definition,
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("voucher".to_owned())
+                    .build(&submitter_id),
+            ],
+            catalog,
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset-definition unregisters should defer to state"),
+            None
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()).expect(
+                "opaque asset-definition unregister should route to the resolved dataspace"
+            ),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_definition_metadata_remove_routes_to_resolved_target_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("vault", "restricted").expect("domain id"),
+            "voucher".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(RemoveKeyValue::asset_definition(
+                opaque_asset_definition,
+                "routing".parse().expect("metadata key"),
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("voucher".to_owned())
+                    .build(&submitter_id),
+            ],
+            catalog,
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset-definition metadata removes should defer to state"),
+            None
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()).expect(
+                "opaque asset-definition metadata remove should route to the resolved dataspace"
+            ),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
 }
