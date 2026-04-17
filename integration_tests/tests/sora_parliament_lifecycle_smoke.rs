@@ -104,7 +104,7 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
         iroha_config::parameters::defaults::common::chain_discriminant(),
         &ALICE_ID,
         deploy_nonce,
-        iroha::data_model::nexus::DataSpaceId::GLOBAL,
+        iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
     )
     .expect("governance smoke contract address")
 }

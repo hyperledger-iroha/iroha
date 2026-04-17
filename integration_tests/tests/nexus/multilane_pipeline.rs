@@ -70,7 +70,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "core".to_string(),
                 description: Some("Primary execution lane".to_string()),
                 visibility: LaneVisibility::Public,
@@ -169,7 +169,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
 
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
@@ -228,7 +228,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     let decision_core = router.route(&tx_core);
     assert_eq!(
         decision_core,
-        RoutingDecision::new(LaneId::new(0), DataSpaceId::GLOBAL)
+        RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
     );
 
     let decision_gov = router.route(&tx_gov);
