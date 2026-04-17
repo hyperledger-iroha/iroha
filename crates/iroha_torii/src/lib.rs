@@ -385,7 +385,6 @@ pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_c
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
-#[cfg(feature = "bench")]
 pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
@@ -423,7 +422,6 @@ pub use routing::{
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
 };
-#[cfg(feature = "bench")]
 pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
