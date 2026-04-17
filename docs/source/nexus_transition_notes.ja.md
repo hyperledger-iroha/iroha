@@ -14,7 +14,7 @@ translator: manual
 
 ## プレースホルダ識別子
 
-- `LaneId` と `DataSpaceId` は `iroha_data_model::nexus` 内にあり、Norito 互換な薄い新型です。既定値はそれぞれ `LaneId::SINGLE` と `DataSpaceId::GLOBAL` で、将来的には決定的なルーティング判断を運ぶ予定です。現状では API の将来像を示すためのラベルとして機能します。
+- `LaneId` と `DataSpaceId` は `iroha_data_model::nexus` 内にあり、Norito 互換な薄い新型です。既定値はそれぞれ `LaneId::SINGLE` と `DataSpaceId::UNIVERSAL` で、将来的には決定的なルーティング判断を運ぶ予定です。現状では API の将来像を示すためのラベルとして機能します。
 - これらの型は Norito のエンコード／デコードに参加し、data-model プレリュードから公開されているため、下流クレートは不安定なフィーチャーフラグなしで依存できます。
 
 ## テレメトリとログのシム
@@ -24,7 +24,7 @@ translator: manual
 
 ## 次のステップ
 
-- Nexus スケジューラ（開始時公平キューイング、フュージョンロジック、データスペースポリシー）が実装されたら、ハードコードされた `LaneId::SINGLE` / `DataSpaceId::GLOBAL` の呼び出しを実際のルーティングに置き換えます。
+- Nexus スケジューラ（開始時公平キューイング、フュージョンロジック、データスペースポリシー）が実装されたら、ハードコードされた `LaneId::SINGLE` / `DataSpaceId::UNIVERSAL` の呼び出しを実際のルーティングに置き換えます。
 - トランザクション受付、キューゴシップ、Torii API といった経路で新しい識別子を受け付け、ネットワーク越しに伝搬できるようにします。
 - マルチレーン実行が稼働したら、メトリクスとテレメトリのラベルをプレースホルダではなく実際の識別子に切り替えます。
 - オペレーション手順に `iroha_cli app nexus lane-report --summary --only-missing --fail-on-sealed` を追加し、`/v1/sumeragi/status` の `lane_governance_sealed_total` / `lane_governance_sealed_aliases` と組み合わせてマニフェスト未適用のレーンを早期検知できるようにします。

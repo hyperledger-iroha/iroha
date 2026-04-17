@@ -142,6 +142,9 @@ pub struct Kura {
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,
+    /// Retains the temporary storage directory used by test-only Kura instances.
+    #[cfg(test)]
+    _temp_store_dir: Option<tempfile::TempDir>,
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
@@ -628,6 +631,8 @@ impl Kura {
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            #[cfg(test)]
+            _temp_store_dir: None,
         });
 
         match kura.kura_disk_usage_bytes() {
@@ -659,13 +664,24 @@ impl Kura {
         Ok((kura, BlockCount(block_count)))
     }
 
-    /// Create a kura instance that doesn't write to disk. Instead it serves as a handler
-    /// for in-memory blocks only.
+    /// Create an isolated Kura instance for tests.
+    ///
+    /// The instance keeps blocks in memory for normal test access, while any background writer
+    /// activity is redirected into a per-instance temporary directory instead of the crate root.
     pub fn blank_kura_for_testing() -> Arc<Kura> {
         let (block_notify_tx, block_notify_rx) = mpsc::channel();
+        let temp_store_dir = tempfile::Builder::new()
+            .prefix("iroha-blank-kura-")
+            .tempdir()
+            .expect("create temporary Kura directory for tests");
+        let store_root = temp_store_dir.path().to_path_buf();
+        let blocks_root = store_root.join("blocks");
+        std::fs::create_dir_all(&blocks_root)
+            .expect("create temporary Kura block directory for tests");
+        let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
             block_store: Mutex::new(BlockStore::with_fsync(
-                PathBuf::new(),
+                &blocks_root,
                 FsyncMode::Off,
                 FSYNC_INTERVAL,
             )),
@@ -675,8 +691,8 @@ impl Kura {
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
-            store_root: PathBuf::new(),
-            active_blocks_dir: Mutex::new(PathBuf::new()),
+            store_root,
+            active_blocks_dir: Mutex::new(blocks_root),
             active_merge_path: Mutex::new(PathBuf::new()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             disk_usage: AtomicU64::new(0),
@@ -692,11 +708,12 @@ impl Kura {
             init_block_count: 0,
             merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
             roster_log: Mutex::new(CommitRosterJournal::new(
-                PathBuf::new(),
+                roster_log_path,
                 BLOCK_SYNC_ROSTER_RETENTION,
             )),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            _temp_store_dir: Some(temp_store_dir),
         })
     }
 
@@ -6320,6 +6337,26 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    #[test]
+    fn blank_kura_for_testing_uses_isolated_block_store_path() {
+        let kura = Kura::blank_kura_for_testing();
+        let block_store_path = kura.block_store.lock().path_to_blockchain.clone();
+
+        assert!(
+            block_store_path.is_absolute(),
+            "test Kura block store must live under an isolated temporary directory"
+        );
+        assert_ne!(
+            block_store_path,
+            std::env::current_dir().expect("current directory"),
+            "test Kura must not write blocks.* into the crate working directory"
+        );
+        assert_eq!(
+            block_store_path.file_name().and_then(|name| name.to_str()),
+            Some("blocks")
+        );
+    }
 
     #[test]
     fn lane_segment_reconciliation_provisions_and_retires_storage() {
