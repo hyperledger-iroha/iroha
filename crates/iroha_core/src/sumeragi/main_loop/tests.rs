@@ -6705,6 +6705,171 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_after_bootstr
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_payload_only_frontier_npos_uses_sender_lane_vote_roster() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let local_peer = actor.common_config.peer.id().clone();
+    let sender_peer = PeerId::from(harness.key_pairs[1].public_key().clone());
+    let sender_lane_peer = PeerId::from(harness.key_pairs[2].public_key().clone());
+    let local_lane_peer = PeerId::from(harness.key_pairs[3].public_key().clone());
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.public_lane_validators.block();
+        let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
+        for key in existing {
+            block.remove(key);
+        }
+        for (lane_id, peer) in [
+            (LaneId::new(1), sender_peer.clone()),
+            (LaneId::new(1), sender_lane_peer.clone()),
+            (LaneId::new(2), local_peer.clone()),
+            (LaneId::new(2), local_lane_peer.clone()),
+        ] {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id,
+                validator: account_id.clone(),
+                peer_id: peer,
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+        block.commit();
+    }
+
+    let expected_local_roster = super::roster::canonicalize_roster_for_mode(
+        vec![local_peer.clone(), local_lane_peer],
+        ConsensusMode::Npos,
+    );
+    let expected_sender_roster = super::roster::canonicalize_roster_for_mode(
+        vec![sender_peer.clone(), sender_lane_peer.clone()],
+        ConsensusMode::Npos,
+    );
+    assert_ne!(
+        expected_local_roster, expected_sender_roster,
+        "test requires distinct local and sender lane rosters"
+    );
+
+    let world = actor.state.world_view();
+    assert_eq!(
+        crate::state::validator_lane_ids_for_peer(&world, &local_peer),
+        BTreeSet::from([LaneId::new(2)]),
+        "local peer should be scoped to the second validator lane"
+    );
+    assert_eq!(
+        crate::state::validator_lane_ids_for_peer(&world, &sender_peer),
+        BTreeSet::from([LaneId::new(1)]),
+        "sender peer should be scoped to the first validator lane"
+    );
+    drop(world);
+
+    let block_height = actor.committed_height_snapshot().saturating_add(1);
+    let view_index = 0_u64;
+    assert_eq!(
+        actor.effective_commit_topology(),
+        expected_local_roster,
+        "local actor should derive the local lane roster before the cross-lane block-sync update"
+    );
+
+    let sender_topology = super::network_topology::Topology::new(expected_sender_roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology = super::topology_for_view(
+        &sender_topology,
+        block_height,
+        view_index,
+        mode_tag,
+        prf_seed,
+    );
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("sender lane topology has a leader");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("sender lane leader keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("sender lane leader index");
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view_index,
+        Some(genesis_hash),
+        leader_kp,
+        u64::try_from(leader_idx).expect("leader index fits u64"),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("sender lane signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+    let block_hash = block.hash();
+
+    actor
+        .handle_block_sync_update(
+            super::message::BlockSyncUpdate::from(&block),
+            Some(sender_peer),
+        )
+        .expect("block sync update");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "payload-only frontier recovery should accept a sender-lane block on a peer in another lane"
+    );
+    let cached_roster = actor
+        .vote_roster_cache
+        .get(&block_hash)
+        .map(|entry| entry.roster.clone())
+        .expect("vote roster should be cached for the recovered block");
+    assert_eq!(
+        cached_roster, expected_sender_roster,
+        "payload-only frontier recovery should cache the sender lane roster instead of the local lane roster"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| !pending.aborted),
+        "cross-lane payload-only recovery should retain the recovered block as valid pending state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
@@ -17730,6 +17895,201 @@ async fn finalize_pending_block_requires_commit_qc() {
             .pending_blocks
             .contains_key(&block_hash),
         "pending block should remain until commit certificate arrives"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn finalize_pending_block_uses_cached_vote_roster_for_commit_job() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let search_limit = u64::try_from(live_roster.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let (view, cached_roster) = (0..search_limit)
+        .find_map(|candidate_view| {
+            let live_signature_topology = super::topology_for_view(
+                &live_topology,
+                height,
+                candidate_view,
+                mode_tag,
+                prf_seed,
+            );
+            for removed_peer in &live_roster {
+                let cached_roster: Vec<_> = live_roster
+                    .iter()
+                    .filter(|peer| *peer != removed_peer)
+                    .cloned()
+                    .collect();
+                if cached_roster.len() < 2 {
+                    continue;
+                }
+                let cached_topology = super::network_topology::Topology::new(cached_roster.clone());
+                let cached_signature_topology = super::topology_for_view(
+                    &cached_topology,
+                    height,
+                    candidate_view,
+                    mode_tag,
+                    prf_seed,
+                );
+                let signer_peer = cached_signature_topology.as_ref().first()?;
+                let live_idx = live_signature_topology.position(signer_peer.public_key())?;
+                let cached_idx = cached_signature_topology.position(signer_peer.public_key())?;
+                if live_idx != cached_idx {
+                    return Some((candidate_view, cached_roster));
+                }
+            }
+            None
+        })
+        .expect("test requires a cached roster that remaps the block signer");
+
+    let parent = actor.state.view().latest_block_hash();
+    let placeholder_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
+    actor.cache_vote_roster(placeholder_hash, height, view, cached_roster.clone());
+    let expected_commit_topology =
+        actor.roster_for_vote_with_mode(placeholder_hash, height, view, consensus_mode);
+    assert_ne!(
+        expected_commit_topology, live_roster,
+        "test setup requires a cached vote roster that differs from the live roster"
+    );
+    let mut expected_signature_topology =
+        super::network_topology::Topology::new(expected_commit_topology.clone());
+    actor
+        .leader_index_for(&mut expected_signature_topology, height, view)
+        .expect("cached vote roster should align for the target view");
+    let expected_signature_topology = expected_signature_topology.as_ref().to_vec();
+    let signer_peer = expected_signature_topology
+        .first()
+        .cloned()
+        .expect("expected signature topology not empty");
+    let live_signature_topology =
+        super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+    assert_ne!(
+        live_signature_topology.as_ref(),
+        expected_signature_topology.as_slice(),
+        "test setup requires live and cached signature topologies to differ"
+    );
+    let signer_idx = expected_signature_topology
+        .iter()
+        .position(|peer| peer == &signer_peer)
+        .expect("signer in expected signature topology");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        parent,
+        signer_kp,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+    );
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let world = actor.state.world_view();
+    assert!(
+        super::validated_block_signers_from_world(
+            &block,
+            &super::network_topology::Topology::new(expected_commit_topology.clone()),
+            &world,
+            mode_tag,
+            prf_seed,
+        )
+        .is_ok(),
+        "cached vote roster should validate the block signatures"
+    );
+    let live_signer_idx = live_signature_topology
+        .position(signer_peer.public_key())
+        .expect("signer must still exist in the live signature topology");
+    assert_ne!(
+        live_signer_idx, signer_idx,
+        "test setup requires the cached vote roster to remap the block signer"
+    );
+    drop(world);
+
+    actor.cache_vote_roster(block_hash, height, view, cached_roster);
+    let epoch = actor.epoch_for_height(height);
+    let signers: BTreeSet<_> = (0..expected_commit_topology.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, expected_commit_topology.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &super::network_topology::Topology::new(expected_commit_topology.clone()),
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Commit, block_hash, height, view, epoch), qc);
+
+    let (work_tx, work_rx) = mpsc::sync_channel(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.work_tx = Some(work_tx);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    pending.note_commit_qc_observed(epoch);
+    pending.commit_qc_epoch = Some(epoch);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+
+    assert!(
+        actor.finalize_pending_block(lock, pending, None),
+        "finalize should enqueue the commit job"
+    );
+    let work = work_rx
+        .recv_timeout(Duration::from_millis(200))
+        .expect("commit work should be queued");
+    assert_eq!(
+        work.commit_topology, expected_commit_topology,
+        "finalize should preserve the cached vote roster for the pending block"
+    );
+    assert_eq!(
+        work.signature_topology, expected_signature_topology,
+        "finalize should align commit signatures against the cached vote roster"
+    );
+    assert_ne!(
+        work.signature_topology,
+        live_signature_topology.as_ref().to_vec(),
+        "commit job must not fall back to the live signature topology when a cached roster exists"
+    );
+    assert_eq!(
+        work.commit_qc
+            .as_ref()
+            .map(|commit_qc| commit_qc.validator_set.clone()),
+        Some(work.commit_topology.clone()),
+        "commit QC lookup should stay aligned with the cached vote roster"
     );
 
     harness.shutdown.send();
@@ -56264,6 +56624,170 @@ async fn missing_qc_height_stall_mode_ignores_lock_rejected_frontier_dependencie
                 *marker_height != height || *marker_hash != lock_rejected_hash
             }),
         "lock-rejected frontier dependency markers should be pruned as non-actionable"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_height_stall_mode_ignores_superseded_same_height_dependencies_when_later_owner_is_live()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let stale_view = 0_u64;
+    let current_view = stale_view.saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, now);
+
+    let stale_hash = sample_block(height, stale_view, Some(parent)).hash();
+    let live_hash = sample_block(height, current_view, Some(parent)).hash();
+    assert_ne!(
+        stale_hash, live_hash,
+        "test setup requires distinct same-height branches"
+    );
+
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        current_view,
+        live_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.note_authoritative_slot_owner(height, current_view, live_hash);
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.note_local_vote_emitted();
+        slot.sync_compat_fields();
+    }
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, current_view)
+            .is_some_and(|(owner_hash, owner_view)| {
+                owner_hash == live_hash && owner_view == current_view
+            }),
+        "test setup requires a later same-height owner to stay live for the active round"
+    );
+
+    let stale = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
+    actor.pending.missing_block_requests.insert(
+        stale_hash,
+        super::MissingBlockRequest {
+            height,
+            view: stale_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: stale,
+            last_requested: stale,
+            last_dependency_progress: stale,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: stale_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: stale_view,
+        epoch: actor.epoch_for_height(height),
+        mode_tag: "permissioned".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let qc_key = super::Actor::qc_tally_key(&qc);
+    actor.deferred_missing_payload_qcs.insert(
+        qc_key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: stale,
+            last_attempt: stale,
+            attempts: 1,
+            escalated_fetch: false,
+            reason: "test_superseded_same_height_dependency",
+        },
+    );
+
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&stale_hash)
+        .expect("same-height request should exist");
+    assert!(
+        actor.missing_block_request_is_non_actionable_dependency(
+            stale_hash,
+            request,
+            actor.committed_height_snapshot(),
+            now,
+        ),
+        "a superseded same-height branch should stop counting as actionable once a different owner is live for the active round"
+    );
+    let deferred_entry = actor
+        .deferred_missing_payload_qcs
+        .get(&qc_key)
+        .expect("deferred same-height QC should exist");
+    assert!(
+        !actor.deferred_missing_payload_qc_has_actionable_dependency(
+            deferred_entry,
+            actor.committed_height_snapshot(),
+            now,
+        ),
+        "deferred same-height QC repair should also become non-actionable once the branch is superseded by the live owner"
+    );
+    assert!(
+        !actor.has_actionable_missing_block_requests(),
+        "superseded same-height requests should not remain actionable backlog"
+    );
+    assert!(
+        !actor.has_commit_phase_missing_qc_dependency_for_height(height),
+        "superseded same-height repair should not keep commit-phase missing-QC acquisition active"
+    );
+    assert!(
+        !actor.missing_qc_height_has_unresolved_dependency_at_height(height),
+        "superseded same-height repair should not keep same-height missing-QC gating active"
+    );
+
+    assert!(
+        actor.clear_non_actionable_missing_dependencies_for_height(
+            height,
+            actor.committed_height_snapshot(),
+            now,
+        ),
+        "cleanup should prune the superseded same-height repair artifacts"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_hash),
+        "cleanup should remove the superseded same-height missing-block request"
+    );
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "cleanup should remove the superseded same-height deferred QC repair"
     );
 
     harness.shutdown.send();

@@ -623,11 +623,6 @@ pub(crate) fn parse_contract_call_execution_context(
     if entrypoint.is_none() && payload.is_none() {
         return Ok(None);
     }
-    if contract_address.is_none() {
-        return Err(ValidationFail::NotPermitted(
-            "contract call metadata requires contract_address".to_owned(),
-        ));
-    }
 
     let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
         let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {

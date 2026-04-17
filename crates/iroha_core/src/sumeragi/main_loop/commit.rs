@@ -2390,7 +2390,15 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
-        let commit_topology = self.roster_for_live_vote_with_mode(pending_height, consensus_mode);
+        let mut commit_topology = self.roster_for_vote_with_mode(
+            block_hash,
+            pending_height,
+            pending_view,
+            consensus_mode,
+        );
+        if commit_topology.is_empty() {
+            commit_topology = self.roster_for_live_vote_with_mode(pending_height, consensus_mode);
+        }
         iroha_logger::info!(
             commit_topology_len = commit_topology.len(),
             commit_topology = ?commit_topology,

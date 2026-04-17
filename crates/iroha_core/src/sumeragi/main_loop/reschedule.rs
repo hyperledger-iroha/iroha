@@ -112,7 +112,7 @@ fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
 
 pub(super) fn near_quorum_payload_timeout(rebroadcast_cooldown: Duration) -> Duration {
     super::saturating_mul_duration(rebroadcast_cooldown, 2)
-        .clamp(Duration::from_millis(200), Duration::from_millis(800))
+        .clamp(Duration::from_millis(400), Duration::from_millis(2_000))
 }
 
 pub(super) fn contiguous_frontier_vote_backed_resend_window(
