@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 AXT descriptor binding bare-payload stabilization):
+AXT descriptor bindings no longer depend on Norito header/schema bytes. The
+binding preimage is now the domain tag plus the descriptor's bare Norito
+payload, which removes feature-sensitive schema-hash drift between the
+data-model fixture generator and consumers like IVM while preserving a
+deterministic payload layout. The canonical descriptor/envelope fixtures were
+regenerated, and the IVM regression now reads the shared data-model fixture
+instead of carrying its own stale copy.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nexus/axt.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/axt_descriptor_builder.rs`
+  - `/home/mtakemiya/dev/iroha/docs/amx.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures`
+  - `cargo test -p iroha_data_model --test axt_descriptor_fixture -- --nocapture`
+  - `cargo test -p iroha_data_model --test axt_envelope_fixture -- --nocapture`
+  - `cargo test -p ivm --test axt_descriptor_builder -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 IVM AES raw-key decryption parity fix):
 IVM's accelerated AES decryption round now matches the scalar raw-key inverse
 round contract instead of relying on the platform AES decryption-round

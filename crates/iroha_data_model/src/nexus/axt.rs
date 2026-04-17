@@ -118,14 +118,16 @@ impl TouchManifest {
 
 /// Compute the canonical descriptor binding used by asset handles and manifests.
 ///
-/// The descriptor bytes are prefixed with a domain separator and hashed using
-/// Poseidon2 (rate 2, capacity 1, +1 padding) to produce a 32-byte digest.
+/// The descriptor's bare Norito payload is prefixed with a domain separator and
+/// hashed using Poseidon2 (rate 2, capacity 1, +1 padding) to produce a 32-byte
+/// digest. The header-framed encoding is intentionally excluded so the binding
+/// stays stable across feature-sensitive schema hashes.
 ///
 /// # Errors
 /// Returns an error if the descriptor cannot be encoded using Norito.
 pub fn compute_descriptor_binding(descriptor: &AxtDescriptor) -> Result<[u8; 32], norito::Error> {
     let mut buf = b"iroha:axt:desc:v1\0".to_vec();
-    let encoded = norito::to_bytes(descriptor)?;
+    let encoded = encode_adaptive(descriptor);
     buf.extend_from_slice(&encoded);
     Ok(poseidon_hash_bytes(&buf))
 }
@@ -942,6 +944,16 @@ mod tests {
     fn descriptor_validation_accepts_valid_descriptor() {
         let descriptor = sample_descriptor(DataSpaceId::new(7));
         assert_eq!(validate_descriptor(&descriptor), Ok(()));
+    }
+
+    #[test]
+    fn descriptor_binding_hashes_bare_norito_payload() {
+        let descriptor = sample_descriptor(DataSpaceId::new(9));
+        let mut expected_preimage = b"iroha:axt:desc:v1\0".to_vec();
+        expected_preimage.extend_from_slice(&encode_adaptive(&descriptor));
+
+        let binding = compute_descriptor_binding(&descriptor).expect("binding");
+        assert_eq!(binding, poseidon_hash_bytes(&expected_preimage));
     }
 
     #[test]
