@@ -28,7 +28,6 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -183,8 +182,6 @@ fn parse_asset_definition_selector_literal(field_path: &str, value: &str) -> Str
         .unwrap_or_else(|err| panic!("invalid {field_path} `{value}`: {err}"))
 }
 
-static ACCOUNT_ADDRESS_PARSE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
 enum KyberKeyConfig {
     Absent,
     Present(KyberKeyInputs),
@@ -218,7 +215,7 @@ use iroha_data_model::{
         HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
     },
     jurisdiction::JdgSignatureScheme,
-    name::Name,
+    name::{self, Name},
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
@@ -858,9 +855,7 @@ pub enum ParseError {
 }
 
 struct AccountAddressParseScope {
-    original_default_domain_label: std::sync::Arc<str>,
-    original_chain_discriminant: u16,
-    _lock: MutexGuard<'static, ()>,
+    _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard,
 }
 
 impl AccountAddressParseScope {
@@ -869,36 +864,16 @@ impl AccountAddressParseScope {
         chain_discriminant: u16,
         emitter: &mut Emitter<ParseError>,
     ) -> Self {
-        let lock = ACCOUNT_ADDRESS_PARSE_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let original_default_domain_label =
-            iroha_data_model::account::address::default_domain_name();
-        let original_chain_discriminant = iroha_data_model::account::address::chain_discriminant();
-        if let Err(err) = iroha_data_model::account::address::set_default_domain_name(
-            default_domain_label.to_owned(),
-        ) {
+        if let Err(err) = name::canonicalize_domain_label(default_domain_label) {
             emitter.emit(Report::new(ParseError::InvalidCommonConfig).attach(format!(
                 "invalid default_account_domain_label `{default_domain_label}`: {err}",
             )));
         }
-        iroha_data_model::account::address::set_chain_discriminant(chain_discriminant);
         Self {
-            original_default_domain_label,
-            original_chain_discriminant,
-            _lock: lock,
+            _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                chain_discriminant,
+            ),
         }
-    }
-}
-
-impl Drop for AccountAddressParseScope {
-    fn drop(&mut self) {
-        let _ = iroha_data_model::account::address::set_default_domain_name(
-            self.original_default_domain_label.to_string(),
-        );
-        iroha_data_model::account::address::set_chain_discriminant(
-            self.original_chain_discriminant,
-        );
     }
 }
 
