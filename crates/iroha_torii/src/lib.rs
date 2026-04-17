@@ -12009,8 +12009,8 @@ fn collect_routed_singular_query_outputs<T>(
     }
 
     if outputs.is_empty() {
-        return Err(last_route_unavailable.unwrap_or_else(|| {
-            last_not_found.unwrap_or_else(|| {
+        return Err(last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
                 torii_proxy_error_response(
                     StatusCode::NOT_FOUND,
                     "not_found",
@@ -12053,8 +12053,8 @@ where
     }
 
     if payloads.is_empty() {
-        return Err(last_route_unavailable.unwrap_or_else(|| {
-            last_not_found.unwrap_or_else(|| {
+        return Err(last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
                 torii_proxy_error_response(
                     StatusCode::NOT_FOUND,
                     "not_found",
@@ -12097,8 +12097,8 @@ where
     }
 
     if payloads.is_empty() {
-        return Err(last_route_unavailable.unwrap_or_else(|| {
-            last_not_found.unwrap_or_else(|| {
+        return Err(last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
                 torii_proxy_error_response(
                     StatusCode::NOT_FOUND,
                     "not_found",
@@ -12617,8 +12617,8 @@ async fn execute_torii_query_via_fanout_for_routes(
             }
 
             let Some(batch) = merged_batch else {
-                return last_route_unavailable.unwrap_or_else(|| {
-                    last_not_found.unwrap_or_else(|| {
+                return last_not_found.unwrap_or_else(|| {
+                    last_route_unavailable.unwrap_or_else(|| {
                         torii_proxy_error_response(
                             StatusCode::NOT_FOUND,
                             "not_found",
@@ -13582,7 +13582,7 @@ mod torii_routed_read_tests {
     }
 
     #[test]
-    fn collect_routed_singular_query_outputs_returns_route_unavailable_when_no_route_succeeds() {
+    fn collect_routed_singular_query_outputs_prefers_not_found_when_no_route_succeeds() {
         let response = collect_routed_singular_query_outputs::<u32>([
             Err(torii_proxy_error_response(
                 StatusCode::NOT_FOUND,
@@ -13595,7 +13595,33 @@ mod torii_routed_read_tests {
                 "authoritative peers offline",
             )),
         ])
-        .expect_err("all singular routes failing should surface the last route_unavailable");
+        .expect_err("all singular routes failing should surface a definitive not_found");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("not_found")
+        );
+    }
+
+    #[test]
+    fn collect_routed_singular_query_outputs_returns_route_unavailable_when_only_unavailable() {
+        let response = collect_routed_singular_query_outputs::<u32>([
+            Err(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "first authoritative peer set offline",
+            )),
+            Err(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "second authoritative peer set offline",
+            )),
+        ])
+        .expect_err("all unavailable singular routes should surface route_unavailable");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -13640,8 +13666,7 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn collect_torii_singleton_json_payloads_returns_route_unavailable_when_no_route_succeeds()
-     {
+    async fn collect_torii_singleton_json_payloads_prefers_not_found_when_no_route_succeeds() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
@@ -13659,7 +13684,36 @@ mod torii_routed_read_tests {
             }
         })
         .await
-        .expect_err("all singleton routes failing should surface the last route_unavailable");
+        .expect_err("all singleton routes failing should surface a definitive not_found");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("not_found")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_singleton_json_payloads_returns_route_unavailable_when_only_unavailable()
+    {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+
+        let response = collect_torii_singleton_json_payloads(&routes, move |_route| async move {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "authoritative peers offline",
+            )
+        })
+        .await
+        .expect_err("all unavailable singleton routes should surface route_unavailable");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -13702,7 +13756,7 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn collect_torii_list_json_payloads_returns_route_unavailable_when_no_route_succeeds() {
+    async fn collect_torii_list_json_payloads_prefers_not_found_when_no_route_succeeds() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
@@ -13720,7 +13774,35 @@ mod torii_routed_read_tests {
             }
         })
         .await
-        .expect_err("all list routes failing should surface the last route_unavailable");
+        .expect_err("all list routes failing should surface a definitive not_found");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("not_found")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_list_json_payloads_returns_route_unavailable_when_only_unavailable() {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+
+        let response = collect_torii_list_json_payloads(&routes, move |_route| async move {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "authoritative peers offline",
+            )
+        })
+        .await
+        .expect_err("all unavailable list routes should surface route_unavailable");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -15373,6 +15455,7 @@ async fn execute_torii_account_read_for_routes(
 
     let mut payloads = Vec::new();
     let mut last_not_found = None;
+    let mut last_route_unavailable = None;
     for route in &routes {
         let response = execute_torii_single_route_read(
             app,
@@ -15387,6 +15470,10 @@ async fn execute_torii_account_read_for_routes(
             last_not_found = Some(response);
             continue;
         }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            last_route_unavailable = Some(response);
+            continue;
+        }
         match torii_json_body::<AccountReadResponse>(response, "account get response").await {
             Ok(payload) => payloads.push(payload),
             Err(response) => return response,
@@ -15395,11 +15482,13 @@ async fn execute_torii_account_read_for_routes(
 
     if payloads.is_empty() {
         return last_not_found.unwrap_or_else(|| {
-            torii_proxy_error_response(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "no dataspace returned a matching result",
-            )
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
         });
     }
 
@@ -31509,6 +31598,117 @@ pub(crate) mod tests_runtime_handlers {
         (restricted_lane, restricted_dataspace)
     }
 
+    fn configure_private_ingress_with_offline_foreign_route_for_test(
+        app: &mut SharedAppState,
+    ) -> (RoutingDecision, RoutingDecision) {
+        let nexus_lane = LaneId::new(0);
+        let local_validator_keypair = KeyPair::random();
+        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let foreign_validator_keypair = KeyPair::random();
+        let foreign_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+        let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+        let foreign_validator = AccountId::new(foreign_validator_keypair.public_key().clone());
+        let foreign_peer_id = PeerId::from(foreign_peer_keypair.public_key().clone());
+        let local_dataspace = DataSpaceId::new(10);
+        let local_lane = LaneId::new(1);
+        let foreign_dataspace = DataSpaceId::new(12);
+        let foreign_lane = LaneId::new(2);
+
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+        online_tx
+            .send(std::collections::HashSet::from([Peer::new(
+                "127.0.0.1:12001".parse().expect("valid local address"),
+                local_peer_keypair.public_key().clone(),
+            )]))
+            .expect("online peers update should succeed");
+        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+        app_mut.local_peer_id = Some(local_peer_id.clone());
+
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(3).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: local_lane,
+                    dataspace_id: local_dataspace,
+                    alias: "local-restricted".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: foreign_lane,
+                    dataspace_id: foreign_dataspace,
+                    alias: "foreign-restricted".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: local_dataspace,
+                alias: "local-restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: foreign_dataspace,
+                alias: "foreign-restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
+        ensure_runtime_peer_binding_for_test(
+            state,
+            &foreign_validator,
+            &foreign_peer_keypair,
+            "foreign",
+        );
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(foreign_peer_id.clone());
+            topology.commit();
+        }
+        install_lane_manifest_registry_for_test(
+            state,
+            &[
+                (
+                    nexus_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (
+                    local_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (foreign_lane, vec![(foreign_validator, foreign_peer_id)]),
+            ],
+        );
+        let state_view = app_mut.state.view();
+        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+
+        (
+            RoutingDecision::new(local_lane, local_dataspace),
+            RoutingDecision::new(foreign_lane, foreign_dataspace),
+        )
+    }
+
     fn install_lane_manifest_registry_for_test(
         state: &IrohaState,
         lanes: &[(LaneId, Vec<(AccountId, PeerId)>)],
@@ -35042,6 +35242,93 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("missing account response");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn account_read_for_routes_skips_route_unavailable_until_success() {
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
+        let (local_route, foreign_route) =
+            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+
+        let response = super::execute_torii_account_read_for_routes(
+            &app,
+            vec![foreign_route, local_route],
+            account_id.to_string(),
+            ResponseFormat::Json,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("proxy"),
+            "mixed local/proxy fanout should report proxy routing",
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("account read body");
+        let payload: AccountReadResponse =
+            norito::json::from_slice(&body).expect("account read payload");
+        assert_eq!(payload.account_id, account_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_missing() {
+        let missing = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        let (local_route, foreign_route) =
+            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+
+        let response = super::execute_torii_account_read_for_routes(
+            &app,
+            vec![foreign_route, local_route],
+            missing.to_string(),
+            ResponseFormat::Json,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable"),
+            "a definitive missing-account response should outrank an unrelated unavailable route",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable() {
+        let missing = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        let (_local_route, foreign_route) =
+            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+
+        let response = super::execute_torii_account_read_for_routes(
+            &app,
+            vec![foreign_route],
+            missing.to_string(),
+            ResponseFormat::Json,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
     }
 
     #[tokio::test]
