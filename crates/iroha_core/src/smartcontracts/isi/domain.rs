@@ -271,6 +271,13 @@ pub mod isi {
                     .domain_id(&state_transaction.nexus.dataspace_catalog)
                     .expect("bound account alias dataspace must exist in catalog")
             })
+            .or_else(|| {
+                DomainId::try_new(
+                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+                    crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+                )
+                .ok()
+            })
     }
 
     fn ensure_asset_definition_human_fields(
@@ -2701,7 +2708,8 @@ pub mod isi {
                     state_transaction.world.remove_account_alias_binding(&alias);
                 }
             }
-            if existing_label.as_ref() != Some(&alias)
+            if existing_alias_owner.is_none()
+                && existing_label.as_ref() != Some(&alias)
                 && state_transaction
                     .world
                     .account_rekey_records

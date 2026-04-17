@@ -1861,7 +1861,7 @@ pub trait LaneRouter: Send + Sync + 'static {
     }
 }
 
-/// Trivial router that keeps the single-lane/global-dataspace behaviour.
+/// Trivial router that keeps the single-lane/universal-dataspace behaviour.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SingleLaneRouter;
 
@@ -3284,7 +3284,7 @@ mod tests {
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
-                alias: "global".to_owned(),
+                alias: "universal".to_owned(),
                 ..Default::default()
             },
             iroha_data_model::nexus::DataSpaceMetadata {
@@ -3333,7 +3333,7 @@ mod tests {
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
-                alias: "global".to_owned(),
+                alias: "universal".to_owned(),
                 ..Default::default()
             },
             iroha_data_model::nexus::DataSpaceMetadata {

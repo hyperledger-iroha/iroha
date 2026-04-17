@@ -1144,7 +1144,7 @@ pub mod sorafs {
         pub const ADVERT_MAX_LATENCY_MS: u32 = 500;
         /// Default rendezvous topics advertised when none are provided.
         pub fn advert_topics() -> Vec<String> {
-            vec!["sorafs.sf1.primary:global".to_string()]
+            vec!["sorafs.sf1.primary:universal".to_string()]
         }
         /// Default filesystem directory for governance artefacts.
         pub fn governance_dir() -> Option<PathBuf> {

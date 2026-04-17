@@ -1101,6 +1101,21 @@ pub struct LaneRelayStore {
 }
 
 impl LaneRelayStore {
+    fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
+        let lane = envelope.lane_id;
+        let height = envelope.block_height;
+        let key = (lane, envelope.dataspace_id, height);
+        self.entries.get(&key).and_then(|existing| {
+            if existing.settlement_hash != envelope.settlement_hash
+                || existing.block_header.hash() != envelope.block_header.hash()
+            {
+                Some(LaneRelayError::ConflictingRelay { lane, height })
+            } else {
+                None
+            }
+        })
+    }
+
     /// Insert or replace a lane relay envelope.
     ///
     /// # Errors
@@ -12488,7 +12503,7 @@ pub trait WorldReadOnly {
     /// Collect the account's dataspace -> domain hierarchy from primary label
     /// materialization, Space Directory bindings, and bound aliases.
     ///
-    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// Accounts materialized with a non-universal primary label inherit that label's dataspace/domain
     /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
     /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
     /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
@@ -18888,10 +18903,8 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
-            let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
             bindings.retain(|binding| {
-                present_peers.contains(&binding.peer_id)
-                    && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                peer_has_live_consensus_key(world, &binding.peer_id, block_height)
             });
             bindings.sort_by(|lhs, rhs| {
                 lhs.validator
@@ -19208,6 +19221,9 @@ impl State {
         )?;
         envelope.verify_with_quorum(quorum)?;
         self.verify_lane_relay_qc(envelope, &committee)?;
+        if let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
+            return Err(error);
+        }
         envelope.verify_fastpq_proof_material()?;
 
         let inserted = {
@@ -31133,7 +31149,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31181,7 +31197,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31220,7 +31236,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31250,7 +31266,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31288,7 +31304,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31317,7 +31333,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31348,7 +31364,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31393,7 +31409,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31429,7 +31445,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31472,7 +31488,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31508,7 +31524,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31564,7 +31580,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31628,7 +31644,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31678,7 +31694,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31723,7 +31739,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31758,7 +31774,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31801,7 +31817,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31902,7 +31918,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31966,7 +31982,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -40722,8 +40738,7 @@ mod tests {
                 MintRequestCanceledAt[sequence] = canceled_at_ms;
               }
 
-              #[access(read="*", write="*")]
-              kotoage fn run() {
+              fn main() {
                 let ev = trigger_event();
                 let action_key = name("action");
                 let request_id_key = name("request_id");
@@ -40734,19 +40749,19 @@ mod tests {
                 let created_at_ms_key = name("created_at_ms");
                 let expires_at_ms_key = name("expires_at_ms");
 
-                let action = json_get_name(ev, action_key);
+                let action = ev.get_name(action_key);
 
                 if (action == name("create")) {
-                  let request_id = json_get_name(ev, request_id_key);
-                  assert(!contains(MintRequestSequenceById, request_id), "mint request already exists");
+                  let request_id = ev.get_name(request_id_key);
+                  assert(!MintRequestSequenceById.contains(request_id), "mint request already exists");
 
                   let sequence = MintRequestNextSequence + 1;
-                  let fi_id = json_get_name(ev, fi_id_key);
-                  let to_account_id = json_get_account_id(ev, to_account_id_key);
-                  let amount_i64 = json_get_int(ev, amount_i64_key);
-                  let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
-                  let created_at_ms = json_get_int(ev, created_at_ms_key);
-                  let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+                  let fi_id = ev.get_name(fi_id_key);
+                  let to_account_id = ev.get_account_id(to_account_id_key);
+                  let amount_i64 = ev.get_int(amount_i64_key);
+                  let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+                  let created_at_ms = ev.get_int(created_at_ms_key);
+                  let expires_at_ms = ev.get_int(expires_at_ms_key);
 
                   MintRequestNextSequence = sequence;
                   MintRequestSequenceById[request_id] = sequence;
@@ -40893,18 +40908,17 @@ mod tests {
 
         let src = r#"
             seiyaku AliasTransfer {
-              #[access(read="*", write="*")]
-              kotoage fn run() permission(alias_transfer_run) {
+              fn main() {
                 let ev = trigger_event();
-                if (json_get_name(ev, name("kind")) != name("asset_change")) {
+                if (ev.get_name(name("kind")) != name("asset_change")) {
                   return;
                 }
-                if (json_get_name(ev, name("op")) != name("added")) {
+                if (ev.get_name(name("op")) != name("added")) {
                   return;
                 }
-                let dst_domain = json_get_name(ev, name("account_domain"));
-                let dst = json_get_account_id(ev, name("account_id"));
-                let amount = json_get_int(ev, name("amount_i64"));
+                let dst_domain = ev.get_name(name("account_domain"));
+                let dst = ev.get_account_id(name("account_id"));
+                let amount = ev.get_int(name("amount_i64"));
                 if (amount <= 0) {
                   return;
                 }

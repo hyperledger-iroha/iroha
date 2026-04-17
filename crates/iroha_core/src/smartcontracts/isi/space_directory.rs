@@ -739,7 +739,7 @@ mod tests {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::UNIVERSAL,
-            alias: "global".to_string(),
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
@@ -772,7 +772,7 @@ mod tests {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::UNIVERSAL,
-            alias: "global".to_string(),
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
@@ -809,7 +809,7 @@ mod tests {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::UNIVERSAL,
-            alias: "global".to_string(),
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
