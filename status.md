@@ -2,6 +2,12 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: `SYSCALL_NAME_DECODE` reserved-delimiter regression test corrected
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_name_decode_syscall.rs` now exercises `SYSCALL_NAME_DECODE` with `alice@banka` for the reserved-delimiter rejection path. The previous fixture used `not-a-norito-name`, but hyphens are valid `Name` characters and are already accepted across `iroha_data_model`.
+- This keeps the IVM regression aligned with the repository's documented `Name` rules, which only reserve `@`, `#`, and `$`.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test core_host_name_decode_syscall -- --nocapture`
+
 ## 2026-04-17 Follow-up: `koto_compile` smoke fixture restored to current ZK semantics
 - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/10_meta_header.ko` now uses `poseidon2(1, 2)` alongside `setvl(8)` so the example actually emits both ZK and vector opcodes under the current compiler. The previous `assert(true)` path lowers to an abort syscall and no longer satisfies `meta { zk: true; }`.
 - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/README.md` now describes the example in the same terms, so the documented fixture matches the compiler behavior and the CLI smoke tests again compile successfully.
