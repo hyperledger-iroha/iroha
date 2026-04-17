@@ -2,7 +2,6 @@
 use std::{collections::BTreeSet, convert::TryFrom};
 
 use iroha_crypto::{Algorithm, Hash, PublicKey};
-use mv::storage::StorageReadOnly;
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -30,6 +29,7 @@ use iroha_data_model::{
     query::error::FindError,
     transaction::{PrivateKaigiAction, PrivateKaigiTemplate, PrivateKaigiTransaction},
 };
+use mv::storage::StorageReadOnly;
 use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
 
 use crate::{
