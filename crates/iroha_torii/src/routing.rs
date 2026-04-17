@@ -159,7 +159,7 @@ use iroha_sccp::{
     sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
     summarize_sccp_message_transparent_open_verify_proof_from_artifact,
     verify_burn_bundle_structure, verify_governance_bundle_structure,
-    verify_message_bundle_structure,
+    verify_message_bundle_structure, verify_sccp_payload_structure,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -4595,14 +4595,26 @@ fn sccp_internal_error(message: impl Into<String>) -> Error {
 }
 
 fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
-    let trimmed = value.trim_start_matches("0x");
-    let bytes = hex::decode(trimmed)
-        .map_err(|err| sccp_bad_request(format!("invalid message_id: {err}")))?;
-    if bytes.len() != 32 {
-        return Err(sccp_bad_request("message_id must be 32 bytes"));
+    let value = value.trim();
+    let trimmed = value.strip_prefix("0x").unwrap_or(value);
+    if trimmed.len() != 64 {
+        return Err(sccp_bad_request(
+            "message_id must be lowercase 32-byte hex with optional 0x prefix",
+        ));
+    }
+    if !trimmed
+        .as_bytes()
+        .iter()
+        .copied()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(sccp_bad_request(
+            "message_id must be lowercase 32-byte hex with optional 0x prefix",
+        ));
     }
     let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
+    hex::decode_to_slice(trimmed, &mut out)
+        .map_err(|err| sccp_bad_request(format!("invalid message_id: {err}")))?;
     Ok(out)
 }
 
@@ -6646,6 +6658,12 @@ pub fn publish_sccp_message_bundle(
     height: u64,
     payload: SccpPayloadV1,
 ) -> Result<NexusSccpMessageProofV1> {
+    if !verify_sccp_payload_structure(&payload) {
+        return Err(sccp_bad_request(
+            "SCCP message payload failed structural verification",
+        ));
+    }
+
     let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
     let commitment = SccpHubCommitmentV1 {
