@@ -267,6 +267,36 @@ with runtime-supplied `authority` / `private_key` JSON fields on supported
 routes such as contract, governance, onboarding, faucet, subscription, and
 submit-and-wait flows.
 
+### Musubi Package Registry Tools
+
+Musubi is exposed through curated `iroha.musubi.*` tools and first-class Torii
+routes under `/v1/musubi/*`.
+
+Read tools:
+- `iroha.musubi.search`: flat `query`, optional `namespace`,
+  `include_yanked`, `offset`, and `limit` fields.
+- `iroha.musubi.release.get`: `package = "namespace/name@version"`.
+- `iroha.musubi.package.releases`: `package = "namespace/name"` plus optional
+  `include_yanked`.
+- `iroha.musubi.package.versions`: `package = "namespace/name"`.
+- `iroha.musubi.alias.resolve`: `alias = "<short-name>"`.
+
+Instruction-builder tools:
+- `iroha.musubi.instructions.publish_release`
+- `iroha.musubi.instructions.yank_release`
+- `iroha.musubi.instructions.set_alias`
+- `iroha.musubi.instructions.assert_release_exists`
+
+The Musubi instruction builders are pre-signing helpers only. They never accept
+`authority`, `private_key`, or bearer-token material. Each returns `wire_id`,
+`instruction_base64`, `instruction_hex`, and an `instruction_json` preview. The
+caller must assemble and sign a transaction locally, then submit it with
+`iroha.transactions.submit_and_wait`.
+
+Musubi package names intentionally do not use a leading `@`. Use
+`namespace/name` and `namespace/name@version` literals such as
+`dex.universal/swap-core` and `dex.universal/swap-core@1.2.3`.
+
 ## Tool Result Contract
 `tools/call` returns a JSON-RPC `result` object with MCP tool semantics:
 - `content`: text summary array

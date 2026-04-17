@@ -1,6 +1,6 @@
 ---
 name: sora-taira-testnet
-description: "Work against the SORA Taira testnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, and transaction workflows. Use when Codex needs to inspect or mutate the Taira testnet, verify or add `https://taira.sora.org/v1/mcp`, prefer the curated `iroha.*` tool surface, classify Taira ingress and chain-health failures correctly, or handle runtime-only signing inputs such as `authority` and `private_key`."
+description: "Work against the SORA Taira testnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, Musubi package-registry, and transaction workflows. Use when Codex needs to inspect or mutate the Taira testnet, verify or add `https://taira.sora.org/v1/mcp`, prefer the curated `iroha.*` tool surface, classify Taira ingress and chain-health failures correctly, or handle runtime-only signing inputs such as `authority` and `private_key`."
 ---
 
 # SORA Taira Testnet
@@ -87,6 +87,12 @@ the caller.
    only when `/v1/app-api/cid/<cid>` is stable `200` and
    `/v1/sorafs/capacity/state` shows `declaration_count >= 1`. Mixed `200` /
    `404` reads or zero declarations are rollout health problems, not a bad CID.
+10. For Musubi package-registry writes, use the pre-signing helpers only:
+    `iroha.musubi.instructions.publish_release`,
+    `iroha.musubi.instructions.yank_release`,
+    `iroha.musubi.instructions.set_alias`, and
+    `iroha.musubi.instructions.assert_release_exists`. They return unsigned
+    Norito-framed instructions; sign and submit them from the client side.
 
 ## Public-Node Diagnostics
 
@@ -215,6 +221,38 @@ instead of lower-level polling:
   "signed_tx_base64": "<base64-encoded SignedTransaction>",
   "status_accept": "application/json",
   "timeout_ms": 120000
+}
+```
+
+### Inspect Musubi packages
+
+Use the curated Musubi tools for package reads:
+
+- `iroha.musubi.search` with `query`, optional `namespace`, `include_yanked`,
+  `offset`, and `limit`
+- `iroha.musubi.release.get` with `package = "namespace/name@version"`
+- `iroha.musubi.package.releases` with `package = "namespace/name"` and
+  optional `include_yanked`
+- `iroha.musubi.package.versions` with `package = "namespace/name"`
+- `iroha.musubi.alias.resolve` with `alias = "<short-name>"`
+
+Musubi namespaces intentionally do not use a leading `@`; use literals like
+`universal`, `dex.universal`, and `dex.universal/swap-core`.
+
+### Build Musubi instructions for local signing
+
+The Musubi instruction tools do not accept `authority`, `private_key`, bearer
+tokens, or any other signing material. They return `wire_id`,
+`instruction_base64`, `instruction_hex`, and an `instruction_json` preview.
+The client must assemble a signed transaction locally and submit it with
+`iroha.transactions.submit_and_wait`.
+
+Example yank instruction payload:
+
+```json
+{
+  "package": "dex.universal/swap-core@1.2.3",
+  "reason": "superseded"
 }
 ```
 

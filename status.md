@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: iroha_core routing compile fix
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/block.rs`
+  now passes the block-scoped `WorldBlock` directly into state-aware lane
+  routing during transaction recording instead of calling a nonexistent
+  `WorldBlock::view()` method.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/queue.rs`
+  re-exports `evaluate_policy_with_catalog_and_world`, and stale
+  `evaluate_policy_with_catalog` imports were removed from block/transaction
+  validation code.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core`
+
 ## 2026-04-17 Follow-up: iroha_config fixture regressions
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now validates `default_account_domain_label` during `Root::parse()` without
