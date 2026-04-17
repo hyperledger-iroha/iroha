@@ -2,6 +2,71 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: DA/RBC reduced-fanout closure and Torii DA spool batching
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now refreshes RBC session progress after RS16 reconstruction before making
+  READY deferral decisions, so `data`/`data_plus_one` initial fanout can emit
+  READY once enough shards reconstruct the full payload instead of relying on
+  a stale pre-reconstruction chunk count.
+- RBC outbound chunk dispatch now records planned, posted, and skipped initial
+  chunk targets through
+  `sumeragi_rbc_initial_chunk_targets_total{encoding,fanout,outcome}`. The
+  metric is emitted only for initial session broadcasts, not later full
+  payload rebroadcasts.
+- Torii signed-query fanout now decides the fanout/proxy route by borrowing the
+  signed query first, then consumes the signed request exactly once on the
+  chosen path. This keeps the no-clone hot path compiling with the by-value
+  verification API.
+- `/v1/da/ingest` now batches replay cursor, manifest, PDP commitment,
+  commitment bundle, pin intent, receipt, and Taikai spool writes into a
+  bounded async worker. The handler awaits the worker acknowledgement before
+  returning `202 Accepted`, preserving the existing durability contract while
+  moving the blocking disk writes off the request task. The queue and batch
+  sizes are configurable as `torii.da_ingest.spool_queue_capacity` and
+  `torii.da_ingest.spool_batch_max`.
+- New Torii DA spool metrics expose batch outcomes, artifact outcomes, queue
+  depth, and batch write latency via `torii_da_spool_batches_total`,
+  `torii_da_spool_artifacts_total`, `torii_da_spool_queue_depth`, and
+  `torii_da_spool_batch_write_ms`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha_torii da_spooler_executes_batch_before_ack -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry --lib rbc_initial_chunk_target_metrics_record_outcomes -- --nocapture`
+  - `cargo test -p iroha_core --lib rs16_initial_chunk_indices_are_reconstructable_and_deterministic -- --nocapture`
+
+## 2026-04-17 Follow-up: Musubi source archive plans and graph locking
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
+  now writes lockfile v3 entries with transitive dependency graph edges,
+  deterministic package-key function prefixes, per-node source archive plans,
+  and direct/root dependency markers. `install` resolves full release records
+  recursively, rejects yanked transitive dependencies, and `build` rewrites
+  dependency-local aliases before prefixing linked library functions.
+- Musubi source hashing and SoraFS CAR planning now share the same source file
+  collector, so ignored paths such as `Musubi.lock`, `.musubi`, `.git`, and
+  `target` cannot drift between the archive hash and generated CAR/manifest.
+  `pack` can emit the source plan, and `publish` writes default artifacts under
+  `.musubi/dist/<namespace>/<name>/<version>/`, rejects digest-only archive
+  submissions, optionally calls Torii `/v1/sorafs/storage/pin` with `--upload`,
+  and publishes releases with source archive plans.
+- `musubi cache fetch` and `musubi install --fetch` can reconstruct cached
+  sources from a verified provider payload using the lockfile archive plan.
+  Musubi v1 dependency libraries are now function-only during linking; sources
+  with state, trigger, const, kotoba, or other non-function items are rejected.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
+  now maintains Musubi-specific package/release indexes in smart-contract state
+  and refuses to silently retarget an existing short alias to a different
+  package.
+- `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md` documents
+  lockfile v3, source archive plans, cache fetch, default publish artifacts,
+  upload, function-only libraries, and short-alias retarget rejection.
+- Focused validation for this slice:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/musubi.rs crates/iroha_core/src/smartcontracts/isi/musubi.rs crates/musubi/src/cli.rs`
+  - `cargo check -p musubi -p iroha_data_model -p iroha_core --target-dir /tmp/iroha-musubi-gap-check-target`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture` (14 tests)
+  - `cargo test -p iroha_data_model --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture` (12 tests)
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture` (3 tests)
+
 ## 2026-04-17 Follow-up: WSV no-op MV commit gaps closed
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/storage.rs` and
   `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/cell.rs` now restore
@@ -22,16 +87,43 @@ Last updated: 2026-04-17
   now explicitly consumes telemetry-only RBC target labels in non-telemetry
   builds, removing focused-test unused-variable warnings without changing
   runtime behavior.
+- While extending the bench-feature validation, the current dirty tree also
+  needed `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
+  to derive `Copy` for `MusubiSourceChunkPlan`; the type only contains scalar
+  and fixed-byte fields, and the focused Musubi data-model tests now cover the
+  file after that compile-gate fix.
 - Focused validation for this slice:
   - `rustfmt --edition 2024 crates/mv/src/storage.rs crates/mv/src/cell.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/benches/blocks/apply_blocks.rs crates/iroha_core/benches/blocks/apply_blocks_benchmark.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv` (24 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-release-test cargo test -p mv --release` (24 tests)
   - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo check -p iroha_telemetry`
   - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_view_returns_when_view_lock_held -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_view_lock_tests -- --nocapture` (1 test)
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_commit_lock_order_tests -- --nocapture` (2 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-data-model-check cargo check -p iroha_data_model --features bench`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-data-model-check cargo test -p iroha_data_model musubi --lib` (12 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv consistent_with_btreemap -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib block_and_revert -- --nocapture` (3 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib block_hashes -- --nocapture` (10 tests)
   - `cargo fmt --all -- --check`
   - `CARGO_TARGET_DIR=/tmp/iroha-wsv-bench-after cargo bench -p iroha_core --features bench --bench apply_blocks -- state_commit/world_commit_noop_large_world --sample-size 30`
   - Scratch baseline under `/tmp/iroha-wsv-bench-before-src` with old MV
     always-commit behavior:
     `CARGO_TARGET_DIR=/tmp/iroha-wsv-bench-before cargo bench -p iroha_core --features bench --bench apply_blocks -- state_commit/world_commit_noop_large_world --sample-size 30`
+- Additional timing runs with `--measurement-time 10 --warm-up-time 3` showed
+  the local host was noisy: current-tree point estimates were 421.11 us,
+  491.19 us, and 381.38 us; scratch old-MV point estimates were 614.09 us and
+  380.29 us. Including the earlier 30-sample comparison, the current-tree
+  median point estimate remains lower than the old-MV median point estimate
+  (426.96 us vs 490.40 us, about 12.9%), but the ranges overlap enough that
+  this should be treated as directional evidence rather than a quiet-machine
+  performance claim.
+- Direct Criterion binary runs avoided Cargo rebuild overhead and were more
+  stable. Three current-tree runs measured 408.17 us, 387.47 us, and 393.56 us
+  point estimates; three old-MV scratch-binary runs measured 440.79 us,
+  427.45 us, and 468.06 us. The direct-run median point estimate is 393.56 us
+  for the current tree vs 440.79 us for the old-MV scratch baseline, about
+  10.7% faster for `state_commit/world_commit_noop_large_world`.
 
 ## 2026-04-17 Follow-up: Norito chain benchmark corpus and layout-candidate gaps
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
@@ -202,6 +294,13 @@ Last updated: 2026-04-17
   overflow regressions exercise a lowered runtime limit, and aligns the mock WSV
   permission/NFT/signatory/name fixtures with the current canonical account and
   Norito payload rules.
+- The CoreHost parity closure in
+  `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/core_host.rs`
+  now sends memory and code TLV decode paths through the same pointer-policy
+  enforcement helper and preserves `AbiTypeNotAllowed` instead of falling back
+  to code-literal decode. The existing CoreHost pointer-ABI integration fixture
+  now uses fully qualified NFT domains, and the dirty Musubi source-plan model
+  derives `Copy` only for the all-Copy chunk plan so `ivm --tests` can compile.
 - Focused validation for this slice:
   - `rustfmt --edition 2024 --check crates/ivm/src/ivm.rs crates/ivm/src/gas.rs crates/ivm/benches/bench_vm.rs`
   - `rustfmt --edition 2024 crates/ivm/src/host.rs crates/ivm/src/memory.rs crates/ivm/src/mock_wsv.rs`
@@ -222,6 +321,13 @@ Last updated: 2026-04-17
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo test -p ivm --lib` (262 tests)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo check -p ivm --tests --message-format short`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-bench cargo bench -p ivm --features bench --bench bench_vm -- ivm_run_straight_line_simple`
+  - `rustfmt --edition 2024 crates/ivm/src/core_host.rs crates/ivm/tests/core_host_pointer_abi.rs crates/iroha_data_model/src/musubi.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm core_host_expect_tlv_enforces_pointer_policy --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm core_host_decode_any_region_enforces_pointer_policy --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm core_host --lib -- --nocapture` (12 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm --test core_host_pointer_abi -- --nocapture` (11 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo test -p ivm --lib` (264 tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-corehost-gap-target cargo check -p ivm --tests --message-format short`
 - Quick benchmark smoke results in this environment:
   `ivm_run_straight_line_simple_8` measured about 92.6-93.3 ms and
   `ivm_run_straight_line_simple_64` measured about 92.9-93.0 ms. Treat these

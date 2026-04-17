@@ -56,7 +56,10 @@ fn string_deserialize_without_ctx_preserves_full_bytes() {
     let s = String::from_utf8(raw.clone()).expect("valid utf8");
 
     let mut payload = Vec::new();
-    s.serialize(&mut payload).expect("serialize string");
+    {
+        let _guard = DecodeFlagsGuard::enter(0);
+        s.serialize(&mut payload).expect("serialize string");
+    }
     let archived = core::archived_from_slice_unchecked::<String>(&payload);
     let decoded = <String as NoritoDeserialize>::deserialize(archived.archived());
     assert_eq!(decoded.as_bytes(), s.as_bytes());

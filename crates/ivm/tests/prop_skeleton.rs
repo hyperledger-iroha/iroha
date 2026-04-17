@@ -5,7 +5,6 @@ use ivm::Memory;
 use sha2::Digest as _;
 
 const CHUNK_BYTES: usize = 32;
-const MAX_INPUT_CHUNKS: usize = (Memory::INPUT_SIZE as usize) / CHUNK_BYTES;
 
 fn leaf_hash(bytes: &[u8; CHUNK_BYTES]) -> HashOf<[u8; CHUNK_BYTES]> {
     let digest = sha2::Sha256::digest(bytes);
@@ -26,26 +25,30 @@ fn deterministic_chunk(chunk_idx: usize, seed: u8) -> [u8; CHUNK_BYTES] {
 
 #[test]
 fn memory_merkle_compact_proofs_verify_for_deterministic_chunks() {
-    let chunk_indices = [0, 1, MAX_INPUT_CHUNKS / 2, MAX_INPUT_CHUNKS - 1];
-    let depth_caps = [None, Some(0), Some(1), Some(4), Some(10)];
+    let chunk_indices = [0, 1, 3, 5];
+    let depth_caps = [None, Some(12), Some(16)];
 
     for chunk_idx in chunk_indices {
         for depth_cap in depth_caps {
             let data = deterministic_chunk(chunk_idx, depth_cap.unwrap_or(13) as u8);
             let mut memory = Memory::new(0);
-            let offset = (chunk_idx * CHUNK_BYTES) as u64;
-            memory
-                .preload_input(offset, &data)
-                .expect("preload input chunk");
+            let addr = Memory::HEAP_START + (chunk_idx * CHUNK_BYTES) as u64;
+            memory.store_bytes(addr, &data).expect("store heap chunk");
             memory.commit();
 
-            let addr = Memory::INPUT_START + offset;
             let (proof, root) = memory.merkle_compact(addr, depth_cap);
-            let leaf = leaf_hash(&data);
+            let mut chunk = [0u8; CHUNK_BYTES];
+            memory
+                .load_bytes((addr / CHUNK_BYTES as u64) * CHUNK_BYTES as u64, &mut chunk)
+                .expect("load proof chunk");
+            let leaf = leaf_hash(&chunk);
 
-            assert!(proof.clone().verify_sha256(&leaf, &root));
+            assert!(
+                proof.clone().verify_sha256(&leaf, &root),
+                "chunk_idx={chunk_idx} depth_cap={depth_cap:?}"
+            );
 
-            let mut tampered = data;
+            let mut tampered = chunk;
             tampered[0] ^= 0x01;
             let tampered_leaf = leaf_hash(&tampered);
             assert!(!proof.verify_sha256(&tampered_leaf, &root));

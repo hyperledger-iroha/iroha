@@ -5231,21 +5231,22 @@ macro_rules! impl_tuple {
                 // defaults as the bare codec path (packed seq/struct and
                 // compact lengths when enabled). This keeps nested encodings
                 // like `Vec<u8>` consistent with the decoder's expectations.
-                let __current = get_decode_flags();
                 let __defaults = default_encode_flags();
                 let __dynamic_mask = header_flags::PACKED_SEQ;
                 let __static_defaults = __defaults & !__dynamic_mask;
-                let __merged = if __current == 0 {
-                    __defaults
-                } else {
-                    let __current_dynamic = __current & __dynamic_mask;
-                    let __current_static = __current & !__dynamic_mask;
-                    let __effective_static = if __current_static == 0 {
-                        __static_defaults
-                    } else {
-                        __current_static | __static_defaults
-                    };
-                    __current_dynamic | __effective_static
+                let __merged = match current_decode_flags_effective() {
+                    None => __defaults,
+                    Some(0) => 0,
+                    Some(__current) => {
+                        let __current_dynamic = __current & __dynamic_mask;
+                        let __current_static = __current & !__dynamic_mask;
+                        let __effective_static = if __current_static == 0 {
+                            __static_defaults
+                        } else {
+                            __current_static | __static_defaults
+                        };
+                        __current_dynamic | __effective_static
+                    }
                 };
                 let __guard = DecodeFlagsGuard::enter_with_hint(__merged, __merged);
                 // Use a small stack-backed buffer to avoid heap traffic for

@@ -599,7 +599,10 @@ fn index_published_release(
 }
 
 fn package_release_index_key(package: &MusubiPackageId) -> Name {
-    storage_key(PACKAGE_RELEASE_INDEX_PREFIX, package.canonical_name().as_bytes())
+    storage_key(
+        PACKAGE_RELEASE_INDEX_PREFIX,
+        package.canonical_name().as_bytes(),
+    )
 }
 
 fn release_key(package: &MusubiPackageRef) -> Name {
@@ -642,9 +645,8 @@ fn decode_release_for_instruction(bytes: &[u8]) -> Result<MusubiRelease, Error> 
 
 fn decode_package_id_for_instruction(bytes: &[u8]) -> Result<MusubiPackageId, Error> {
     let mut cursor = bytes;
-    let package = MusubiPackageId::decode(&mut cursor).map_err(|_| {
-        Error::InvariantViolation("stored Musubi short alias is malformed".into())
-    })?;
+    let package = MusubiPackageId::decode(&mut cursor)
+        .map_err(|_| Error::InvariantViolation("stored Musubi short alias is malformed".into()))?;
     if cursor.is_empty() {
         Ok(package)
     } else {

@@ -970,7 +970,7 @@ mod tests {
         let seeds = [0_u8, 1, 2, 3, 7, 31, 63, 127, 128, 191, 255];
 
         for &seed in &seeds {
-            for &(label, _) in VECTOR_SINGLE_DOMAINS {
+            for (label, _) in VECTOR_SINGLE_DOMAINS {
                 let _guard = default_domain_guard(Some("default"));
                 let _domain = domain_id(label);
                 let account = AccountId::new(ed25519_pk_with(seed));
