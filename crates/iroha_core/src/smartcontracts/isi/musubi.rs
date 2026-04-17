@@ -684,7 +684,22 @@ fn invalid_parameter(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, sorafs::pin_registry::ManifestDigest};
+    use iroha_data_model::{
+        account::AccountId,
+        block::BlockHeader,
+        musubi::{MusubiArchiveRef, MusubiDappLink, MusubiShortAlias},
+        nexus::DataSpaceId,
+        smart_contract::{ContractAddress, ContractAlias},
+        sorafs::pin_registry::ManifestDigest,
+    };
+    use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
+    use nonzero_ext::nonzero;
+
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
 
     #[test]
     fn storage_key_is_stable_and_name_safe() {
@@ -726,5 +741,147 @@ mod tests {
         );
 
         assert_eq!(decode_release_lossy(&release.encode()), Some(release));
+    }
+
+    #[test]
+    fn short_alias_retarget_to_different_package_is_rejected() {
+        let state = test_state();
+        let authority = publisher();
+        let first = sample_release("dex.universal/swap-core@1.0.0");
+        let second = sample_release("dex.universal/router@1.0.0");
+        let alias = "swap".parse().expect("alias");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        grant_short_alias_permission(&mut tx, &authority);
+        seed_published_release(&mut tx, first.clone());
+        seed_published_release(&mut tx, second.clone());
+
+        SetMusubiShortAlias::new(MusubiShortAlias::new(
+            alias.clone(),
+            first.package.package.clone(),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("initial alias set");
+        let err =
+            SetMusubiShortAlias::new(MusubiShortAlias::new(alias, second.package.package.clone()))
+                .execute(&authority, &mut tx)
+                .expect_err("retarget rejected");
+
+        assert!(err.to_string().contains("already targets"));
+    }
+
+    #[test]
+    fn short_alias_requires_active_release() {
+        let state = test_state();
+        let authority = publisher();
+        let mut release = sample_release("dex.universal/legacy@0.9.0");
+        release.yank("superseded", 42);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        grant_short_alias_permission(&mut tx, &authority);
+        seed_published_release(&mut tx, release.clone());
+
+        let err = SetMusubiShortAlias::new(MusubiShortAlias::new(
+            "legacy".parse().expect("alias"),
+            release.package.package,
+        ))
+        .execute(&authority, &mut tx)
+        .expect_err("inactive release rejected");
+
+        assert!(err.to_string().contains("no active releases"));
+    }
+
+    #[test]
+    fn dapp_link_rejects_missing_contract_alias() {
+        let state = test_state();
+        let alias: ContractAlias = "router::dex.universal".parse().expect("alias");
+        let release = sample_dapp_release("dex.universal/swap-core@1.0.0", alias);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
+        let mut block = state.block(header);
+        let tx = block.transaction();
+
+        let err = ensure_dapp_contracts_exist(&release, &tx).expect_err("missing alias rejected");
+
+        assert!(err.to_string().contains("unknown or expired"));
+    }
+
+    #[test]
+    fn dapp_link_accepts_active_contract_alias() {
+        let state = test_state();
+        let authority = publisher();
+        let alias: ContractAlias = "router::dex.universal".parse().expect("alias");
+        let release = sample_dapp_release("dex.universal/swap-core@1.0.0", alias.clone());
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .bind_contract_alias(&contract_address, alias, None, None, 1_000)
+            .expect("bind contract alias");
+
+        ensure_dapp_contracts_exist(&release, &tx).expect("active alias accepted");
+    }
+
+    fn test_state() -> State {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        State::new_for_testing(World::default(), kura, query)
+    }
+
+    fn publisher() -> AccountId {
+        let keypair = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn grant_short_alias_permission(
+        tx: &mut crate::state::StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) {
+        tx.world
+            .add_account_permission(authority, CanSetMusubiShortAlias.into());
+    }
+
+    fn seed_published_release(
+        tx: &mut crate::state::StateTransaction<'_, '_>,
+        release: MusubiRelease,
+    ) {
+        tx.world
+            .smart_contract_state
+            .insert(release_key(&release.package), release.encode());
+        index_published_release(&release, tx);
+    }
+
+    fn sample_release(raw: &str) -> MusubiRelease {
+        MusubiRelease::new(
+            raw.parse().expect("package"),
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 10, 1),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            None,
+            publisher(),
+            0,
+        )
+    }
+
+    fn sample_dapp_release(raw: &str, alias: ContractAlias) -> MusubiRelease {
+        let package: MusubiPackageRef = raw.parse().expect("package");
+        let dapp =
+            MusubiDappLink::new(package.package.namespace.clone(), vec![alias]).expect("dapp link");
+        MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([3; 32]), [4; 32], 10, 1),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            Some(dapp),
+            publisher(),
+            0,
+        )
     }
 }

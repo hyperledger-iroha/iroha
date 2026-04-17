@@ -6,13 +6,16 @@ Latest sync (2026-04-17 Musubi live gateway fetch and registry integration):
 Musubi now hydrates lockfile sources from live SoraFS gateway providers as well
 as local provider payloads. Gateway provider specs are runtime-only inputs,
 package/manifest scoped for multi-package fetches, and cannot be mixed with
-`--provider-payload`. A 4-peer integration smoke now covers the on-chain
-registry path for publish, dependency recording, search/list queries, short
-aliases, and yanking from another peer.
+`--provider-payload`. Gateway URLs are HTTPS by default, with an explicit
+loopback-only `--gateway-allow-insecure-localhost` escape hatch for local
+testing. 4-peer integration smokes now cover the on-chain registry path for
+genesis and post-genesis publish, dependency recording, search/list queries,
+short aliases, and yanking from another peer.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/Cargo.toml`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/musubi_registry.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
@@ -483,21 +486,25 @@ entries.
   - only feature-split the SoraNet relay/VPN QUIC tool binaries if operators
     agree that default full-workspace tests can skip those executable targets
 
-Latest sync (2026-04-17 Torii core latency fast paths):
+Latest sync (2026-04-17 Torii core latency fast paths and profiling gap closure):
 Torii now removes avoidable work from the `/transaction` and `/query` hot
 paths. Signed query verification returns the authenticated payload directly,
 accepted transaction lane-admission metrics and snapshot-query metrics record
 through direct telemetry helpers, and the API rate limiter uses sharded
 short-held locks instead of one global async mutex. An ignored release-mode
-load profile now samples those paths inside the Torii library test harness, and
-an ignored four-peer HTTP smoke now exercises signed `FindParameters` queries
-and transaction submissions through real Torii sockets.
+load profile now samples those paths inside the Torii library test harness.
+The profiling gap follow-up adds shared `torii_profile` summary output,
+route-stage telemetry, Criterion hot-path coverage, and an ignored four-peer
+HTTP profile that separates submit-only latency from submit-to-commit latency.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/profile_stats.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/limits.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/benches/torii_hot_paths.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_telemetry/src/metrics.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
@@ -505,44 +512,59 @@ and transaction submissions through real Torii sockets.
 - validation status:
   - touched Rust files were formatted with direct `rustfmt --edition 2024`
   - isolated-target validation passed:
-    `cargo test -p iroha_torii --features telemetry --lib --target-dir
-    /tmp/iroha-torii-gap-target signed_query_verification_tests --
+    `cargo check -p iroha_core --features telemetry --lib --target-dir
+    /tmp/iroha-torii-profile-core-check`
+  - isolated-target validation passed:
+    `cargo check -p iroha_torii --features telemetry,bench --bench
+    torii_hot_paths --target-dir /tmp/iroha-torii-profile-bench-check`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib profile_stats
+    --target-dir /tmp/iroha-torii-profile-tests -- --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_core --features telemetry --lib
+    direct_torii_route_stage_metric_records_without_actor --target-dir
+    /tmp/iroha-torii-profile-core-check -- --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib
+    signed_query_verification_tests --target-dir
+    /tmp/iroha-torii-profile-tests --
     --nocapture`
   - isolated-target validation passed:
-    `cargo test -p iroha_torii --features telemetry --lib --target-dir
-    /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
-  - isolated-target validation passed:
-    `cargo test -p iroha_torii --lib --target-dir
-    /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently --
-    --nocapture`
-  - isolated-target validation passed:
-    `cargo test -p iroha_core --features telemetry --lib --target-dir
-    /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
+    `cargo test -p iroha_torii --features telemetry --lib
+    lane_admission_latency_tests --target-dir /tmp/iroha-torii-profile-tests
+    -- --nocapture`
   - release-mode load profiling passed:
     `cargo test -p iroha_torii --features telemetry --release --lib
-    --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile --
-    --ignored --nocapture`
-  - ignored four-peer HTTP load smoke passed:
-    `cargo test -p integration_tests --test core_api
+    --target-dir /tmp/iroha-torii-profile-release torii_hot_path_load_profile
+    -- --ignored --nocapture`
+  - ignored four-peer HTTP/finality profile passed:
+    `cargo test -p integration_tests --release --test torii_load_profile
     torii_http_hot_path_load_profile --target-dir
-    /tmp/iroha-torii-http-load-target -- --ignored --nocapture`
-  - `cargo check -p iroha_core --lib --target-dir
-    /tmp/iroha-torii-gap-plan-core-check`
-  - profile sample on this host: signed-query verify p50/p95/p99
-    1.500/1.625/1.792 us; Norito `FindAbiVersion` query handling with direct
-    metrics 27.792/47.417/66.333 us; Norito `FindParameters` query handling
-    with direct metrics 29.166/48.375/57.333 us; transaction admission with
-    direct metrics 79.750/86.042/106.958 us; concurrent distinct-key pre-auth
-    limiter 0.500/1.125/3.792 us; concurrent same-key pre-auth limiter
-    0.250/1.458/13.875 us
-  - HTTP smoke sample on this host: `FindParameters` query p50/p95/p99
-    14.075/16.102/16.401 ms; transaction submit p50/p95/p99
-    11.067/13.271/13.804 ms
-  - `git diff --check` passed for the Torii/integration/status/roadmap files
-    touched in this slice
+    /tmp/iroha-torii-profile-release -- --ignored --nocapture`
+  - short Criterion smoke passed:
+    `cargo bench -p iroha_torii --features bench,telemetry --bench
+    torii_hot_paths --target-dir /tmp/iroha-torii-profile-release --
+    --sample-size 10 --warm-up-time 1 --measurement-time 1`
+  - `git diff --check` passed for the Torii profiling, integration-profile,
+    telemetry, status, and roadmap files touched in this slice
+  - in-process profile sample on this host: signed-query verify p50/p95/p99/p999
+    1.541/1.667/1.792/23.250 us; Norito `FindParameters` query handling
+    18.292/67.625/90.083/108.041 us; transaction admission
+    87.834/133.708/197.792/246.834 us; distinct-key limiter
+    0.667/1.416/5.166/34.292 us; same-key limiter
+    0.167/2.292/16.833/59.458 us
+  - HTTP profile sample on this host: `FindParameters` query p50/p95/p99
+    1.272/1.663/1.886 ms; transaction submit p50/p95/p99
+    0.836/1.098/1.203 ms; submit-to-commit p50/p95/p99
+    4.058/5.546/5.546 s
+  - Criterion smoke sample on this host: signed-query verify 1.477-1.494 us;
+    `FindParameters` query handling 48.430-67.752 us; transaction admission
+    54.117-55.085 us; distinct-key limiter 358.44-375.34 ns; same-key limiter
+    148.01-149.08 ns
 - open work after this slice:
-  - repeat the HTTP smoke on a quiet host and add higher-volume before/after
-    samples before treating the timing numbers as release-grade capacity data
+  - repeat the HTTP/finality profile on a quiet host and add higher-volume
+    before/after samples before treating the timing numbers as release-grade
+    capacity data
   - keep `/status` and `/metrics` actor sync behavior intact while moving only
     pure hot-path observations to direct telemetry helpers
 
