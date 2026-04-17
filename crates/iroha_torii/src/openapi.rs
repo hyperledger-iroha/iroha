@@ -10311,6 +10311,7 @@ fn openapi_schemas() -> Map {
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
                         "instructions": {
                             "type": "array",
                             "items": { "type": "object" }
@@ -10334,6 +10335,7 @@ fn openapi_schemas() -> Map {
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
                         "proposal_id": { "type": "string" },
                         "instructions_hash": { "type": "string" }
                     }
@@ -10400,6 +10402,7 @@ fn openapi_schemas() -> Map {
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
                         "proposal_id": { "type": "string" },
                         "instructions_hash": { "type": "string" }
                     }
@@ -10420,6 +10423,49 @@ fn openapi_schemas() -> Map {
                 "proposal_id": { "type": "string" },
                 "instructions_hash": { "type": "string" },
                 "tx_hash_hex": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigCancelRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigCancelResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "action": { "type": "string" },
+                "target_proposal_id": { "type": "string" },
+                "target_instructions_hash": { "type": "string" },
+                "cancel_proposal_id": { "type": "string" },
+                "cancel_instructions_hash": { "type": "string" },
                 "executed_tx_hash_hex": { "type": "string" },
                 "creation_time_ms": { "type": "integer", "format": "uint64" },
                 "signing_message_b64": { "type": "string" }
