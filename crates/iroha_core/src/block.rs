@@ -512,7 +512,7 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world, routing_ledger},
+    queue::{evaluate_policy_with_catalog_and_world, routing_ledger},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
@@ -6288,7 +6288,7 @@ pub(crate) mod valid {
                                     lane_catalog,
                                     dataspace_catalog,
                                     &accepted,
-                                    &state_block.world.view(),
+                                    &state_block.world,
                                 )
                             })
                             .collect()
@@ -6303,7 +6303,7 @@ pub(crate) mod valid {
                                 lane_catalog,
                                 dataspace_catalog,
                                 &accepted,
-                                &state_block.world.view(),
+                                &state_block.world,
                             )
                         })
                         .collect()
@@ -6318,7 +6318,7 @@ pub(crate) mod valid {
                             lane_catalog,
                             dataspace_catalog,
                             &accepted,
-                            &state_block.world.view(),
+                            &state_block.world,
                         )
                     })
                     .collect()

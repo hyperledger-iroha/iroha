@@ -57,7 +57,7 @@ use crate::{
         LaneIdentityMetadataError,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::{evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world},
+    queue::evaluate_policy_with_catalog_and_world,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
