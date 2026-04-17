@@ -594,6 +594,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
 
     let reserve_account = account_id("reserve-sorafs");
     let reserve_account_label = account_literal(&reserve_account);
+    let asset_definition_arg = xor_asset_id().to_string();
 
     let provider_account = parse_account_literal(alice_account_literal());
     let treasury_account = parse_account_literal(bob_account_literal());
@@ -613,7 +614,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
             "--reserve-account",
             &reserve_account_label,
             "--asset-definition",
-            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            &asset_definition_arg,
         ])
         .output()
         .expect("execute sorafs reserve ledger");
@@ -3719,6 +3720,7 @@ fn da_rent_ledger_emits_transfer_plan() {
     let provider_arg = account_literal(&provider_account);
     let pdp_arg = account_literal(&pdp_account);
     let potr_arg = account_literal(&potr_account);
+    let asset_definition_arg = xor_asset_id().to_string();
 
     let ledger_output = command()
         .args([
@@ -3740,7 +3742,7 @@ fn da_rent_ledger_emits_transfer_plan() {
             "--potr-bonus-account",
             &potr_arg,
             "--asset-definition",
-            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            &asset_definition_arg,
         ])
         .output()
         .expect("failed to execute iroha da rent-ledger");

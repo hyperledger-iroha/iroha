@@ -292,6 +292,10 @@ trait RunContext {
     where
         T: JsonSerialize + ?Sized;
 
+    fn println_data(&mut self, data: impl Display) -> Result<()> {
+        self.println(data)
+    }
+
     fn println(&mut self, data: impl Display) -> Result<()>;
 
     fn client_from_config(&self) -> Client {
@@ -502,6 +506,11 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
         } else {
             writeln!(&mut self.write, "{data}")?;
         }
+        Ok(())
+    }
+
+    fn println_data(&mut self, data: impl Display) -> Result<()> {
+        writeln!(&mut self.write, "{data}")?;
         Ok(())
     }
 }
@@ -7648,6 +7657,15 @@ mod tests {
         assert!(ctx.err_write.is_empty(), "stderr should be empty");
         let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
         assert_eq!(stdout, "hello\n");
+    }
+
+    #[test]
+    fn printjsoncontext_writes_data_lines_to_stdout_in_json_mode() {
+        let mut ctx = test_context(CliOutputFormat::Json);
+        ctx.println_data("input,status").expect("println data");
+        assert!(ctx.err_write.is_empty(), "stderr should be empty");
+        let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
+        assert_eq!(stdout, "input,status\n");
     }
 
     #[test]
