@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 `SYSCALL_NAME_DECODE` reserved-delimiter regression test correction):
+The focused IVM regression for `SYSCALL_NAME_DECODE` now uses `alice@banka`
+for its reserved-delimiter failure case. The old fixture, `not-a-norito-name`,
+was stale because hyphens remain valid `Name` characters; the repository only
+reserves `@`, `#`, and `$`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_name_decode_syscall.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test core_host_name_decode_syscall -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 `koto_compile` smoke fixture restored to current ZK semantics):
 The `10_meta_header.ko` example now uses `poseidon2(1, 2)` instead of
 `assert(true)` for its ZK path, matching the compiler's current behavior where
