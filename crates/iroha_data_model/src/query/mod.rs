@@ -896,6 +896,12 @@ mod model {
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch the active SNS owner for a dataspace alias.
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
+        /// Fetch a Musubi release by exact package reference.
+        FindMusubiReleaseByRef(musubi::prelude::FindMusubiReleaseByRef),
+        /// Fetch all registered versions for a Musubi package id.
+        FindMusubiPackageVersions(musubi::prelude::FindMusubiPackageVersions),
+        /// Fetch a Musubi short alias target package id.
+        FindMusubiShortAliasByName(musubi::prelude::FindMusubiShortAliasByName),
         /// Fetch an account by stable alias.
         FindAccountByAlias(account::prelude::FindAccountByAlias),
         /// Fetch a domain by identifier.
@@ -954,6 +960,12 @@ mod model {
         DaPinIntent(crate::da::pin_intent::DaPinIntentWithLocation),
         /// Verified lane relay payload.
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
+        /// Musubi release payload.
+        MusubiRelease(crate::musubi::MusubiRelease),
+        /// Musubi version list payload.
+        MusubiVersions(Vec<crate::musubi::MusubiVersion>),
+        /// Musubi package id payload.
+        MusubiPackageId(crate::musubi::MusubiPackageId),
         /// Account identifier payload.
         AccountId(AccountId),
         /// Domain payload.
@@ -2481,6 +2493,9 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
+    musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
+    musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
+    musubi::prelude::FindMusubiShortAliasByName => crate::musubi::MusubiPackageId,
     account::prelude::FindAccountByAlias => crate::account::Account,
     domain::prelude::FindDomainById => crate::domain::Domain,
 }
@@ -3612,6 +3627,65 @@ pub mod sns {
     /// Prelude re-exports for SNS queries.
     pub mod prelude {
         pub use super::FindDataspaceNameOwnerById;
+    }
+}
+
+pub mod musubi {
+    //! Musubi package registry query definitions.
+
+    use std::fmt;
+
+    use crate::{
+        musubi::{MusubiPackageId, MusubiPackageRef},
+        name::Name,
+    };
+
+    queries! {
+        /// Fetch a Musubi release by exact package reference.
+        #[repr(transparent)]
+        pub struct FindMusubiReleaseByRef {
+            /// Exact release reference.
+            pub package: MusubiPackageRef,
+        }
+
+        /// Fetch all registered versions for a Musubi package id.
+        #[repr(transparent)]
+        pub struct FindMusubiPackageVersions {
+            /// Canonical package identifier.
+            pub package: MusubiPackageId,
+        }
+
+        /// Fetch the canonical target for a curated Musubi short alias.
+        #[repr(transparent)]
+        pub struct FindMusubiShortAliasByName {
+            /// Curated short alias.
+            pub alias: Name,
+        }
+    }
+
+    impl fmt::Display for FindMusubiReleaseByRef {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi release `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for FindMusubiPackageVersions {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi versions for `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for FindMusubiShortAliasByName {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi short alias `{}`", self.alias)
+        }
+    }
+
+    /// Prelude re-exports for Musubi queries.
+    pub mod prelude {
+        pub use super::{
+            FindMusubiPackageVersions, FindMusubiReleaseByRef, FindMusubiShortAliasByName,
+        };
     }
 }
 

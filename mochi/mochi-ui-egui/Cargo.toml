@@ -10,10 +10,14 @@ description = "Desktop shell for the MOCHI local Iroha network supervisor."
 name = "mochi"
 path = "src/main.rs"
 
+[features]
+default = []
+gui = ["dep:eframe", "dep:egui_plot"]
+
 [dependencies]
 mochi-core = { path = "../mochi-core" }
-eframe = { workspace = true }
-egui_plot = { version = "0.34.0" }
+eframe = { version = "0.33.0", default-features = true, optional = true }
+egui_plot = { version = "0.34.0", optional = true }
 tokio = { workspace = true, features = ["signal"] }
 toml = { workspace = true }
 hex = { workspace = true }

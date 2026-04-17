@@ -8,16 +8,27 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail, eyre};
+use iroha::{
+    client::Client,
+    config::{Config, LoadPath},
+};
 use iroha_data_model::{
+    isi::musubi::{PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease},
     musubi::{
-        MusubiArchiveRef, MusubiDappLink, MusubiNamespace, MusubiPackageId, MusubiPackageName,
-        MusubiPackageRef, MusubiVersion,
+        MusubiArchiveRef, MusubiDappLink, MusubiDependency, MusubiNamespace, MusubiPackageId,
+        MusubiPackageName, MusubiPackageRef, MusubiRelease, MusubiShortAlias, MusubiVersion,
     },
     name::Name,
+    query::musubi::prelude::{
+        FindMusubiPackageVersions, FindMusubiReleaseByRef, FindMusubiShortAliasByName,
+    },
     smart_contract::ContractAlias,
     sorafs::pin_registry::ManifestDigest,
 };
-use ivm::{KotodamaCompiler, kotodama::compiler::CompilerOptions};
+use ivm::{
+    KotodamaCompiler,
+    kotodama::{ast::Item, compiler::CompilerOptions, parser::parse as parse_kotodama},
+};
 
 const DEFAULT_MANIFEST: &str = "Musubi.toml";
 const DEFAULT_LOCKFILE: &str = "Musubi.lock";
@@ -51,8 +62,47 @@ impl Args {
             Command::Pack(args) => args.run(),
             Command::Publish(args) => args.run(),
             Command::Yank(args) => args.run(),
+            Command::Alias(args) => args.run(),
+            Command::Versions(args) => args.run(),
             Command::Info(args) => args.run(),
         }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct ClientArgs {
+    /// Path to the Iroha client configuration file
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+    /// Wait for transaction commit or rejection
+    #[arg(long)]
+    wait: bool,
+}
+
+impl ClientArgs {
+    fn load(&self) -> Result<(Client, iroha_data_model::account::AccountId)> {
+        let load_path = self.config.as_ref().map_or_else(
+            || LoadPath::Default(PathBuf::from("client.toml")),
+            |path| LoadPath::Explicit(path.clone()),
+        );
+        let config = Config::load(load_path)
+            .map_err(|err| eyre!("failed to load Iroha client config: {err:?}"))?;
+        let account = config.account.clone();
+        Ok((Client::new(config), account))
+    }
+
+    fn submit<I>(&self, instruction: I) -> Result<()>
+    where
+        I: Into<iroha_data_model::isi::InstructionBox>,
+    {
+        let (client, _) = self.load()?;
+        let hash = if self.wait {
+            client.submit_blocking(instruction)?
+        } else {
+            client.submit(instruction)?
+        };
+        println!("transaction_hash = {hash}");
+        Ok(())
     }
 }
 
@@ -72,6 +122,10 @@ enum Command {
     Publish(PublishArgs),
     /// Prepare or submit a yank for an existing release
     Yank(YankArgs),
+    /// Resolve or curate a global short alias
+    Alias(AliasArgs),
+    /// List published versions for a package id
+    Versions(VersionsArgs),
     /// Print package manifest information
     Info(ManifestPathArgs),
 }
@@ -188,12 +242,17 @@ impl AddArgs {
 
 #[derive(clap::Args, Debug)]
 struct InstallArgs {
+    #[command(flatten)]
+    client: ClientArgs,
     /// Path to the Musubi package manifest
     #[arg(long, default_value = DEFAULT_MANIFEST)]
     manifest: PathBuf,
     /// Lockfile path to refresh
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
+    /// Do not query the on-chain registry; write an unresolved exact-version lockfile
+    #[arg(long)]
+    offline: bool,
 }
 
 impl InstallArgs {
@@ -201,9 +260,32 @@ impl InstallArgs {
         let manifest = read_manifest(&self.manifest)?;
         validate_dependency_aliases(&manifest)?;
 
-        // TODO: Replace this exact-version lock seed with on-chain registry
-        // resolution once PublishMusubiRelease and release queries are wired.
-        let lockfile = MusubiLockfile::from_manifest(&manifest);
+        let lockfile = if self.offline || manifest.dependencies.is_empty() {
+            MusubiLockfile::from_manifest(&manifest)
+        } else {
+            let (client, _) = self.client.load()?;
+            let mut packages = Vec::with_capacity(manifest.dependencies.len());
+            for dependency in &manifest.dependencies {
+                let release = client
+                    .query_single(FindMusubiReleaseByRef::new(dependency.package.clone()))
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to resolve Musubi dependency `{}`",
+                            dependency.package
+                        )
+                    })?;
+                if !release.status.is_active() {
+                    bail!("Musubi dependency `{}` is yanked", dependency.package);
+                }
+                packages.push(LockedPackage {
+                    alias: dependency.alias.clone(),
+                    package: dependency.package.clone(),
+                    archive: Some(release.archive),
+                    resolved: true,
+                });
+            }
+            MusubiLockfile::new(packages)
+        };
         write_lockfile(&self.lockfile, &lockfile)?;
         println!(
             "validated {} dependencies and wrote {}",
@@ -283,16 +365,23 @@ struct PackArgs {
 impl PackArgs {
     fn run(self) -> Result<()> {
         let manifest = read_manifest(&self.manifest)?;
-        let archive_hash = hash_source_tree(&self.source_root)?;
+        let archive = hash_source_tree(&self.source_root)?;
         println!("package = {}", manifest.package.package_ref());
         println!("source_root = {}", self.source_root.display());
-        println!("archive_hash_blake3_256 = {}", hex::encode(archive_hash));
+        println!(
+            "archive_hash_blake3_256 = {}",
+            hex::encode(archive.archive_hash_blake3_256)
+        );
+        println!("source_bytes = {}", archive.source_bytes);
+        println!("source_file_count = {}", archive.source_file_count);
         Ok(())
     }
 }
 
 #[derive(clap::Args, Debug)]
 struct PublishArgs {
+    #[command(flatten)]
+    client: ClientArgs,
     /// Path to the Musubi package manifest
     #[arg(long, default_value = DEFAULT_MANIFEST)]
     manifest: PathBuf,
@@ -309,24 +398,31 @@ struct PublishArgs {
 
 impl PublishArgs {
     fn run(self) -> Result<()> {
-        if !self.dry_run {
-            // TODO: Submit PublishMusubiRelease after the chain-side registry ISI
-            // and namespace authority checks are added.
-            bail!(
-                "on-chain Musubi publish is not wired yet; use --dry-run for the release payload"
-            );
-        }
         let manifest = read_manifest(&self.manifest)?;
-        let manifest_dir = self.manifest.parent().unwrap_or_else(|| Path::new("."));
+        let manifest_dir = self
+            .manifest
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let archive_stats = hash_source_tree(manifest_dir)?;
         let archive_hash = match self.archive_hash {
             Some(value) => parse_hex_32(&value)?,
-            None => hash_source_tree(manifest_dir)?,
+            None => archive_stats.archive_hash_blake3_256,
         };
         let archive = MusubiArchiveRef::new(
             ManifestDigest::new(parse_hex_32(&self.sorafs_manifest_digest)?),
             archive_hash,
+            archive_stats.source_bytes,
+            archive_stats.source_file_count,
         );
         validate_dapp_link(&manifest)?;
+        if !archive.is_non_empty() {
+            bail!("Musubi releases must include a non-empty source archive");
+        }
+        if manifest.exports.is_empty() {
+            bail!("Musubi releases must export at least one Kotodama function");
+        }
+        validate_exported_functions_exist(manifest_dir, &manifest.exports)?;
 
         println!("package = {}", manifest.package.package_ref());
         println!(
@@ -337,15 +433,32 @@ impl PublishArgs {
             "archive_hash_blake3_256 = {}",
             hex::encode(archive.archive_hash_blake3_256)
         );
+        println!("source_bytes = {}", archive.source_bytes);
+        println!("source_file_count = {}", archive.source_file_count);
         println!("dependencies = {}", manifest.dependencies.len());
         println!("exports = {}", manifest.exports.len());
-        println!("dry_run = true");
+        println!("dry_run = {}", self.dry_run);
+        if !self.dry_run {
+            let (client, account) = self.client.load()?;
+            let release = release_from_manifest(&manifest, archive, account, 0)?;
+            release
+                .validate_publishable()
+                .map_err(|err| eyre!("{}", err.reason()))?;
+            let hash = if self.client.wait {
+                client.submit_blocking(PublishMusubiRelease::new(release))?
+            } else {
+                client.submit(PublishMusubiRelease::new(release))?
+            };
+            println!("transaction_hash = {hash}");
+        }
         Ok(())
     }
 }
 
 #[derive(clap::Args, Debug)]
 struct YankArgs {
+    #[command(flatten)]
+    client: ClientArgs,
     /// Exact package release reference to yank
     package: MusubiPackageRef,
     /// Human-readable yank reason
@@ -358,14 +471,105 @@ struct YankArgs {
 
 impl YankArgs {
     fn run(self) -> Result<()> {
-        if !self.dry_run {
-            // TODO: Submit YankMusubiRelease after the chain-side registry ISI
-            // and namespace authority checks are added.
-            bail!("on-chain Musubi yank is not wired yet; use --dry-run for the yank payload");
-        }
         println!("package = {}", self.package);
         println!("reason = {}", self.reason);
-        println!("dry_run = true");
+        println!("dry_run = {}", self.dry_run);
+        if !self.dry_run {
+            let instruction = YankMusubiRelease::new(self.package, self.reason);
+            self.client.submit(instruction)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct AliasArgs {
+    #[command(subcommand)]
+    command: AliasCommand,
+}
+
+impl AliasArgs {
+    fn run(self) -> Result<()> {
+        match self.command {
+            AliasCommand::Resolve(args) => args.run(),
+            AliasCommand::Set(args) => args.run(),
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum AliasCommand {
+    /// Resolve a curated short alias to its canonical package id
+    Resolve(AliasResolveArgs),
+    /// Bind or update a curated short alias
+    Set(AliasSetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct AliasResolveArgs {
+    #[command(flatten)]
+    client: ClientArgs,
+    /// Curated short alias to resolve
+    alias: Name,
+}
+
+impl AliasResolveArgs {
+    fn run(self) -> Result<()> {
+        let (client, _) = self.client.load()?;
+        let target = client
+            .query_single(FindMusubiShortAliasByName::new(self.alias.clone()))
+            .wrap_err_with(|| format!("failed to resolve Musubi alias `{}`", self.alias))?;
+        println!("alias = {}", self.alias);
+        println!("target = {target}");
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct AliasSetArgs {
+    #[command(flatten)]
+    client: ClientArgs,
+    /// Curated short alias with no namespace prefix
+    alias: Name,
+    /// Canonical package id selected by the alias
+    target: MusubiPackageId,
+    /// Print the alias binding without submitting it
+    #[arg(long)]
+    dry_run: bool,
+}
+
+impl AliasSetArgs {
+    fn run(self) -> Result<()> {
+        let binding = MusubiShortAlias::new(self.alias, self.target);
+        println!("alias = {}", binding.alias);
+        println!("target = {}", binding.target);
+        println!("dry_run = {}", self.dry_run);
+        if !self.dry_run {
+            self.client.submit(SetMusubiShortAlias::new(binding))?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct VersionsArgs {
+    #[command(flatten)]
+    client: ClientArgs,
+    /// Canonical package id to inspect
+    package: MusubiPackageId,
+}
+
+impl VersionsArgs {
+    fn run(self) -> Result<()> {
+        let (client, _) = self.client.load()?;
+        let versions = client
+            .query_single(FindMusubiPackageVersions::new(self.package.clone()))
+            .wrap_err_with(|| format!("failed to list Musubi versions for `{}`", self.package))?;
+        println!("package = {}", self.package);
+        println!("versions = {}", versions.len());
+        for version in versions {
+            println!("  {version}");
+        }
         Ok(())
     }
 }
@@ -411,8 +615,10 @@ impl MusubiManifest {
         self.dependencies
             .sort_by(|left, right| left.alias.cmp(&right.alias));
         self.exports.sort();
+        self.exports.dedup();
         if let Some(dapp) = &mut self.dapp {
             dapp.contracts.sort();
+            dapp.contracts.dedup();
         }
     }
 }
@@ -451,17 +657,23 @@ struct MusubiLockfile {
 }
 
 impl MusubiLockfile {
+    fn new(mut packages: Vec<LockedPackage>) -> Self {
+        packages.sort_by(|left, right| left.alias.cmp(&right.alias));
+        Self { packages }
+    }
+
     fn from_manifest(manifest: &MusubiManifest) -> Self {
-        let mut packages = manifest
+        let packages = manifest
             .dependencies
             .iter()
             .map(|dependency| LockedPackage {
                 alias: dependency.alias.clone(),
                 package: dependency.package.clone(),
+                archive: None,
+                resolved: false,
             })
             .collect::<Vec<_>>();
-        packages.sort_by(|left, right| left.alias.cmp(&right.alias));
-        Self { packages }
+        Self::new(packages)
     }
 }
 
@@ -469,6 +681,8 @@ impl MusubiLockfile {
 struct LockedPackage {
     alias: Name,
     package: MusubiPackageRef,
+    archive: Option<MusubiArchiveRef>,
+    resolved: bool,
 }
 
 fn read_manifest(path: &Path) -> Result<MusubiManifest> {
@@ -652,31 +866,51 @@ fn render_manifest(manifest: &MusubiManifest) -> Result<String> {
 fn render_lockfile(lockfile: &MusubiLockfile) -> Result<String> {
     let mut root = toml::Table::new();
     root.insert("version".to_owned(), toml::Value::Integer(LOCKFILE_VERSION));
-    let packages = lockfile
-        .packages
-        .iter()
-        .map(|package| {
-            let mut table = toml::Table::new();
+    let mut packages = Vec::with_capacity(lockfile.packages.len());
+    for package in &lockfile.packages {
+        let mut table = toml::Table::new();
+        table.insert(
+            "alias".to_owned(),
+            toml::Value::String(package.alias.to_string()),
+        );
+        table.insert(
+            "name".to_owned(),
+            toml::Value::String(package.package.package.to_string()),
+        );
+        table.insert(
+            "version".to_owned(),
+            toml::Value::String(package.package.version.to_string()),
+        );
+        table.insert(
+            "source".to_owned(),
+            toml::Value::String("registry".to_owned()),
+        );
+        table.insert(
+            "resolved".to_owned(),
+            toml::Value::Boolean(package.resolved),
+        );
+        if let Some(archive) = package.archive {
+            let source_bytes = i64::try_from(archive.source_bytes)
+                .map_err(|_| eyre!("source byte count does not fit TOML integer"))?;
             table.insert(
-                "alias".to_owned(),
-                toml::Value::String(package.alias.to_string()),
+                "sorafs_manifest_digest".to_owned(),
+                toml::Value::String(hex::encode(archive.sorafs_manifest.as_bytes())),
             );
             table.insert(
-                "name".to_owned(),
-                toml::Value::String(package.package.package.to_string()),
+                "archive_hash_blake3_256".to_owned(),
+                toml::Value::String(hex::encode(archive.archive_hash_blake3_256)),
             );
             table.insert(
-                "version".to_owned(),
-                toml::Value::String(package.package.version.to_string()),
+                "source_bytes".to_owned(),
+                toml::Value::Integer(source_bytes),
             );
             table.insert(
-                "source".to_owned(),
-                toml::Value::String("registry".to_owned()),
+                "source_file_count".to_owned(),
+                toml::Value::Integer(i64::from(archive.source_file_count)),
             );
-            table.insert("resolved".to_owned(), toml::Value::Boolean(false));
-            toml::Value::Table(table)
-        })
-        .collect::<Vec<_>>();
+        }
+        packages.push(toml::Value::Table(table));
+    }
     root.insert("package".to_owned(), toml::Value::Array(packages));
     toml::to_string_pretty(&toml::Value::Table(root)).map_err(Into::into)
 }
@@ -749,7 +983,99 @@ fn validate_dapp_link(manifest: &MusubiManifest) -> Result<()> {
     Ok(())
 }
 
-fn hash_source_tree(root: &Path) -> Result<[u8; 32]> {
+fn validate_exported_functions_exist(root: &Path, exports: &[Name]) -> Result<()> {
+    if exports.is_empty() {
+        return Ok(());
+    }
+    let defined = collect_kotodama_functions(root)?;
+    if defined.is_empty() {
+        bail!(
+            "Musubi release exports functions but no Kotodama `.ko` source files were found under `{}`",
+            root.display()
+        );
+    }
+    for export in exports {
+        if !defined.contains(export) {
+            bail!(
+                "Musubi export `{export}` is not defined by any Kotodama source under `{}`",
+                root.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn collect_kotodama_functions(root: &Path) -> Result<BTreeSet<Name>> {
+    let root = root
+        .canonicalize()
+        .wrap_err_with(|| format!("failed to canonicalize `{}`", root.display()))?;
+    let mut files = Vec::new();
+    collect_source_files(&root, &root, &mut files)?;
+
+    let mut functions = BTreeSet::new();
+    for relative in files.into_iter().filter(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "ko")
+    }) {
+        let path = root.join(&relative);
+        let source = fs::read_to_string(&path)
+            .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+        let program = parse_kotodama(&source)
+            .map_err(|err| eyre!("failed to parse `{}`: {err}", path.display()))?;
+        for item in program.items {
+            if let Item::Function(function) = item {
+                functions.insert(function.name.parse::<Name>().map_err(|err| {
+                    eyre!(
+                        "Kotodama function `{}` in `{}` is not a valid Musubi export name: {}",
+                        function.name,
+                        path.display(),
+                        err.reason()
+                    )
+                })?);
+            }
+        }
+    }
+    Ok(functions)
+}
+
+fn release_from_manifest(
+    manifest: &MusubiManifest,
+    archive: MusubiArchiveRef,
+    published_by: iroha_data_model::account::AccountId,
+    published_at_ms: u64,
+) -> Result<MusubiRelease> {
+    let dependencies = manifest
+        .dependencies
+        .iter()
+        .map(|dependency| {
+            MusubiDependency::new(dependency.alias.clone(), dependency.package.clone())
+        })
+        .collect();
+    let dapp = manifest
+        .dapp
+        .as_ref()
+        .map(|dapp| MusubiDappLink::new(dapp.namespace.clone(), dapp.contracts.clone()))
+        .transpose()?;
+    Ok(MusubiRelease::new(
+        manifest.package.package_ref(),
+        archive,
+        dependencies,
+        manifest.exports.clone(),
+        dapp,
+        published_by,
+        published_at_ms,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceArchiveStats {
+    archive_hash_blake3_256: [u8; 32],
+    source_bytes: u64,
+    source_file_count: u32,
+}
+
+fn hash_source_tree(root: &Path) -> Result<SourceArchiveStats> {
     let root = root
         .canonicalize()
         .wrap_err_with(|| format!("failed to canonicalize `{}`", root.display()))?;
@@ -759,6 +1085,8 @@ fn hash_source_tree(root: &Path) -> Result<[u8; 32]> {
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(ARCHIVE_DOMAIN_SEPARATOR);
+    let mut source_bytes = 0_u64;
+    let mut source_file_count = 0_u32;
     for relative in files {
         let path = root.join(&relative);
         let bytes =
@@ -770,8 +1098,18 @@ fn hash_source_tree(root: &Path) -> Result<[u8; 32]> {
         hasher.update(b"\0");
         hasher.update(&bytes);
         hasher.update(b"\0");
+        source_bytes = source_bytes
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| eyre!("source archive byte count overflow"))?;
+        source_file_count = source_file_count
+            .checked_add(1)
+            .ok_or_else(|| eyre!("source archive file count overflow"))?;
     }
-    Ok(*hasher.finalize().as_bytes())
+    Ok(SourceArchiveStats {
+        archive_hash_blake3_256: *hasher.finalize().as_bytes(),
+        source_bytes,
+        source_file_count,
+    })
 }
 
 fn collect_source_files(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -928,6 +1266,23 @@ mod tests {
         let second = hash_source_tree(temp.path()).expect("second hash");
 
         assert_eq!(first, second);
+        assert!(first.source_bytes > 0);
+        assert_eq!(first.source_file_count, 2);
+    }
+
+    #[test]
+    fn export_validation_requires_defined_kotodama_function() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join("src")).expect("src dir");
+        fs::write(temp.path().join("src/lib.ko"), "fn quote() {}\n").expect("source");
+
+        validate_exported_functions_exist(temp.path(), &["quote".parse().expect("export")])
+            .expect("export exists");
+        let err =
+            validate_exported_functions_exist(temp.path(), &["swap".parse().expect("export")])
+                .expect_err("missing export");
+
+        assert!(err.to_string().contains("not defined"));
     }
 
     #[test]
@@ -939,7 +1294,7 @@ mod tests {
 
     #[test]
     fn musubi_release_types_are_norito_roundtrip_ready() {
-        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32]);
+        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 10, 1);
         let bytes = archive.encode();
         let mut cursor = bytes.as_slice();
         let decoded = MusubiArchiveRef::decode(&mut cursor).expect("decode archive");

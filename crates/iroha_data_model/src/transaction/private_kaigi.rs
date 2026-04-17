@@ -7,7 +7,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
-use norito::codec::{Decode, DecodeAll, Encode};
+use norito::codec::{Decode, Encode};
 
 #[cfg(feature = "fault_injection")]
 use crate::isi::InstructionBox;
@@ -161,6 +161,7 @@ mod model {
     )]
     #[display("{}", self.hash())]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[norito(decode_from_slice)]
     pub struct PrivateKaigiTransaction {
         /// Unique id of the blockchain. Used for replay protection.
         pub chain: ChainId,
@@ -283,28 +284,7 @@ impl iroha_version::codec::DecodeVersioned for PrivateKaigiTransaction {
             )));
         }
 
-        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
-        let mut cursor = payload;
-        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
-        drop(payload_guard);
-        if cursor.is_empty() {
-            Ok(decoded)
-        } else {
-            Err(Error::NoritoCodec(
-                "PrivateKaigiTransaction payload contains trailing bytes".into(),
-            ))
-        }
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for PrivateKaigiTransaction {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: PrivateKaigiTransaction = norito::codec::Decode::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+        norito::codec::decode_exact_from_slice(payload).map_err(Error::from)
     }
 }
 
@@ -315,6 +295,8 @@ mod tests {
     #[cfg(feature = "fault_injection")]
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::KeyPair;
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+    use norito::core::DecodeFromSlice;
 
     use super::*;
     #[cfg(feature = "fault_injection")]
@@ -394,6 +376,30 @@ mod tests {
         let decoded: PrivateKaigiTransaction =
             norito::codec::decode_adaptive(&bytes).expect("decode private tx");
         assert_eq!(decoded, tx);
+    }
+
+    #[test]
+    fn private_kaigi_transaction_decode_from_slice_rejects_trailing_bytes() {
+        let tx = sample_transaction();
+        let mut bytes = norito::codec::encode_adaptive(&tx);
+        bytes.push(0);
+
+        let err = PrivateKaigiTransaction::decode_from_slice(&bytes)
+            .expect_err("private Kaigi slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn private_kaigi_transaction_versioned_decode_rejects_trailing_bytes() {
+        let tx = sample_transaction();
+        let mut bytes = tx.encode_versioned();
+        bytes.push(0);
+
+        let err = PrivateKaigiTransaction::decode_all_versioned(&bytes)
+            .expect_err("versioned private Kaigi decoder must reject trailing bytes");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
 
     #[test]

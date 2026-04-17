@@ -3606,7 +3606,7 @@ pub struct QueryOptions {
 
 /// Verify a signed query and return the authenticated request payload.
 pub(crate) fn verify_signed_query_request(
-    query: &SignedQuery,
+    query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
     sig.verify(query.payload.authority.signatory(), &query.payload)
@@ -3615,16 +3615,52 @@ pub(crate) fn verify_signed_query_request(
                 "query signature failed verification".to_string(),
             ))
         })?;
-    let bytes = norito::to_bytes(&query.payload).map_err(|error| {
-        Error::from(ValidationFail::InternalError(format!(
-            "failed to encode verified query request payload: {error}"
-        )))
-    })?;
-    norito::decode_from_bytes(&bytes).map_err(|error| {
-        Error::from(ValidationFail::InternalError(format!(
-            "failed to decode verified query request payload: {error}"
-        )))
-    })
+    Ok(query.payload)
+}
+
+#[cfg(test)]
+mod signed_query_verification_tests {
+    use iroha_data_model::{
+        account::AccountId,
+        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+    };
+
+    use super::*;
+
+    fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    #[test]
+    fn verified_signed_query_returns_authenticated_payload() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let signed = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority.clone())
+            .sign(&key_pair);
+
+        let verified = verify_signed_query_request(signed).expect("signed query should verify");
+        let (verified_authority, verified_request) = verified.into_parts();
+
+        assert_eq!(verified_authority, authority);
+        assert!(matches!(
+            verified_request,
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
+        ));
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_mismatched_authority() {
+        let signer = KeyPair::random();
+        let other = KeyPair::random();
+        let mut signed = signed_find_abi_version(&signer);
+        signed.payload.authority = AccountId::new(other.public_key().clone());
+
+        assert!(verify_signed_query_request(signed).is_err());
+    }
 }
 
 /// Execute a previously verified query request with the provided options.
@@ -3737,31 +3773,26 @@ pub(crate) async fn execute_verified_query_with_opts(
     #[cfg(feature = "telemetry")]
     if tel.is_enabled() {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
-        let metrics = tel.metrics().await;
-        metrics
-            .torii_query_snapshot_requests
-            .with_label_values(&[mode_label])
-            .inc();
-        if matches!(resp, QueryResponse::Iterable(_)) {
-            metrics
-                .torii_query_snapshot_first_batch_ms
-                .with_label_values(&[mode_label])
-                .observe(ms);
-        }
+        let first_batch_ms = matches!(resp, QueryResponse::Iterable(_)).then_some(ms);
+        let mut gas_units = [0_u64; 2];
+        let mut gas_count = 0_usize;
         if matches!(mode, LaneCursorMode::Stored) {
             if let Some(units) = opts.gas_units {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
+                gas_units[gas_count] = units;
+                gas_count += 1;
             }
             if let Some(units) = continue_budget {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
+                gas_units[gas_count] = units;
+                gas_count += 1;
             }
         }
+        let _ = tel.with_metrics(|telemetry| {
+            telemetry.observe_torii_query_snapshot(
+                mode_label,
+                first_batch_ms,
+                &gas_units[..gas_count],
+            );
+        });
     }
 
     Ok(resp)
@@ -8992,35 +9023,15 @@ pub async fn handle_transaction(
 }
 
 #[cfg(feature = "telemetry")]
-const TELEMETRY_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-
-#[cfg(feature = "telemetry")]
-async fn observe_lane_admission_latency(
+fn observe_lane_admission_latency(
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
     lane_id: iroha_data_model::nexus::LaneId,
     elapsed_seconds: f64,
 ) {
-    if !telemetry.is_enabled() {
-        return;
-    }
-
-    let Ok(metrics) = tokio::time::timeout(TELEMETRY_SYNC_TIMEOUT, telemetry.metrics()).await
-    else {
-        iroha_logger::warn!(
-            lane = %lane_id.as_u32(),
-            endpoint,
-            timeout_ms = TELEMETRY_SYNC_TIMEOUT.as_millis(),
-            "telemetry sync timed out; skipping lane admission latency record"
-        );
-        return;
-    };
-
-    let lane_label = lane_id.as_u32().to_string();
-    metrics
-        .torii_lane_admission_latency_seconds
-        .with_label_values(&[lane_label.as_str(), endpoint])
-        .observe(elapsed_seconds);
+    let _ = telemetry.with_metrics(|telemetry| {
+        telemetry.observe_torii_lane_admission_latency(endpoint, lane_id, elapsed_seconds);
+    });
 }
 
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -9044,8 +9055,7 @@ pub async fn handle_transaction_with_metrics(
             endpoint,
             decision.lane_id,
             start.elapsed().as_secs_f64(),
-        )
-        .await;
+        );
     }
 
     result
@@ -9057,28 +9067,27 @@ mod lane_admission_latency_tests {
     use iroha_core::telemetry::{StateTelemetry, Telemetry};
     use iroha_data_model::nexus::LaneId;
     use iroha_telemetry::metrics::global_or_default;
-    use tokio::time::timeout;
 
     use super::*;
 
-    #[tokio::test]
-    async fn telemetry_timeout_prevents_hanging_observation() {
+    #[test]
+    fn telemetry_observation_records_without_actor_sync() {
         let metrics = global_or_default();
-        // Do not start the telemetry actor; use a raw handle to simulate a dead channel.
-        let telemetry = Telemetry::from(StateTelemetry::new(metrics, true));
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
+        let histogram = metrics
+            .torii_lane_admission_latency_seconds
+            .with_label_values(&["0", iroha_torii_shared::uri::TRANSACTION]);
+        let before = histogram.get_sample_count();
 
-        timeout(
-            TELEMETRY_SYNC_TIMEOUT.saturating_mul(2),
-            observe_lane_admission_latency(
-                &gate,
-                iroha_torii_shared::uri::TRANSACTION,
-                LaneId::SINGLE,
-                0.0,
-            ),
-        )
-        .await
-        .expect("observation must complete even when telemetry actor is missing");
+        observe_lane_admission_latency(
+            &gate,
+            iroha_torii_shared::uri::TRANSACTION,
+            LaneId::SINGLE,
+            0.25,
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
     }
 }
 
@@ -9093,7 +9102,7 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    let query = verify_signed_query_request(&query)?;
+    let query = verify_signed_query_request(query)?;
     let resp = execute_verified_query_with_opts(live_query_store, state, query, tel, opts).await?;
     Ok(crate::utils::respond_with_format(resp, format))
 }
@@ -31279,7 +31288,7 @@ fn literal_is_local8(literal: &str) -> bool {
 }
 
 #[cfg(feature = "app_api")]
-fn explorer_qr_error(err: qrcode::types::QrError) -> Error {
+fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
     use iroha_data_model::query::error::QueryExecutionFail;
 
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(

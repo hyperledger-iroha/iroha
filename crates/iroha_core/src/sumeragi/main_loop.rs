@@ -22,7 +22,8 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
-    LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig, SumeragiNposTimeouts,
+    LaneConfig as LaneConfigSnapshot, NodeRole, RbcRs16InitialFanout, Sumeragi as SumeragiConfig,
+    SumeragiNposTimeouts,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -10172,7 +10173,56 @@ struct RbcState {
 struct RbcOutboundChunks {
     chunks: Vec<OutboundRbcChunk>,
     cursor: usize,
-    targets: Vec<(usize, PeerId)>,
+    targets: Vec<RbcOutboundTarget>,
+}
+
+pub(super) struct RbcOutboundSeed<'a> {
+    pub(super) chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
+    pub(super) roster: &'a [PeerId],
+    pub(super) rs16_layout: Option<RbcPayloadLayout>,
+    pub(super) rs16_fanout: RbcRs16InitialFanout,
+}
+
+impl<'a> RbcOutboundSeed<'a> {
+    fn full(chunks: Vec<crate::sumeragi::consensus::RbcChunk>, roster: &'a [PeerId]) -> Self {
+        Self {
+            chunks,
+            roster,
+            rs16_layout: None,
+            rs16_fanout: RbcRs16InitialFanout::Full,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RbcOutboundTarget {
+    validator_index: usize,
+    peer: PeerId,
+    chunk_indices: Option<Arc<[u32]>>,
+}
+
+impl RbcOutboundTarget {
+    fn full(validator_index: usize, peer: PeerId) -> Self {
+        Self {
+            validator_index,
+            peer,
+            chunk_indices: None,
+        }
+    }
+
+    fn with_chunk_indices(validator_index: usize, peer: PeerId, chunk_indices: Vec<u32>) -> Self {
+        Self {
+            validator_index,
+            peer,
+            chunk_indices: Some(Arc::from(chunk_indices.into_boxed_slice())),
+        }
+    }
+
+    fn allows_chunk(&self, idx: u32) -> bool {
+        self.chunk_indices
+            .as_ref()
+            .is_none_or(|indices| indices.binary_search(&idx).is_ok())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -20480,22 +20530,46 @@ impl Actor {
         &mut self,
         key: super::rbc_store::SessionKey,
         requested: usize,
-        seed: Option<(Vec<crate::sumeragi::consensus::RbcChunk>, &[PeerId])>,
+        seed: Option<RbcOutboundSeed<'_>>,
     ) -> RbcOutboundChunkDispatch {
         let mut dispatch = RbcOutboundChunkDispatch::default();
 
-        if let Some((chunks, roster)) = seed {
-            if chunks.is_empty() || roster.is_empty() {
+        if let Some(seed) = seed {
+            let chunks = seed.chunks;
+            if chunks.is_empty() || seed.roster.is_empty() {
                 return dispatch;
             }
             let target_count =
-                rbc::rbc_chunk_target_count(roster.len(), self.config.rbc.chunk_fanout);
+                rbc::rbc_chunk_target_count(seed.roster.len(), self.config.rbc.chunk_fanout);
             if target_count == 0 {
                 return dispatch;
             }
-            let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+            let session_seed = rbc::shuffle_seed(&key.0, key.1, key.2);
             let local_peer_id = self.common_config.peer.id().clone();
-            let targets = rbc::select_rbc_chunk_targets(roster, &local_peer_id, seed, target_count);
+            let targets = rbc::select_rbc_chunk_targets(
+                seed.roster,
+                &local_peer_id,
+                session_seed,
+                target_count,
+            )
+            .into_iter()
+            .map(|(validator_index, peer)| {
+                let chunk_indices = seed.rs16_layout.and_then(|layout| {
+                    rbc::rs16_initial_chunk_indices_for_target(
+                        layout,
+                        validator_index,
+                        session_seed,
+                        seed.rs16_fanout,
+                    )
+                });
+                match chunk_indices {
+                    Some(indices) => {
+                        RbcOutboundTarget::with_chunk_indices(validator_index, peer, indices)
+                    }
+                    None => RbcOutboundTarget::full(validator_index, peer),
+                }
+            })
+            .collect::<Vec<_>>();
             if targets.is_empty() {
                 return dispatch;
             }
@@ -20588,7 +20662,11 @@ impl Actor {
             return;
         }
         let chunk_count = chunks.len();
-        let dispatch = self.dispatch_rbc_outbound_chunks(key, 0, Some((chunks, &topology_peers)));
+        let dispatch = self.dispatch_rbc_outbound_chunks(
+            key,
+            0,
+            Some(RbcOutboundSeed::full(chunks, &topology_peers)),
+        );
         let queued = dispatch.stored;
         info!(
             height = key.1,
@@ -34788,6 +34866,13 @@ impl RbcSession {
         if self.total_chunks == 0 {
             return self.expected_chunk_root;
         }
+        if self.received_chunks == self.total_chunks
+            && self.expected_chunk_digests.is_some()
+            && self.expected_chunk_root.is_some()
+            && !self.invalid
+        {
+            return self.expected_chunk_root;
+        }
         let digests = self.all_chunk_digests()?;
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
         tree.root().map(Hash::from)
@@ -35169,8 +35254,19 @@ impl RbcSession {
         self.recovered_from_disk
     }
 
-    pub(crate) fn ingest_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) {
+    #[cfg(test)]
+    pub(super) fn ingest_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) {
         let _ = self.note_chunk(idx, bytes, sender);
+    }
+
+    pub(super) fn ingest_prehashed_chunk(
+        &mut self,
+        idx: u32,
+        bytes: Vec<u8>,
+        digest: [u8; 32],
+        sender: Option<u32>,
+    ) -> ChunkIngestOutcome {
+        self.note_chunk_with_digest(idx, bytes, digest, sender)
     }
 
     pub(super) fn ingest_chunk_with_outcome(
@@ -35284,14 +35380,24 @@ impl RbcSession {
         dropped
     }
 
-    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, _sender: Option<u32>) -> ChunkIngestOutcome {
-        if idx >= self.total_chunks {
-            return ChunkIngestOutcome::OutOfBounds;
-        }
+    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) -> ChunkIngestOutcome {
         let mut hasher = Sha256::new();
         sha2::digest::Update::update(&mut hasher, &bytes);
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&hasher.finalize());
+        self.note_chunk_with_digest(idx, bytes, digest, sender)
+    }
+
+    fn note_chunk_with_digest(
+        &mut self,
+        idx: u32,
+        bytes: Vec<u8>,
+        digest: [u8; 32],
+        _sender: Option<u32>,
+    ) -> ChunkIngestOutcome {
+        if idx >= self.total_chunks {
+            return ChunkIngestOutcome::OutOfBounds;
+        }
 
         if let Some(expected) = self.expected_chunk_digests.as_ref() {
             let Some(expected_digest) = expected.get(idx as usize) else {

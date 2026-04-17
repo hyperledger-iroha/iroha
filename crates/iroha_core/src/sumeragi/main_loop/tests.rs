@@ -1494,6 +1494,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             data_shards: 0,
             parity_shards: 0,
             chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+            rs16_initial_fanout: iroha_config::parameters::actual::RbcRs16InitialFanout::Full,
             pending_max_chunks: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
             pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
             pending_session_limit: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
@@ -19192,7 +19193,11 @@ async fn flush_rbc_outbound_chunks_respects_per_tick_budget_for_deferred_queue()
     assert!(
         harness
             .actor
-            .dispatch_rbc_outbound_chunks(key, 0, Some((chunks, &roster)))
+            .dispatch_rbc_outbound_chunks(
+                key,
+                0,
+                Some(super::RbcOutboundSeed::full(chunks, &roster))
+            )
             .stored,
         "expected outbound chunk queue to be seeded"
     );
@@ -19916,7 +19921,11 @@ async fn flush_rbc_outbound_chunks_skips_when_queue_backpressured() {
     assert!(
         harness
             .actor
-            .dispatch_rbc_outbound_chunks(key, 0, Some((chunks, &roster)))
+            .dispatch_rbc_outbound_chunks(
+                key,
+                0,
+                Some(super::RbcOutboundSeed::full(chunks, &roster))
+            )
             .stored,
         "expected outbound chunk queue to be seeded"
     );
@@ -20003,7 +20012,11 @@ async fn flush_rbc_outbound_chunks_allows_urgent_active_pending_when_queue_backp
     assert!(
         harness
             .actor
-            .dispatch_rbc_outbound_chunks(key, 0, Some((chunks, &roster)))
+            .dispatch_rbc_outbound_chunks(
+                key,
+                0,
+                Some(super::RbcOutboundSeed::full(chunks, &roster))
+            )
             .stored,
         "expected outbound chunk queue to be seeded"
     );
@@ -61592,10 +61605,11 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10)),
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20)),
     ];
+    let tx_sizes: Vec<usize> = txs.iter().map(|tx| tx.as_ref().encode().len()).collect();
 
     let total_chunks = 4;
     let (lane_alloc, dataspace_alloc) = actor
-        .derive_rbc_allocations(&txs, &routing, total_chunks)
+        .derive_rbc_allocations(&txs, &routing, &tx_sizes, total_chunks)
         .expect("allocations");
 
     assert_eq!(lane_alloc.len(), 2);
@@ -119834,6 +119848,55 @@ fn complete_rs16_payload_bytes_roundtrip() {
         Some(payload.as_slice()),
         "RS16 payload reconstruction should preserve canonical payload bytes"
     );
+}
+
+#[test]
+fn rbc_prehashed_chunk_ingest_accepts_expected_digest() {
+    let bytes = vec![0xA5; 32];
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![digest])
+        .root()
+        .map(Hash::from)
+        .expect("single digest root");
+    let mut session = RbcSession::new(
+        1,
+        Some(Hash::new(&bytes)),
+        Some(root),
+        Some(vec![digest]),
+        0,
+    )
+    .expect("session");
+
+    let outcome = session.ingest_prehashed_chunk(0, bytes.clone(), digest, Some(0));
+
+    assert_eq!(outcome, ChunkIngestOutcome::Accepted);
+    assert_eq!(session.chunk_bytes(0), Some(bytes.as_slice()));
+    assert_eq!(session.chunk_root(), Some(root));
+}
+
+#[test]
+fn rbc_prehashed_chunk_ingest_rejects_digest_mismatch() {
+    let bytes = vec![0x5A; 32];
+    let expected: [u8; 32] = Sha256::digest(&bytes).into();
+    let root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![expected])
+        .root()
+        .map(Hash::from)
+        .expect("single digest root");
+    let mut session = RbcSession::new(
+        1,
+        Some(Hash::new(&bytes)),
+        Some(root),
+        Some(vec![expected]),
+        0,
+    )
+    .expect("session");
+    let mut mismatched = expected;
+    mismatched[0] ^= 0xFF;
+
+    let outcome = session.ingest_prehashed_chunk(0, bytes, mismatched, Some(0));
+
+    assert_eq!(outcome, ChunkIngestOutcome::DigestMismatch);
+    assert_eq!(session.received_chunks(), 0);
 }
 
 #[cfg(feature = "telemetry")]

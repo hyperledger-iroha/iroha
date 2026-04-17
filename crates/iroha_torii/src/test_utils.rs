@@ -896,6 +896,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 data_shards: 0,
                 parity_shards: 0,
                 chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
+                rs16_initial_fanout: A::RbcRs16InitialFanout::Full,
                 pending_max_chunks: defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 pending_max_bytes: defaults::sumeragi::RBC_PENDING_MAX_BYTES,
                 pending_session_limit: defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,

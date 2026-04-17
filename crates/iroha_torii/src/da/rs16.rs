@@ -1,7 +1,6 @@
 //! RS16 chunk commitment helpers for DA ingest.
 
 use axum::http::StatusCode;
-use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::da::{
     ingest::DaIngestRequest,
     manifest::{ChunkCommitment, ChunkRole},
@@ -61,15 +60,21 @@ where
     }
 
     let stripes = chunks.len().div_ceil(data_shards);
+    let row_parity = usize::from(request.erasure_profile.row_parity_stripes);
     let mut commitments = Vec::with_capacity(
         chunks.len()
             + stripes.saturating_mul(parity_shards)
             + stripes
-                .saturating_mul(usize::from(request.erasure_profile.row_parity_stripes))
+                .saturating_mul(row_parity)
                 .saturating_mul(data_shards + parity_shards),
     );
-    // For column parity, retain the symbol vectors per stripe/column.
-    let mut stripe_symbols_matrix: Vec<Vec<Vec<u16>>> = Vec::with_capacity(stripes);
+    let retain_row_parity_matrix = row_parity > 0;
+    let mut stripe_symbols_matrix: Vec<Vec<Vec<u16>>> = if retain_row_parity_matrix {
+        Vec::with_capacity(stripes)
+    } else {
+        Vec::new()
+    };
+    let mut hash_scratch = Vec::with_capacity(symbol_count.saturating_mul(2));
     let mut next_index: u32 = 0;
 
     for stripe in 0..stripes {
@@ -128,7 +133,9 @@ where
         }
 
         if parity_shards == 0 {
-            stripe_symbols_matrix.push(stripe_symbols);
+            if retain_row_parity_matrix {
+                stripe_symbols_matrix.push(stripe_symbols);
+            }
             continue;
         }
 
@@ -141,11 +148,7 @@ where
             })?;
 
         for (parity_idx, symbols) in parity_symbols.iter().enumerate() {
-            let mut hasher = Blake3Hasher::new();
-            for symbol in symbols {
-                hasher.update(&symbol.to_le_bytes());
-            }
-            let digest = hasher.finalize();
+            let digest = digest_symbols_le(symbols, &mut hash_scratch);
             let offset = erasure_rs16::parity_offset(
                 request.total_size,
                 stripe,
@@ -167,17 +170,18 @@ where
                 index,
                 offset,
                 request.chunk_size,
-                ChunkDigest::new(*digest.as_bytes()),
+                ChunkDigest::new(digest),
                 ChunkRole::GlobalParity,
                 stripe_id,
             ));
             stripe_symbols.push(symbols.clone());
         }
 
-        stripe_symbols_matrix.push(stripe_symbols);
+        if retain_row_parity_matrix {
+            stripe_symbols_matrix.push(stripe_symbols);
+        }
     }
 
-    let row_parity = usize::from(request.erasure_profile.row_parity_stripes);
     if row_parity > 0 {
         let column_count = data_shards + parity_shards;
         let base_offset = request.total_size.saturating_add(
@@ -206,11 +210,7 @@ where
                 })?;
 
             for (row_parity_idx, symbols) in parity_cols.iter().enumerate() {
-                let mut hasher = Blake3Hasher::new();
-                for symbol in symbols {
-                    hasher.update(&symbol.to_le_bytes());
-                }
-                let digest = hasher.finalize();
+                let digest = digest_symbols_le(symbols, &mut hash_scratch);
 
                 let offset = base_offset.saturating_add(
                     ((row_parity_idx * column_count + column) as u64)
@@ -223,7 +223,7 @@ where
                     index,
                     offset,
                     request.chunk_size,
-                    ChunkDigest::new(*digest.as_bytes()),
+                    ChunkDigest::new(digest),
                     ChunkRole::StripeParity,
                     column_id,
                 ));
@@ -232,6 +232,15 @@ where
     }
 
     Ok(commitments)
+}
+
+fn digest_symbols_le(symbols: &[u16], scratch: &mut Vec<u8>) -> [u8; 32] {
+    scratch.clear();
+    scratch.reserve(symbols.len().saturating_mul(2));
+    for symbol in symbols {
+        scratch.extend_from_slice(&symbol.to_le_bytes());
+    }
+    *blake3::hash(scratch.as_slice()).as_bytes()
 }
 
 fn allocate_chunk_index(counter: &mut u32) -> Result<u32, (StatusCode, String)> {

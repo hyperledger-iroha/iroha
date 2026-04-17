@@ -579,7 +579,7 @@ pub(super) fn apply_hydrated_payload(
             return outcome;
         };
         if session.chunk_bytes(idx_u32).is_none() {
-            session.ingest_chunk(idx_u32, chunk.clone(), None);
+            session.ingest_prehashed_chunk(idx_u32, chunk.clone(), digests[idx], None);
             outcome.updated = true;
         }
     }
@@ -693,6 +693,51 @@ pub(super) fn select_rbc_chunk_targets(
         candidates.truncate(target_count);
     }
     candidates
+}
+
+pub(super) fn rs16_initial_chunk_indices_for_target(
+    layout: RbcPayloadLayout,
+    target_idx: usize,
+    seed: u64,
+    fanout: config_actual::RbcRs16InitialFanout,
+) -> Option<Vec<u32>> {
+    let required = match fanout {
+        config_actual::RbcRs16InitialFanout::Full => return None,
+        config_actual::RbcRs16InitialFanout::Data => usize::from(layout.data_shards),
+        config_actual::RbcRs16InitialFanout::DataPlusOne => {
+            usize::from(layout.data_shards).saturating_add(1)
+        }
+    };
+    if !layout.is_rs16() || required == 0 {
+        return None;
+    }
+    let stripe_width = layout.stripe_width();
+    let required = required.min(stripe_width);
+    let stripe_count = layout.stripe_count()?;
+    let total_chunks = layout.total_chunks()?;
+    let mut indices = Vec::with_capacity(stripe_count.saturating_mul(required));
+
+    for stripe in 0..stripe_count {
+        let mut offsets: Vec<usize> = (0..stripe_width).collect();
+        let target_seed = u64::try_from(target_idx).unwrap_or(u64::MAX);
+        let stripe_seed_part = u64::try_from(stripe).unwrap_or(u64::MAX);
+        let stripe_seed = seed
+            ^ target_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ stripe_seed_part.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let mut rng = StdRng::seed_from_u64(stripe_seed);
+        offsets.shuffle(&mut rng);
+        offsets.truncate(required);
+        for offset in offsets {
+            let idx = stripe.saturating_mul(stripe_width).saturating_add(offset);
+            if idx < total_chunks {
+                indices.push(u32::try_from(idx).ok()?);
+            }
+        }
+    }
+
+    indices.sort_unstable();
+    indices.dedup();
+    Some(indices)
 }
 
 #[allow(dead_code)]
@@ -897,6 +942,41 @@ mod tests {
     }
 
     #[test]
+    fn rs16_initial_chunk_indices_are_reconstructable_and_deterministic() {
+        let layout =
+            RbcPayloadLayout::new(RbcEncoding::Rs16, 1024, 16 * 1024, 4, 2).expect("valid layout");
+        let first = rs16_initial_chunk_indices_for_target(
+            layout,
+            2,
+            99,
+            config_actual::RbcRs16InitialFanout::DataPlusOne,
+        )
+        .expect("reduced fanout indices");
+        let second = rs16_initial_chunk_indices_for_target(
+            layout,
+            2,
+            99,
+            config_actual::RbcRs16InitialFanout::DataPlusOne,
+        )
+        .expect("reduced fanout indices");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), layout.stripe_count().unwrap() * 5);
+        for stripe in 0..layout.stripe_count().unwrap() {
+            let start = stripe * layout.stripe_width();
+            let end = start + layout.stripe_width();
+            let observed = first
+                .iter()
+                .filter(|idx| {
+                    let idx = usize::try_from(**idx).expect("index fits usize");
+                    idx >= start && idx < end
+                })
+                .count();
+            assert_eq!(observed, 5);
+        }
+    }
+
+    #[test]
     fn rbc_rebroadcaster_count_tracks_fault_tolerance() {
         assert_eq!(rbc_rebroadcasters_count(0), 0);
         assert_eq!(rbc_rebroadcasters_count(1), 1);
@@ -922,6 +1002,7 @@ mod tests {
             data_shards: 4,
             parity_shards: 2,
             chunk_fanout: None,
+            rs16_initial_fanout: config_actual::RbcRs16InitialFanout::Full,
             pending_max_chunks: 8,
             pending_max_bytes: 8192,
             pending_session_limit: 8,
@@ -1134,6 +1215,7 @@ pub(super) struct RbcPlanInputs<'a> {
     pub(super) signed_block: &'a SignedBlock,
     pub(super) transactions: &'a [AcceptedTransaction<'static>],
     pub(super) routing: &'a [RoutingDecision],
+    pub(super) tx_sizes: &'a [usize],
     pub(super) payload: &'a [u8],
     pub(super) payload_hash: Hash,
     pub(super) height: u64,
@@ -1201,6 +1283,7 @@ impl Actor {
             signed_block,
             transactions,
             routing,
+            tx_sizes,
             payload,
             payload_hash,
             height,
@@ -1218,12 +1301,17 @@ impl Actor {
             routing.len(),
             "routing decisions must align with transactions"
         );
+        debug_assert_eq!(
+            transactions.len(),
+            tx_sizes.len(),
+            "transaction sizes must align with transactions"
+        );
 
         let encoded = encode_rbc_payload(payload, RbcChunkingSpec::from_config(&self.config.rbc))?;
         let total_chunks = u32::try_from(encoded.chunks.len()).expect("encoded chunk count fits");
 
         let (lane_allocations, dataspace_allocations) =
-            self.derive_rbc_allocations(transactions, routing, total_chunks)?;
+            self.derive_rbc_allocations(transactions, routing, tx_sizes, total_chunks)?;
 
         let block_hash = signed_block.hash();
         let leader_signature = signed_block
@@ -1245,7 +1333,13 @@ impl Actor {
         session.leader_signature = Some(leader_signature.clone());
         for (idx, chunk) in encoded.chunks.iter().enumerate() {
             let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
-            session.ingest_chunk(chunk_index, chunk.clone(), Some(local_validator_index));
+            let digest = encoded.digests[idx];
+            session.ingest_prehashed_chunk(
+                chunk_index,
+                chunk.clone(),
+                digest,
+                Some(local_validator_index),
+            );
         }
 
         session.set_allocations(lane_allocations, dataspace_allocations);
@@ -1431,6 +1525,7 @@ impl Actor {
         &self,
         transactions: &[AcceptedTransaction<'static>],
         routing: &[RoutingDecision],
+        tx_sizes: &[usize],
         total_chunks: u32,
     ) -> Result<(Vec<LaneAllocation>, Vec<DataspaceAllocation>)> {
         use std::collections::BTreeMap as StdBTreeMap;
@@ -1439,10 +1534,15 @@ impl Actor {
         let mut dataspace_map: StdBTreeMap<(LaneId, DataSpaceId), DataspaceAllocation> =
             StdBTreeMap::new();
 
-        for (tx, decision) in transactions.iter().zip(routing.iter()) {
-            let encoded = tx.as_ref().encode();
-            let len = u64::try_from(encoded.len())
-                .map_err(|_| RbcError::TransactionPayloadTooLarge { len: encoded.len() })?;
+        debug_assert_eq!(
+            transactions.len(),
+            tx_sizes.len(),
+            "transaction sizes must align with transactions"
+        );
+
+        for ((tx, decision), encoded_len) in transactions.iter().zip(routing.iter()).zip(tx_sizes) {
+            let len = u64::try_from(*encoded_len)
+                .map_err(|_| RbcError::TransactionPayloadTooLarge { len: *encoded_len })?;
             let teu = Queue::estimate_teu(tx);
 
             lane_map
@@ -1576,7 +1676,7 @@ impl Actor {
     pub(super) fn schedule_rbc_chunk_posts(
         &mut self,
         chunk: &super::OutboundRbcChunk,
-        targets: &[(usize, PeerId)],
+        targets: &[super::RbcOutboundTarget],
     ) {
         if targets.is_empty() {
             return;
@@ -1607,11 +1707,16 @@ impl Actor {
             }
         };
         let local_peer_id = self.common_config.peer.id().clone();
-        for (target_idx, peer_id) in targets {
+        for target in targets {
+            if !target.allows_chunk(chunk_idx) {
+                continue;
+            }
+            let target_idx = target.validator_index;
+            let peer_id = &target.peer;
             if peer_id == &local_peer_id {
                 continue;
             }
-            let Ok(validator_idx) = u32::try_from(*target_idx) else {
+            let Ok(validator_idx) = u32::try_from(target_idx) else {
                 continue;
             };
 
@@ -1696,13 +1801,31 @@ impl Actor {
             return Ok(());
         }
         let local_peer_id = self.common_config.peer.id().clone();
+        let rs16_layout = if matches!(plan.init.encoding, RbcEncoding::Rs16) {
+            RbcPayloadLayout::new(
+                plan.init.encoding,
+                plan.init.chunk_size_bytes,
+                plan.init.payload_size_bytes,
+                plan.init.data_shards,
+                plan.init.parity_shards,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let rs16_fanout = self.config.rbc.rs16_initial_fanout;
         let init_message = Arc::new(BlockMessage::RbcInit(plan.init));
         let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
         let initial_chunk_count = plan.chunks.len();
         let dispatch = self.dispatch_rbc_outbound_chunks(
             key,
             initial_chunk_count,
-            Some((plan.chunks, &topology_peers)),
+            Some(super::RbcOutboundSeed {
+                chunks: plan.chunks,
+                roster: &topology_peers,
+                rs16_layout,
+                rs16_fanout,
+            }),
         );
         for peer in &topology_peers {
             if peer == &local_peer_id {
@@ -1755,14 +1878,19 @@ impl Actor {
             total_chunks,
             Some(payload_hash),
             Some(encoded.chunk_root),
-            Some(encoded.digests),
+            Some(encoded.digests.clone()),
             epoch,
         )
         .map_err(RbcError::from)?;
 
-        for (idx, chunk) in encoded.chunks.into_iter().enumerate() {
+        for (idx, (chunk, digest)) in encoded
+            .chunks
+            .into_iter()
+            .zip(encoded.digests.into_iter())
+            .enumerate()
+        {
             let idx = u32::try_from(idx).map_err(|_| RbcError::ChunkIndexOverflow { idx })?;
-            session.ingest_chunk(idx, chunk, None);
+            session.ingest_prehashed_chunk(idx, chunk, digest, None);
         }
 
         Ok(session)

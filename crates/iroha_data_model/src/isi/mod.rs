@@ -896,6 +896,27 @@ impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+// Allow direct boxing of Musubi package registry instructions.
+impl From<crate::isi::musubi::PublishMusubiRelease> for InstructionBox {
+    fn from(i: crate::isi::musubi::PublishMusubiRelease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::YankMusubiRelease> for InstructionBox {
+    fn from(i: crate::isi::musubi::YankMusubiRelease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::SetMusubiShortAlias> for InstructionBox {
+    fn from(i: crate::isi::musubi::SetMusubiShortAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
+    fn from(i: crate::isi::musubi::AssertMusubiReleaseExists) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 // Allow direct boxing of offline allowance instructions.
 impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
@@ -2063,6 +2084,8 @@ pub mod identifier;
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
 pub mod mint_burn;
+/// Musubi package registry instructions.
+pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
 /// Offline allowance settlement instructions.

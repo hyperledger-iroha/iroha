@@ -120,6 +120,11 @@ name = "enum_vs_trait"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "chain_wire"
+harness = false
+required-features = ["bench"]
+
 [[test]]
 name = "ui"
 required-features = ["trybuild-tests"]

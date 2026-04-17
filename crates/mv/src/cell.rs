@@ -32,7 +32,7 @@ impl<V: Value> Cell<V> {
 
         *revert.get_mut() = None;
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, false)
     }
 
     /// Create block to aggregate updates and revert changes made in latest block
@@ -47,7 +47,7 @@ impl<V: Value> Cell<V> {
             }
         }
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, true)
     }
 }
 
@@ -100,9 +100,22 @@ mod block {
     pub struct Block<'storage, V: Value> {
         pub(crate) revert: EbrCellWriteTxn<'storage, Option<V>>,
         pub(crate) blocks: EbrCellWriteTxn<'storage, V>,
+        pub(super) dirty: bool,
     }
 
     impl<'storage, V: Value> Block<'storage, V> {
+        pub(super) fn new(
+            revert: EbrCellWriteTxn<'storage, Option<V>>,
+            blocks: EbrCellWriteTxn<'storage, V>,
+            dirty: bool,
+        ) -> Self {
+            Self {
+                revert,
+                blocks,
+                dirty,
+            }
+        }
+
         /// Create transaction for the block
         pub fn transaction<'block>(&'block mut self) -> Transaction<'block, 'storage, V>
         where
@@ -116,15 +129,23 @@ mod block {
 
         /// Apply aggregated changes to the storage
         pub fn commit(self) {
+            let Self {
+                revert,
+                blocks,
+                dirty,
+            } = self;
             // Commit fields in the inverse order
-            self.blocks.commit();
-            self.revert.commit();
+            if dirty {
+                blocks.commit();
+            }
+            revert.commit();
         }
 
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.blocks.get_mut();
             self.revert.get_or_insert(value.clone());
+            self.dirty = true;
             value
         }
 
@@ -166,6 +187,7 @@ mod block {
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.block.blocks.get_mut();
             self.revert.get_or_insert(value.clone());
+            self.block.dirty = true;
             value
         }
 
@@ -303,5 +325,46 @@ mod tests {
         assert_eq!(view1.get(), &2);
         // Revert is visible in the view created after revert was applied
         assert_eq!(view2.get(), &1);
+    }
+
+    #[test]
+    fn noop_commit_clears_revert_history() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            *block.get_mut() = 1;
+            block.commit();
+        }
+
+        {
+            let block = cell.block();
+            block.commit();
+        }
+
+        {
+            let block = cell.block_and_revert();
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &1);
+    }
+
+    #[test]
+    fn aborted_transaction_dirty_commit_keeps_state_unchanged() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            {
+                let mut transaction = block.transaction();
+                *transaction.get_mut() = 1;
+            }
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &0);
     }
 }
