@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: iroha_cli regression fixes
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/contracts.rs`
+  debug-call fixtures now use `domain.dataspace` domain literals so Kotodama
+  semantic validation accepts the public entrypoint contracts.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/commands/sorafs.rs`
+  defers SoraFS storage-pin manifest decoding until directory payloads need the
+  manifest chunking profile, so single-file pin uploads preserve raw manifest
+  bytes without rejecting test or gateway passthrough fixtures. The incentives
+  reward fixtures now use the same canonical XOR asset definition as their bond
+  entries, restoring positive payouts and underbonded audit reporting.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/subscriptions.rs`
+  subscription NFT fixtures now use domain-qualified collection IDs.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/src/soracloud.rs`
+  normalizes accidentally double-escaped `BASH_SOURCE` shell variables in
+  scaffolded template files, adds missing single-api `doctor.sh`/`release.sh`
+  root scripts, and updates deploy/upgrade tests for public-discovery SoraFS
+  publication plus staged Inrou guest-image fixtures.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_cli/tests/cli_smoke.rs`
+  now shares the canonical XOR reward asset fixture with the CLI unit tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli --bin iroha`
+  - `cargo test -p iroha_cli --test cli_smoke incentives -- --nocapture`
+
 ## 2026-04-17 Follow-up: Musubi live gateway fetch and registry integration
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs` now lets
   `musubi cache fetch` and `musubi install --fetch` hydrate missing lockfile

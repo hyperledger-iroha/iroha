@@ -11512,9 +11512,7 @@ impl StoragePinArgs {
         ) -> Result<Response<Vec<u8>>>,
     {
         let manifest_bytes = fs::read(&self.manifest).wrap_err("failed to read manifest file")?;
-        let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
-            .wrap_err("failed to decode manifest payload")?;
-        let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest)?;
+        let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest_bytes)?;
         let borrowed_files = files.as_ref().map(|entries| {
             entries
                 .iter()
@@ -11549,13 +11547,15 @@ struct OwnedStorageFileEntry {
 
 fn load_storage_pin_payload(
     input: &Path,
-    manifest: &ManifestV1,
+    manifest_bytes: &[u8],
 ) -> Result<(Vec<u8>, Option<Vec<OwnedStorageFileEntry>>)> {
     let metadata = fs::metadata(input)
         .wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
 
     if metadata.is_dir() {
-        let profile = chunk_profile_from_manifest(manifest)?;
+        let manifest: ManifestV1 = norito::decode_from_bytes(manifest_bytes)
+            .wrap_err("failed to decode manifest payload")?;
+        let profile = chunk_profile_from_manifest(&manifest)?;
         let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
             .map_err(|err| eyre!("failed to build directory payload plan: {err}"))?;
         let files = plan
@@ -12553,7 +12553,7 @@ mod tests {
         );
         policy.insert(
             "bond_asset_id".to_string(),
-            norito::json::Value::String("61CtjvNd9T3THAR65GsMVHr82Bjc".to_string()),
+            norito::json::Value::String(xor_asset_id().to_string()),
         );
         policy.insert(
             "uptime_floor_per_mille".to_string(),
@@ -14871,7 +14871,7 @@ mod tests {
         assert!(state.disputes.is_empty());
         assert_eq!(
             state.reward_config.policy.bond_asset_id,
-            "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            xor_asset_id().to_string()
         );
     }
 

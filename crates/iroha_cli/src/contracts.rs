@@ -2806,7 +2806,7 @@ mod tests {
 
                 kotoage fn bump() -> int permission(Admin) {
                     counter = counter + 1;
-                    register_domain(domain("debugcall"));
+                    register_domain(domain("debugcall.universal"));
                     return counter;
                 }
             }
@@ -2912,7 +2912,7 @@ mod tests {
                 state int counter;
 
                 kotoage fn bump(amount: int) -> int permission(Admin) {
-                    register_domain(domain("debugparity"));
+                    register_domain(domain("debugparity.universal"));
                     counter = amount;
                     return counter;
                 }

@@ -749,7 +749,7 @@ mod tests {
         let authority = publisher();
         let first = sample_release("dex.universal/swap-core@1.0.0");
         let second = sample_release("dex.universal/router@1.0.0");
-        let alias = "swap".parse().expect("alias");
+        let alias: Name = "swap".parse().expect("alias");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
