@@ -59,12 +59,25 @@ fn enum_roundtrip() {
 #[test]
 fn enum_fixed_field_includes_length_header() {
     // Sequential layout emits an outer length header for variant payloads.
-    // For `u8` variants the length header is 8 bytes followed by the payload.
     let bytes = Color::Green(7).encode();
-    assert_eq!(bytes.len(), 4 + 8 + 1, "tag + length header + payload");
+    let (payload_len, header_len) =
+        norito::core::read_len_from_slice(&bytes[4..]).expect("variant payload length");
+    assert_eq!(payload_len, 1);
+    assert_eq!(
+        bytes.len(),
+        4 + header_len + payload_len,
+        "tag + length header + payload"
+    );
 
     let bytes2 = Color::Blue(9).encode();
-    assert_eq!(bytes2.len(), 4 + 8 + 1, "tag + length header + payload");
+    let (payload_len, header_len) =
+        norito::core::read_len_from_slice(&bytes2[4..]).expect("variant payload length");
+    assert_eq!(payload_len, 1);
+    assert_eq!(
+        bytes2.len(),
+        4 + header_len + payload_len,
+        "tag + length header + payload"
+    );
 }
 
 #[test]
@@ -72,8 +85,19 @@ fn enum_string_field_includes_nested_lengths() {
     // Sequential layout encodes both the outer variant length and the inner string length.
     let v = Custom::Text("hi".into());
     let bytes = v.encode();
-    // 4 bytes tag + 8 bytes outer length + (8 bytes inner length + 2 bytes data)
-    assert_eq!(bytes.len(), 4 + 8 + 8 + 2);
+    let (outer_len, outer_header_len) =
+        norito::core::read_len_from_slice(&bytes[4..]).expect("variant payload length");
+    let payload_start = 4 + outer_header_len;
+    assert_eq!(outer_len, bytes.len() - payload_start);
+
+    let (inner_len, inner_header_len) =
+        norito::core::read_len_from_slice(&bytes[payload_start..]).expect("string length");
+    assert_eq!(inner_len, 2);
+    assert_eq!(
+        bytes.len(),
+        payload_start + inner_header_len + inner_len,
+        "tag + outer length header + inner length header + payload"
+    );
 }
 
 #[test]

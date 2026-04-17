@@ -189,11 +189,12 @@ fn header_flags_guard_mismatch_fails_fast() {
     assert!(matches!(
         err,
         norito::core::Error::DecodeFlagsMismatch {
-            header_flags: 0,
+            header_flags: header_compact,
             header_hint: 0,
             active_flags,
             active_hint
-        } if active_flags
+        } if header_compact == header_flags::COMPACT_LEN
+            && active_flags
             == (header_flags::PACKED_SEQ | header_flags::COMPACT_LEN)
             && active_hint == active_flags
     ));

@@ -1,7 +1,7 @@
 //! Mismatched compact flags should reject fixed-width tuple payloads.
 
 use norito::{
-    core::{NoritoSerialize, header_flags},
+    core::{DecodeFlagsGuard, NoritoSerialize, header_flags},
     decode_from_bytes,
 };
 
@@ -9,7 +9,10 @@ use norito::{
 fn tuple_fixed_u64_rejected_under_compact_flag() {
     let value = (5u8, String::from("hi"));
     let mut payload = Vec::new();
-    value.serialize(&mut payload).expect("serialize tuple");
+    {
+        let _guard = DecodeFlagsGuard::enter(0);
+        value.serialize(&mut payload).expect("serialize tuple");
+    }
 
     let bytes = norito::core::frame_bare_with_header_flags::<(u8, String)>(
         &payload,

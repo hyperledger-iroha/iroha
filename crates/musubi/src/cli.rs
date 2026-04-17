@@ -20,9 +20,9 @@ use iroha_data_model::{
     },
     musubi::{
         MusubiArchiveRef, MusubiDappLink, MusubiDependency, MusubiNamespace, MusubiPackageId,
-        MusubiPackageName, MusubiPackageRef, MusubiRelease, MusubiReleaseStatus,
-        MusubiShortAlias, MusubiSourceArchivePlan, MusubiSourceChunkPlan,
-        MusubiSourceFilePlan, MusubiVersion, MusubiVersionReq,
+        MusubiPackageName, MusubiPackageRef, MusubiRelease, MusubiReleaseStatus, MusubiShortAlias,
+        MusubiSourceArchivePlan, MusubiSourceChunkPlan, MusubiSourceFilePlan, MusubiVersion,
+        MusubiVersionReq,
     },
     name::Name,
     query::musubi::prelude::{
@@ -588,7 +588,10 @@ impl PublishArgs {
             );
         }
         let default_outputs = default_publish_artifact_paths(&manifest);
-        let car_out = self.car_out.as_deref().or(Some(default_outputs.car.as_path()));
+        let car_out = self
+            .car_out
+            .as_deref()
+            .or(Some(default_outputs.car.as_path()));
         let sorafs_manifest_out = self
             .sorafs_manifest_out
             .as_deref()
@@ -1888,8 +1891,8 @@ fn collect_source_file_entries(root: &Path) -> Result<Vec<SourceFileEntry>> {
         .into_iter()
         .map(|relative| {
             let path = root.join(&relative);
-            let bytes = fs::read(&path)
-                .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+            let bytes =
+                fs::read(&path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
             let components = relative_path_components(&relative)?;
             Ok(SourceFileEntry {
                 relative,
@@ -2150,8 +2153,14 @@ fn insert_resolved_release(
         )?;
     }
 
-    let mut locked =
-        locked_package_from_release(alias, version_req, &release, dependency_links, direct, cache_dir);
+    let mut locked = locked_package_from_release(
+        alias,
+        version_req,
+        &release,
+        dependency_links,
+        direct,
+        cache_dir,
+    );
     if cache_source_path(cache_dir, &locked).exists()
         && let Err(err) = verify_cached_package(cache_dir, &locked)
     {
@@ -2316,7 +2325,11 @@ fn build_sorafs_source_manifest(
     let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
     let chunker = chunker_from_manifest(&manifest_v1);
     let pin_policy = pin_policy_from_manifest(&manifest_v1);
-    let source_plan = source_archive_plan_from_car_plan(&plan, *stats.car_archive_digest.as_bytes(), stats.car_size)?;
+    let source_plan = source_archive_plan_from_car_plan(
+        &plan,
+        *stats.car_archive_digest.as_bytes(),
+        stats.car_size,
+    )?;
     let manifest_bytes = manifest_v1
         .encode()
         .map_err(|err| eyre!("failed to encode SoraFS manifest: {err}"))?;
@@ -2587,9 +2600,10 @@ fn write_source_payload(
     fs::create_dir_all(destination)
         .wrap_err_with(|| format!("failed to create `{}`", destination.display()))?;
     for file in &source_plan.files {
-        let relative = file.path.iter().fold(PathBuf::new(), |path, component| {
-            path.join(component)
-        });
+        let relative = file
+            .path
+            .iter()
+            .fold(PathBuf::new(), |path, component| path.join(component));
         let output = destination.join(relative);
         ensure_parent_dir(&output)?;
         let bytes = file_payload_bytes(file, &source_plan.chunks, payload)?;
@@ -2690,11 +2704,7 @@ fn link_program_with_lockfile(
                 &mut dependency_program,
                 &package_dependency_by_alias,
             )?;
-            prefix_dependency_program(
-                &mut dependency_program,
-                &package_prefix,
-                &package_functions,
-            );
+            prefix_dependency_program(&mut dependency_program, &package_prefix, &package_functions);
             program.items.extend(dependency_program.items);
         }
     }
@@ -2707,13 +2717,15 @@ fn package_dependency_map<'a>(
 ) -> Result<BTreeMap<String, &'a LockedPackage>> {
     let mut dependencies = BTreeMap::new();
     for dependency in &package.dependencies {
-        let locked = lockfile.package_by_ref(&dependency.package).ok_or_else(|| {
-            eyre!(
-                "dependency `{}` of `{}` is missing from Musubi.lock",
-                dependency.package,
-                package.package
-            )
-        })?;
+        let locked = lockfile
+            .package_by_ref(&dependency.package)
+            .ok_or_else(|| {
+                eyre!(
+                    "dependency `{}` of `{}` is missing from Musubi.lock",
+                    dependency.package,
+                    package.package
+                )
+            })?;
         dependencies.insert(dependency.alias.to_string(), locked);
     }
     Ok(dependencies)
@@ -3238,6 +3250,106 @@ mod tests {
 
         copy_source_tree(source.path(), &destination).expect("copy source tree");
         verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    #[test]
+    fn sorafs_plan_uses_same_source_file_set_as_archive_hash() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        fs::write(
+            source.path().join("Musubi.toml"),
+            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir(source.path().join("src")).expect("src dir");
+        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+        fs::write(source.path().join(DEFAULT_LOCKFILE), "ignored").expect("lockfile");
+        fs::create_dir_all(source.path().join(".musubi/cache")).expect("musubi cache");
+        fs::write(source.path().join(".musubi/cache/generated.ko"), "ignored").expect("generated");
+        fs::create_dir(source.path().join("target")).expect("target dir");
+        fs::write(source.path().join("target/build.ko"), "ignored").expect("target");
+
+        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
+        let archive = hash_source_tree(source.path()).expect("archive hash");
+        let sorafs =
+            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive)
+                .expect("sorafs manifest");
+
+        assert_eq!(
+            sorafs.source_plan.files.len(),
+            archive.source_file_count as usize
+        );
+        assert_eq!(sorafs.source_plan.content_length, archive.source_bytes);
+        assert_eq!(archive.source_file_count, 2);
+    }
+
+    #[test]
+    fn cache_fetch_reconstructs_source_from_verified_payload() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        fs::write(
+            source.path().join("Musubi.toml"),
+            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir(source.path().join("src")).expect("src dir");
+        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+
+        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
+        let archive_stats = hash_source_tree(source.path()).expect("archive hash");
+        let sorafs =
+            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive_stats)
+                .expect("sorafs manifest");
+        let package = LockedPackage {
+            alias: "math".parse().unwrap(),
+            package: "std.universal/math@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: Some(MusubiArchiveRef::new(
+                sorafs.digest,
+                archive_stats.archive_hash_blake3_256,
+                archive_stats.source_bytes,
+                archive_stats.source_file_count,
+            )),
+            source_plan: Some(sorafs.source_plan),
+            cache_path: None,
+            exports: vec!["add".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+        let cache = tempfile::tempdir().expect("cache tempdir");
+        let provider_payload = source.path().join("provider.payload");
+        fs::write(&provider_payload, sorafs.payload).expect("provider payload");
+
+        fetch_locked_package_source(&package, cache.path(), &[provider_payload], false)
+            .expect("fetch source");
+
+        let fetched =
+            fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
+                .expect("read fetched");
+        assert_eq!(fetched, "fn add() {}\n");
+        verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    #[test]
+    fn dependency_programs_reject_non_function_items() {
+        let program = parse_kotodama("const answer = 1;").expect("parse const");
+        let package = LockedPackage {
+            alias: "math".parse().unwrap(),
+            package: "std.universal/math@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: None,
+            source_plan: None,
+            cache_path: None,
+            exports: vec!["add".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+
+        let err =
+            validate_dependency_program_is_function_only(&program, &package, Path::new("lib.ko"))
+                .expect_err("const rejected");
+
+        assert!(err.to_string().contains("function-only"));
     }
 
     #[test]

@@ -46419,7 +46419,10 @@ mod hot_path_load_profile_tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         prelude::*,
-        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+        query::{
+            QueryRequest, SingularQueryBox, executor::prelude::FindParameters,
+            runtime::prelude::FindAbiVersion,
+        },
     };
     use iroha_logger::Level;
     use iroha_telemetry::metrics::Metrics;
@@ -46441,6 +46444,13 @@ mod hot_path_load_profile_tests {
     fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
         let authority = AccountId::new(key_pair.public_key().clone());
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_authority(authority)
             .sign(key_pair)
     }
@@ -46517,6 +46527,30 @@ mod hot_path_load_profile_tests {
             query_samples.push(start.elapsed());
         }
         print_profile("query_find_abi_norito_with_direct_metrics", query_samples);
+
+        let signed_queries = (0..QUERY_SAMPLES)
+            .map(|_| signed_find_parameters(&key_pair))
+            .collect::<Vec<_>>();
+        let mut parameter_query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_query,
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("parameter query should complete");
+            std::hint::black_box(response);
+            parameter_query_samples.push(start.elapsed());
+        }
+        print_profile(
+            "query_find_parameters_norito_with_direct_metrics",
+            parameter_query_samples,
+        );
 
         let tx_state = Arc::new(State::new_for_testing(
             World::default(),
@@ -46596,6 +46630,36 @@ mod hot_path_load_profile_tests {
             "preauth_rate_limiter_distinct_keys_concurrent",
             limiter_samples,
         );
+
+        let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
+            LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
+        )));
+        let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        for _ in 0..LIMITER_WORKERS {
+            let limiter = limiter.clone();
+            let limiter_samples = Arc::clone(&limiter_samples);
+            handles.push(tokio::spawn(async move {
+                for _ in 0..LIMITER_OPS_PER_WORKER {
+                    let start = Instant::now();
+                    let allowed = limiter.allow("load-profile-shared-key").await;
+                    let elapsed = start.elapsed();
+                    assert!(allowed, "shared limiter key should be admitted");
+                    limiter_samples
+                        .lock()
+                        .expect("limiter samples lock")
+                        .push(elapsed);
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("limiter worker should complete");
+        }
+        let limiter_samples = Arc::try_unwrap(limiter_samples)
+            .expect("all limiter sample handles dropped")
+            .into_inner()
+            .expect("limiter samples lock");
+        print_profile("preauth_rate_limiter_same_key_concurrent", limiter_samples);
     }
 }
 

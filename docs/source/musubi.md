@@ -60,9 +60,10 @@ contracts = ["router::dex.universal"]
 
 Dependencies may use exact versions, caret requirements, tilde requirements,
 wildcards such as `1.*`, or comparator lists such as `>=1.0.0,<2.0.0`.
-`Musubi.lock` records the exact active release selected from the on-chain
-registry plus the source archive commitment. Lockfile keys are always canonical
-package ids; short aliases are resolved before they enter the lockfile.
+`Musubi.lock` records the full transitive graph selected from the on-chain
+registry plus each source archive commitment and deterministic source archive
+plan. Lockfile package identities are always canonical package ids; short
+aliases are resolved before they enter the lockfile.
 
 ## CLI
 
@@ -75,8 +76,10 @@ Useful local commands:
 cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
 cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias math
 cargo run -p musubi -- install --config client.toml
+cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
 cargo run -p musubi -- cache import math --source-root ../math
-cargo run -p musubi -- pack
+cargo run -p musubi -- cache fetch math --provider-payload math.payload
+cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
 cargo run -p musubi -- search swap --config client.toml
 cargo run -p musubi -- versions dex.universal/swap-core --config client.toml
@@ -90,27 +93,37 @@ cargo install musubi
 ```
 
 `install` resolves dependency requirements against the on-chain Musubi registry
-by default and records the canonical package ref, selected requirement, SoraFS
-manifest digest, source archive hash, byte count, file count, and exported
-functions in `Musubi.lock`. Use `install --offline` to write an unresolved
-lockfile for exact-version dependencies without querying a node. Use
-`install --locked` in CI to reject stale lockfiles.
+by default, follows transitive Musubi dependencies, and records lockfile v3
+nodes with the canonical package ref, selected requirement, SoraFS manifest
+digest, source archive hash, byte count, file count, exported functions, archive
+plan, and each node's own dependency aliases. Use `install --offline` to write
+an unresolved lockfile for exact-version dependencies without querying a node.
+Use `install --locked` in CI to reject stale lockfiles.
 
 `cache import` copies a fetched or checked-out source tree into the local
 Musubi cache and verifies it against the archive commitment in `Musubi.lock`.
+`cache fetch` and `install --fetch` reconstruct a source tree from a verified
+provider payload using the lockfile source archive plan. This local payload path
+is the current CLI-safe fetch surface; gateway-provider fetch can be layered onto
+the same archive plan without changing the lockfile format.
 `build` links cached dependency sources by rewriting calls such as
 `math::add()` to deterministic internal Kotodama function names, and rejects
-calls to functions that the dependency did not export.
+calls to functions that the dependency did not export. Musubi v1 libraries are
+function-only: dependency source files containing state declarations, triggers,
+kotoba blocks, constants, or other non-function contract items are rejected.
 
 `pack` computes the deterministic BLAKE3-256 source archive hash plus the source
-byte and file counts. With `--car-out` or `--sorafs-manifest-out`, it also
-builds a deterministic SoraFS CAR payload and SoraFS manifest. `publish
---dry-run` prints the release payload. Without `--dry-run`, `publish` submits a
-SoraFS pin registration first when it generated the manifest locally, then
-submits the signed `PublishMusubiRelease` transaction using the Iroha client
-config. Publish also parses package `.ko` sources and rejects exports that are
-not defined by a Kotodama function in the source tree. `yank` works the same way
-for `YankMusubiRelease`.
+byte and file counts. With `--car-out`, `--sorafs-manifest-out`, or
+`--source-plan-out`, it also builds the deterministic SoraFS CAR payload,
+SoraFS manifest, and Musubi source archive plan from the same source file set.
+`publish --dry-run` prints the release payload. Without `--dry-run`, `publish`
+now writes default artifacts under `.musubi/dist/<namespace>/<name>/<version>/`,
+rejects digest-only archive submissions, optionally uploads the manifest and
+payload through Torii's SoraFS storage-pin endpoint with `--upload`, registers
+the generated SoraFS pin, then submits the signed `PublishMusubiRelease`
+transaction using the Iroha client config. Publish also parses package `.ko`
+sources and rejects exports that are not defined by a Kotodama function in the
+source tree. `yank` works the same way for `YankMusubiRelease`.
 
 `search`, `versions`, and `alias resolve` query the same registry. `alias set
 --dry-run` prints a curated short-alias binding, and without `--dry-run` submits
@@ -135,7 +148,8 @@ The registry policy is:
   registered domain owner
 - global short aliases are not first-come package ownership; setting one
   requires the explicit `CanSetMusubiShortAlias` permission and the target
-  package must already have at least one active release
+  package must already have at least one active release, and an existing active
+  short alias cannot be silently retargeted
 - lockfiles record canonical package ids, never short aliases
 
 This means a project can use convenient import aliases locally while the shared
