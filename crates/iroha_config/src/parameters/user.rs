@@ -13361,13 +13361,13 @@ impl Nexus {
             return None;
         }
 
-        let has_global = dataspace_entries
+        let has_universal = dataspace_entries
             .iter()
             .any(|entry| entry.id == DataSpaceId::UNIVERSAL);
-        let has_global_alias = dataspace_entries
+        let has_universal_alias = dataspace_entries
             .iter()
             .any(|entry| entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS);
-        if !has_global && !has_global_alias {
+        if !has_universal && !has_universal_alias {
             dataspace_entries.push(DataSpaceMetadata::default());
         }
 

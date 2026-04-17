@@ -10858,11 +10858,15 @@ seiyaku Callee {
         result.expect("unit nested contract call should succeed");
         assert_eq!(vm.register(10), 0, "unit return should clear r10");
         assert!(
-            durable_state_overlay.contains_key("backlog"),
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/backlog")),
             "state overlay should include nested unit-return writes",
         );
         assert!(
-            durable_state_overlay.contains_key("safe_mode"),
+            durable_state_overlay
+                .keys()
+                .any(|key| key.as_ref().ends_with("/safe_mode")),
             "state overlay should include all nested unit-return writes",
         );
     }
