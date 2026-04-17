@@ -16922,6 +16922,8 @@ fn scaffold_single_api_app_template(
             output_dir.join("build-and-sync.sh"),
             single_api_build_and_sync_sh(),
         ),
+        (output_dir.join("doctor.sh"), single_api_doctor_sh()),
+        (output_dir.join("release.sh"), single_api_release_sh()),
         (output_dir.join("deploy.sh"), single_api_deploy_sh()),
         (output_dir.join("upgrade.sh"), single_api_upgrade_sh()),
         (
@@ -17254,10 +17256,15 @@ fn write_template_file(path: &Path, body: &str, overwrite: bool) -> Result<()> {
             format!("failed to create template directory {}", parent.display())
         })?;
     }
+    let body = normalize_template_shell_vars(body);
     fs::write(path, body)
         .wrap_err_with(|| format!("failed to write template file {}", path.display()))?;
     mark_template_file_executable(path)?;
     Ok(())
+}
+
+fn normalize_template_shell_vars(body: &str) -> String {
+    body.replace("${{BASH_SOURCE[0]}}", "${BASH_SOURCE[0]}")
 }
 
 fn mark_template_file_executable(path: &Path) -> Result<()> {
@@ -21830,6 +21837,48 @@ NPM_BIN="${NPM_BIN:-npm}"
     .replace("{prelude}", prelude)
 }
 
+fn single_api_doctor_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+{prelude}
+
+"$SCRIPT_DIR/build-and-sync.sh"
+exec "${IROHA_CMD[@]}" app soracloud app doctor --manifest "$SCRIPT_DIR/app_manifest.json" "$@"
+"#
+    .replace("{prelude}", prelude)
+}
+
+fn single_api_release_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+{prelude}
+
+: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
+
+"$SCRIPT_DIR/doctor.sh"
+
+args=(
+  app soracloud app release
+  --manifest "$SCRIPT_DIR/app_manifest.json"
+  --torii-url "$TORII_URL"
+  --skip-build
+)
+
+if [[ -n "${API_TOKEN:-}" ]]; then
+  args+=(--api-token "$API_TOKEN")
+fi
+
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
+"#
+    .replace("{prelude}", prelude)
+}
+
 fn single_api_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
@@ -22661,6 +22710,23 @@ mod tests {
             b"deterministic-safetensors-payload",
         )
         .expect("write weights");
+    }
+
+    fn write_test_inrou_guest_images(inrou_dir: &Path, label: &str) {
+        for isa in ["x86_64", "aarch64"] {
+            let isa_dir = inrou_dir.join(isa);
+            fs::create_dir_all(&isa_dir).expect("create test inrou isa dir");
+            fs::write(
+                isa_dir.join("vmlinux"),
+                format!("{label}-{isa}-kernel").as_bytes(),
+            )
+            .expect("write test inrou kernel");
+            fs::write(
+                isa_dir.join("rootfs.ext4"),
+                format!("{label}-{isa}-rootfs").as_bytes(),
+            )
+            .expect("write test inrou rootfs");
+        }
     }
 
     #[derive(Clone)]
@@ -27590,6 +27656,22 @@ mod tests {
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
             (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode public discovery pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "disc-deploy" }))
+                        .expect("encode public discovery storage pin response"),
+                },
+            ),
+            (
                 "/v1/soracloud/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -27680,6 +27762,22 @@ mod tests {
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode public discovery pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "disc-upgrade" }))
+                        .expect("encode public discovery storage pin response"),
+                },
+            ),
             (
                 "/v1/soracloud/upgrade".to_owned(),
                 MockHttpResponse {
@@ -28367,7 +28465,7 @@ main().catch((error) => {
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/http-service-local-dev-ran.txt"
 "#,
         )
@@ -28478,7 +28576,7 @@ exit 130
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
 "#,
         )
@@ -28610,7 +28708,7 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/deploy-workspace-torii.txt"
 printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/deploy-workspace-token.txt"
 printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
@@ -28696,7 +28794,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/upgrade-workspace-torii.txt"
 printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
 "#,
@@ -30267,7 +30365,7 @@ main().catch((error) => {
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/local-dev-ran.txt"
 "#,
         )
@@ -30465,7 +30563,7 @@ exit 130
             r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
 "#,
         )
@@ -33118,6 +33216,7 @@ main().catch((error) => {
         .expect("write frontend index");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        write_test_inrou_guest_images(&dir.join("services/live/inrou"), "deploy");
         fs::write(
             dir.join("services/live/build/live-api.tgz"),
             b"deploy-live-bundle",
@@ -33342,6 +33441,7 @@ main().catch((error) => {
         .expect("write frontend index");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        write_test_inrou_guest_images(&dir.join("services/live/inrou"), "upgrade");
         fs::write(
             dir.join("services/live/build/live-api.tgz"),
             b"upgrade-live-bundle",

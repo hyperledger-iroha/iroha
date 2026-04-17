@@ -86,10 +86,11 @@ fn assert_numeric_micro(amount: &Numeric, expected_micro: u128) {
 }
 
 fn sample_reward_config_json() -> Value {
+    let bond_asset_id = xor_asset_id().to_string();
     norito::json!({
         "policy": {
             "minimum_exit_bond": "1000",
-            "bond_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "bond_asset_id": bond_asset_id,
             "uptime_floor_per_mille": 900,
             "slash_penalty_basis_points": 250,
             "activation_grace_epochs": 0
