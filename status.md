@@ -26,6 +26,23 @@ Last updated: 2026-04-17
     dead-code warnings in bench/test builds)
   - `cargo bench -p enum_trait_bench -- --sample-size 10 --warm-up-time 1 --measurement-time 1`
 
+## 2026-04-17 Follow-up: `koto_compile` smoke fixture restored to current ZK semantics
+- `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/10_meta_header.ko` now uses `poseidon2(1, 2)` alongside `setvl(8)` so the example actually emits both ZK and vector opcodes under the current compiler. The previous `assert(true)` path lowers to an abort syscall and no longer satisfies `meta { zk: true; }`.
+- `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/README.md` now describes the example in the same terms, so the documented fixture matches the compiler behavior and the CLI smoke tests again compile successfully.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test cli_smoke -- --nocapture`
+
+## 2026-04-17 Follow-up: AXT descriptor binding no longer drifts across crate feature sets
+- `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nexus/axt.rs` now derives `compute_descriptor_binding` from the descriptor's bare Norito payload (`codec::encode_adaptive`) instead of the header-framed bytes. This removes schema-hash/header drift from the binding preimage while keeping the payload layout deterministic.
+- The same module now has a focused unit test that pins the Poseidon preimage to the `iroha:axt:desc:v1\0` domain separator plus bare payload bytes.
+- `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json` and `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_envelope_multi_ds.json` were regenerated so the shared AXT fixtures match the new stable binding.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/axt_descriptor_builder.rs` now consumes the canonical data-model descriptor fixture instead of a stale duplicate copy and only asserts the shared binding/JSON schema surface, not the model-type-specific Norito header bytes.
+- Focused validation for this slice:
+  - `cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures`
+  - `cargo test -p iroha_data_model --test axt_descriptor_fixture -- --nocapture`
+  - `cargo test -p iroha_data_model --test axt_envelope_fixture -- --nocapture`
+  - `cargo test -p ivm --test axt_descriptor_builder -- --nocapture`
+
 ## 2026-04-17 Follow-up: IVM AES raw-key decryption parity fix
 - `/home/mtakemiya/dev/iroha/crates/ivm/src/aes.rs` now implements the
   accelerated `aesdec` round with the same raw round-key contract as

@@ -202,7 +202,7 @@ fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
         ModelLaneConfig {
             id: LaneId::new(0),
             dataspace_id: DataSpaceId::new(0),
-            alias: "lane-global".to_owned(),
+            alias: "lane-universal".to_owned(),
             visibility: LaneVisibility::Public,
             ..ModelLaneConfig::default()
         },
@@ -563,12 +563,12 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         .lock()
         .await;
 
-    let mut lane_global = Table::new();
-    lane_global.insert("index".into(), TomlValue::Integer(0));
-    lane_global.insert("alias".into(), TomlValue::String("lane-global".to_owned()));
-    lane_global.insert("dataspace".into(), TomlValue::String("global".to_owned()));
-    lane_global.insert("visibility".into(), TomlValue::String("public".to_owned()));
-    lane_global.insert("metadata".into(), TomlValue::Table(Table::new()));
+    let mut lane_universal = Table::new();
+    lane_universal.insert("index".into(), TomlValue::Integer(0));
+    lane_universal.insert("alias".into(), TomlValue::String("lane-universal".to_owned()));
+    lane_universal.insert("dataspace".into(), TomlValue::String("universal".to_owned()));
+    lane_universal.insert("visibility".into(), TomlValue::String("public".to_owned()));
+    lane_universal.insert("metadata".into(), TomlValue::Table(Table::new()));
 
     let mut lane_alice = Table::new();
     lane_alice.insert("index".into(), TomlValue::Integer(1));
@@ -584,14 +584,14 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     lane_bob.insert("visibility".into(), TomlValue::String("public".to_owned()));
     lane_bob.insert("metadata".into(), TomlValue::Table(Table::new()));
 
-    let mut ds_global = Table::new();
-    ds_global.insert("alias".into(), TomlValue::String("global".to_owned()));
-    ds_global.insert("id".into(), TomlValue::Integer(0));
-    ds_global.insert(
+    let mut ds_universal = Table::new();
+    ds_universal.insert("alias".into(), TomlValue::String("universal".to_owned()));
+    ds_universal.insert("id".into(), TomlValue::Integer(0));
+    ds_universal.insert(
         "description".into(),
         TomlValue::String("default dataspace".to_owned()),
     );
-    ds_global.insert("fault_tolerance".into(), TomlValue::Integer(1));
+    ds_universal.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
     let mut ds1 = Table::new();
     ds1.insert("alias".into(), TomlValue::String("ds1".to_owned()));
@@ -629,7 +629,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     policy.insert("default_lane".into(), TomlValue::Integer(0));
     policy.insert(
         "default_dataspace".into(),
-        TomlValue::String("global".to_owned()),
+        TomlValue::String("universal".to_owned()),
     );
     policy.insert(
         "rules".into(),
@@ -671,7 +671,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 .write(
                     ["nexus", "lane_catalog"],
                     TomlValue::Array(vec![
-                        TomlValue::Table(lane_global.clone()),
+                        TomlValue::Table(lane_universal.clone()),
                         TomlValue::Table(lane_alice.clone()),
                         TomlValue::Table(lane_bob.clone()),
                     ]),
@@ -679,7 +679,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 .write(
                     ["nexus", "dataspace_catalog"],
                     TomlValue::Array(vec![
-                        TomlValue::Table(ds_global.clone()),
+                        TomlValue::Table(ds_universal.clone()),
                         TomlValue::Table(ds1.clone()),
                         TomlValue::Table(ds2.clone()),
                     ]),

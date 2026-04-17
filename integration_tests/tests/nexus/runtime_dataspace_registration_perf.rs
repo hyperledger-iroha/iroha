@@ -1027,7 +1027,7 @@ fn run_registration_iteration(
 
     let lane = LaneConfig {
         id: lane_id,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         alias: format!("bench-lane-{lane_raw}"),
         description: Some(format!("runtime registration benchmark lane {lane_raw}")),
         visibility: LaneVisibility::Public,

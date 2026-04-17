@@ -17,7 +17,7 @@ seiyaku MetaDemo {
   hajimari() {
     // Emit vector/zk opcodes so the meta flags are exercised.
     setvl(8);
-    assert(true);
+    let _digest = poseidon2(1, 2);
     let a = 1;
   }
 }

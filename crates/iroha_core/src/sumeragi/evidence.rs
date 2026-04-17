@@ -549,6 +549,9 @@ fn validate_double_vote(
     if v1.height != v2.height {
         return Err(EvidenceValidationError::HeightMismatch);
     }
+    if v1.view != v2.view {
+        return Err(EvidenceValidationError::ViewMismatch);
+    }
     if v1.epoch != v2.epoch {
         return Err(EvidenceValidationError::EpochMismatch);
     }

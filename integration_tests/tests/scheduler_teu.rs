@@ -173,7 +173,7 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     }
 
     let lane_label = LaneId::SINGLE.as_u32().to_string();
-    let dataspace_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
 
     let backlog = metrics
         .nexus_scheduler_dataspace_teu_backlog
@@ -236,7 +236,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "public".to_string(),
         description: Some("Public execution lane".to_string()),
         visibility: LaneVisibility::Public,
@@ -281,7 +281,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(1),
             dataspace: Some(DataSpaceId::new(1)),
@@ -377,7 +377,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
-    let dataspace0_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
 
     let backlog_lane0 = metrics
@@ -416,7 +416,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     }
     assert!(lanes_seen.contains(&LaneId::new(0)));
     assert!(lanes_seen.contains(&LaneId::new(1)));
-    assert!(dataspaces_seen.contains(&DataSpaceId::GLOBAL));
+    assert!(dataspaces_seen.contains(&DataSpaceId::UNIVERSAL));
     assert!(dataspaces_seen.contains(&DataSpaceId::new(1)));
 
     drop(guards);
@@ -474,7 +474,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "rule-lane".to_string(),
         description: Some("Routed lane".to_string()),
         visibility: LaneVisibility::Public,
@@ -521,7 +521,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         default_dataspace: DataSpaceId::new(1),
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(0),
-            dataspace: Some(DataSpaceId::GLOBAL),
+            dataspace: Some(DataSpaceId::UNIVERSAL),
             matcher: LaneRoutingMatcher {
                 account: Some(routed_account.to_string()),
                 instruction: None,
@@ -607,7 +607,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
-    let dataspace0_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
 
     let backlog_lane0 = metrics
@@ -645,7 +645,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "default dataspace should be used for fallback"
     );
     assert!(
-        dataspaces_seen.contains(&DataSpaceId::GLOBAL),
+        dataspaces_seen.contains(&DataSpaceId::UNIVERSAL),
         "explicit rule should keep its dataspace"
     );
 
