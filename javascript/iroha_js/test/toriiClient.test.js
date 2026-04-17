@@ -8704,7 +8704,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
           {
             id: 4,
             key: "ton_raw",
-            description: "TON raw addresses in workchain:account_hex form.",
+            description: "Canonical TON raw addresses in workchain:account_hex form.",
           },
         ],
         counterparties: [
@@ -8761,7 +8761,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
       {
         id: 4,
         key: "ton_raw",
-        description: "TON raw addresses in workchain:account_hex form.",
+        description: "Canonical TON raw addresses in workchain:account_hex form.",
       },
     ],
     counterparties: [
