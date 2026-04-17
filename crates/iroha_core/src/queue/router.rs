@@ -132,7 +132,7 @@ pub fn evaluate_policy(
     tx: &AcceptedTransaction<'_>,
 ) -> RoutingDecision {
     if let Some(decision) =
-        dataspace_scoped_permission_routing_decision(tx, None, None).unwrap_or(None)
+        dataspace_scoped_permission_routing_decision(tx, None, None, None).unwrap_or(None)
     {
         return decision;
     }
@@ -159,6 +159,7 @@ fn evaluate_policy_with_view(
         tx,
         Some(&state_view.nexus().lane_catalog),
         Some(&state_view.nexus().dataspace_catalog),
+        Some(state_view),
     )
     .unwrap_or(None)
     {
@@ -189,6 +190,7 @@ pub fn evaluate_policy_with_catalog(
         tx,
         Some(lane_catalog),
         Some(dataspace_catalog),
+        None,
     )? {
         return Ok(decision);
     }
@@ -205,10 +207,31 @@ pub fn evaluate_policy_with_catalog(
     resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
 }
 
+/// Evaluate the routing policy against catalogs, resolving opaque dataspace-scoped
+/// permissions from the current world snapshot when possible.
+pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
+        tx,
+        Some(lane_catalog),
+        Some(dataspace_catalog),
+        world,
+    )? {
+        return Ok(decision);
+    }
+    evaluate_policy_with_catalog(policy, lane_catalog, dataspace_catalog, tx)
+}
+
 fn dataspace_scoped_permission_routing_decision(
     tx: &AcceptedTransaction<'_>,
     lane_catalog: Option<&LaneCatalog>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
     let mut target_dataspace: Option<DataSpaceId> = None;
     let Some(executable) = transaction_executable(tx) else {
@@ -221,6 +244,7 @@ fn dataspace_scoped_permission_routing_decision(
                 let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
                     &**instruction,
                     dataspace_catalog,
+                    state_view,
                 ) else {
                     continue;
                 };
@@ -242,6 +266,76 @@ fn dataspace_scoped_permission_routing_decision(
                 let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
                     &**instruction,
                     dataspace_catalog,
+                    state_view,
+                ) else {
+                    continue;
+                };
+                if let Some(existing) = target_dataspace {
+                    if existing != dataspace_id {
+                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                            first_dataspace_id: existing,
+                            second_dataspace_id: dataspace_id,
+                        });
+                    }
+                } else {
+                    target_dataspace = Some(dataspace_id);
+                }
+            }
+        }
+    }
+
+    let Some(dataspace_id) = target_dataspace else {
+        return Ok(None);
+    };
+
+    match (lane_catalog, dataspace_catalog) {
+        (Some(lane_catalog), Some(dataspace_catalog)) => {
+            canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    lane_catalog: Option<&LaneCatalog>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+    let mut target_dataspace: Option<DataSpaceId> = None;
+    let Some(executable) = transaction_executable(tx) else {
+        return Ok(None);
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                ) else {
+                    continue;
+                };
+                if let Some(existing) = target_dataspace {
+                    if existing != dataspace_id {
+                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                            first_dataspace_id: existing,
+                            second_dataspace_id: dataspace_id,
+                        });
+                    }
+                } else {
+                    target_dataspace = Some(dataspace_id);
+                }
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
                 ) else {
                     continue;
                 };
@@ -343,7 +437,9 @@ fn instruction_account_permission_holder(
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
-                if dataspace_scoped_permission_target(&grant.object, None).is_some() {
+                if dataspace_scoped_permission_target_needs_state(&grant.object)
+                    || dataspace_scoped_permission_target(&grant.object, None, None).is_some()
+                {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&grant.destination)
@@ -356,7 +452,9 @@ fn instruction_account_permission_holder(
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
-                if dataspace_scoped_permission_target(&revoke.object, None).is_some() {
+                if dataspace_scoped_permission_target_needs_state(&revoke.object)
+                    || dataspace_scoped_permission_target(&revoke.object, None, None).is_some()
+                {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&revoke.destination)
@@ -374,13 +472,14 @@ fn instruction_account_permission_holder(
 fn instruction_dataspace_scoped_permission_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
-                dataspace_scoped_permission_target(&grant.object, dataspace_catalog)
+                dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
             }
             GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
         };
@@ -389,8 +488,40 @@ fn instruction_dataspace_scoped_permission_target(
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
-                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog)
+                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
             }
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+        };
+    }
+
+    None
+}
+
+fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => dataspace_scoped_permission_target_with_world(
+                &grant.object,
+                dataspace_catalog,
+                world,
+            ),
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => dataspace_scoped_permission_target_with_world(
+                &revoke.object,
+                dataspace_catalog,
+                world,
+            ),
             RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
         };
     }
@@ -401,19 +532,99 @@ fn instruction_dataspace_scoped_permission_target(
 fn asset_definition_dataspace_target(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    let dataspace_alias = asset_definition_id.try_domain()?.dataspace().as_ref();
+    let dataspace_alias = asset_definition_id
+        .try_domain()
+        .map(|domain| domain.dataspace().as_ref().to_owned())
+        .or_else(|| {
+            state_view.and_then(|view| {
+                view.world
+                    .asset_definition(asset_definition_id)
+                    .ok()
+                    .and_then(|definition| {
+                        definition
+                            .id
+                            .try_domain()
+                            .map(|domain| domain.dataspace().as_ref().to_owned())
+                    })
+            })
+        })?;
     if dataspace_alias.eq_ignore_ascii_case("universal") {
         return Some(DataSpaceId::GLOBAL);
     }
     dataspace_catalog?
-        .by_alias(dataspace_alias)
+        .by_alias(&dataspace_alias)
         .map(|entry| entry.id)
+}
+
+fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
+    asset_definition_id: &AssetDefinitionId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let dataspace_alias = asset_definition_id
+        .try_domain()
+        .map(|domain| domain.dataspace().as_ref().to_owned())
+        .or_else(|| {
+            world
+                .asset_definition(asset_definition_id)
+                .ok()
+                .and_then(|definition| {
+                    definition
+                        .id
+                        .try_domain()
+                        .map(|domain| domain.dataspace().as_ref().to_owned())
+                })
+        })?;
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::GLOBAL);
+    }
+    dataspace_catalog?
+        .by_alias(&dataspace_alias)
+        .map(|entry| entry.id)
+}
+
+fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
+    match permission.name() {
+        "CanMintAssetWithDefinition" => permission
+            .payload()
+            .try_into_any_norito::<CanMintAssetWithDefinition>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        "CanBurnAssetWithDefinition" => permission
+            .payload()
+            .try_into_any_norito::<CanBurnAssetWithDefinition>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        "CanTransferAssetWithDefinition" => permission
+            .payload()
+            .try_into_any_norito::<CanTransferAssetWithDefinition>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        "CanModifyAssetMetadataWithDefinition" => permission
+            .payload()
+            .try_into_any_norito::<CanModifyAssetMetadataWithDefinition>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        "CanUnregisterAssetDefinition" => permission
+            .payload()
+            .try_into_any_norito::<CanUnregisterAssetDefinition>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        "CanModifyAssetDefinitionMetadata" => permission
+            .payload()
+            .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+            .ok()
+            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+        _ => false,
+    }
 }
 
 fn dataspace_scoped_permission_target(
     permission: &Permission,
     dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     if permission.name() != "CanPublishSpaceDirectoryManifest" {
         return match permission.name() {
@@ -422,42 +633,66 @@ fn dataspace_scoped_permission_target(
                 .try_into_any_norito::<CanMintAssetWithDefinition>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanBurnAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanBurnAssetWithDefinition>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanTransferAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanTransferAssetWithDefinition>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanModifyAssetMetadataWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanModifyAssetMetadataWithDefinition>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanUnregisterAssetDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanUnregisterAssetDefinition>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             "CanModifyAssetDefinitionMetadata" => permission
                 .payload()
                 .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
                 .ok()
                 .and_then(|token| {
-                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        state_view,
+                    )
                 }),
             _ => None,
         };
@@ -468,6 +703,132 @@ fn dataspace_scoped_permission_target(
         .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
         .ok()
         .map(|token| token.dataspace)
+}
+
+fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
+    permission: &Permission,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    if permission.name() != "CanPublishSpaceDirectoryManifest" {
+        return match permission.name() {
+            "CanMintAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            "CanBurnAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanBurnAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            "CanTransferAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanTransferAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            "CanModifyAssetMetadataWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanModifyAssetMetadataWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            "CanUnregisterAssetDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanUnregisterAssetDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            "CanModifyAssetDefinitionMetadata" => permission
+                .payload()
+                .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        dataspace_catalog,
+                        world,
+                    )
+                }),
+            _ => None,
+        };
+    }
+
+    permission
+        .payload()
+        .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+        .ok()
+        .map(|token| token.dataspace)
+}
+
+fn instruction_dataspace_scoped_permission_target_needs_state(
+    instruction: &dyn Instruction,
+) -> bool {
+    let any = instruction.as_any();
+
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => {
+                dataspace_scoped_permission_target_needs_state(&grant.object)
+            }
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => false,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => {
+                dataspace_scoped_permission_target_needs_state(&revoke.object)
+            }
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => false,
+        };
+    }
+
+    false
+}
+
+fn dataspace_scoped_permission_routing_requires_state(tx: &AcceptedTransaction<'_>) -> bool {
+    let Some(executable) = transaction_executable(tx) else {
+        return false;
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
+            instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
+        }),
+        Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::IvmProved(proved) => proved.overlay.iter().any(|instruction| {
+            instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
+        }),
+    }
 }
 
 fn canonical_dataspace_route(
@@ -1047,7 +1408,9 @@ impl LaneRouter for ConfigLaneRouter {
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
-        if policy_needs_state(self.policy.as_ref()) {
+        if policy_needs_state(self.policy.as_ref())
+            || dataspace_scoped_permission_routing_requires_state(tx)
+        {
             return None;
         }
         Some(self.route(tx))
@@ -1061,6 +1424,7 @@ impl LaneRouter for ConfigLaneRouter {
             tx,
             Some(self.lane_catalog.as_ref()),
             Some(self.dataspace_catalog.as_ref()),
+            None,
         )? {
             return Ok(decision);
         }
@@ -1082,6 +1446,7 @@ impl LaneRouter for ConfigLaneRouter {
             tx,
             Some(&nexus.lane_catalog),
             Some(&nexus.dataspace_catalog),
+            Some(state_view),
         )? {
             return Ok(decision);
         }
@@ -1093,7 +1458,9 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-        if policy_needs_state(self.policy.as_ref()) {
+        if policy_needs_state(self.policy.as_ref())
+            || dataspace_scoped_permission_routing_requires_state(tx)
+        {
             return Ok(None);
         }
         self.try_route(tx).map(Some)
@@ -1286,6 +1653,26 @@ mod tests {
                 .world
                 .account_scope_directory
                 .insert(account_id, entry.clone());
+        }
+        state
+    }
+
+    fn state_with_asset_definitions(
+        asset_definitions: Vec<AssetDefinition>,
+        dataspace_catalog: DataSpaceCatalog,
+        lane_catalog: LaneCatalog,
+    ) -> crate::state::State {
+        let mut state = blank_state();
+        {
+            let mut nexus = state.nexus.write();
+            nexus.dataspace_catalog = dataspace_catalog;
+            nexus.lane_catalog = lane_catalog;
+        }
+        for asset_definition in asset_definitions {
+            state
+                .world
+                .asset_definitions
+                .insert(asset_definition.id.clone(), asset_definition);
         }
         state
     }
@@ -2379,7 +2766,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_permission_grant_routes_by_destination_account_policy() {
+    fn asset_definition_permission_grant_routes_by_asset_definition_dataspace_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -2432,29 +2819,48 @@ mod tests {
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
         );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Grant::account_permission(
                 iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
-                    asset_definition,
+                    asset_definition: opaque_asset_definition,
                 },
                 bob_id,
             ))],
         );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("ds1".to_owned())
+                    .build(&alice_id),
+            ],
+            router.dataspace_catalog.as_ref().clone(),
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset-definition permission should defer to state"),
+            None
+        );
 
         let decision = router
-            .try_route(&tx)
-            .expect("asset-definition permission should route to destination account lane");
+            .try_route_with_view(&tx, &state.view())
+            .expect("asset-definition permission should route to the asset-definition dataspace");
 
         assert_eq!(
             decision,
-            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
         );
     }
 
     #[test]
-    fn asset_definition_permission_revoke_routes_by_destination_account_policy() {
+    fn asset_definition_permission_revoke_routes_by_asset_definition_dataspace_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -2507,20 +2913,133 @@ mod tests {
             DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
         );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Revoke::account_permission(
                 iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
-                    asset_definition,
+                    asset_definition: opaque_asset_definition,
                 },
                 bob_id,
             ))],
         );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("ds1".to_owned())
+                    .build(&alice_id),
+            ],
+            router.dataspace_catalog.as_ref().clone(),
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset-definition revoke should defer to state"),
+            None
+        );
+
+        let decision = router.try_route_with_view(&tx, &state.view()).expect(
+            "asset-definition permission revoke should route to the asset-definition dataspace",
+        );
+
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+        );
+    }
+
+    #[test]
+    fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![
+                LaneRoutingRule {
+                    lane: LaneId::new(1),
+                    dataspace: Some(DataSpaceId::new(1)),
+                    matcher: LaneRoutingMatcher {
+                        account: Some(alice_id.to_string()),
+                        instruction: None,
+                        description: None,
+                    },
+                },
+                LaneRoutingRule {
+                    lane: LaneId::new(2),
+                    dataspace: Some(DataSpaceId::new(2)),
+                    matcher: LaneRoutingMatcher {
+                        account: Some(bob_id.to_string()),
+                        instruction: None,
+                        description: None,
+                    },
+                },
+            ],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+            (LaneId::new(2), DataSpaceId::new(2)),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(1),
+                alias: "alice".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "bob".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("vault", "bob").unwrap(),
+            "voucher".parse().unwrap(),
+        );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                    asset_definition: opaque_asset_definition,
+                },
+                alice_id.clone(),
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("voucher".to_owned())
+                    .build(&bob_id),
+            ],
+            router.dataspace_catalog.as_ref().clone(),
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque named-dataspace permission should defer to state"),
+            None
+        );
 
         let decision = router
-            .try_route(&tx)
-            .expect("asset-definition permission revoke should route to destination account lane");
+            .try_route_with_view(&tx, &state.view())
+            .expect("named-dataspace asset permission should route to that dataspace");
 
         assert_eq!(
             decision,

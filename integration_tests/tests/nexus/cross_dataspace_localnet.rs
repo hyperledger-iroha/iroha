@@ -1905,17 +1905,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let mut successful_swap_synced_status = None;
         let (successful_swap_tx, successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
-            let pre_barrier_height = alice
+            let pre_barrier_height = submitter
                 .get_sumeragi_status_wire()
                 .map_err(|err| eyre!(err))?
                 .commit_qc
-                .height
-                .max(
-                    bob.get_sumeragi_status_wire()
-                        .map_err(|err| eyre!(err))?
-                        .commit_qc
-                        .height,
-                );
+                .height;
             let successful_swap_tx = submitter
                 .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
@@ -1930,17 +1924,18 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&successful_swap_tx) {
                 Ok(_) => {
-                    successful_swap_synced_status =
-                        Some(wait_for_committed_success_or_height_fallback(
-                            &alice,
-                            &alice,
+                    successful_swap_synced_status = Some(
+                        wait_for_committed_success_or_height_fallback(
+                            &submitter,
+                            &submitter,
                             successful_swap_entry_hash.clone(),
-                            "successful swap confirmation on alice observer",
-                            "successful swap barrier on alice observer (height fallback)",
+                            "successful swap confirmation on ds1 authoritative observer",
+                            "successful swap barrier on ds1 authoritative observer (height fallback)",
                             successful_swap_pre_barrier_height,
                             SWAP_COMMITTED_OUTCOME_TIMEOUT,
                             SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                        )?);
+                        )?,
+                    );
                 }
                 Err(err) => {
                     let error_text = err.to_string();
@@ -1949,11 +1944,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     }
                     swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
                     match wait_for_committed_success_or_height_fallback(
-                        &alice,
-                        &alice,
+                        &submitter,
+                        &submitter,
                         successful_swap_entry_hash,
-                        "successful swap confirmation on alice observer",
-                        "successful swap barrier on alice observer (height fallback)",
+                        "successful swap confirmation on ds1 authoritative observer",
+                        "successful swap barrier on ds1 authoritative observer (height fallback)",
                         successful_swap_pre_barrier_height,
                         SWAP_COMMITTED_OUTCOME_TIMEOUT,
                         SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
@@ -2158,27 +2153,23 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         Metadata::default(),
                     );
                     let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();
-                    let pre_barrier_height = alice
+                    let pre_barrier_height = soak_submitter
                         .get_sumeragi_status_wire()
                         .map_err(|err| eyre!(err))?
                         .commit_qc
-                        .height
-                        .max(
-                            bob.get_sumeragi_status_wire()
-                                .map_err(|err| eyre!(err))?
-                                .commit_qc
-                                .height,
-                        );
+                        .height;
                     soak_submitter.submit_transaction(&soak_swap_tx)?;
                     let submit_elapsed = submit_started.elapsed();
                     let barrier_started = Instant::now();
                     let _synced_after_paired_swaps = match wait_for_committed_success(
-                        &alice,
+                        &soak_submitter,
                         soak_swap_entry_hash.clone(),
-                        "soak paired swaps confirmation on alice",
+                        "soak paired swaps confirmation on ds1 authoritative observer",
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
                     ) {
-                        Ok(()) => alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?,
+                        Ok(()) => soak_submitter
+                            .get_sumeragi_status_wire()
+                            .map_err(|err| eyre!(err))?,
                         Err(err) => {
                             let error_text = err.to_string();
                             if !is_inconclusive_committed_outcome_error(&error_text) {
@@ -2191,21 +2182,21 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                 );
                             }
                             match wait_for_height_with_tick_timeout(
-                                &alice,
-                                &alice,
+                                &soak_submitter,
+                                &soak_submitter,
                                 pre_barrier_height.saturating_add(1),
-                                "soak paired swaps barrier on alice (height fallback)",
+                                "soak paired swaps barrier on ds1 authoritative observer (height fallback)",
                                 SOAK_PHASE_WAIT_TIMEOUT,
                                 SOAK_BARRIER_TICK_EVERY_POLLS,
                             ) {
                                 Ok(status) => status,
                                 Err(height_err) => match wait_for_committed_success(
-                                    &alice,
+                                    &soak_submitter,
                                     soak_swap_entry_hash.clone(),
-                                    "soak paired swaps confirmation on alice (post-barrier-timeout)",
+                                    "soak paired swaps confirmation on ds1 authoritative observer (post-barrier-timeout)",
                                     SOAK_PHASE_WAIT_TIMEOUT,
                                 ) {
-                                    Ok(()) => alice
+                                    Ok(()) => soak_submitter
                                         .get_sumeragi_status_wire()
                                         .map_err(|err| eyre!(err))?,
                                     Err(outcome_err) => {
@@ -2389,9 +2380,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
                     {
                         if let Ok(committed_reason) = wait_for_committed_rejection_reason(
-                            &alice,
+                            &submitter,
                             entry_hash.clone(),
-                            "rollback rejection reason from committed history",
+                            "rollback rejection reason from ds1 authoritative history",
                             ROLLBACK_HISTORY_RETRY_TIMEOUT,
                         ) {
                             failure_text = Some(committed_reason);
@@ -2415,9 +2406,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 .ok_or_else(|| eyre!("missing transaction entry hash for rollback fallback"))?;
             eprintln!("[rollback] falling back to committed history lookup for rejection reason");
             match wait_for_committed_rejection_reason(
-                &alice,
+                &alice_on_ds1,
                 entry_hash,
-                "rollback rejection reason from committed history fallback",
+                "rollback rejection reason from ds1 authoritative history fallback",
                 ROLLBACK_HISTORY_FALLBACK_TIMEOUT,
             ) {
                 Ok(reason) => {
