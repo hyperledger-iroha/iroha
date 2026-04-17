@@ -46076,15 +46076,23 @@ async fn frontier_sidecar_hint_retargets_uncommitted_tracked_missing_request_dur
     let _ = seed_genesis_block_for_state(&actor.state);
     let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
     let height = committed_height.saturating_add(1).max(1);
-    let mut expected_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
-    if actor.block_payload_available_locally(expected_hash) {
-        expected_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE5; Hash::LENGTH]));
-    }
+    let expected_hash = [0xC5_u8, 0xE5, 0xA5, 0xB5]
+        .into_iter()
+        .map(|byte| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+        })
+        .find(|hash| {
+            !actor.block_payload_available_locally(*hash)
+                && !actor.authoritative_block_payload_available(*hash)
+        })
+        .expect("test setup requires a frontier hash without authoritative payload");
     assert!(
         !actor.block_payload_available_locally(expected_hash),
         "test setup requires a missing frontier hash"
+    );
+    assert!(
+        !actor.authoritative_block_payload_available(expected_hash),
+        "test setup requires a frontier hash without authoritative payload"
     );
     let sidecar_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
@@ -46120,6 +46128,27 @@ async fn frontier_sidecar_hint_retargets_uncommitted_tracked_missing_request_dur
             view_change_triggered_view: None,
             attempts: 0,
         },
+    );
+    assert_eq!(
+        actor.committed_height_snapshot(),
+        committed_height,
+        "test setup requires a stable committed-height snapshot"
+    );
+    assert_eq!(
+        height,
+        actor.committed_height_snapshot().saturating_add(1),
+        "test setup requires the vote-backed sidecar hint to target the contiguous frontier"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .get(&expected_hash)
+            .is_some_and(|request| {
+                request.height == height
+                    && !actor.authoritative_block_payload_available(expected_hash)
+            }),
+        "test setup should track an unresolved frontier missing-block request for the expected hash"
     );
 
     actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
