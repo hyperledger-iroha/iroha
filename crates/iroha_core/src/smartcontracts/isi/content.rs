@@ -218,7 +218,7 @@ fn build_manifest(
         ContentBundleManifest {
             bundle_id,
             index_hash,
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             lane: LaneId::SINGLE,
             blob_class: BlobClass::GovernanceArtifact,
             retention: RetentionPolicy::default(),

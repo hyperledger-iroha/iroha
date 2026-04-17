@@ -479,32 +479,41 @@ pub mod isi {
             })
             .collect();
 
-        for domain_id in &binding.allowed_domains {
-            if !alias_domains.contains(domain_id) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "asset subject binding requires account {subject} to hold an alias in domain {domain_id}"
-                    )
-                    .into(),
-                ));
-            }
-
+        let matching_domains = binding
+            .allowed_domains
+            .iter()
+            .filter(|domain_id| alias_domains.contains(*domain_id));
+        let mut matched_any = false;
+        let mut denied_domains = Vec::new();
+        for domain_id in matching_domains {
+            matched_any = true;
             let domain = state_transaction
                 .world
                 .domain(domain_id)
                 .map_err(Error::from)?;
             let domain_policy = load_domain_usage_policy(domain)?;
-            if !domain_policy.allows(definition_id) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "domain policy for {domain_id} denies usage of asset definition {definition_id}"
-                    )
-                    .into(),
-                ));
+            if domain_policy.allows(definition_id) {
+                return Ok(());
             }
+            denied_domains.push(domain_id.to_string());
         }
 
-        Ok(())
+        if !matched_any {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset subject binding requires account {subject} to hold an alias in at least one allowed domain for asset definition {definition_id}"
+                )
+                .into(),
+            ));
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "domain policy for matched domains [{}] denies usage of asset definition {definition_id}",
+                denied_domains.join(", ")
+            )
+            .into(),
+        ))
     }
 
     fn ensure_dataspace_binding_allows_asset(
@@ -1332,7 +1341,7 @@ pub mod query {
                     }
                 }
                 "domain" | "definition.domain" | "id.definition.domain" => {
-                    if let Ok(domain_id) = DomainId::parse_fully_qualified(raw) {
+                    if let Some(domain_id) = parse_domain_predicate_value(raw) {
                         self.domains.insert(domain_id);
                     }
                 }
@@ -1437,22 +1446,37 @@ pub mod query {
         Some(current)
     }
 
-    fn asset_alias_value(asset: &Asset, field: &str) -> Option<String> {
+    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
+        DomainId::parse_fully_qualified(raw)
+            .ok()
+            .or_else(|| DomainId::try_new(raw, "universal").ok())
+    }
+
+    fn asset_alias_values(asset: &Asset, field: &str) -> Vec<String> {
         match field {
             "account" | "account_id" | "owner" | "id.account" => {
-                Some(asset.id().account().to_string())
+                vec![asset.id().account().to_string()]
             }
             "definition"
             | "asset_definition"
             | "asset_definition_id"
             | "definition_id"
-            | "id.definition" => Some(asset.id().definition().to_string()),
+            | "id.definition" => vec![asset.id().definition().to_string()],
             "domain" | "definition.domain" | "id.definition.domain" => asset
                 .id()
                 .definition()
                 .try_domain()
-                .map(|domain| domain.to_string()),
-            _ => None,
+                .map(|domain| {
+                    let canonical = domain.to_string();
+                    let shorthand = domain.name().to_string();
+                    if canonical == shorthand {
+                        vec![canonical]
+                    } else {
+                        vec![canonical, shorthand]
+                    }
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
         }
     }
 
@@ -1500,7 +1524,7 @@ pub mod query {
                         let Value::String(raw) = value else {
                             return None;
                         };
-                        DomainId::parse_fully_qualified(raw).ok()
+                        parse_domain_predicate_value(raw)
                     })
                     .collect::<BTreeSet<_>>()
                     .into_iter()
@@ -1599,8 +1623,12 @@ pub mod query {
         let mut asset_json = None;
 
         for cond in &predicate.equals {
-            if let Some(alias) = asset_alias_value(asset, &cond.field) {
-                if !predicate_value_equals_str(&cond.value, &alias) {
+            let aliases = asset_alias_values(asset, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
                     return false;
                 }
                 continue;
@@ -1617,8 +1645,12 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
-            if let Some(alias) = asset_alias_value(asset, &cond.field) {
-                if !predicate_values_contain_str(&cond.values, &alias) {
+            let aliases = asset_alias_values(asset, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
                     return false;
                 }
                 continue;
@@ -1635,7 +1667,7 @@ pub mod query {
         }
 
         for field in &predicate.exists {
-            if asset_alias_value(asset, field).is_some() {
+            if !asset_alias_values(asset, field).is_empty() {
                 continue;
             }
             let Some(value) = asset_json_value(&mut asset_json, asset) else {
@@ -1966,7 +1998,10 @@ pub mod query {
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use iroha_data_model::account::NewAccount;
+        use iroha_data_model::account::{
+            NewAccount,
+            rekey::{AccountAlias, AccountAliasDomain},
+        };
         use iroha_data_model::asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
             AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlStoreV1,
@@ -3444,6 +3479,107 @@ pub mod query {
         }
 
         #[test]
+        fn transfer_accepts_any_matching_allowed_domain_membership() {
+            let denied_domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let allowed_domain_id: DomainId =
+                DomainId::try_new("oasis", "universal").expect("domain id");
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                denied_domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+
+            let mut denied_domain_metadata = Metadata::default();
+            denied_domain_metadata.insert(
+                DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(DomainAssetUsagePolicyV1 {
+                    allowed_assets: BTreeSet::new(),
+                    denied_assets: BTreeSet::from([asset_def_id.clone()]),
+                }),
+            );
+            let denied_domain = Domain::new(denied_domain_id.clone())
+                .with_metadata(denied_domain_metadata)
+                .build(&ALICE_ID);
+            let allowed_domain = Domain::new(allowed_domain_id.clone()).build(&ALICE_ID);
+
+            let allowed_dataspace_id = DataSpaceId::UNIVERSAL;
+            let alice_account = Account::new(ALICE_ID.clone())
+                .with_label(Some(AccountAlias::new(
+                    "alice".parse().expect("account alias label"),
+                    Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
+                    allowed_dataspace_id,
+                )))
+                .build(&ALICE_ID);
+            let bob_account = Account::new(BOB_ID.clone())
+                .with_label(Some(AccountAlias::new(
+                    "bob".parse().expect("account alias label"),
+                    Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
+                    allowed_dataspace_id,
+                )))
+                .build(&BOB_ID);
+
+            let mut asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
+            let binding = AssetSubjectBindingV1 {
+                allowed_domains: BTreeSet::from([
+                    denied_domain_id.clone(),
+                    allowed_domain_id.clone(),
+                ]),
+                allowed_dataspaces: BTreeSet::new(),
+            };
+            let issuer_policy = AssetIssuerUsagePolicyV1 {
+                require_subject_binding: true,
+                subject_bindings: BTreeMap::from([
+                    (ALICE_ID.clone(), binding.clone()),
+                    (BOB_ID.clone(), binding),
+                ]),
+            };
+            asset_def.metadata_mut().insert(
+                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(issuer_policy),
+            );
+
+            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let world = World::with_assets(
+                [denied_domain, allowed_domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("one matching allowed domain membership should authorize transfer");
+
+            let destination_asset_id = AssetId::new(asset_def_id, BOB_ID.clone());
+            assert_eq!(
+                stx.world
+                    .asset(&destination_asset_id)
+                    .expect("destination asset created")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(1, 0)
+            );
+        }
+
+        #[test]
         fn transfer_rejects_when_bound_domain_policy_denies_asset() {
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -3465,8 +3601,21 @@ pub mod query {
             let domain = Domain::new(domain_id.clone())
                 .with_metadata(domain_metadata)
                 .build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let domain_dataspace_id = DataSpaceId::UNIVERSAL;
+            let alice_account = Account::new(ALICE_ID.clone())
+                .with_label(Some(AccountAlias::new(
+                    "alice".parse().expect("account alias label"),
+                    Some(AccountAliasDomain::new(domain_id.name().clone())),
+                    domain_dataspace_id,
+                )))
+                .build(&ALICE_ID);
+            let bob_account = Account::new(BOB_ID.clone())
+                .with_label(Some(AccountAlias::new(
+                    "bob".parse().expect("account alias label"),
+                    Some(AccountAliasDomain::new(domain_id.name().clone())),
+                    domain_dataspace_id,
+                )))
+                .build(&BOB_ID);
 
             let mut asset_def = {
                 let __asset_definition_id = asset_def_id.clone();

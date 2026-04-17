@@ -3108,7 +3108,7 @@ mod tests {
     }
 
     fn alias_in_domain(domain: &DomainId, label: Name) -> AccountAlias {
-        AccountAlias::new(label, Some(alias_domain(domain)), DataSpaceId::GLOBAL)
+        AccountAlias::new(label, Some(alias_domain(domain)), DataSpaceId::UNIVERSAL)
     }
 
     fn seed_account_alias_lease(
@@ -3178,7 +3178,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
     }
@@ -3273,7 +3273,7 @@ mod tests {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let account_label = AccountAlias::domainless(
             "primary".parse::<Name>().expect("label"),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3890,7 +3890,7 @@ mod tests {
 
         let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let bound_label =
-            AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
+            AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
 
@@ -3938,7 +3938,7 @@ mod tests {
 
         let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let root_alias =
-            AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
+            AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let domain_alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -6235,7 +6235,7 @@ mod tests {
         let manifest = iroha_data_model::content::ContentBundleManifest {
             bundle_id,
             index_hash: [0x44; 32],
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             lane: LaneId::SINGLE,
             blob_class: iroha_data_model::da::types::BlobClass::GovernanceArtifact,
             retention: iroha_data_model::da::types::RetentionPolicy::default(),
@@ -6979,7 +6979,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -7016,7 +7016,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -7057,8 +7057,8 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
-        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -7087,8 +7087,8 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
-        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
+        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let account = Account {
             id: authority.clone(),
             metadata: Metadata::default(),
@@ -7105,7 +7105,7 @@ mod tests {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
         seed_account_alias_lease(&mut tx, &authority, &label);

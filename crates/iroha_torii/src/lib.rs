@@ -11153,7 +11153,7 @@ fn resolve_torii_target_account_routes(
     let world = state_view.world();
     let account_scope = world.account_scope_entry(account_id).map_err(|_error| {
         queue::RoutingResolveError::UnknownDataspace {
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         }
     })?;
 
@@ -11223,7 +11223,7 @@ fn resolve_torii_target_domain_routes(
         .by_alias(domain_id.dataspace().as_ref())
         .map(|entry| entry.id)
         .ok_or(queue::RoutingResolveError::UnknownDataspace {
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         })?;
 
     torii_routes_for_dataspaces(app, [dataspace_id])
@@ -11552,7 +11552,7 @@ fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecisio
     }
 
     routing_decision.lane_id == LaneId::SINGLE
-        && routing_decision.dataspace_id == DataSpaceId::GLOBAL
+        && routing_decision.dataspace_id == DataSpaceId::UNIVERSAL
         && app
             .state
             .authoritative_lane_peer_ids(routing_decision.lane_id)
@@ -11819,7 +11819,7 @@ fn torii_account_permissions_route_scope(
 }
 
 fn torii_nexus_route(app: &AppState) -> Result<RoutingDecision, Response> {
-    resolve_torii_route_for_dataspace_id(app, DataSpaceId::GLOBAL).map_err(|error| {
+    resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL).map_err(|error| {
         torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -35276,7 +35276,7 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(
             dataspaces,
-            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, restricted_dataspace]),
+            std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, restricted_dataspace]),
             "signed/internal account reads should only fan out across the target account scope",
         );
         assert!(
@@ -35310,7 +35310,7 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(
             dataspaces,
-            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, governance_dataspace]),
+            std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
             "unsigned public reads should stay on caller/public visibility routes",
         );
         assert!(
@@ -35351,7 +35351,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             dataspaces,
             std::collections::BTreeSet::from([
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 governance_dataspace,
                 restricted_dataspace,
             ]),
@@ -35390,7 +35390,7 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(
             dataspaces,
-            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, governance_dataspace]),
+            std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
             "unsigned permissions reads should stay on caller/public visibility routes",
         );
         assert!(
@@ -35426,7 +35426,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             dataspaces,
             std::collections::BTreeSet::from([
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 governance_dataspace,
                 restricted_dataspace,
             ]),
@@ -35460,7 +35460,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             dataspaces,
             std::collections::BTreeSet::from([
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 governance_dataspace,
                 restricted_dataspace,
             ]),
@@ -35816,7 +35816,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
     fn effective_proxy_routing_decision_prefers_receiver_recomputed_route() {
-        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
 
         assert_eq!(
@@ -35832,7 +35832,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
     fn effective_proxy_signed_query_routing_decision_prefers_receiver_recomputed_route() {
-        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
 
         assert_eq!(
@@ -42875,7 +42875,7 @@ pub(crate) mod tests_runtime_handlers {
         peers.apply();
         block.commit().expect("commit permissioned peer roster");
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
@@ -42951,7 +42951,7 @@ pub(crate) mod tests_runtime_handlers {
         peers.apply();
         block.commit().expect("commit npos peer roster");
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
@@ -43024,7 +43024,7 @@ pub(crate) mod tests_runtime_handlers {
             block.commit().expect("commit empty npos peer roster");
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
@@ -43559,7 +43559,7 @@ pub(crate) mod tests_runtime_handlers {
             );
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let authoritative_without_local: Vec<_> =
             super::authoritative_lane_peers(app.as_ref(), route)
                 .authoritative
@@ -43632,7 +43632,7 @@ pub(crate) mod tests_runtime_handlers {
             );
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let candidates =
             super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
 
@@ -43698,7 +43698,7 @@ pub(crate) mod tests_runtime_handlers {
             );
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let response = super::execute_torii_proxy_request_with_fallback(
             &app,
             route,
@@ -43892,7 +43892,7 @@ pub(crate) mod tests_runtime_handlers {
             );
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let candidates = super::torii_proxy_candidate_peer_ids(
             app.as_ref(),
             &local_peer_id,
@@ -44016,7 +44016,7 @@ pub(crate) mod tests_runtime_handlers {
             );
         }
 
-        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let request_id = Hash::new(b"torii-proxy-forward-success");
         let app_for_response = app.clone();
         let authoritative_peer_for_response = authoritative_peer_id.clone();
@@ -48154,7 +48154,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
@@ -48369,7 +48369,7 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
-            alias: AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
+            alias: AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::UNIVERSAL)
                 .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
                 .expect("alias literal"),
         };
@@ -48395,7 +48395,7 @@ mod tests {
                 Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                     "centralbank".parse::<Name>().expect("domain"),
                 )),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )))
             .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
@@ -48423,7 +48423,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
@@ -48484,7 +48484,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
@@ -48549,7 +48549,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -48615,7 +48615,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
@@ -48689,7 +48689,7 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         bind_contract_alias_for_test(&app, &contract_address, "router::dex.universal");
@@ -51502,7 +51502,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
@@ -51604,7 +51604,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 "centralbank".parse::<Name>().expect("domain id"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))

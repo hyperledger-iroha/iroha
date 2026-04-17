@@ -738,7 +738,7 @@ mod tests {
     fn publish_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "global".to_string(),
             description: None,
             fault_tolerance: 1,
@@ -771,7 +771,7 @@ mod tests {
     fn revoke_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "global".to_string(),
             description: None,
             fault_tolerance: 1,
@@ -808,7 +808,7 @@ mod tests {
     fn expire_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "global".to_string(),
             description: None,
             fault_tolerance: 1,

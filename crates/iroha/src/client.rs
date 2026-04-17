@@ -12519,7 +12519,7 @@ mod tx_confirmation_stream_tests {
             hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
@@ -12669,7 +12669,7 @@ mod tx_confirmation_stream_tests {
                     hash,
                     block_height: None,
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     status: TransactionStatus::Queued,
                 },
             ))),
@@ -12678,7 +12678,7 @@ mod tx_confirmation_stream_tests {
                     hash,
                     block_height: Some(height),
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     status: TransactionStatus::Approved,
                 },
             ))),
@@ -12841,7 +12841,7 @@ mod tx_confirmation_stream_tests {
             hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();

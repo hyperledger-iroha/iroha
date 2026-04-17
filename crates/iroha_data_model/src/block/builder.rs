@@ -313,7 +313,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let policy = DaProofPolicy {
             lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "lane-1".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         };

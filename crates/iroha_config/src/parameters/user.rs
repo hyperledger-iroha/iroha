@@ -13009,7 +13009,7 @@ impl Nexus {
         let has_multilane = lane_catalog.lane_count().get() > 1
             || dataspace_catalog.entries().len() > 1
             || routing_policy.default_lane != LaneId::SINGLE
-            || routing_policy.default_dataspace != DataSpaceId::GLOBAL
+            || routing_policy.default_dataspace != DataSpaceId::UNIVERSAL
             || !routing_policy.rules.is_empty();
         if has_multilane && !enabled {
             emitter.emit(
@@ -13337,12 +13337,12 @@ impl Nexus {
                     continue;
                 };
 
-                if alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS && id != DataSpaceId::GLOBAL {
+                if alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS && id != DataSpaceId::UNIVERSAL {
                     dataspace_errors = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                         "dataspace[{idx}] alias \"{}\" must map to id {}",
                         defaults::nexus::DEFAULT_DATASPACE_ALIAS,
-                        DataSpaceId::GLOBAL.as_u64()
+                        DataSpaceId::UNIVERSAL.as_u64()
                     )));
                     continue;
                 }
@@ -13362,7 +13362,7 @@ impl Nexus {
 
         let has_global = dataspace_entries
             .iter()
-            .any(|entry| entry.id == DataSpaceId::GLOBAL);
+            .any(|entry| entry.id == DataSpaceId::UNIVERSAL);
         let has_global_alias = dataspace_entries
             .iter()
             .any(|entry| entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS);
@@ -13412,7 +13412,7 @@ impl Nexus {
                 return None;
             }
         } else {
-            DataSpaceId::GLOBAL
+            DataSpaceId::UNIVERSAL
         };
         let lane_dataspaces: BTreeMap<LaneId, DataSpaceId> = lane_catalog
             .lanes()

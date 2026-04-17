@@ -287,7 +287,7 @@ impl Event {
         {
             telemetry
                 .fields
-                .push_sanitized("dataspace_id", Value::from(DataSpaceId::GLOBAL.as_u64()));
+                .push_sanitized("dataspace_id", Value::from(DataSpaceId::UNIVERSAL.as_u64()));
         }
         event.record(&mut telemetry);
         telemetry
