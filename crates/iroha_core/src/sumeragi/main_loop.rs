@@ -5022,6 +5022,17 @@ impl Actor {
             view,
             expected_epoch,
         )
+        .or_else(|| {
+            self.state
+                .commit_roster_snapshot_for_block(height, block_hash)
+                .map(|snapshot| snapshot.commit_qc)
+                .filter(|qc| {
+                    qc.phase == crate::sumeragi::consensus::Phase::Commit
+                        && qc.height == height
+                        && qc.view == view
+                        && qc.epoch == expected_epoch
+                })
+        })
     }
 
     fn pending_block_has_commit_qc(
@@ -5030,16 +5041,8 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> bool {
-        let expected_epoch = self.epoch_for_height(height);
-        cached_qc_for(
-            &self.qc_cache,
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            height,
-            view,
-            expected_epoch,
-        )
-        .is_some()
+        self.cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
     }
 
     fn pending_block_has_qc(
@@ -5049,15 +5052,8 @@ impl Actor {
         view: u64,
     ) -> bool {
         let expected_epoch = self.epoch_for_height(height);
-        cached_qc_for(
-            &self.qc_cache,
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            height,
-            view,
-            expected_epoch,
-        )
-        .is_some()
+        self.cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
             || cached_qc_for(
                 &self.qc_cache,
                 crate::sumeragi::consensus::Phase::Prepare,
