@@ -1361,7 +1361,7 @@ mod tests {
         let label = AccountAlias::new(
             "gas".parse().expect("label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -1384,7 +1384,7 @@ mod tests {
                     alias: Some(AccountAlias::new(
                         "ops".parse().expect("label"),
                         Some(AccountAliasDomain::new(domain_id.name().clone())),
-                        DataSpaceId::GLOBAL,
+                        DataSpaceId::UNIVERSAL,
                     )),
                     lease_expiry_ms: None,
                 }),
@@ -1409,7 +1409,7 @@ mod tests {
             &AccountAlias::new(
                 "ops".parse().expect("label"),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             ),
             &dataspace_catalog,
         )

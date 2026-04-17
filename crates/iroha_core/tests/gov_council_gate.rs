@@ -32,7 +32,7 @@ fn sample_contract_address(
         iroha_config::parameters::defaults::common::chain_discriminant(),
         account_id,
         deploy_nonce,
-        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
     .expect("sample contract address")
 }

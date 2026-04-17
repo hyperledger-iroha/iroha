@@ -28,7 +28,7 @@ fn queued_event(hash: HashOf<SignedTransaction>) -> EventBox {
         hash,
         block_height: None,
         lane_id: LaneId::SINGLE,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         status: TransactionStatus::Queued,
     };
 
@@ -40,7 +40,7 @@ fn approved_event(hash: HashOf<SignedTransaction>, height: NonZeroU64) -> EventB
         hash,
         block_height: Some(height),
         lane_id: LaneId::SINGLE,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         status: TransactionStatus::Approved,
     };
 
@@ -115,14 +115,14 @@ fn batched_pipeline_events_confirm_transaction() {
             hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }),
         PipelineEventBox::Transaction(TransactionEvent {
             hash,
             block_height: Some(height),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }),
     ]);

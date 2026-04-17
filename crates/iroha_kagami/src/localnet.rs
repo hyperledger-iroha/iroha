@@ -2401,11 +2401,11 @@ fn append_localnet_contract_permissions(
     let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let client_account_id = localnet_client_account_id();
     let manage_account_alias: Permission = CanManageAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
     .into();
     let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
-        dataspace: DataSpaceId::GLOBAL,
+        dataspace: DataSpaceId::UNIVERSAL,
     }
     .into();
     let mut seen = BTreeSet::new();

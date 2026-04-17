@@ -2706,7 +2706,7 @@ mod network_relay_tests {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 },
                 path_args: Vec::new(),
                 query_string: None,
@@ -6934,7 +6934,7 @@ metadata = {}
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     alias: "governance".to_string(),
                     description: Some("governance lane".to_string()),
                     ..LaneConfig::default()

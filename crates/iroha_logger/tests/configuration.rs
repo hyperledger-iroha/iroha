@@ -26,7 +26,7 @@ async fn telemetry_separation_custom() {
         fields: Fields(vec![
             ("level", norito::json!("INFO")),
             ("lane_id", norito::json!(u64::from(LaneId::SINGLE.as_u32()))),
-            ("dataspace_id", norito::json!(DataSpaceId::GLOBAL.as_u64())),
+            ("dataspace_id", norito::json!(DataSpaceId::UNIVERSAL.as_u64())),
             ("a", norito::json!(2)),
             ("c", norito::json!(true)),
             ("d", norito::json!("this won't be logged")),

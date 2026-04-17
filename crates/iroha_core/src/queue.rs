@@ -4055,9 +4055,9 @@ pub mod tests {
                 dataspaces.insert(*dataspace);
             }
             if lanes_by_id.is_empty() {
-                lanes_by_id.insert(LaneId::SINGLE, DataSpaceId::GLOBAL);
+                lanes_by_id.insert(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
             }
-            dataspaces.insert(DataSpaceId::GLOBAL);
+            dataspaces.insert(DataSpaceId::UNIVERSAL);
 
             let max_lane_id = lanes_by_id
                 .keys()
@@ -4086,7 +4086,7 @@ pub mod tests {
                 .into_iter()
                 .map(|id| DataSpaceMetadata {
                     id,
-                    alias: if id == DataSpaceId::GLOBAL {
+                    alias: if id == DataSpaceId::UNIVERSAL {
                         "universal".to_string()
                     } else {
                         format!("test-dataspace-{}", id.as_u64())
@@ -4263,7 +4263,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "default".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4316,7 +4316,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "default".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: None,
@@ -4390,7 +4390,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "centralbank".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4468,7 +4468,7 @@ pub mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -4510,7 +4510,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "confidential".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: None,
@@ -4611,7 +4611,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4714,7 +4714,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4730,14 +4730,14 @@ pub mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &validator,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &validator,
             1,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let code_hash = iroha_crypto::Hash::new(b"demo");
@@ -4881,7 +4881,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4897,14 +4897,14 @@ pub mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &validator,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &validator,
             1,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let code_hash = iroha_crypto::Hash::new(b"demo");
@@ -5031,7 +5031,7 @@ pub mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &validator,
             7,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         world
@@ -5055,7 +5055,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -5073,7 +5073,7 @@ pub mod tests {
                 iroha_data_model::account::address::chain_discriminant(),
                 &validator,
                 8,
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
         let activate = InstructionBox::from(ActivateContractInstance {
@@ -5136,7 +5136,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "upgrade".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -5217,7 +5217,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "upgrade".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -5875,7 +5875,7 @@ pub mod tests {
             .push_with_gossip_payload_with_state_and_routing(
                 tx,
                 &fixture.state,
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 Some(Arc::new(vec![1_u8])),
             )
             .expect_err("fee-insolvent gossip should be rejected before enqueue");
@@ -6024,7 +6024,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "default".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -6178,7 +6178,7 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let target = DataSpaceId::GLOBAL;
+        let target = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -6580,7 +6580,7 @@ pub mod tests {
             ncore::to_bytes(entry.tx.as_ref()).expect("encode signed transaction");
         assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
-        assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);
     }
 
     #[test]
@@ -6591,7 +6591,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -6636,7 +6636,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -6689,7 +6689,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -6747,7 +6747,7 @@ pub mod tests {
         queue.push(tx, state.view()).expect("push");
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let router: Arc<dyn LaneRouter> = Arc::new(ViewOnlyRouter {
             lane: expected_lane,
             dataspace: expected_dataspace,
@@ -6793,7 +6793,7 @@ pub mod tests {
             .push_with_gossip_payload_with_state_and_routing(
                 tx,
                 state.as_ref(),
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 Some(Arc::clone(&payload)),
             )
             .expect("push with precomputed routing should succeed");
@@ -6803,7 +6803,7 @@ pub mod tests {
             .get(&hash)
             .expect("routing decision should exist");
         assert_eq!(routing.lane_id, LaneId::SINGLE);
-        assert_eq!(routing.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(routing.dataspace_id, DataSpaceId::UNIVERSAL);
         let stored_payload = queue
             .tx_gossip_payloads
             .get(&hash)
@@ -8128,7 +8128,7 @@ pub mod tests {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         queue
             .push_requeued_with_routing(tx, routing, &state)
@@ -8177,7 +8177,7 @@ pub mod tests {
             .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
         state_block.commit().unwrap();
         let queue = Queue::test(config_factory(), &time_source);
-        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         assert!(matches!(
             queue.push_requeued_with_routing(tx, routing, &state),
@@ -8393,7 +8393,7 @@ pub mod tests {
                 hash: tx_hash,
                 block_height: None,
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 status: TransactionStatus::Queued,
             }
             .into()
@@ -8415,7 +8415,7 @@ pub mod tests {
                 hash: tx_hash,
                 block_height: None,
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 status: TransactionStatus::Expired,
             }
             .into()
