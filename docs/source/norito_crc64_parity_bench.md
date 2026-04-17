@@ -56,11 +56,11 @@ Run the Criterion benchmark:
 
 
 ```bash
-cargo bench -p norito -- benches::bench_crc64 -- --warm-up-time 1 --sample-size 30
+cargo bench -p norito --bench crc64 -- --warm-up-time 1 --sample-size 30
 
 # aarch64 (Apple M‑series / ARM servers):
 RUSTFLAGS='-C target-feature=+neon,+aes' \
-  cargo bench -p norito -- benches::bench_crc64 -- --warm-up-time 1 --sample-size 30
+  cargo bench -p norito --features simd-accel --bench crc64 -- --warm-up-time 1 --sample-size 30
 
 ```
 
@@ -74,14 +74,14 @@ The `crates/norito/benches/codec.rs` benchmark compares Norito vs SCALE and binc
 Recommended invocation:
 
 ```bash
-cargo bench -p norito -- benches::bench_codec -- --warm-up-time 1 --sample-size 30
+cargo bench -p norito --features "bench-internal parity-scale" --bench codec -- --warm-up-time 1 --sample-size 30
 
 
 # With acceleration turned on (CRC becomes less dominant):
 # x86_64
-RUSTFLAGS='-C target-feature=+sse4.2,+pclmulqdq' cargo bench -p norito -- benches::bench_codec -- --warm-up-time 1 --sample-size 30
+RUSTFLAGS='-C target-feature=+sse4.2,+pclmulqdq' cargo bench -p norito --features "bench-internal parity-scale simd-accel" --bench codec -- --warm-up-time 1 --sample-size 30
 # aarch64
-RUSTFLAGS='-C target-feature=+neon,+aes' cargo bench -p norito -- benches::bench_codec -- --warm-up-time 1 --sample-size 30
+RUSTFLAGS='-C target-feature=+neon,+aes' cargo bench -p norito --features "bench-internal parity-scale simd-accel" --bench codec -- --warm-up-time 1 --sample-size 30
 
 ```
 

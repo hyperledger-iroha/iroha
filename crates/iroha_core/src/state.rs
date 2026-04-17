@@ -23069,7 +23069,6 @@ impl<'state> StateBlock<'state> {
     /// # Panics
     ///
     /// Panics if processing approved transactions or time triggers fails.
-    #[cfg(any(test, feature = "bench"))]
     #[iroha_logger::log(skip_all, fields(block_height))]
     pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
         self.apply_transactions(block);
@@ -23080,7 +23079,6 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Apply all non-erroneous transactions in the given committed block.
-    #[cfg(any(test, feature = "bench"))]
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
 
@@ -27257,7 +27255,6 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Apply a non-erroneous executable in the given committed block.
-    #[cfg(any(test, feature = "bench"))]
     pub fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
         match executable {
             Executable::Instructions(instructions) => {

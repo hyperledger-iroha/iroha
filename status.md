@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: plain `cargo bench` benchmark selection
+- Criterion is now a dev-dependency for the workspace crates with Criterion
+  targets, and the artificial per-crate `bench` feature no longer gates Cargo
+  benchmark target selection. The empty `bench` feature is retained only as a
+  compatibility marker for older local commands.
+- Removed `required-features = ["bench"]` from benchmark manifests, kept real
+  backend or algorithm feature gates where they are not artificial, and exposed
+  the Torii/StateBlock helpers needed by default-selected benchmark targets.
+- Updated benchmark docs and helper scripts so default Criterion commands use
+  plain `cargo bench`, while Norito parity/internal fixtures and crypto SM/GOST
+  scripts keep only their actual feature requirements.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n scripts/bench_norito_enum.sh scripts/build_norito_aarch64_simd.sh scripts/gost_bench.sh scripts/sm_perf.sh scripts/sm_perf_capture_helper.sh`
+  - `git diff --check`
+  - `cargo bench -p enum_trait_bench --no-run`
+  - `cargo bench -p norito --bench crc64 --no-run`
+  - `cargo bench -p iroha_core --bench queries --no-run`
+  - `cargo bench -p iroha_torii --bench torii_hot_paths --no-run`
+  - `cargo bench -p iroha_core --bench apply_blocks --no-run`
+  - `cargo bench --no-run` (passes; emitted pre-existing `iroha_crypto`
+    dead-code warnings in bench/test builds)
+  - `cargo bench -p enum_trait_bench -- --sample-size 10 --warm-up-time 1 --measurement-time 1`
+
 ## 2026-04-17 Follow-up: iroha_config fixture regressions
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters/user.rs`
   now validates `default_account_domain_label` during `Root::parse()` without
