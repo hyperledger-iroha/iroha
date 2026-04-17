@@ -86,7 +86,7 @@ GET /v1/accounts/{uaid}/portfolio
 * `dataspaces` enumerate holdings per dataspace. Each slice corresponds to the
   UAID↔dataspace bindings stored in the Space Directory; if a UAID has not been
   bound yet it will appear under the fallback `default_dataspace`
-  (`DataSpaceId::GLOBAL`).
+  (`DataSpaceId::UNIVERSAL`).
 * Each account entry includes the optional stable label plus the sorted list of
   asset positions with their canonical identifiers and Norito numeric balances.
   Account IDs are canonical I105 literals; asset definition IDs remain

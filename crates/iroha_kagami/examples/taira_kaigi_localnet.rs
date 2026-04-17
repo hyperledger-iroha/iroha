@@ -280,7 +280,8 @@ fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> KeyPair {
 fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
     match (&args.genesis_private_key, &args.seed) {
         (Some(hex), None) => {
-            let private_key = PrivateKey::from_hex(Algorithm::default(), hex)
+            let private_key = PrivateKey::from_str(hex)
+                .or_else(|_| PrivateKey::from_hex(Algorithm::default(), hex))
                 .wrap_err("failed to parse explicit genesis private key")?;
             Ok(KeyPair::from(private_key))
         }

@@ -1,5 +1,4 @@
 //! Benchmarks extracting tail values from telemetry status.
-#![cfg(feature = "telemetry")]
 
 use criterion::Criterion;
 use iroha_telemetry::metrics::{Metrics, Status};

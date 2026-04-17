@@ -2,6 +2,55 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 plain `cargo bench` benchmark selection):
+Criterion is now a dev-dependency for the workspace crates that already ship
+Criterion benchmarks, and plain `cargo bench` now discovers those benchmark
+targets without requiring artificial per-crate `bench` features. The empty
+compatibility marker remains for older local commands, but Cargo benchmark
+selection is no longer gated on it. Benchmark manifests dropped
+`required-features = ["bench"]` where that gate was artificial, while real
+algorithm/backend feature requirements and the Torii/StateBlock helper exports
+remain intact. The benchmark docs and helper scripts were updated to prefer
+plain `cargo bench`, with Norito parity/internal fixtures and crypto SM/GOST
+scripts still keeping only their real feature requirements.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/enum_trait_bench/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/fastpq_prover/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_crypto/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model_derive/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_primitives/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/benches/status_tail.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/benches/torii_hot_paths.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_zkp_halo2/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/norito/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/crates/sm3_neon/Cargo.toml`
+  - `/home/mtakemiya/dev/iroha/docs/source/benchmarks.md`
+  - `/home/mtakemiya/dev/iroha/docs/source/norito_crc64_parity_bench.md`
+  - `/home/mtakemiya/dev/iroha/scripts/bench_norito_enum.sh`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `bash -n scripts/bench_norito_enum.sh scripts/build_norito_aarch64_simd.sh scripts/gost_bench.sh scripts/sm_perf.sh scripts/sm_perf_capture_helper.sh`
+  - `git diff --check`
+  - `cargo bench -p enum_trait_bench --no-run`
+  - `cargo bench -p norito --bench crc64 --no-run`
+  - `cargo bench -p iroha_core --bench queries --no-run`
+  - `cargo bench -p iroha_torii --bench torii_hot_paths --no-run`
+  - `cargo bench -p iroha_core --bench apply_blocks --no-run`
+  - `cargo bench --no-run` (passes; emitted pre-existing `iroha_crypto`
+    dead-code warnings in bench/test builds)
+  - `cargo bench -p enum_trait_bench -- --sample-size 10 --warm-up-time 1 --measurement-time 1`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 `SYSCALL_NAME_DECODE` reserved-delimiter regression test correction):
 The focused IVM regression for `SYSCALL_NAME_DECODE` now uses `alice@banka`
 for its reserved-delimiter failure case. The old fixture, `not-a-norito-name`,

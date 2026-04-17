@@ -127,6 +127,35 @@ same bootstrap source of truth. It now requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
+## Private profiles
+
+Application-specific private-dataspace profiles should live outside this repo.
+When you need one, keep the profile in your own deployment repository and pass
+it to the renderer explicitly:
+
+```bash
+python3 scripts/render_taira_validator_bundle.py \
+  --base-config /absolute/path/to/private-profile.toml \
+  --roster configs/soranexus/taira/validator_roster.local.toml \
+  --secrets configs/soranexus/taira/validator_secrets.local.toml \
+  --output-dir dist/taira-private-validators
+```
+
+For a true genesis reset on a validator host, stop the runtime and wipe the
+mounted state before starting again:
+
+```bash
+bash configs/soranexus/taira/taira-validator-container.sh \
+  --env-file /etc/default/taira-validator-container.compose.env reset
+
+bash configs/soranexus/taira/taira-validator-container.sh \
+  --env-file /etc/default/taira-validator-container.compose.env up
+```
+
+That sequence removes the mounted validator state under `TAIRA_STORAGE_PATH`
+after stopping the container, which is the required step for a true genesis
+reset.
+
 When you run the shared nginx edge on one host, keep the same roster as the
 source of truth for the edge upstreams too:
 

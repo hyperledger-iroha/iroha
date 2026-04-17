@@ -16,17 +16,17 @@ translator: manual
 
 ## מזהי מציין מקום
 
-- `LaneId` ו-`DataSpaceId` נמצאים ב-`iroha_data_model::nexus`. אלו newtype-ים דקים התואמים Norito, שערך ברירת המחדל שלהם הוא `LaneId::SINGLE` ו-`DataSpaceId::GLOBAL`. בעתיד הם ישאו החלטות ניתוב דטרמיניסטיות; כרגע הם מתעדים את צורת ה-API העתידית.
+- `LaneId` ו-`DataSpaceId` נמצאים ב-`iroha_data_model::nexus`. אלו newtype-ים דקים התואמים Norito, שערך ברירת המחדל שלהם הוא `LaneId::SINGLE` ו-`DataSpaceId::UNIVERSAL`. בעתיד הם ישאו החלטות ניתוב דטרמיניסטיות; כרגע הם מתעדים את צורת ה-API העתידית.
 - הטיפוסים מקודדים ומפוענחים באמצעות Norito ומיוצאים דרך ה-prelude של data-model, כך שקרייטים תלויים יכולים להשתמש בהם ללא flags ניסיוניים.
 
 ## קרסי טלמטריה ולוג
 
-- שיטות `StateTelemetry` ב-`iroha_core` מקבלות כעת `LaneId` (והעוגן `DataSpaceId::GLOBAL`). המטריקות חושפות שני gauges — ‏`nexus_lane_id_placeholder` ו-`nexus_dataspace_id_placeholder` — לשמירת תאימות הדשבורד בזמן שהמערכת עדיין פועלת בנתיב יחיד.
+- שיטות `StateTelemetry` ב-`iroha_core` מקבלות כעת `LaneId` (והעוגן `DataSpaceId::UNIVERSAL`). המטריקות חושפות שני gauges — ‏`nexus_lane_id_placeholder` ו-`nexus_dataspace_id_placeholder` — לשמירת תאימות הדשבורד בזמן שהמערכת עדיין פועלת בנתיב יחיד.
 - אירועי טלמטריה מובנים דרך `iroha_logger` כוללים אוטומטית שדות `lane_id` ו-`dataspace_id`. אם המתקשר אינו מספק ערכים, הלוגר משלים את ברירות המחדל.
 
 ## צעדים הבאים
 
-- להחליף את הקריאות הקשיחות `LaneId::SINGLE`/`DataSpaceId::GLOBAL` ברגע שמתזמן Nexus (SFQ, לוגיקת Fusion, מדיניות Data-Space) יוטמע.
+- להחליף את הקריאות הקשיחות `LaneId::SINGLE`/`DataSpaceId::UNIVERSAL` ברגע שמתזמן Nexus (SFQ, לוגיקת Fusion, מדיניות Data-Space) יוטמע.
 - להרחיב משטחים (קבלה, Gossip, Torii) כך שיקבלו את המזהים החדשים ויעבירו אותם בין צמתים.
 - לאחר שמסלולים מרובים יופעלו, להחליף את תוויות הטלמטריה/מטריקות מהמזהים ה placeholders לערכים האמיתיים.
 - לעדכן את נהלי התפעול כך שיכללו `iroha_cli app nexus lane-report --summary --only-missing --fail-on-sealed`, ולהצליב עם `lane_governance_sealed_total` / `lane_governance_sealed_aliases` שמופיעים ב-`/v1/sumeragi/status` כדי לעצור פריסות כאשר מניפסט ממשל עדיין חסר.
