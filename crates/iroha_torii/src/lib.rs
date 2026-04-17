@@ -48369,9 +48369,12 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
-            alias: AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::UNIVERSAL)
-                .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
-                .expect("alias literal"),
+            alias: AccountAlias::domainless(
+                "missing".parse().expect("label"),
+                DataSpaceId::UNIVERSAL,
+            )
+            .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
+            .expect("alias literal"),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
 

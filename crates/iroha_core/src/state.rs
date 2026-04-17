@@ -32566,7 +32566,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32599,7 +32603,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32624,7 +32632,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32649,7 +32661,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32692,7 +32708,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32716,7 +32736,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32759,7 +32783,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32801,7 +32829,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32829,7 +32861,11 @@ mod tests {
         let signers_bitmap = signer_bitmap(&[0], validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32852,7 +32888,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -33579,7 +33619,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         let keypairs = configure_commit_topology(&state, 1);
 
@@ -33643,8 +33687,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -33722,7 +33774,11 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
                 (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
@@ -33781,8 +33837,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
