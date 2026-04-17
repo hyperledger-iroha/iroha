@@ -105,7 +105,7 @@ import re
 import sys
 
 peer_cfg = open(sys.argv[1], encoding='utf-8').read()
-match = re.search(r'(?m)^public_key\s*=\s*"([^"]+)"', peer_cfg)
+match = re.search(r'(?ms)^\[genesis\]\n.*?^public_key\s*=\s*"([^"]+)"', peer_cfg)
 if not match:
     raise SystemExit("missing genesis public_key")
 print(match.group(1))
