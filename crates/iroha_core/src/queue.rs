@@ -621,7 +621,6 @@ impl Queue {
         let signed = tx
             .external()
             .expect("queue gossip only supports external signed transactions");
-        let _flags = ncore::DecodeFlagsGuard::enter(0);
         Arc::new(ncore::to_bytes(signed).expect("encode signed transaction gossip payload"))
     }
 
@@ -2083,7 +2082,7 @@ impl Queue {
         Ok(routing_decision)
     }
 
-    /// Pushes an accepted transaction into the queue using a cached canonical full-frame gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2098,7 +2097,7 @@ impl Queue {
             .map(|_| ())
     }
 
-    /// Pushes an accepted transaction into the queue using a cached canonical full-frame gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2113,7 +2112,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using narrow state accessors and a cached
-    /// canonical full-frame gossip payload.
+    /// default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -2129,7 +2128,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
-    /// cached canonical full-frame gossip payload.
+    /// cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -3941,17 +3940,13 @@ impl Queue {
 pub mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
         path::PathBuf,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, atomic::Ordering},
         thread,
         time::Duration,
     };
 
-    use crossbeam_queue::ArrayQueue;
-    use dashmap::DashMap;
     use iroha_crypto::{
         Hash, KeyPair, MerkleTree,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -3963,10 +3958,11 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
+            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
+            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, ManifestVersion,
+            ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -4019,78 +4015,88 @@ pub mod tests {
             time_source: &TimeSource,
             router: Arc<dyn LaneRouter>,
         ) -> Self {
-            let (backpressure_tx, _) = watch::channel(BackpressureState::Healthy {
-                queued: 0,
-                capacity: cfg.capacity,
-            });
-            let queue = {
-                let lane_catalog = Arc::new(LaneCatalog::default());
-                let dataspace_catalog = Arc::new(DataSpaceCatalog::default());
-                let queue = Self {
-                    events_sender: tokio::sync::broadcast::Sender::new(1),
-                    router: parking_lot::RwLock::new(router),
-                    lane_compliance: parking_lot::RwLock::new(None),
-                    lane_catalog: parking_lot::RwLock::new(Arc::clone(&lane_catalog)),
-                    dataspace_catalog: parking_lot::RwLock::new(Arc::clone(&dataspace_catalog)),
-                    tx_hashes: ArrayQueue::new(cfg.capacity.get()),
-                    tx_gossip: ArrayQueue::new(cfg.capacity.get()),
-                    txs: DashMap::new(),
-                    routing_decisions: DashMap::new(),
-                    tx_encoded_len: DashMap::new(),
-                    tx_gas_cost: DashMap::new(),
-                    tx_enqueued_at_ms: DashMap::new(),
-                    queued_tx_enqueued_at_ms: DashMap::new(),
-                    tx_gossip_payloads: DashMap::new(),
-                    removed_hashes: DashMap::new(),
-                    txs_per_user: DashMap::new(),
-                    push_remove_lock: parking_lot::Mutex::new(()),
-                    guard_sequence: AtomicU64::new(0),
-                    inflight_guards: AtomicUsize::new(0),
-                    capacity: cfg.capacity,
-                    capacity_per_user: cfg.capacity_per_user,
-                    time_source: time_source.clone(),
-                    tx_time_to_live: cfg.transaction_time_to_live,
-                    expired_cull_interval: cfg.expired_cull_interval,
-                    expired_cull_batch: cfg.expired_cull_batch,
-                    last_expired_cull_ms: AtomicU64::new(0),
-                    expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
-                    expiry_ring_members: DashMap::new(),
-                    backpressure_tx,
-                    pressure_age_budget_ms: AtomicU64::new(Self::default_pressure_age_budget_ms()),
-                    sumeragi_wake: OnceLock::new(),
-                    nexus_limits: parking_lot::RwLock::new(QueueLimits::default()),
-                    #[cfg(feature = "telemetry")]
-                    tx_teu: DashMap::new(),
-                    #[cfg(feature = "telemetry")]
-                    lane_teu_pending: DashMap::new(),
-                    #[cfg(feature = "telemetry")]
-                    dataspace_teu_pending: DashMap::new(),
-                    lane_manifests: parking_lot::RwLock::new(Arc::new(
-                        LaneManifestRegistry::empty(),
-                    )),
-                    lane_privacy_registry: parking_lot::RwLock::new(Arc::new(
-                        LanePrivacyRegistry::empty(),
-                    )),
-                    #[cfg(test)]
-                    vacant_entry_warnings: AtomicUsize::new(0),
-                };
-                #[cfg(feature = "telemetry")]
-                {
-                    for lane in lane_catalog.lanes() {
-                        queue
-                            .lane_teu_pending
-                            .insert(lane.id, PendingTeu::default());
-                        for dataspace in dataspace_catalog.entries() {
-                            queue
-                                .dataspace_teu_pending
-                                .insert((lane.id, dataspace.id), PendingTeu::default());
-                        }
-                    }
-                }
-                queue
-            };
-            queue.publish_backpressure_state(0, None);
+            Self::test_with_router_for_routes(cfg, time_source, router, &[])
+        }
+
+        /// Construct a `Queue` with synthetic Nexus catalogs matching static test routes.
+        pub fn test_with_router_for_routes(
+            cfg: Config,
+            time_source: &TimeSource,
+            router: Arc<dyn LaneRouter>,
+            routes: &[(LaneId, DataSpaceId)],
+        ) -> Self {
+            let (lane_catalog, dataspace_catalog) = Self::test_catalogs_for_routes(routes);
+            let mut queue = Self::from_config_with_router_limits_and_catalogs(
+                cfg,
+                tokio::sync::broadcast::Sender::new(1),
+                router,
+                QueueLimits::default(),
+                &lane_catalog,
+                &dataspace_catalog,
+                None,
+            );
+            queue.time_source = time_source.clone();
             queue
+        }
+
+        fn test_catalogs_for_routes(
+            routes: &[(LaneId, DataSpaceId)],
+        ) -> (Arc<LaneCatalog>, Arc<DataSpaceCatalog>) {
+            let mut lanes_by_id = BTreeMap::new();
+            let mut dataspaces = BTreeSet::new();
+            for (lane, dataspace) in routes {
+                match lanes_by_id.insert(*lane, *dataspace) {
+                    Some(existing) if existing != *dataspace => {
+                        panic!("test route catalog cannot bind lane {lane:?} to two dataspaces")
+                    }
+                    _ => {}
+                }
+                dataspaces.insert(*dataspace);
+            }
+            if lanes_by_id.is_empty() {
+                lanes_by_id.insert(LaneId::SINGLE, DataSpaceId::GLOBAL);
+            }
+            dataspaces.insert(DataSpaceId::GLOBAL);
+
+            let max_lane_id = lanes_by_id
+                .keys()
+                .map(|id| id.as_u32())
+                .max()
+                .expect("at least one lane");
+            let lane_count = NonZeroU32::new(max_lane_id.saturating_add(1))
+                .expect("lane count should be non-zero");
+            let lanes = lanes_by_id
+                .into_iter()
+                .map(|(id, dataspace_id)| LaneConfig {
+                    id,
+                    dataspace_id,
+                    alias: if id == LaneId::SINGLE {
+                        "default".to_string()
+                    } else {
+                        format!("test-lane-{}", id.as_u32())
+                    },
+                    ..LaneConfig::default()
+                })
+                .collect();
+            let lane_catalog =
+                Arc::new(LaneCatalog::new(lane_count, lanes).expect("valid test lane catalog"));
+
+            let entries = dataspaces
+                .into_iter()
+                .map(|id| DataSpaceMetadata {
+                    id,
+                    alias: if id == DataSpaceId::GLOBAL {
+                        "universal".to_string()
+                    } else {
+                        format!("test-dataspace-{}", id.as_u64())
+                    },
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect();
+            let dataspace_catalog =
+                Arc::new(DataSpaceCatalog::new(entries).expect("valid test dataspace catalog"));
+            (lane_catalog, dataspace_catalog)
         }
     }
 
@@ -6057,10 +6063,11 @@ pub mod tests {
             lane: LaneId::SINGLE,
             dataspace,
         });
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             router.clone(),
+            &[(LaneId::SINGLE, dataspace)],
         ));
 
         let mut statuses = BTreeMap::new();
@@ -6113,10 +6120,11 @@ pub mod tests {
             lane: LaneId::SINGLE,
             dataspace,
         });
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             router.clone(),
+            &[(LaneId::SINGLE, dataspace)],
         ));
 
         let mut statuses = BTreeMap::new();
@@ -6183,13 +6191,14 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let queue = Queue::test_with_router(
+        let queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(StaticRouter {
                 lane: LaneId::SINGLE,
                 dataspace,
             }),
+            &[(LaneId::SINGLE, dataspace)],
         );
 
         queue
@@ -6225,13 +6234,14 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let queue = Queue::test_with_router(
+        let queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(StaticRouter {
                 lane: LaneId::SINGLE,
                 dataspace,
             }),
+            &[(LaneId::SINGLE, dataspace)],
         );
 
         let result = queue.push(
@@ -6867,7 +6877,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6947,7 +6962,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -7032,7 +7052,12 @@ pub mod tests {
             ]),
         });
 
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: lane_b_bounds,
             per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
@@ -7080,7 +7105,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -7137,7 +7167,12 @@ pub mod tests {
                 dataspace: test_dataspace,
             });
             let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-            let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+            let queue_inner = Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                router,
+                &[(test_lane, test_dataspace)],
+            );
             *queue_inner.nexus_limits.write() = QueueLimits {
                 fallback: scheduling,
                 per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -7243,7 +7278,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -7352,7 +7392,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -7416,15 +7461,17 @@ pub mod tests {
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let (events_sender, _) = tokio::sync::broadcast::channel(8);
+        let test_lane = LaneId::new(7);
+        let test_dataspace = DataSpaceId::new(42);
         let router = Arc::new(StaticRouter {
-            lane: LaneId::new(7),
-            dataspace: DataSpaceId::new(42),
+            lane: test_lane,
+            dataspace: test_dataspace,
         });
-        let queue = Arc::new(Queue::from_config_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
-            events_sender,
+            &time_source,
             router,
+            &[(test_lane, test_dataspace)],
         ));
 
         let (account_id, key_pair) = gen_account_in("wonderland");
@@ -7462,8 +7509,8 @@ pub mod tests {
             .tx_teu
             .get(&hash)
             .expect("TEU info missing for routed transaction");
-        assert_eq!(teu_info.lane_id, LaneId::new(7));
-        assert_eq!(teu_info.dataspace_id, DataSpaceId::new(42));
+        assert_eq!(teu_info.lane_id, test_lane);
+        assert_eq!(teu_info.dataspace_id, test_dataspace);
     }
 
     #[cfg(feature = "telemetry")]
@@ -7512,13 +7559,14 @@ pub mod tests {
 
         let expected_lane = LaneId::new(5);
         let expected_dataspace = DataSpaceId::new(13);
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(TaggedRouter {
                 lane: expected_lane,
                 dataspace: expected_dataspace,
             }),
+            &[(expected_lane, expected_dataspace)],
         ));
 
         let tx = accepted_tx_by_someone(&time_source);

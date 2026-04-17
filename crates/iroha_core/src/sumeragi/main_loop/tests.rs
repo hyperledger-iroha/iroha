@@ -45613,7 +45613,11 @@ async fn sidecar_noncanonical_mismatch_retargets_missing_request_to_canonical_ha
     actor.sidecar_observation_suppression_depth = 0;
     let local_height = actor.committed_height_snapshot();
     let allow_frontier_sidecar_retarget = actor
-        .should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(height, local_height);
+        .should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
+            height,
+            local_height,
+            "test_sidecar_noncanonical_retarget",
+        );
     assert!(
         allow_frontier_sidecar_retarget,
         "baseline frontier sidecar retarget test requires retarget gate to be open"
@@ -46003,6 +46007,26 @@ async fn frontier_sidecar_hint_does_not_retarget_uncommitted_tracked_missing_req
             attempts: 0,
         },
     );
+    assert_eq!(
+        actor.committed_height_snapshot(),
+        committed_height,
+        "test setup requires a stable committed-height snapshot"
+    );
+    assert_eq!(
+        height,
+        actor.committed_height_snapshot().saturating_add(1),
+        "test setup requires the vote-backed sidecar hint to target the contiguous frontier"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height == height && !actor.authoritative_block_payload_available(*hash)
+            }),
+        "test setup should track an unresolved frontier missing-block request"
+    );
 
     actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
         frontier_height: height,
@@ -46039,6 +46063,110 @@ async fn frontier_sidecar_hint_does_not_retarget_uncommitted_tracked_missing_req
             .missing_block_requests
             .contains_key(&sidecar_hash),
         "frontier-stall guard should prevent retargeting to sidecar hint under stall"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_sidecar_hint_retargets_uncommitted_tracked_missing_request_during_frontier_stall_for_vote_roster_lookup()
+ {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let height = committed_height.saturating_add(1).max(1);
+    let mut expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
+    if actor.block_payload_available_locally(expected_hash) {
+        expected_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE5; Hash::LENGTH]));
+    }
+    assert!(
+        !actor.block_payload_available_locally(expected_hash),
+        "test setup requires a missing frontier hash"
+    );
+    let sidecar_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
+    assert_ne!(
+        expected_hash, sidecar_hash,
+        "test requires distinct expected and sidecar hashes"
+    );
+    actor
+        .kura
+        .write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            sidecar_hash,
+            None,
+            None,
+            None,
+        ));
+
+    let now = Instant::now();
+    actor.pending.missing_block_requests.insert(
+        expected_hash,
+        super::MissingBlockRequest {
+            height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Background,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height: height,
+        local_height_at_entry: committed_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_reanchor_emit_at: Some(now),
+        last_far_ahead_replay_window_index: None,
+    });
+    actor.sidecar_mismatch_recovery.remove(&height);
+    actor.mark_canonical_frontier_reanchor_window_emitted(height, height, 0, now, Some(now));
+    actor.sidecar_observation_suppression_depth = 0;
+    assert!(
+        actor.should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
+            height,
+            committed_height,
+            "vote_roster_lookup",
+        ),
+        "vote-backed frontier-stall recovery test requires the retarget gate to be open"
+    );
+
+    actor.observe_sidecar_mismatch_for_height(height, expected_hash, "vote_roster_lookup");
+
+    let expected_request = actor.pending.missing_block_requests.get(&expected_hash);
+    let sidecar_request = actor.pending.missing_block_requests.get(&sidecar_hash);
+    assert!(
+        expected_request.is_none(),
+        "vote-backed frontier-stall recovery should retarget the tracked missing request (expected_attempts={:?}, sidecar_attempts={:?}, quarantine={})",
+        expected_request.map(|request| request.attempts),
+        sidecar_request.map(|request| request.attempts),
+        actor.sidecar_quarantined_for_height(height)
+    );
+    assert!(
+        sidecar_request.is_some(),
+        "vote-backed frontier-stall recovery should track the sidecar hash (expected_attempts={:?}, quarantine={})",
+        expected_request.map(|request| request.attempts),
+        actor.sidecar_quarantined_for_height(height)
+    );
+    assert!(
+        !actor.sidecar_quarantined_for_height(height),
+        "vote-backed frontier-stall recovery should not quarantine on first observation"
     );
 
     harness.shutdown.send();

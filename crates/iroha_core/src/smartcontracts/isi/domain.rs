@@ -33,6 +33,7 @@ pub mod isi {
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
     };
     use iroha_logger::prelude::*;
+    use norito::codec::Decode as _;
 
     use super::*;
     use crate::{
@@ -226,10 +227,20 @@ pub mod isi {
                 err.to_string().into(),
             ))
         })?;
-        let Some(record) = crate::sns::record_by_selector(state_transaction.world(), &selector)
+        let storage_key = crate::sns::record_storage_key(&selector);
+        let Some(bytes) = state_transaction
+            .world
+            .smart_contract_state
+            .get(&storage_key)
         else {
             return Ok(());
         };
+        let mut slice = bytes.as_slice();
+        let record = NameRecordV1::decode(&mut slice).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to decode account alias SNS record: {err}").into(),
+            )
+        })?;
         let status =
             crate::sns::effective_status(&record, state_transaction.block_unix_timestamp_ms());
         if matches!(
@@ -775,13 +786,10 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                crate::sns::ensure_account_alias_lease(
-                    &mut state_transaction.world,
-                    authority,
-                    label,
-                    &state_transaction.nexus.dataspace_catalog,
-                )
-                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
+                crate::sns::ensure_account_alias_lease(state_transaction, authority, label)
+                    .map_err(|e| {
+                        InstructionExecutionError::InvariantViolation(e.to_string().into())
+                    })?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -2570,13 +2578,8 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            crate::sns::ensure_account_alias_lease(
-                &mut state_transaction.world,
-                authority,
-                &alias,
-                &state_transaction.nexus.dataspace_catalog,
-            )
-            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
+            crate::sns::ensure_account_alias_lease(state_transaction, authority, &alias)
+                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2676,13 +2679,8 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            crate::sns::ensure_account_alias_lease(
-                &mut state_transaction.world,
-                authority,
-                &alias,
-                &state_transaction.nexus.dataspace_catalog,
-            )
-            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
+            crate::sns::ensure_account_alias_lease(state_transaction, authority, &alias)
+                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -3127,15 +3125,43 @@ mod tests {
             vec![NameControllerV1::account(&address)],
             0,
             0,
-            1_000,
-            2_000,
-            3_000,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
             Metadata::default(),
         );
         tx.world.smart_contract_state.insert(
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
+        if tx.world.account(owner).is_err() {
+            let account = Account {
+                id: owner.clone(),
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+            };
+            let (account_id, account_value) = account.into_key_value();
+            tx.world.accounts.insert(account_id, account_value);
+        }
+        tx.world.add_account_permission(
+            owner,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+            }),
+        );
+        if let Some(domain_id) = alias
+            .domain_id(&tx.nexus.dataspace_catalog)
+            .expect("domain id")
+        {
+            tx.world.add_account_permission(
+                owner,
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain_id),
+                }),
+            );
+        }
     }
 
     fn seed_domainful_alias_manage_permissions(
@@ -3187,7 +3213,7 @@ mod tests {
     #[test]
     fn account_label_registration_and_cleanup() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3304,7 +3330,7 @@ mod tests {
     #[test]
     fn register_account_with_label_emits_created_event_with_alias_domain() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3342,7 +3368,7 @@ mod tests {
     #[test]
     fn register_account_with_label_requires_active_sns_lease() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3367,7 +3393,7 @@ mod tests {
     #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3424,7 +3450,7 @@ mod tests {
     #[test]
     fn set_primary_account_alias_allows_domainful_alias_without_domain_link() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3459,7 +3485,7 @@ mod tests {
     #[test]
     fn set_account_label_reclaims_stale_alias_binding_with_missing_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3510,7 +3536,7 @@ mod tests {
     #[test]
     fn bind_account_alias_requires_active_sns_lease() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3543,7 +3569,7 @@ mod tests {
     #[test]
     fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3604,7 +3630,7 @@ mod tests {
     #[test]
     fn set_account_label_allows_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -3626,6 +3652,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -3695,7 +3722,7 @@ mod tests {
     #[test]
     fn set_account_label_allows_global_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -3717,6 +3744,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -3767,7 +3795,7 @@ mod tests {
     #[test]
     fn bind_account_alias_adds_multiple_aliases_to_existing_multisig_account() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3855,7 +3883,7 @@ mod tests {
     #[test]
     fn unregister_account_removes_all_bound_aliases() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3903,7 +3931,7 @@ mod tests {
     #[test]
     fn clear_account_alias_binding_removes_non_primary_aliases_only() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3979,7 +4007,7 @@ mod tests {
     #[test]
     fn bind_account_alias_reclaims_stale_binding_with_missing_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4030,7 +4058,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_account_registrar_for_domain() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4050,6 +4078,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register account");
@@ -4073,7 +4102,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_global_account_registrar() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4093,6 +4122,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register account");
@@ -4116,7 +4146,7 @@ mod tests {
     #[test]
     fn bind_account_alias_rejects_alias_owned_by_different_account_without_registrar_rights() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let unauthorized = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4156,8 +4186,8 @@ mod tests {
         .expect_err("alias collision should be rejected");
 
         assert!(
-            err.to_string().contains("already registered"),
-            "error should mention alias collision: {err}"
+            err.to_string().contains("not permitted"),
+            "error should mention missing alias authority: {err}"
         );
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -4169,7 +4199,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4191,6 +4221,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -4233,7 +4264,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_global_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4255,6 +4286,7 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
+        seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -4297,7 +4329,7 @@ mod tests {
     #[test]
     fn register_account_rejects_phone_like_label() {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 

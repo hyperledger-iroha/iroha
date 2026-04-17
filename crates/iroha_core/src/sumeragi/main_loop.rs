@@ -4018,16 +4018,21 @@ impl Actor {
         )
     }
 
+    fn frontier_sidecar_hint_can_override_stall_gate(reason: &'static str) -> bool {
+        matches!(reason, "vote_roster_lookup" | "deferred_vote_roster_lookup")
+    }
+
     fn should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
         &self,
         frontier_height: u64,
         local_height: u64,
+        reason: &'static str,
     ) -> bool {
         if self.sidecar_quarantined_for_height(frontier_height) {
             return false;
         }
         if self.frontier_catchup_stall_mode_active_at_frontier(frontier_height, local_height) {
-            return false;
+            return Self::frontier_sidecar_hint_can_override_stall_gate(reason);
         }
         let dependency_progress_now =
             self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
@@ -28301,6 +28306,7 @@ impl Actor {
                     && self.should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
                         contiguous_frontier_height,
                         committed_height,
+                        reason,
                     );
                 let retargeted_frontier_sidecar = allow_frontier_sidecar_retarget
                     && self.retarget_missing_block_request_to_canonical_hash(

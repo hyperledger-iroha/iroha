@@ -4770,8 +4770,10 @@ mod tests {
         fn make_world() -> World {
             let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
             let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
-            let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+            let n1 =
+                Nft::new("n1$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+            let n2 =
+                Nft::new("n2$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
             World::with_assets([domain], [account], [], [], [n1, n2])
         }
 
@@ -5153,8 +5155,8 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
-        let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+        let n1 = Nft::new("n1$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+        let n2 = Nft::new("n2$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [n1.clone(), n2.clone()]);
 
         let kura = Kura::blank_kura_for_testing();
@@ -6659,8 +6661,10 @@ mod tests {
 
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let nft1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
-        let nft2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+        let nft1 =
+            Nft::new("n1$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
+        let nft2 =
+            Nft::new("n2$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [nft1.clone(), nft2.clone()]);
 
         let kura = Kura::blank_kura_for_testing();

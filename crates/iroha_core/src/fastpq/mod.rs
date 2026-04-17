@@ -572,7 +572,7 @@ mod tests {
         let digest = authority_digest(&ALICE_ID);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "0ab8515c63c9d51963d14006b34946e5d7cba4788f0b33c0f6d275bfdd81f42f"
+            "c03a53264d90b3d5825626599268d2ad8a2016f42730ee80d7b9f63b83c42989"
         );
     }
 
@@ -598,7 +598,7 @@ mod tests {
         let digest = poseidon_preimage_digest(&delta, &batch_hash);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "349a52ad3a452c8ad7cb0e21df495d76b683d77d9dc021a470aedff2418e0801"
+            "a3d862221d5d238c9a8e97f978b75431c6f44adef6debffb3b6baeb741aeac01"
         );
     }
 

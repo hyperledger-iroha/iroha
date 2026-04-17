@@ -9721,7 +9721,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-0$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-0$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -9948,7 +9948,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-usage$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-usage$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10071,7 +10071,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-fail$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-fail$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10249,7 +10249,7 @@ mod tests {
             subscription_key.clone(),
             Json::new(subscription_state.clone()),
         );
-        let nft_id: NftId = "sub-suspend$subscriptions".parse().unwrap();
+        let nft_id: NftId = "sub-suspend$subscriptions.universal".parse().unwrap();
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
@@ -10558,7 +10558,7 @@ mod tests {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let alias_domain = fixture_domain_id();
-        let alias_domain_label = alias_domain.to_string();
+        let alias_domain_label = alias_domain.name().to_string();
         let alias_label: Name = "banking".parse().expect("alias label");
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
@@ -12817,7 +12817,7 @@ seiyaku Vault {
         let authority: AccountId = fixture_account("alice");
         let authority_clone = authority.clone();
         let owner: AccountId = fixture_account("bob");
-        let nft_id: NftId = "gold$wonderland".parse().unwrap();
+        let nft_id: NftId = "gold$wonderland.universal".parse().unwrap();
         let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
         let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
 

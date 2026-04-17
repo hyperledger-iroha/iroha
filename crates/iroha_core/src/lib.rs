@@ -570,6 +570,12 @@ mod tests {
         },
     };
 
+    fn canonical_signed_transaction_payload(
+        signed: &iroha_data_model::transaction::SignedTransaction,
+    ) -> Arc<Vec<u8>> {
+        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction"))
+    }
+
     #[test]
     fn trust_gossip_classifies_to_trust_topic() {
         let gossip = PeerTrustGossip { trust: Vec::new() };
@@ -875,7 +881,7 @@ mod tests {
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
             .sign(keypair.private_key());
-        let payload = Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"));
+        let payload = canonical_signed_transaction_payload(&signed);
         let gossip = TransactionGossip {
             txs: vec![GossipTransaction::with_encoded(
                 signed.clone(),
@@ -919,8 +925,7 @@ mod tests {
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "pong".to_owned())])
             .sign(keypair.private_key());
-        let canonical_payload =
-            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"));
+        let canonical_payload = canonical_signed_transaction_payload(&signed);
         let payload = {
             let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
             Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))

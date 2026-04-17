@@ -18,14 +18,57 @@ Last updated: 2026-04-17
   classification used at ingress and prefers the receiver's validated route over
   the ingress hint when they diverge.
 - Focused regressions now pin the state-required routing edges that were still
-  easy to miss: single-scope and multi-scope account metadata writes, opaque
-  asset-definition unregister and metadata-remove flows, and target-domain /
-  target-alias signed-query route resolution on private ingress.
+  easy to miss: dataspace-labelled account registration plus single-scope and
+  multi-scope account metadata writes, opaque asset-definition unregister /
+  metadata-set / metadata-remove flows, and target-domain / target-alias
+  signed-query route resolution on private ingress, including opaque
+  asset-definition queries that need app-state reclassification.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha_core queue::router --lib`
   - `cargo test -p iroha_torii effective_proxy_signed_query_routing_decision --lib`
   - `cargo test -p iroha_torii resolve_signed_query_routing_for_app_uses_target_ --lib`
+
+## 2026-04-17 Follow-up: worker backlog drain regression no longer hangs
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/mod.rs`
+  now gives `run_worker_iteration_adapts_block_drain_caps_on_block_backlog`
+  a test-local block backlog channel sized for its intended 20-message
+  backlog. The test still exercises the adaptive block-drain cap, but no longer
+  blocks while seeding a 16-capacity `sync_channel`.
+- The test now holds the worker-queue status guard and drains leftover seeded
+  block messages after the iteration so queue-depth counters do not leak into
+  later worker-loop tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sumeragi::tests::run_worker_iteration_adapts_block_drain_caps_on_block_backlog -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib run_worker_iteration_adapts_block_drain_caps_on_block_backlog -- --nocapture`
+  - `cargo test -p iroha_core --lib run_worker_iteration_ -- --nocapture`
+
+## 2026-04-17 Follow-up: Taira MCP Musubi coverage closure
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/musubi.rs`
+  now disambiguates Musubi query execution through
+  `ValidSingularQuery::execute`, fixing the Torii build after the native
+  Musubi REST handlers were added.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/mcp.rs`
+  explicitly permits the four Musubi pre-signing instruction-builder tools in
+  the read-only MCP profile. This keeps public Taira MCP useful for local
+  signing workflows while still blocking transaction submission and other
+  mutating POST tools by default.
+- The read-only exception is exact-name scoped to
+  `iroha.musubi.instructions.publish_release`,
+  `iroha.musubi.instructions.yank_release`,
+  `iroha.musubi.instructions.set_alias`, and
+  `iroha.musubi.instructions.assert_release_exists`; these tools return
+  unsigned instruction envelopes and do not accept `private_key` or `authority`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii -p iroha_core --target-dir /tmp/iroha-musubi-torii-target`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib mcp::tests:: --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+- Full workspace test, strict clippy, and a live public Taira
+  `check_mcp_rollout.sh` canary still need a longer runtime validation window.
 
 ## 2026-04-17 Follow-up: iroha_core routing compile fix
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/block.rs`
@@ -24327,3 +24370,27 @@ Last updated: 2026-04-17
 - Focused validation completed:
   - `cargo fmt --all`
   - `cargo test -p iroha_core --lib state::permission_cache_tests::permission_cache_rebuilds_after_restart -- --nocapture`
+
+## 2026-04-17 Iroha Core Trigger/Gossip Telemetry Test Fixes
+- Fixed the root cached-transaction gossip roundtrip tests to compare against the canonical zero-layout-flag signed transaction frame used by `GossipTransaction::with_encoded`, including the context-free compact-length case.
+- Fixed telemetry test fixtures so lane-catalog IDs are zero-based within the configured lane count and the shared telemetry `SystemUnderTest` seeds its transaction authority account before non-genesis blocks.
+- Refreshed trigger event snapshots to match the sandbox's alias-aware asset rendering (`rose##<account>@wonderland`) while preserving the validated data-trigger and time-trigger execution order.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `cargo test -p iroha_core --lib network_message_roundtrip_cached_transaction_gossip -- --nocapture`
+  - `cargo test -p iroha_core --lib telemetry::tests::status_exposes_tx_gossip_targets_with_aliases --features telemetry -- --nocapture`
+  - `cargo test -p iroha_core --lib telemetry::tests::tx_counters_ignore_time_trigger_failures --features telemetry -- --nocapture`
+  - `cargo test -p iroha_core --lib telemetry::tests::commit_blocks --features telemetry -- --nocapture`
+  - `cargo test -p iroha_core --lib tx::tests::data_trigger -- --nocapture`
+  - `cargo test -p iroha_core --lib tx::tests::time_trigger::fires_after_external_transactions -- --nocapture`
+
+## 2026-04-17 AXT Block Validation Test Fixes
+- Fixed AXT envelope validation to prefer the block-embedded policy snapshot when present, preserving the execution-time per-dataspace policy slots used by block result validation.
+- Scoped touch-manifest enforcement to declared non-empty touch specs, while still rejecting empty manifests for specs that require read/write coverage.
+- Updated block validation fixtures to seed required SNS domain-name leases before non-genesis domain registration tests so rollback/order assertions exercise transaction execution instead of domain admission policy.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `cargo test -p iroha_core --features app_api --lib block::commit::axt_validation_tests -- --nocapture`
+  - `cargo test -p iroha_core --lib block::tests -- --nocapture`
