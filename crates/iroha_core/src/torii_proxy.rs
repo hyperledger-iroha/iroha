@@ -126,6 +126,66 @@ pub struct ToriiReadProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 
+/// Route set Nexus should recompute for a coordinated fanout request.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ToriiFanoutRouteScopeV1 {
+    /// Fan out across all configured dataspace routes.
+    AllDataspaces,
+    /// Fan out across the dataspaces that may own the target account.
+    TargetAccount {
+        /// Canonical target account id literal.
+        account_id: String,
+    },
+    /// Fan out across public routes plus caller-visible private dataspaces.
+    VisibleAccount {
+        /// Optional canonical caller account id literal.
+        caller_account_id: Option<String>,
+    },
+}
+
+/// Merge behavior requested for an App API read fanout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ToriiReadFanoutMergeV1 {
+    /// Merge JSON list-style responses.
+    List,
+    /// Merge JSON singleton responses.
+    Singleton,
+    /// Merge account-detail responses while preserving the requested response format.
+    Account,
+    /// Merge account portfolio responses.
+    Portfolio,
+    /// Merge dataspace account summary responses.
+    DataspaceSummary,
+    /// Merge space-directory bindings responses.
+    SpaceDirectoryBindings,
+    /// Merge space-directory manifest responses.
+    SpaceDirectoryManifests {
+        /// Client pagination offset to apply after merged deduplication.
+        page_offset: u64,
+        /// Client pagination limit to apply after merged deduplication.
+        page_limit: Option<u64>,
+    },
+}
+
+/// App API read fanout coordinated by the Nexus/default route.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct ToriiReadFanoutProxyRequestV1 {
+    /// Supported read endpoint identifier.
+    pub endpoint: ToriiReadEndpointV1,
+    /// Route scope that Nexus must recompute from its local catalog/world.
+    pub route_scope: ToriiFanoutRouteScopeV1,
+    /// Merge behavior for the endpoint response.
+    pub merge: ToriiReadFanoutMergeV1,
+    /// String path arguments in endpoint-specific order.
+    pub path_args: Vec<String>,
+    /// Raw query string without the leading `?`.
+    pub query_string: Option<String>,
+    /// Raw JSON body for POST-style read endpoints.
+    pub body: Vec<u8>,
+    /// Response encoding negotiated by the ingress node.
+    pub response_format: ToriiProxyResponseFormatV1,
+}
+
 /// Hosted HTTP request forwarded to a peer that may own a healthy Inrou target.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiHostedHttpProxyRequestV1 {
@@ -177,8 +237,17 @@ pub enum ToriiProxyRequestKindV1 {
         /// Response encoding negotiated by the ingress node.
         response_format: ToriiProxyResponseFormatV1,
     },
+    /// Execute a verified query fanout coordinated by the Nexus/default route.
+    VerifiedQueryFanout {
+        /// Norito-encoded verified query payload forwarded by the ingress node.
+        request_bytes: Vec<u8>,
+        /// Response encoding negotiated by the ingress node.
+        response_format: ToriiProxyResponseFormatV1,
+    },
     /// Execute a routed Torii read endpoint on the authoritative peer.
     Read(ToriiReadProxyRequestV1),
+    /// Execute an App API read fanout coordinated by the Nexus/default route.
+    ReadFanout(ToriiReadFanoutProxyRequestV1),
     /// Proxy a Soracloud public hosted-HTTP request to a peer with a local healthy Inrou target.
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }

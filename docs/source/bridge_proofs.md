@@ -8,6 +8,43 @@ Torii now exposes three live SCCP bundle families:
 - `governance` bundles for token add/pause/resume governance actions
 - `message` bundles for the generic multi-chain SCCP payload family (`asset_register`, `route_activate`, `transfer`)
 
+## Human relay model
+
+SCCP relay to the SORA2 `sccp-bridge` pallet is a manual operator flow. The
+production path does not assume an off-chain worker, node-side daemon, or
+automated relayer service. A human relay operator uses a bridge web interface to
+review a Nexus/Iroha SCCP message or governance action, fetch the pallet-ready
+proof envelope, and sign the corresponding SORA2 extrinsic through a wallet.
+
+The relay operator is only a courier and transaction fee payer. Authorization
+comes from Sora Parliament on Sora Nexus, Nexus finality, and the on-chain
+checks performed by the SORA2 pallet against trusted finality and Parliament
+roster anchors. A malformed or unauthorized relay transaction is expected to be
+rejected on-chain.
+
+The bridge UI should perform the following checks before preparing a wallet
+transaction:
+
+- fetch `/v1/sccp/capabilities` and confirm `runtime_proof_family =
+  runtime-scale-v1` and `runtime_verifier_backend = sora-nexus-runtime-v1`;
+- fetch the human-readable JSON bundle for the selected message or governance
+  action and display the payload, message id, commitment root, finality epoch,
+  finality height, and any Parliament certificate metadata;
+- fetch the matching runtime SCALE envelope from
+  `/v1/sccp/proofs/message/{message_id}/runtime-scale` or
+  `/v1/sccp/proofs/governance/{message_id}/runtime-scale`;
+- check that SORA2 already has the required `TrustedNexusFinalityAnchors` and,
+  for governance/control actions, `TrustedParliamentRosters` entries; and
+- prepare the correct SORA2 call for wallet signing:
+  `submit_message_proof`, `submit_token_add_proof`, `submit_token_pause_proof`,
+  or `submit_token_resume_proof`.
+
+For the runtime SCALE path, the SORA2 call uses `proof_family =
+runtime-scale-v1`, `verifier_backend = sora-nexus-runtime-v1`, and
+`bundle_bytes` equal to the raw response body from the `/runtime-scale` endpoint.
+`proof_bytes` and `public_inputs` are retained for non-runtime verifier backends
+and may be empty for this runtime envelope path.
+
 ## Acceptance rules
 
 - Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
@@ -30,10 +67,16 @@ Torii now exposes three live SCCP bundle families:
 
 ## Torii API surface
 
-- `GET /v1/sccp/capabilities` returns the relayer-facing SCCP capability snapshot:
+- `GET /v1/sccp/capabilities` returns the relay-operator-facing SCCP capability snapshot:
   - local hub domain/chain identity (`SORA`);
   - legacy burn/governance registry backends;
   - the generic message proof family (`stark-fri-v1`);
+  - the SORA2 runtime proof family (`runtime-scale-v1`) and verifier backend
+    (`sora-nexus-runtime-v1`);
+  - the runtime SCALE envelope paths used by the bridge UI for wallet
+    submission:
+    - `/v1/sccp/proofs/message/{message_id}/runtime-scale`
+    - `/v1/sccp/proofs/governance/{message_id}/runtime-scale`
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);
@@ -58,13 +101,13 @@ Torii now exposes three live SCCP bundle families:
   - the canonical counterparty account codec;
   - the intended verifier target (`EVM`, `Solana`, `TON`, `TRON`, or
     Substrate-style runtime);
-  - the finality model label used by the proof worker; and
+  - the finality model label used by proof tooling; and
   - the manifest seed used to derive the bridge proof manifest hash, plus the
     required SCCP public inputs (`message_id`, `payload_hash`, `target_domain`,
     `commitment_root`, `finality_height`, `finality_block_hash`).
   - each manifest now also carries a chain-specific `submission_template`
     describing the expected verifier entrypoint, envelope encoding, submission
-    kind, and required argument keys for relayers targeting that chain.
+    kind, and required argument keys for relay tooling targeting that chain.
   - the reference EVM wrapper contracts for that template now live under
     `contracts/evm/sccp` in this repo.
   - ETH and BSC currently share the same reference EVM wrapper entrypoint:
@@ -100,7 +143,7 @@ Torii now exposes three live SCCP bundle families:
     hash, schema hash, public-input column/word counts, and wrapper/backend
     proof lengths without changing the underlying Norito wire artifact;
   - a generated `submission_package` carrying the target verifier entrypoint,
-    envelope encoding, raw argument blobs, prebuilt relayer envelope bytes, and
+    envelope encoding, raw argument blobs, prebuilt relay envelope bytes, and
     a typed `platform_payload` view for that lane:
     - ETH/BSC: `evm_contract_call`
     - TRON: `tron_contract_call`
@@ -121,14 +164,14 @@ Torii now exposes three live SCCP bundle families:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
   - the same SCCP security model / anchor governance declaration and destination binding that the artifact and manifest commit into the canonical statement hash;
   - a normalized payload projection with typed codec values for EVM / Solana / TON / Tron / logical-text surfaces; and
-  - the same chain-specific `submission_template` advertised by the manifest, so prover/relayer workers can derive the target verifier entrypoint and argument list without hard-coding per-chain packaging; and
-  - the generated `submission_package` for the chain-specific relayer/verifier
+  - the same chain-specific `submission_template` advertised by the manifest, so proof tooling can derive the target verifier entrypoint and argument list without hard-coding per-chain packaging; and
+  - the generated `submission_package` for the chain-specific relay/verifier
     lane, including the same typed `platform_payload` projection surfaced on the
     artifact route; and
   - JSON responses for this route also expose `proof_envelope_summary`, derived
-    from the canonical native SCCP proof for the bundled message so workers can
+    from the canonical native SCCP proof for the bundled message so operators can
     inspect the bound circuit/verifier/schema metadata before submission; and
-  - the original typed Nexus SCCP message bundle so a prover worker can keep both the normalized view and the canonical committed preimage in one document.
+  - the original typed Nexus SCCP message bundle so proof tooling can keep both the normalized view and the canonical committed preimage in one document.
   - client helpers now exist for that route directly:
     - Rust: `iroha::client::Client::get_sccp_message_proof_job_json(...)` and `get_sccp_message_proof_job(...)`;
     - Python: `ToriiClient.get_sccp_message_proof_job(...)`; and

@@ -20,13 +20,7 @@ use iroha_data_model::{
     permission::Permission,
     transaction::Executable,
 };
-use iroha_executor_data_model::permission::{
-    account::{
-        CanManageAccountAlias, CanModifyAccountMetadata, CanResolveAccountAlias,
-        CanUnregisterAccount,
-    },
-    nexus::CanPublishSpaceDirectoryManifest,
-};
+use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
 
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
@@ -341,10 +335,8 @@ fn instruction_account_permission_holder(
             GrantBox::Permission(grant) => {
                 if dataspace_scoped_permission_target(&grant.object).is_some() {
                     AccountPermissionHolderTarget::Skip
-                } else if permission_routes_by_destination_account(&grant.object) {
-                    AccountPermissionHolderTarget::Holder(&grant.destination)
                 } else {
-                    AccountPermissionHolderTarget::Abort
+                    AccountPermissionHolderTarget::Holder(&grant.destination)
                 }
             }
             GrantBox::Role(_) | GrantBox::RolePermission(_) => AccountPermissionHolderTarget::Abort,
@@ -356,10 +348,8 @@ fn instruction_account_permission_holder(
             RevokeBox::Permission(revoke) => {
                 if dataspace_scoped_permission_target(&revoke.object).is_some() {
                     AccountPermissionHolderTarget::Skip
-                } else if permission_routes_by_destination_account(&revoke.object) {
-                    AccountPermissionHolderTarget::Holder(&revoke.destination)
                 } else {
-                    AccountPermissionHolderTarget::Abort
+                    AccountPermissionHolderTarget::Holder(&revoke.destination)
                 }
             }
             RevokeBox::Role(_) | RevokeBox::RolePermission(_) => {
@@ -369,13 +359,6 @@ fn instruction_account_permission_holder(
     }
 
     AccountPermissionHolderTarget::Abort
-}
-
-fn permission_routes_by_destination_account(permission: &Permission) -> bool {
-    CanUnregisterAccount::try_from(permission).is_ok()
-        || CanModifyAccountMetadata::try_from(permission).is_ok()
-        || CanResolveAccountAlias::try_from(permission).is_ok()
-        || CanManageAccountAlias::try_from(permission).is_ok()
 }
 
 fn instruction_dataspace_scoped_permission_target(
@@ -1019,19 +1002,16 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &AcceptedTransaction<'_>,
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
+        let nexus = state_view.nexus();
         if let Some(decision) = dataspace_scoped_permission_routing_decision(
             tx,
-            Some(&state_view.nexus().lane_catalog),
-            Some(&state_view.nexus().dataspace_catalog),
+            Some(&nexus.lane_catalog),
+            Some(&nexus.dataspace_catalog),
         )? {
             return Ok(decision);
         }
         let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
-        resolve_routing_decision(
-            decision,
-            self.lane_catalog.as_ref(),
-            self.dataspace_catalog.as_ref(),
-        )
+        resolve_routing_decision(decision, &nexus.lane_catalog, &nexus.dataspace_catalog)
     }
 
     fn try_route_without_state(
@@ -2000,8 +1980,63 @@ mod tests {
         );
         assert_eq!(
             router.route_with_view(&domain_tx, &state.view()),
-            RoutingDecision::default()
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
         );
+    }
+
+    #[test]
+    fn try_route_with_view_resolves_against_same_state_catalog_snapshot() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let state_lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: lane_id,
+                dataspace: Some(dataspace_id),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@sbp".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let stale_router_lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::GLOBAL)]);
+        let router = ConfigLaneRouter::new(
+            policy,
+            DataSpaceCatalog::default(),
+            stale_router_lane_catalog,
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("state-catalog-route", "universal").expect("domain id"),
+            )))],
+        );
+        let state = state_with_account_aliases(
+            &[(
+                authority_id.clone(),
+                account_alias("operator@sbp", &catalog),
+            )],
+            catalog,
+        );
+        state.nexus.write().lane_catalog = state_lane_catalog;
+
+        let decision = router
+            .try_route_with_view(&tx, &state.view())
+            .expect("state-aware routing must resolve against the same state catalogs it matched");
+
+        assert_eq!(decision, RoutingDecision::new(lane_id, dataspace_id));
     }
 
     #[test]
@@ -2269,7 +2304,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_permission_grant_keeps_authority_routing_policy() {
+    fn asset_definition_permission_grant_routes_by_destination_account_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -2335,11 +2370,86 @@ mod tests {
 
         let decision = router
             .try_route(&tx)
-            .expect("asset-definition permission should keep authority routing");
+            .expect("asset-definition permission should route to destination account lane");
 
         assert_eq!(
             decision,
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1))
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
+        );
+    }
+
+    #[test]
+    fn asset_definition_permission_revoke_routes_by_destination_account_policy() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![
+                LaneRoutingRule {
+                    lane: LaneId::new(1),
+                    dataspace: Some(DataSpaceId::new(1)),
+                    matcher: LaneRoutingMatcher {
+                        account: Some(alice_id.to_string()),
+                        instruction: None,
+                        description: None,
+                    },
+                },
+                LaneRoutingRule {
+                    lane: LaneId::new(2),
+                    dataspace: Some(DataSpaceId::new(2)),
+                    matcher: LaneRoutingMatcher {
+                        account: Some(bob_id.to_string()),
+                        instruction: None,
+                        description: None,
+                    },
+                },
+            ],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+            (LaneId::new(2), DataSpaceId::new(2)),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(1),
+                alias: "alice".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "bob".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("nexus", "universal").unwrap(),
+            "ds1".parse().unwrap(),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Revoke::account_permission(
+                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                    asset_definition,
+                },
+                bob_id,
+            ))],
+        );
+
+        let decision = router
+            .try_route(&tx)
+            .expect("asset-definition permission revoke should route to destination account lane");
+
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
         );
     }
 
