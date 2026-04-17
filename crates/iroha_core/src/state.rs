@@ -25319,9 +25319,65 @@ mod permission_cache_tests {
         exec_path.to_string_lossy().to_string()
     }
 
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
+    }
+
+    fn build_test_block(
+        accepted: AcceptedTransaction<'static>,
+        parent: Option<&SignedBlock>,
+        topology: &crate::sumeragi::network_topology::Topology,
+        signer: &iroha_crypto::PrivateKey,
+    ) -> crate::block::NewBlock {
+        let mut builder = crate::block::BlockBuilder::new(vec![accepted]).chain(0, parent);
+        if let Some(parent) = parent.filter(|block| block.header().height().get() >= 2) {
+            builder = builder.with_previous_roster_evidence(Some(
+                previous_roster_evidence_for_parent(parent, topology.as_ref()),
+            ));
+        }
+        builder.sign(signer).unpack(|_| {})
+    }
+
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn permission_cache_rebuilds_after_restart() {
+        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
+        // platform-default worker stack for this integration-heavy scenario.
+        let handle = std::thread::Builder::new()
+            .name("permission_cache_rebuilds_after_restart".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(permission_cache_rebuilds_after_restart_impl)
+            .expect("spawn permission cache replay test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn permission_cache_rebuilds_after_restart_impl() {
         use std::{
             borrow::Cow,
             num::{NonZeroU64, NonZeroUsize},
@@ -25515,10 +25571,13 @@ mod permission_cache_tests {
             .sign(owner_keypair.private_key());
         let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
 
-        let unverified_grant = crate::block::BlockBuilder::new(vec![accepted_grant])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_grant = build_test_block(
+            accepted_grant,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_grant.header());
             let committed_grant = unverified_grant
@@ -25659,10 +25718,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
-        let unverified_revoke = crate::block::BlockBuilder::new(vec![accepted_revoke])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke = build_test_block(
+            accepted_revoke,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke.header());
             let committed_revoke = unverified_revoke
@@ -25778,10 +25840,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
-        let unverified_role = crate::block::BlockBuilder::new(vec![accepted_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_role = build_test_block(
+            accepted_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_role.header());
             let committed_role = unverified_role
@@ -25882,10 +25947,13 @@ mod permission_cache_tests {
             ))])
             .sign(owner_keypair.private_key());
         let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
-        let unverified_revoke_role = crate::block::BlockBuilder::new(vec![accepted_revoke_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke_role = build_test_block(
+            accepted_revoke_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke_role.header());
             let committed_revoke_role = unverified_revoke_role
