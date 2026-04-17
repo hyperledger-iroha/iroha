@@ -739,7 +739,7 @@ mod tests {
             amount: 77,
             sender_codec: 1,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: 2,
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: recipient.to_vec(),
             route_id_codec: 1,
             route_id: b"nexus:eth:xor".to_vec(),
@@ -792,8 +792,14 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_block_preserves_payload_order() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(1, b"0xaaa")),
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(2, b"0xbbb")),
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                1,
+                b"0x0000000000000000000000000000000000000aaa",
+            )),
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                2,
+                b"0x0000000000000000000000000000000000000bbb",
+            )),
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 1);
 
@@ -821,7 +827,10 @@ mod tests {
     #[test]
     fn collect_sccp_messages_skips_undecodable_payloads() {
         let payloads = vec![
-            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(3, b"0xccc")),
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                3,
+                b"0x0000000000000000000000000000000000000ccc",
+            )),
             vec![0xff, 0x00, 0x01],
         ];
         let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 2);

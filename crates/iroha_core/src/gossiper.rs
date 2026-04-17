@@ -2225,7 +2225,6 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
 }
 
 fn encode_signed_transaction(signed: &SignedTransaction) -> Vec<u8> {
-    let _flags = ncore::DecodeFlagsGuard::enter(0);
     ncore::to_bytes(signed).expect("encode signed transaction")
 }
 
@@ -2297,7 +2296,7 @@ impl GossipTransaction {
         }
     }
 
-    /// Wrap an already-signed transaction with cached canonical full-frame bytes.
+    /// Wrap an already-signed transaction with cached default full-frame bytes.
     pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
         let tx_hash = signed.hash();
         let canonical = Arc::new(encode_signed_transaction(&signed));

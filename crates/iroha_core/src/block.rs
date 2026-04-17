@@ -2985,7 +2985,10 @@ pub(crate) mod valid {
         block: &SignedBlock,
         state_block: &StateBlock<'_>,
     ) -> Result<(), BlockValidationError> {
-        let snapshot = state_block.axt_policy_snapshot();
+        let snapshot = block
+            .axt_policy_snapshot()
+            .cloned()
+            .unwrap_or_else(|| state_block.axt_policy_snapshot());
         let snapshot_version = if snapshot.version != 0 {
             snapshot.version
         } else {
@@ -3131,6 +3134,16 @@ pub(crate) mod valid {
                         axt_timing.max_clock_skew_ms,
                         None,
                     );
+                    if policy_slot > 0 && policy_slot > expiry_deadline {
+                        return Err(make_axt_error_with(
+                            AxtRejectReason::Expiry,
+                            "proof expired relative to policy slot",
+                            Some(dsid),
+                            Some(policy.target_lane),
+                            None,
+                            None,
+                        ));
+                    }
                     if let Some(min_expiry) = min_expiry_slot {
                         if min_expiry > expiry_slot {
                             return Err(make_axt_error_with(
@@ -3142,16 +3155,6 @@ pub(crate) mod valid {
                                 None,
                             ));
                         }
-                    }
-                    if policy_slot > 0 && policy_slot > expiry_deadline {
-                        return Err(make_axt_error_with(
-                            AxtRejectReason::Expiry,
-                            "proof expired relative to policy slot",
-                            Some(dsid),
-                            Some(policy.target_lane),
-                            None,
-                            None,
-                        ));
                     }
                 }
                 Ok(())
@@ -3265,6 +3268,19 @@ pub(crate) mod valid {
                         ));
                     }
                     if let Some(spec) = touch_specs.get(&touch.dsid) {
+                        if (!spec.read.is_empty() || !spec.write.is_empty())
+                            && touch.manifest.read.is_empty()
+                            && touch.manifest.write.is_empty()
+                        {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Descriptor,
+                                "missing touch manifest for dataspace",
+                                Some(touch.dsid),
+                                None,
+                                None,
+                            ));
+                        }
                         if !touch
                             .manifest
                             .read
@@ -3307,7 +3323,9 @@ pub(crate) mod valid {
                     }
                 }
                 for spec in &envelope.descriptor.touches {
-                    if !touch_dsids.contains(&spec.dsid) {
+                    if (!spec.read.is_empty() || !spec.write.is_empty())
+                        && !touch_dsids.contains(&spec.dsid)
+                    {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Descriptor,
@@ -3388,16 +3406,6 @@ pub(crate) mod valid {
                             envelope_lane,
                             AxtRejectReason::Descriptor,
                             "handle references undeclared dataspace",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
-                    if !touch_dsids.contains(&fragment.intent.asset_dsid) {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Descriptor,
-                            "missing touch manifest for handle dataspace",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -13160,7 +13168,6 @@ mod commit {
             let snapshot = state.axt_policy_snapshot();
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
-
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(
                 err,
@@ -13219,7 +13226,6 @@ mod commit {
             let snapshot = state.axt_policy_snapshot();
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
-
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(
                 err,
@@ -13424,7 +13430,11 @@ mod commit {
 
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
-                touches: Vec::new(),
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: vec!["orders/".to_owned()],
+                    write: Vec::new(),
+                }],
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
@@ -13449,11 +13459,7 @@ mod commit {
             let state_block = state.block(block.header());
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
-                AxtRejectReason::Descriptor,
-                "missing touch manifest for handle dataspace",
-            );
+            expect_axt_error(err, AxtRejectReason::Descriptor, "missing touch manifest");
         }
 
         #[test]
@@ -13659,6 +13665,7 @@ mod commit {
             first.handle.sub_nonce = 3;
             first.handle.budget.remaining = 10;
             first.handle.budget.per_use = Some(10);
+            first.intent.op.amount = "7".to_owned();
             first.amount = 7;
             let mut second = first.clone();
             second.handle.sub_nonce = 4;
@@ -13733,6 +13740,7 @@ mod commit {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
+            state.nexus.get_mut().axt.max_clock_skew_ms = 0;
             let dsid = DataSpaceId::new(22);
             let lane = LaneId::new(9);
             let policy = AxtPolicyEntry {
@@ -13740,7 +13748,7 @@ mod commit {
                 target_lane: lane,
                 min_handle_era: 1,
                 min_sub_nonce: 1,
-                current_slot: 5,
+                current_slot: 70_000,
             };
             state.set_axt_policy(dsid, policy);
 
@@ -13749,24 +13757,24 @@ mod commit {
                 touches: Vec::new(),
             };
             let binding = binding_for_descriptor(&descriptor);
-            let mut handle = sample_handle(binding, lane, dsid, 6, policy.manifest_root);
-            handle.proof = Some(ProofBlob {
-                payload: policy.manifest_root.to_vec(),
-                expiry_slot: Some(4),
-            });
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
                 descriptor,
                 touches: Vec::new(),
-                proofs: Vec::new(),
-                handles: vec![handle],
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(4),
+                    },
+                }],
+                handles: Vec::new(),
                 commit_height: Some(1),
             };
             let snapshot = state.axt_policy_snapshot();
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
-
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(err, AxtRejectReason::Expiry, "expired");
         }
@@ -13982,6 +13990,7 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle_one = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            handle_one.intent.op.amount = "7".to_owned();
             handle_one.amount = 7;
             let mut handle_two = handle_one.clone();
             handle_two.amount = 7;
@@ -15325,6 +15334,27 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     #[allow(dead_code)]
     fn commit_block_at_height(
         state: &State,
@@ -15821,7 +15851,11 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
-        let world = World::with([domain], [account], []);
+        let domain_a_id = DomainId::try_new("domain-a", "universal").unwrap();
+        let domain_b_id = DomainId::try_new("domain-b", "universal").unwrap();
+        let mut world = World::with([domain], [account], []);
+        seed_domain_name_lease(&mut world, &alice_id, &domain_a_id);
+        seed_domain_name_lease(&mut world, &alice_id, &domain_b_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
@@ -15831,12 +15865,8 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         // Two independent register instructions (no ordering dependencies)
-        let domain_a = Register::domain(Domain::new(
-            DomainId::try_new("domain-a", "universal").unwrap(),
-        ));
-        let domain_b = Register::domain(Domain::new(
-            DomainId::try_new("domain-b", "universal").unwrap(),
-        ));
+        let domain_a = Register::domain(Domain::new(domain_a_id));
+        let domain_b = Register::domain(Domain::new(domain_b_id));
 
         let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions::<InstructionBox>([domain_a.into()])
@@ -15902,19 +15932,27 @@ mod tests {
             .zip(block_ref.results())
             .collect();
 
-        let is_ok = |hash: &_, label: &str| {
+        let lookup = |hash: &_, label: &str| {
             outcomes
                 .iter()
                 .find(|(entry_hash, _)| entry_hash == hash)
                 .unwrap_or_else(|| panic!("missing result for {label}"))
                 .1
                 .as_ref()
-                .is_ok()
         };
 
-        assert!(!is_ok(&fail_hash, "fail tx"));
-        assert!(is_ok(&register_hash, "register tx"));
-        assert!(is_ok(&succeed_hash, "succeed tx"));
+        let fail_result = lookup(&fail_hash, "fail tx");
+        assert!(fail_result.is_err(), "fail tx must be rejected");
+        let register_result = lookup(&register_hash, "register tx");
+        assert!(
+            register_result.is_ok(),
+            "register tx must succeed, got {register_result:?}"
+        );
+        let succeed_result = lookup(&succeed_hash, "succeed tx");
+        assert!(
+            succeed_result.is_ok(),
+            "succeed tx must succeed, got {succeed_result:?}"
+        );
     }
 
     #[tokio::test]
@@ -15926,7 +15964,9 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
-        let world = World::with([domain], [account], []);
+        let created_domain_id = DomainId::try_new("domain", "universal").expect("Valid");
+        let mut world = World::with([domain], [account], []);
+        seed_domain_name_lease(&mut world, &alice_id, &created_domain_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
@@ -15935,8 +15975,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let domain_id = DomainId::try_new("domain", "universal").expect("Valid");
-        let create_domain = Register::domain(Domain::new(domain_id));
+        let create_domain = Register::domain(Domain::new(created_domain_id));
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").unwrap(),
             "coin".parse().unwrap(),
@@ -16000,13 +16039,12 @@ mod tests {
                 .as_ref()
         };
 
+        let fail_result = lookup(&fail_hash, "fail tx");
+        assert!(fail_result.is_err(), "Failing tx must be rejected");
+        let accept_result = lookup(&accept_hash, "accept tx");
         assert!(
-            lookup(&fail_hash, "fail tx").is_err(),
-            "Failing tx must be rejected"
-        );
-        assert!(
-            lookup(&accept_hash, "accept tx").is_ok(),
-            "Second tx must succeed"
+            accept_result.is_ok(),
+            "Second tx must succeed, got {accept_result:?}"
         );
     }
 
