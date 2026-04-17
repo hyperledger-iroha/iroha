@@ -115,6 +115,24 @@ OpenAPI-derived tools use stable route-based names:
 
 Curated aliases are also exposed under `iroha.*` and `connect.*`.
 
+Musubi package-registry aliases are exposed under `iroha.musubi.*`:
+
+- `iroha.musubi.search`
+- `iroha.musubi.release.get`
+- `iroha.musubi.package.releases`
+- `iroha.musubi.package.versions`
+- `iroha.musubi.alias.resolve`
+- `iroha.musubi.instructions.publish_release`
+- `iroha.musubi.instructions.yank_release`
+- `iroha.musubi.instructions.set_alias`
+- `iroha.musubi.instructions.assert_release_exists`
+
+The Musubi instruction tools only build unsigned instruction payloads. They do
+not accept `authority`, `private_key`, or other signing material; sign locally
+and submit the resulting transaction with `iroha.transactions.submit_and_wait`.
+Use package literals like `dex.universal/swap-core` and
+`dex.universal/swap-core@1.2.3`, with no leading `@` namespace marker.
+
 ## Canonical specification
 
 The full wire-level contract is maintained in:
