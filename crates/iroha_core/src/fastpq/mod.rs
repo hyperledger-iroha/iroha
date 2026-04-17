@@ -123,7 +123,7 @@ pub fn public_inputs_template_from_block(
     let old_root = crate::sumeragi::exec::parent_state_from_witness(witness);
     let new_root = crate::sumeragi::exec::post_state_from_witness(witness);
     FastpqPublicInputsTemplate {
-        dsid: dataspace_id_bytes(DataSpaceId::GLOBAL),
+        dsid: dataspace_id_bytes(DataSpaceId::UNIVERSAL),
         slot,
         old_root: old_root.into(),
         new_root: new_root.into(),
@@ -677,7 +677,7 @@ mod tests {
         let perm_root = [0x11; 32];
         let template = public_inputs_template_from_block(&header, &witness, perm_root);
         let mut expected_dsid = [0u8; 16];
-        expected_dsid[..8].copy_from_slice(&DataSpaceId::GLOBAL.as_u64().to_le_bytes());
+        expected_dsid[..8].copy_from_slice(&DataSpaceId::UNIVERSAL.as_u64().to_le_bytes());
         assert_eq!(template.dsid, expected_dsid);
         assert_eq!(template.slot, 123_000_000);
         assert_eq!(template.perm_root, perm_root);

@@ -686,7 +686,7 @@ fn json_get_account_id_reads_contract_address_subject_literal() {
         iroha_data_model::account::address::chain_discriminant(),
         &authority,
         3,
-        DataSpaceId::GLOBAL,
+        DataSpaceId::UNIVERSAL,
     )
     .expect("derive contract address");
     let json = format!(r#"{{"controller":"{}"}}"#, contract_address);

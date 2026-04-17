@@ -451,7 +451,7 @@ fn sample_lane_relay_envelope_with_bitmap(
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         tx_count: 1,
         total_local_micro: 1,
         total_xor_due_micro: 1,
@@ -3593,7 +3593,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
         lane_keypairs.iter().map(account_id_for_keypair).collect();
     install_lane_manifest_registry(
         &actor.state,
-        &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
+        &[(LaneId::new(0), DataSpaceId::UNIVERSAL, lane_validators)],
     );
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
@@ -3663,7 +3663,7 @@ async fn merge_committee_accepts_remote_signature() {
         lane_keypairs.iter().map(account_id_for_keypair).collect();
     install_lane_manifest_registry(
         &actor.state,
-        &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
+        &[(LaneId::new(0), DataSpaceId::UNIVERSAL, lane_validators)],
     );
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");

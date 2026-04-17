@@ -336,12 +336,12 @@ pub fn prepare_state(
                 .map(|entry| entry.id)
                 .collect();
             if ids.is_empty() {
-                vec![DataSpaceId::GLOBAL]
+                vec![DataSpaceId::UNIVERSAL]
             } else {
                 ids
             }
         })
-        .unwrap_or_else(|| vec![DataSpaceId::GLOBAL]);
+        .unwrap_or_else(|| vec![DataSpaceId::UNIVERSAL]);
     let lanes: Vec<LaneId> = nexus
         .map(|profile| {
             let ids: Vec<LaneId> = profile
@@ -399,7 +399,7 @@ pub fn prepare_state(
         let gas_account = Account::new(gas_account_id.clone()).with_label(Some(AccountAlias::new(
             gas_label,
             Some(AccountAliasDomain::new(ivm_domain.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )));
 
         let stake_asset = nexus
@@ -1107,7 +1107,7 @@ impl ChaosState {
     }
 
     fn random_dataspace(&self, rng: &mut StdRng) -> DataSpaceId {
-        *self.dataspaces.choose(rng).unwrap_or(&DataSpaceId::GLOBAL)
+        *self.dataspaces.choose(rng).unwrap_or(&DataSpaceId::UNIVERSAL)
     }
 
     fn random_lane(&self, rng: &mut StdRng) -> LaneId {
@@ -3103,7 +3103,7 @@ mod tests {
             Some(AccountAliasDomain::new(
                 "ivm".parse::<Name>().expect("ivm domain"),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let mut found_fee_sink = false;
         for instruction in genesis.iter().flatten() {
@@ -4775,7 +4775,7 @@ mod tests {
             state
                 .space_directory_manifests
                 .values()
-                .any(|spaces| spaces.contains(&DataSpaceId::GLOBAL)),
+                .any(|spaces| spaces.contains(&DataSpaceId::UNIVERSAL)),
             "dataspace should be recorded as published"
         );
     }

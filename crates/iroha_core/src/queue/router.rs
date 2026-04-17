@@ -59,7 +59,7 @@ impl RoutingDecision {
 
 impl Default for RoutingDecision {
     fn default() -> Self {
-        Self::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+        Self::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     }
 }
 
@@ -875,7 +875,7 @@ fn domain_dataspace_target(
         .as_ref()
         .eq_ignore_ascii_case("universal")
     {
-        return Some(DataSpaceId::GLOBAL);
+        return Some(DataSpaceId::UNIVERSAL);
     }
     dataspace_catalog?
         .by_alias(domain_id.dataspace().as_ref())
@@ -1004,7 +1004,7 @@ fn asset_definition_dataspace_target(
             })
         })?;
     if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::GLOBAL);
+        return Some(DataSpaceId::UNIVERSAL);
     }
     dataspace_catalog?
         .by_alias(&dataspace_alias)
@@ -1031,7 +1031,7 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
                 })
         })?;
     if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::GLOBAL);
+        return Some(DataSpaceId::UNIVERSAL);
     }
     dataspace_catalog?
         .by_alias(&dataspace_alias)
@@ -1866,7 +1866,7 @@ pub trait LaneRouter: Send + Sync + 'static {
 pub struct SingleLaneRouter;
 
 impl SingleLaneRouter {
-    /// Create a router that always selects the default single lane/global dataspace.
+    /// Create a router that always selects the default single lane/universal dataspace.
     #[must_use]
     pub const fn new() -> Self {
         Self
@@ -1875,7 +1875,7 @@ impl SingleLaneRouter {
 
 impl LaneRouter for SingleLaneRouter {
     fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     }
 }
 
@@ -2137,7 +2137,7 @@ mod tests {
     fn catalog_with_lanes(lanes: &[LaneId]) -> LaneCatalog {
         let entries: Vec<(LaneId, DataSpaceId)> = lanes
             .iter()
-            .map(|lane_id| (*lane_id, DataSpaceId::GLOBAL))
+            .map(|lane_id| (*lane_id, DataSpaceId::UNIVERSAL))
             .collect();
         catalog_with_lane_dataspaces(&entries)
     }
@@ -2252,7 +2252,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::new(0),
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(1),
@@ -2300,7 +2300,7 @@ mod tests {
         let state = blank_state();
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id.as_u32(), 1);
-        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
         // Non-matching instruction should fall back to default lane.
         let tx = sample_transaction(
@@ -2336,7 +2336,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(3),
                 dataspace: Some(DataSpaceId::new(7)),
@@ -2348,7 +2348,7 @@ mod tests {
             }],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(3), DataSpaceId::new(7)),
         ]);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -2382,7 +2382,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(5),
                 dataspace: Some(DataSpaceId::new(7)),
@@ -2407,7 +2407,7 @@ mod tests {
 
         let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(5), DataSpaceId::new(7)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog, lane_catalog);
@@ -2435,7 +2435,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(4),
                 dataspace: Some(DataSpaceId::new(9)),
@@ -2465,7 +2465,7 @@ mod tests {
         .expect("valid dataspace catalog");
 
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(4), DataSpaceId::new(7)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
@@ -2498,7 +2498,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(9),
                 dataspace: Some(DataSpaceId::new(7)),
@@ -2521,7 +2521,7 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::GLOBAL)]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
 
         let tx = sample_transaction(
@@ -2552,7 +2552,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::new(9),
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(11),
                 dataspace: None,
@@ -2597,7 +2597,7 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(11));
-        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -2648,7 +2648,7 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
-        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -2664,7 +2664,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2695,7 +2695,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2729,7 +2729,7 @@ mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2766,7 +2766,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2824,7 +2824,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2874,7 +2874,7 @@ mod tests {
         let (receiver_id, _) = gen_account_in("acme");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: None,
@@ -2910,12 +2910,12 @@ mod tests {
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![],
             },
             dataspace_catalog(&[(dataspace_id, "acme")]),
             catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 (LaneId::new(2), dataspace_id),
             ]),
         );
@@ -2940,7 +2940,7 @@ mod tests {
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![LaneRoutingRule {
                     lane: LaneId::new(3),
                     dataspace: None,
@@ -2953,7 +2953,7 @@ mod tests {
             },
             dataspace_catalog(&[(dataspace_id, "acme")]),
             catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 (LaneId::new(3), dataspace_id),
             ]),
         );
@@ -2979,12 +2979,12 @@ mod tests {
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: vec![],
             },
             dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
             catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 (LaneId::new(2), first_dataspace),
                 (LaneId::new(3), second_dataspace),
             ]),
@@ -3021,7 +3021,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(2),
@@ -3105,7 +3105,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: Some(DataSpaceId::new(10)),
@@ -3118,7 +3118,7 @@ mod tests {
         };
 
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(10)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
@@ -3166,13 +3166,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
         let state_lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: lane_id,
                 dataspace: Some(dataspace_id),
@@ -3185,7 +3185,7 @@ mod tests {
         };
 
         let stale_router_lane_catalog =
-            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::GLOBAL)]);
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(
             policy,
             DataSpaceCatalog::default(),
@@ -3221,7 +3221,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: Some(DataSpaceId::new(10)),
@@ -3234,7 +3234,7 @@ mod tests {
         };
 
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(10)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
@@ -3265,7 +3265,7 @@ mod tests {
         let (alice_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::new(0),
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(2),
                 dataspace: Some(DataSpaceId::new(2)),
@@ -3277,12 +3277,12 @@ mod tests {
             }],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::new(0), DataSpaceId::GLOBAL),
+            (LaneId::new(0), DataSpaceId::UNIVERSAL),
             (LaneId::new(2), DataSpaceId::new(2)),
         ]);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "global".to_owned(),
                 ..Default::default()
             },
@@ -3314,7 +3314,7 @@ mod tests {
         let (alice_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::new(0),
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: Some(DataSpaceId::new(1)),
@@ -3326,12 +3326,12 @@ mod tests {
             }],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::new(0), DataSpaceId::GLOBAL),
+            (LaneId::new(0), DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(1)),
         ]);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "global".to_owned(),
                 ..Default::default()
             },
@@ -3354,7 +3354,7 @@ mod tests {
 
         assert_eq!(
             decision,
-            RoutingDecision::new(LaneId::new(0), DataSpaceId::GLOBAL)
+            RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -3365,7 +3365,7 @@ mod tests {
         let lane = LaneId::new(3);
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: Some(DataSpaceId::new(1)),
@@ -3377,7 +3377,7 @@ mod tests {
             }],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane, dataspace),
         ]);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -3413,7 +3413,7 @@ mod tests {
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(1),
@@ -3436,7 +3436,7 @@ mod tests {
             ],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(1)),
             (LaneId::new(2), DataSpaceId::new(2)),
         ]);
@@ -3484,7 +3484,7 @@ mod tests {
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(1),
@@ -3507,7 +3507,7 @@ mod tests {
             ],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(1)),
             (LaneId::new(2), DataSpaceId::new(2)),
         ]);
@@ -3568,7 +3568,7 @@ mod tests {
 
         assert_eq!(
             decision,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -3578,7 +3578,7 @@ mod tests {
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(1),
@@ -3601,7 +3601,7 @@ mod tests {
             ],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(1)),
             (LaneId::new(2), DataSpaceId::new(2)),
         ]);
@@ -3662,7 +3662,7 @@ mod tests {
 
         assert_eq!(
             decision,
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 
@@ -3672,7 +3672,7 @@ mod tests {
         let (bob_id, _) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![
                 LaneRoutingRule {
                     lane: LaneId::new(1),
@@ -3695,7 +3695,7 @@ mod tests {
             ],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(1)),
             (LaneId::new(2), DataSpaceId::new(2)),
         ]);
@@ -3767,11 +3767,11 @@ mod tests {
         let second_dataspace = DataSpaceId::new(8);
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(3), first_dataspace),
             (LaneId::new(4), second_dataspace),
         ]);
@@ -3835,7 +3835,7 @@ mod tests {
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
-            default_dataspace: DataSpaceId::GLOBAL,
+            default_dataspace: DataSpaceId::UNIVERSAL,
             rules: vec![LaneRoutingRule {
                 lane: LaneId::new(1),
                 dataspace: Some(dataspace_id),
@@ -3847,7 +3847,7 @@ mod tests {
             }],
         };
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
@@ -3904,13 +3904,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
@@ -3952,13 +3952,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
@@ -3992,14 +3992,14 @@ mod tests {
             (second_dataspace, "restricted"),
         ]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), first_dataspace),
             (LaneId::new(2), second_dataspace),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
@@ -4041,13 +4041,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
@@ -4098,13 +4098,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
@@ -4157,13 +4157,13 @@ mod tests {
         let lane_id = LaneId::new(2);
         let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(
             LaneRoutingPolicy {
                 default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::GLOBAL,
+                default_dataspace: DataSpaceId::UNIVERSAL,
                 rules: Vec::new(),
             },
             catalog.clone(),
