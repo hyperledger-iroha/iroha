@@ -9301,8 +9301,8 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_data_model::social::ViralEscrowRecord;
     use iroha_data_model::{
-        ChainId, Level,
-        account::AccountId,
+        ChainId, Level, Registrable,
+        account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
@@ -9826,14 +9826,14 @@ mod tests {
             nonzero!(2_u32),
             vec![
                 LaneConfig {
-                    id: LaneId::new(1),
+                    id: LaneId::new(0),
                     dataspace_id: DataSpaceId::new(7),
                     alias: "restricted-alpha".to_owned(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
-                    id: LaneId::new(2),
+                    id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(9),
                     alias: "restricted-beta".to_owned(),
                     visibility: LaneVisibility::Restricted,
@@ -9863,7 +9863,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(7),
-            &[LaneId::new(1)],
+            &[LaneId::new(0)],
             &[peer],
             Some(nonzero!(3usize)),
             true,
@@ -9876,7 +9876,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(9),
-            &[LaneId::new(2)],
+            &[LaneId::new(1)],
             &[],
             Some(nonzero!(2usize)),
             false,
@@ -9896,7 +9896,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 7)
             .expect("alpha dataspace entry");
         assert_eq!(alpha.dataspace_alias.as_deref(), Some("alpha"));
-        assert_eq!(alpha.lane_ids, vec![1]);
+        assert_eq!(alpha.lane_ids, vec![0]);
         assert_eq!(alpha.targets, 1);
         assert_eq!(alpha.target_peers.len(), 1);
         assert_eq!(alpha.outcome, "sent");
@@ -9910,7 +9910,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 9)
             .expect("beta dataspace entry");
         assert_eq!(beta.dataspace_alias.as_deref(), Some("beta"));
-        assert_eq!(beta.lane_ids, vec![2]);
+        assert_eq!(beta.lane_ids, vec![1]);
         assert_eq!(beta.targets, 0);
         assert_eq!(beta.outcome, "dropped");
         assert_eq!(beta.reason.as_deref(), Some("no_restricted_targets"));
@@ -12581,7 +12581,9 @@ mod tests {
             let (leader_public_key, leader_private_key) =
                 KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
-            let world = World::default();
+            let (account_id, account_keypair) = gen_account_in("wonderland");
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let world = World::with([], [account], []);
             {
                 let mut peers_block = world.peers.block();
                 let _ = peers_block.get_mut().push(local_peer_id.clone());
@@ -12618,7 +12620,6 @@ mod tests {
 
             let chain_id = state.chain_id.clone();
             let topology = Topology::new(vec![local_peer_id.clone()]);
-            let (account_id, account_keypair) = gen_account_in("wonderland");
 
             Self {
                 telemetry,

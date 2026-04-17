@@ -10931,6 +10931,8 @@ pub fn encode_agent_artifact_allow_provenance_payload(
 ///
 /// The payload layout is a Norito tuple in this exact field order:
 /// `(apartment_name, artifact_hash, provenance_hash, budget_units, run_label, workflow_input_json)`.
+/// When the `json` feature is enabled, `workflow_input_json` is canonicalized
+/// before encoding so client-side signing matches runtime verification.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -10942,14 +10944,32 @@ pub fn encode_agent_autonomy_run_provenance_payload(
     run_label: &str,
     workflow_input_json: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
+    let canonical_workflow_input_json =
+        canonical_agent_workflow_input_json_for_payload(workflow_input_json);
     norito::to_bytes(&(
         apartment_name,
         artifact_hash,
         provenance_hash,
         budget_units,
         run_label,
-        workflow_input_json,
+        canonical_workflow_input_json.as_deref(),
     ))
+}
+
+fn canonical_agent_workflow_input_json_for_payload(
+    workflow_input_json: Option<&str>,
+) -> Option<String> {
+    let workflow_input_json = workflow_input_json?;
+    let trimmed = workflow_input_json.trim();
+    #[cfg(feature = "json")]
+    {
+        if let Ok(parsed) = norito::json::from_str::<norito::json::Value>(trimmed) {
+            if let Ok(canonical) = norito::json::to_json(&parsed) {
+                return Some(canonical);
+            }
+        }
+    }
+    Some(trimmed.to_owned())
 }
 
 /// Derive the deterministic runtime request commitment for an approved Soracloud agent autonomy run.
@@ -12231,7 +12251,10 @@ mod tests {
             Some("QmProvenanceHash"),
             42_000u64,
             "nightly-retrain",
-            Some("{\"inputs\":[\"alpha\",\"beta\"]}"),
+            canonical_agent_workflow_input_json_for_payload(Some(
+                "{\"inputs\":[\"alpha\",\"beta\"]}",
+            ))
+            .as_deref(),
         ))
         .expect("encode tuple");
         assert_eq!(encoded, expected);

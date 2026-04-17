@@ -9862,13 +9862,7 @@ pub mod isi {
                 .into());
             }
             let now_ms = state_transaction.block_unix_timestamp_ms();
-            let bootstrap_domain_name_lease = state_transaction._curr_block.is_genesis()
-                && state_transaction.block_hashes.is_empty()
-                && state_transaction
-                    .world
-                    .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
-                    .map(|domain| domain.owned_by() == authority)
-                    .unwrap_or(false);
+            let bootstrap_domain_name_lease = state_transaction.block_hashes.is_empty();
             let should_seed_domain_name_lease = match crate::sns::active_domain_owner(
                 state_transaction.world(),
                 &canonical_id,
@@ -11921,7 +11915,7 @@ pub mod isi {
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
-            account::{AccountId, MultisigMember, MultisigPolicy},
+            account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
             bridge::BridgeReceipt,
             confidential::ConfidentialStatus,
             consensus::{
@@ -11946,6 +11940,7 @@ pub mod isi {
             },
             query::error::FindError,
             role::{Role, RoleId},
+            sns::{NameControllerV1, NameRecordV1},
             zk::BackendTag,
         };
         use iroha_data_model::{
@@ -11993,7 +11988,10 @@ pub mod isi {
             let raw = format!("sha256:{}", "aa".repeat(32));
             assert!(super::parse_hex32_hint(&raw).is_none());
         }
-        use iroha_executor_data_model::permission::domain::CanModifyDomainMetadata;
+        use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias},
+            domain::CanModifyDomainMetadata,
+        };
         use iroha_primitives::{json::Json, numeric::Numeric};
         #[allow(unused_imports)]
         use iroha_schema::Ident;
@@ -12084,6 +12082,56 @@ pub mod isi {
             );
         }
 
+        fn seed_account_alias_lease_tx(
+            tx: &mut StateTransaction<'_, '_>,
+            owner: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            let selector =
+                crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+                    .expect("selector");
+            let address = AccountAddress::from_account_id(owner).expect("account address");
+            let record = NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![NameControllerV1::account(&address)],
+                0,
+                0,
+                1_000,
+                2_000,
+                3_000,
+                Metadata::default(),
+            );
+            tx.world.smart_contract_state.insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
+        fn seed_account_alias_manage_permissions(
+            tx: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            tx.world.add_account_permission(
+                authority,
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+                }),
+            );
+            if let Some(domain) = alias
+                .domain_id(&tx.nexus.dataspace_catalog)
+                .expect("alias domain should resolve")
+            {
+                tx.world.add_account_permission(
+                    authority,
+                    Permission::from(CanManageAccountAlias {
+                        scope: AccountAliasPermissionScope::Domain(domain),
+                    }),
+                );
+            }
+        }
+
         #[test]
         fn grant_role_permission_records_epoch_and_revoke_clears() {
             let kura = Kura::blank_kura_for_testing();
@@ -12169,6 +12217,15 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x51; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -12182,6 +12239,27 @@ pub mod isi {
             assert!(
                 err.to_string().contains("active SNS domain-name lease"),
                 "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn register_domain_in_empty_state_does_not_require_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased-empty", "world").expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("empty-state bootstrap should bypass SNS lease gating");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored during empty-state bootstrap"
             );
         }
 
@@ -12780,7 +12858,7 @@ pub mod isi {
             let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let other_domain_id: DomainId =
                 DomainId::try_new("other", "world").expect("domain id parses");
             let account_label = AccountAlias::new(
@@ -12795,6 +12873,8 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
+            bootstrap_alice_account(&mut stx);
+
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup domain");
@@ -12803,6 +12883,8 @@ pub mod isi {
                 .expect("register other domain");
 
             seed_manifest_record(&mut stx, uaid, dataspace);
+            seed_account_alias_manage_permissions(&mut stx, &ALICE_ID, &account_label);
+            seed_account_alias_lease_tx(&mut stx, &ALICE_ID, &account_label);
 
             let keypair = KeyPair::random();
             let account_id = AccountId::new(keypair.public_key().clone());
@@ -15305,20 +15387,9 @@ pub mod isi {
 
         #[test]
         fn register_domain_rejects_labels_failing_norm_current() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let domain_id: DomainId =
-                DomainId::try_new("wÍḷd-card", "universal").expect("domain id parses");
-            let err = Register::domain(Domain::new(domain_id))
-                .execute(&ALICE_ID, &mut stx)
+            let err = DomainId::try_new("wÍḷd-card", "universal")
                 .expect_err("label violating STD3 must be rejected");
-            let msg = smart_contract_instruction_error_message(err);
+            let msg = err.reason();
             assert!(
                 msg.contains("normalization"),
                 "unexpected error message: {msg}"
@@ -18015,6 +18086,7 @@ pub mod isi {
             let mut stx = block.transaction();
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, &domain_id);
             let err = Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("endorsement must be required");

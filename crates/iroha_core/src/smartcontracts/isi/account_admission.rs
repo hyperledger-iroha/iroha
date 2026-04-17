@@ -651,7 +651,7 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let nft_id: NftId = "n0$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "n0$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
 
         let world = World::with_assets([domain], [alice_account], [], [], [nft]);

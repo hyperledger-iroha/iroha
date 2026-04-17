@@ -34971,6 +34971,36 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaque_asset_definition_query()
+     {
+        let authority_key_pair = KeyPair::random();
+        let authority = AccountId::new(authority_key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        let (restricted_lane, restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id"),
+            "asset-definition".parse().expect("asset definition name"),
+        );
+        seed_asset_definition_for_test(&app, &asset_definition_id);
+        let query = iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
+                iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_definition_id,
+                ),
+            ),
+        )
+        .with_authority(authority)
+        .sign(&authority_key_pair);
+
+        assert_eq!(
+            super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
+                .expect("opaque asset-definition signed query should resolve a routed dataspace"),
+            RoutingDecision::new(restricted_lane, restricted_dataspace)
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
         let authority_key_pair = KeyPair::random();
         let authority = AccountId::new(authority_key_pair.public_key().clone());

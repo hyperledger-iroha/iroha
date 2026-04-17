@@ -3945,6 +3945,43 @@ mod tests {
     }
 
     #[test]
+    fn register_account_with_dataspace_label_routes_without_state() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Register::account(
+                Account::new(target_id)
+                    .with_label(Some(account_alias("merchant@restricted", &catalog))),
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("account registration with a dataspace label should route without state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
     fn account_metadata_write_with_multiple_scopes_falls_back_to_default_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
         let (target_id, _) = gen_account_in("wonderland");
@@ -4049,6 +4086,65 @@ mod tests {
         assert_eq!(
             router.try_route_with_view(&tx, &state.view()).expect(
                 "opaque asset-definition unregister should route to the resolved dataspace"
+            ),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_definition_metadata_set_routes_to_resolved_target_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: Vec::new(),
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("vault", "restricted").expect("domain id"),
+            "voucher".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(SetKeyValue::asset_definition(
+                opaque_asset_definition,
+                "routing".parse().expect("metadata key"),
+                Json::from("ok"),
+            ))],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("voucher".to_owned())
+                    .build(&submitter_id),
+            ],
+            catalog,
+            router.lane_catalog.as_ref().clone(),
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset-definition metadata sets should defer to state"),
+            None
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()).expect(
+                "opaque asset-definition metadata set should route to the resolved dataspace"
             ),
             RoutingDecision::new(lane_id, dataspace_id)
         );

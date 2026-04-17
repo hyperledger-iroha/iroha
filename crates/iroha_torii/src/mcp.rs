@@ -484,6 +484,7 @@ fn is_tool_allowed_by_policy(
         ToriiMcpProfile::Writer => true,
         ToriiMcpProfile::ReadOnly => {
             matches!(tool.method, Method::GET | Method::HEAD | Method::OPTIONS)
+                || is_musubi_pre_signing_instruction_tool(&tool.name)
                 || tool.name.contains(".query")
                 || tool.name.ends_with(".get")
                 || tool.name.ends_with(".list")
@@ -522,6 +523,16 @@ fn is_tool_allowed_by_policy(
         .map(String::as_str)
         .map(str::trim)
         .any(|prefix| !prefix.is_empty() && tool.name.starts_with(prefix))
+}
+
+fn is_musubi_pre_signing_instruction_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "iroha.musubi.instructions.publish_release"
+            | "iroha.musubi.instructions.yank_release"
+            | "iroha.musubi.instructions.set_alias"
+            | "iroha.musubi.instructions.assert_release_exists"
+    )
 }
 
 pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
@@ -13532,8 +13543,11 @@ mod tests {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::ReadOnly;
         let read_tool = sample_tool("iroha.accounts.get", Method::GET);
+        let instruction_builder_tool =
+            sample_tool("iroha.musubi.instructions.yank_release", Method::POST);
         let write_tool = sample_tool("iroha.transactions.submit", Method::POST);
         assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
+        assert!(is_tool_allowed_by_policy(&cfg, &instruction_builder_tool));
         assert!(!is_tool_allowed_by_policy(&cfg, &write_tool));
     }
 

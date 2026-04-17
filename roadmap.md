@@ -9,9 +9,11 @@ rules, mixed-dataspace write batches fail deterministically, transfer matchers
 understand transferred domain / asset-definition scope, and proxied signed
 queries now use the receiver's target-aware route recomputation instead of
 blindly trusting the ingress hint. Regression coverage now pins the remaining
-state-dependent edges for single-scope and multi-scope account metadata
-writes, opaque asset-definition unregister and metadata-remove flows, and
-target-domain / target-alias signed-query route resolution.
+state-dependent edges for dataspace-labelled account registration, single-scope
+and multi-scope account metadata writes, opaque asset-definition unregister /
+metadata-set / metadata-remove flows, and target-domain / target-alias
+signed-query route resolution, including opaque asset-definition queries that
+need app-state reclassification.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue/router.rs`
@@ -31,6 +33,34 @@ target-domain / target-alias signed-query route resolution.
     dataspace-purpose route directory
   - decide whether merge-ledger synthesis should stay an all-lanes barrier or
     gain partial merge groups for independent lane progress
+
+Latest sync (2026-04-17 Taira MCP Musubi coverage closure):
+Torii now exposes Musubi package-registry workflows through the native MCP
+surface in a Taira-friendly shape: read tools query packages, releases,
+versions, and aliases, while pre-signing instruction builders produce unsigned
+instruction envelopes for local signing. The final read-only policy gap is
+closed by allowing only the four exact Musubi instruction-builder tools under
+the read-only profile; transaction submission and other mutating POST tools
+remain blocked.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/mcp.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii -p iroha_core --target-dir /tmp/iroha-musubi-torii-target`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib mcp::tests:: --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+  - run `configs/soranexus/taira/check_mcp_rollout.sh` against the live public
+    Taira MCP endpoint with a runtime-only canary client config before public
+    cutover claims
 
 Latest sync (2026-04-17 Musubi live gateway fetch and registry integration):
 Musubi now hydrates lockfile sources from live SoraFS gateway providers as well

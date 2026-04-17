@@ -582,7 +582,7 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let nft_id: NftId = "rose$wonderland".parse()?;
+        let nft_id: NftId = "rose$wonderland.universal".parse()?;
         let key = "Bytes".parse::<Name>()?;
         Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
             .execute(&account_id, &mut state_transaction)?;

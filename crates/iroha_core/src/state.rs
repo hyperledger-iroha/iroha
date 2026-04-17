@@ -38673,7 +38673,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_owner$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_owner$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -38694,7 +38696,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -38959,7 +38963,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -38993,7 +38997,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -39089,7 +39093,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor".parse().expect("role id");
         let perm: Permission = CanModifyNftMetadata {
@@ -39149,7 +39155,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_perm$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_perm$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor_perm".parse().expect("role id");
         let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
@@ -44100,7 +44108,7 @@ mod tests {
         let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
         let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
         let holder_id = AccountId::new(KeyPair::random().into_parts().0);
-        let nft_id: NftId = "ticket$nfts".parse().unwrap();
+        let nft_id: NftId = "ticket$nfts.universal".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),

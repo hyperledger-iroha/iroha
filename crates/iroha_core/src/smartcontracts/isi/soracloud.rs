@@ -15835,13 +15835,13 @@ mod tests {
         );
         assert_eq!(ops_record.autonomy_budget_remaining_units, 380);
         assert_eq!(ops_record.autonomy_run_history.len(), 1);
+        let canonical_workflow_input_json =
+            "{\"inputs\":{\"messages\":[{\"content\":\"nightly-batch-1\",\"role\":\"user\"}]}}";
         assert_eq!(
             ops_record.autonomy_run_history[0]
                 .workflow_input_json
                 .as_deref(),
-            Some(
-                "{\"inputs\":{\"messages\":[{\"role\":\"user\",\"content\":\"nightly-batch-1\"}]}}"
-            )
+            Some(canonical_workflow_input_json)
         );
         let autonomy_event = world
             .soracloud_agent_apartment_audit_events()
@@ -15849,9 +15849,7 @@ mod tests {
             .expect("autonomy audit event");
         assert_eq!(
             autonomy_event.payload_hash,
-            Some(Hash::new(
-                b"{\"inputs\":{\"messages\":[{\"role\":\"user\",\"content\":\"nightly-batch-1\"}]}}"
-            ))
+            Some(Hash::new(canonical_workflow_input_json.as_bytes()))
         );
         assert_eq!(ops_record.checkpoint_count, 1);
         assert_eq!(ops_record.last_checkpoint_sequence, Some(8));
