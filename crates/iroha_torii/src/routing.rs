@@ -3605,7 +3605,7 @@ pub struct QueryOptions {
 }
 
 /// Verify a signed query and return the authenticated request payload.
-pub(crate) fn verify_signed_query_request(
+pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
@@ -8894,7 +8894,8 @@ mod multisig_guard_tests {
     }
 }
 
-pub(crate) fn accept_transaction_for_ingress(
+/// Validate a transaction at Torii ingress and return the accepted form.
+pub fn accept_transaction_for_ingress(
     chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -8902,7 +8903,20 @@ pub(crate) fn accept_transaction_for_ingress(
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
+    #[cfg(feature = "telemetry")]
+    let decode_started = std::time::Instant::now();
     let tx = tx.into();
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        telemetry,
+        "transaction",
+        "decode_or_build",
+        "ok",
+        decode_started.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
 
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
@@ -8931,6 +8945,14 @@ pub(crate) fn accept_transaction_for_ingress(
             };
             tel.inc_torii_signature_limit_reject(signature_count, signature_limit, authority_label);
         });
+        #[cfg(feature = "telemetry")]
+        observe_route_stage_latency(
+            telemetry,
+            "transaction",
+            "verify",
+            "error",
+            verify_started.elapsed(),
+        );
         return Err(Error::AcceptTransaction(rejection));
     }
     drop(state_view);
@@ -8960,7 +8982,17 @@ pub(crate) fn accept_transaction_for_ingress(
         tx_limits,
         crypto_cfg.as_ref(),
     ) {
-        Ok(tx) => Ok(tx),
+        Ok(tx) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "ok",
+                verify_started.elapsed(),
+            );
+            Ok(tx)
+        }
         Err(err) => {
             iroha_logger::warn!(?err, "transaction rejected during admission");
             #[cfg(feature = "telemetry")]
@@ -8978,6 +9010,14 @@ pub(crate) fn accept_transaction_for_ingress(
                     tel.inc_torii_nts_unhealthy_reject();
                 }
             });
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "error",
+                verify_started.elapsed(),
+            );
             Err(Error::AcceptTransaction(err))
         }
     }
@@ -9025,7 +9065,18 @@ async fn handle_transaction_inner(
         tx = %accepted_tx.hash(),
         "transaction accepted by Torii; enqueuing"
     );
-    push_accepted_transaction_for_ingress(queue, state, accepted_tx)
+    #[cfg(feature = "telemetry")]
+    let enqueue_started = std::time::Instant::now();
+    let result = push_accepted_transaction_for_ingress(queue, state, accepted_tx);
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        _telemetry,
+        "transaction",
+        "enqueue",
+        if result.is_ok() { "ok" } else { "error" },
+        enqueue_started.elapsed(),
+    );
+    result
 }
 
 pub async fn handle_transaction(
@@ -9052,7 +9103,21 @@ fn observe_lane_admission_latency(
     });
 }
 
+#[cfg(feature = "telemetry")]
+fn observe_route_stage_latency(
+    telemetry: &MaybeTelemetry,
+    route_kind: &'static str,
+    stage: &'static str,
+    outcome: &'static str,
+    duration: Duration,
+) {
+    let _ = telemetry.with_metrics(|telemetry| {
+        telemetry.observe_torii_route_stage_latency(route_kind, stage, outcome, duration);
+    });
+}
+
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+/// Handle a transaction and record direct Torii admission metrics when telemetry is enabled.
 pub async fn handle_transaction_with_metrics(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
@@ -9065,6 +9130,15 @@ pub async fn handle_transaction_with_metrics(
     let start = std::time::Instant::now();
 
     let result = handle_transaction_inner(chain_id, queue, state, tx, &telemetry).await;
+
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &telemetry,
+        "transaction",
+        "handle",
+        if result.is_ok() { "ok" } else { "error" },
+        start.elapsed(),
+    );
 
     #[cfg(feature = "telemetry")]
     if let Ok(decision) = &result {
@@ -9107,6 +9181,27 @@ mod lane_admission_latency_tests {
 
         assert_eq!(histogram.get_sample_count(), before + 1);
     }
+
+    #[test]
+    fn route_stage_observation_records_without_actor_sync() {
+        let metrics = global_or_default();
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
+        let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
+        let histogram = metrics
+            .torii_route_stage_latency_seconds
+            .with_label_values(&["transaction", "enqueue", "ok"]);
+        let before = histogram.get_sample_count();
+
+        observe_route_stage_latency(
+            &gate,
+            "transaction",
+            "enqueue",
+            "ok",
+            Duration::from_micros(10),
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
 }
 
 /// Execute a signed query while honoring pagination/cursor overrides and telemetry policies.
@@ -9120,9 +9215,63 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    let query = verify_signed_query_request(query)?;
-    let resp = execute_verified_query_with_opts(live_query_store, state, query, tel, opts).await?;
-    Ok(crate::utils::respond_with_format(resp, format))
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
+    let query = match verify_signed_query_request(query) {
+        Ok(query) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(&tel, "query", "verify", "ok", verify_started.elapsed());
+            query
+        }
+        Err(err) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(&tel, "query", "verify", "error", verify_started.elapsed());
+            return Err(err);
+        }
+    };
+
+    #[cfg(feature = "telemetry")]
+    let handle_started = std::time::Instant::now();
+    let resp =
+        match execute_verified_query_with_opts(live_query_store, state, query, tel.clone(), opts)
+            .await
+        {
+            Ok(resp) => {
+                #[cfg(feature = "telemetry")]
+                observe_route_stage_latency(
+                    &tel,
+                    "query",
+                    "handle",
+                    "ok",
+                    handle_started.elapsed(),
+                );
+                resp
+            }
+            Err(err) => {
+                #[cfg(feature = "telemetry")]
+                observe_route_stage_latency(
+                    &tel,
+                    "query",
+                    "handle",
+                    "error",
+                    handle_started.elapsed(),
+                );
+                return Err(err);
+            }
+        };
+
+    #[cfg(feature = "telemetry")]
+    let response_started = std::time::Instant::now();
+    let response = crate::utils::respond_with_format(resp, format);
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &tel,
+        "query",
+        "encode_or_response",
+        "ok",
+        response_started.elapsed(),
+    );
+    Ok(response)
 }
 
 /// Simple liveness probe. Returns a constant string when Torii is up.
@@ -46429,11 +46578,15 @@ mod hot_path_load_profile_tests {
 
     use super::*;
 
-    const VERIFY_SAMPLES: usize = 2_048;
-    const QUERY_SAMPLES: usize = 512;
-    const TX_SAMPLES: usize = 256;
+    const VERIFY_WARMUP_SAMPLES: usize = 128;
+    const VERIFY_SAMPLES: usize = 4_096;
+    const QUERY_WARMUP_SAMPLES: usize = 64;
+    const QUERY_SAMPLES: usize = 2_048;
+    const TX_WARMUP_SAMPLES: usize = 32;
+    const TX_SAMPLES: usize = 1_024;
+    const LIMITER_WARMUP_SAMPLES: usize = 128;
     const LIMITER_WORKERS: usize = 16;
-    const LIMITER_OPS_PER_WORKER: usize = 512;
+    const LIMITER_OPS_PER_WORKER: usize = 1_024;
 
     fn direct_metrics_telemetry() -> MaybeTelemetry {
         let metrics = Arc::new(Metrics::default());
@@ -46455,32 +46608,20 @@ mod hot_path_load_profile_tests {
             .sign(key_pair)
     }
 
-    fn micros(duration: Duration) -> f64 {
-        duration.as_secs_f64() * 1_000_000.0
-    }
-
-    fn percentile_permille(sorted_samples: &[Duration], permille: usize) -> Duration {
-        assert!(!sorted_samples.is_empty());
-        let index = (sorted_samples.len() - 1)
-            .saturating_mul(permille)
-            .saturating_add(500)
-            / 1_000;
-        sorted_samples[index.min(sorted_samples.len() - 1)]
-    }
-
-    fn print_profile(label: &str, mut samples: Vec<Duration>) {
-        samples.sort_unstable();
-        let total: f64 = samples.iter().map(|sample| sample.as_secs_f64()).sum();
-        let sample_count =
-            u32::try_from(samples.len()).expect("load profile sample count fits in u32");
-        let avg_us = total * 1_000_000.0 / f64::from(sample_count);
-        eprintln!(
-            "torii_load_profile label={label} samples={} avg_us={avg_us:.3} p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3}",
-            samples.len(),
-            micros(percentile_permille(&samples, 500)),
-            micros(percentile_permille(&samples, 950)),
-            micros(percentile_permille(&samples, 990)),
-            micros(*samples.last().expect("non-empty samples")),
+    fn print_hot_profile(
+        kind: &str,
+        samples: Vec<Duration>,
+        warmup_samples: usize,
+        concurrency: usize,
+        wall_time: Duration,
+    ) {
+        crate::profile_stats::print_profile(
+            "hot_path",
+            kind,
+            samples,
+            warmup_samples,
+            concurrency,
+            wall_time,
         );
     }
 
@@ -46488,17 +46629,29 @@ mod hot_path_load_profile_tests {
     #[ignore = "load profile; run explicitly with --ignored --nocapture"]
     async fn torii_hot_path_load_profile() {
         let key_pair = KeyPair::random();
+        for _ in 0..VERIFY_WARMUP_SAMPLES {
+            let signed_query = signed_find_abi_version(&key_pair);
+            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            std::hint::black_box(verified);
+        }
         let signed_queries = (0..VERIFY_SAMPLES)
             .map(|_| signed_find_abi_version(&key_pair))
             .collect::<Vec<_>>();
         let mut verify_samples = Vec::with_capacity(VERIFY_SAMPLES);
+        let wall_start = Instant::now();
         for signed_query in signed_queries {
             let start = Instant::now();
             let verified = verify_signed_query_request(signed_query).expect("query verifies");
             std::hint::black_box(verified);
             verify_samples.push(start.elapsed());
         }
-        print_profile("signed_query_verify_direct", verify_samples);
+        print_hot_profile(
+            "signed_query_verify_direct",
+            verify_samples,
+            VERIFY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
 
         let query_store = LiveQueryStore::start_test();
         let query_state = Arc::new(State::new_for_testing(
@@ -46506,11 +46659,25 @@ mod hot_path_load_profile_tests {
             Kura::blank_kura_for_testing(),
             query_store.clone(),
         ));
+        let query_telemetry = direct_metrics_telemetry();
+        for _ in 0..QUERY_WARMUP_SAMPLES {
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_find_abi_version(&key_pair),
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("warmup query should complete");
+            std::hint::black_box(response);
+        }
         let signed_queries = (0..QUERY_SAMPLES)
             .map(|_| signed_find_abi_version(&key_pair))
             .collect::<Vec<_>>();
-        let query_telemetry = direct_metrics_telemetry();
         let mut query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        let wall_start = Instant::now();
         for signed_query in signed_queries {
             let start = Instant::now();
             let response = handle_queries_with_opts(
@@ -46526,12 +46693,32 @@ mod hot_path_load_profile_tests {
             std::hint::black_box(response);
             query_samples.push(start.elapsed());
         }
-        print_profile("query_find_abi_norito_with_direct_metrics", query_samples);
+        print_hot_profile(
+            "query_find_abi_norito_with_direct_metrics",
+            query_samples,
+            QUERY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
 
+        for _ in 0..QUERY_WARMUP_SAMPLES {
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_find_parameters(&key_pair),
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("parameter warmup query should complete");
+            std::hint::black_box(response);
+        }
         let signed_queries = (0..QUERY_SAMPLES)
             .map(|_| signed_find_parameters(&key_pair))
             .collect::<Vec<_>>();
         let mut parameter_query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        let wall_start = Instant::now();
         for signed_query in signed_queries {
             let start = Instant::now();
             let response = handle_queries_with_opts(
@@ -46547,9 +46734,12 @@ mod hot_path_load_profile_tests {
             std::hint::black_box(response);
             parameter_query_samples.push(start.elapsed());
         }
-        print_profile(
+        print_hot_profile(
             "query_find_parameters_norito_with_direct_metrics",
             parameter_query_samples,
+            QUERY_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
         );
 
         let tx_state = Arc::new(State::new_for_testing(
@@ -46557,10 +46747,11 @@ mod hot_path_load_profile_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(TX_SAMPLES * 2).0;
+        let tx_capacity = (TX_SAMPLES + TX_WARMUP_SAMPLES) * 2;
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(tx_capacity).0;
         let queue_cfg = iroha_config::parameters::actual::Queue {
-            capacity: NonZeroUsize::new(TX_SAMPLES * 2).expect("non-zero queue capacity"),
-            capacity_per_user: NonZeroUsize::new(TX_SAMPLES * 2)
+            capacity: NonZeroUsize::new(tx_capacity).expect("non-zero queue capacity"),
+            capacity_per_user: NonZeroUsize::new(tx_capacity)
                 .expect("non-zero user queue capacity"),
             transaction_time_to_live: Duration::from_secs(60),
             ..Default::default()
@@ -46570,6 +46761,24 @@ mod hot_path_load_profile_tests {
             Arc::new("torii_load_profile_chain".parse().expect("valid chain id"));
         let tx_key_pair = KeyPair::random();
         let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
+        let tx_telemetry = direct_metrics_telemetry();
+        for index in 0..TX_WARMUP_SAMPLES {
+            let instruction = Log::new(Level::INFO, format!("torii-load-profile-warmup-{index}"));
+            let tx = TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+                .with_instructions([InstructionBox::from(instruction)])
+                .sign(tx_key_pair.private_key());
+            let decision = handle_transaction_with_metrics(
+                Arc::clone(&chain_id),
+                Arc::clone(&tx_queue),
+                Arc::clone(&tx_state),
+                tx,
+                tx_telemetry.clone(),
+                iroha_torii_shared::uri::TRANSACTION,
+            )
+            .await
+            .expect("warmup transaction should be admitted");
+            std::hint::black_box(decision);
+        }
         let transactions = (0..TX_SAMPLES)
             .map(|index| {
                 let instruction = Log::new(Level::INFO, format!("torii-load-profile-{index}"));
@@ -46578,8 +46787,8 @@ mod hot_path_load_profile_tests {
                     .sign(tx_key_pair.private_key())
             })
             .collect::<Vec<_>>();
-        let tx_telemetry = direct_metrics_telemetry();
         let mut tx_samples = Vec::with_capacity(TX_SAMPLES);
+        let wall_start = Instant::now();
         for tx in transactions {
             let start = Instant::now();
             let decision = handle_transaction_with_metrics(
@@ -46595,13 +46804,24 @@ mod hot_path_load_profile_tests {
             std::hint::black_box(decision);
             tx_samples.push(start.elapsed());
         }
-        print_profile("transaction_admission_with_direct_metrics", tx_samples);
+        print_hot_profile(
+            "transaction_admission_with_direct_metrics",
+            tx_samples,
+            TX_WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
 
         let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        for index in 0..LIMITER_WARMUP_SAMPLES {
+            let key = format!("load-profile-warmup-{index}");
+            assert!(limiter.allow(&key).await, "warmup limiter key admitted");
+        }
         let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
             LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
         )));
         let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        let wall_start = Instant::now();
         for worker in 0..LIMITER_WORKERS {
             let limiter = limiter.clone();
             let limiter_samples = Arc::clone(&limiter_samples);
@@ -46626,16 +46846,26 @@ mod hot_path_load_profile_tests {
             .expect("all limiter sample handles dropped")
             .into_inner()
             .expect("limiter samples lock");
-        print_profile(
+        print_hot_profile(
             "preauth_rate_limiter_distinct_keys_concurrent",
             limiter_samples,
+            LIMITER_WARMUP_SAMPLES,
+            LIMITER_WORKERS,
+            wall_start.elapsed(),
         );
 
         let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        for _ in 0..LIMITER_WARMUP_SAMPLES {
+            assert!(
+                limiter.allow("load-profile-shared-key").await,
+                "warmup shared limiter key admitted"
+            );
+        }
         let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
             LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
         )));
         let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        let wall_start = Instant::now();
         for _ in 0..LIMITER_WORKERS {
             let limiter = limiter.clone();
             let limiter_samples = Arc::clone(&limiter_samples);
@@ -46659,7 +46889,13 @@ mod hot_path_load_profile_tests {
             .expect("all limiter sample handles dropped")
             .into_inner()
             .expect("limiter samples lock");
-        print_profile("preauth_rate_limiter_same_key_concurrent", limiter_samples);
+        print_hot_profile(
+            "preauth_rate_limiter_same_key_concurrent",
+            limiter_samples,
+            LIMITER_WARMUP_SAMPLES,
+            LIMITER_WORKERS,
+            wall_start.elapsed(),
+        );
     }
 }
 
