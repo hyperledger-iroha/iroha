@@ -1813,7 +1813,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     .height,
             );
         wait_for_committed_success_or_height_fallback(
-            &nexus_bob_submitter,
+            // Committed transaction history is authority-routed, so observe the grant through
+            // the submitting authority. Polling Bob's authority route here can only ever see
+            // the fallback height barrier and masks rejected or still-unseen grant outcomes.
+            &nexus_alice_submitter,
             &nexus_alice_submitter,
             setup_grants_entry_hash,
             "setup grants committed outcome",
