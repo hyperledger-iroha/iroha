@@ -2100,7 +2100,7 @@ pub mod nexus {
     pub const LANE_COUNT: NonZeroU32 = nonzero!(1u32);
     /// Default alias assigned to the primary lane when no catalog entries are provided.
     pub const DEFAULT_LANE_ALIAS: &str = "default";
-    /// Default alias assigned to the global data space when no catalog entries are provided.
+    /// Default alias assigned to the universal dataspace when no catalog entries are provided.
     pub const DEFAULT_DATASPACE_ALIAS: &str = "universal";
     /// Default lane index used when routing policy omits an explicit value.
     pub const DEFAULT_ROUTING_LANE_INDEX: u32 = 0;

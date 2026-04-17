@@ -224,7 +224,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .expect("UAID bindings present");
     assert!(
         bindings.is_bound_to(DataSpaceId::UNIVERSAL, &user_id),
-        "UAID should be bound to the global dataspace"
+        "UAID should be bound to the universal dataspace"
     );
     let manifest_set = view
         .world()
