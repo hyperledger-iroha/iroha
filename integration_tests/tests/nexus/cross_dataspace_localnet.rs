@@ -623,6 +623,10 @@ fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Num
     Ok(vec![asset_balance(client, asset_id)?])
 }
 
+fn render_error_with_debug(err: &(impl core::fmt::Display + core::fmt::Debug)) -> String {
+    format!("{err} ({err:?})")
+}
+
 #[derive(Debug)]
 struct RoutedJsonGetResponse {
     body: JsonValue,
@@ -852,7 +856,7 @@ fn wait_for_expected_balances_with_timeout(
             let observed = match asset_balance_variants(expectation.client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
-                    last_error = Some(err.to_string());
+                    last_error = Some(render_error_with_debug(&err));
                     all_match = false;
                     break;
                 }
@@ -892,7 +896,7 @@ fn wait_for_expected_balances_with_tick_timeout(
             let observed = match asset_balance_variants(expectation.client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
-                    last_error = Some(err.to_string());
+                    last_error = Some(render_error_with_debug(&err));
                     all_match = false;
                     break;
                 }
@@ -937,7 +941,9 @@ fn wait_for_expected_balances_with_tick_timeout(
                         .map(|asset| format!("{}={}", asset.id.canonical_literal(), asset.value()))
                         .collect::<Vec<_>>()
                 })
-                .unwrap_or_else(|err| vec![format!("query error: {err}")]);
+                .unwrap_or_else(|err| {
+                    vec![format!("query error: {}", render_error_with_debug(&err))]
+                });
             format!(
                 "{} => [{}]",
                 expectation.asset_id.canonical_literal(),
@@ -969,7 +975,7 @@ fn wait_for_account_permissions(
         {
             Ok(permissions) => permissions,
             Err(err) => {
-                last_error = Some(format!("{err} ({err:?})"));
+                last_error = Some(render_error_with_debug(&err));
                 polls = polls.saturating_add(1);
                 if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
                     let _ = tick_submitter.submit(Log::new(
