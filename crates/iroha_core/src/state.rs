@@ -7345,7 +7345,22 @@ where
         let ids: Vec<PeerId> = c
             .members
             .into_iter()
-            .filter_map(|acct| validator_peer_ids_by_account.get(&acct).cloned())
+            .filter_map(|acct| {
+                if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
+                    return Some(peer_id.clone());
+                }
+                let peer_id = PeerId::from(acct.signatory().clone());
+                if !present_peers.contains(&peer_id) {
+                    return None;
+                }
+                if enforce_topology_membership && !topology_peers.contains(&peer_id) {
+                    return None;
+                }
+                if !peer_has_live_consensus_key(world, &peer_id, block_height) {
+                    return None;
+                }
+                Some(peer_id)
+            })
             .collect();
         if !ids.is_empty() {
             return Some(ids);
@@ -13846,6 +13861,7 @@ impl<'world> WorldBlock<'world> {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -14113,6 +14129,7 @@ impl<'world> WorldBlock<'world> {
         account_permissions.commit();
         tx_sequences.commit();
         roles.commit();
+        rwas.commit();
         nfts.commit();
         assets.commit();
         identifier_claims.commit();
@@ -15013,6 +15030,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -15256,6 +15274,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         space_directory_manifests.apply();
         account_permissions.apply();
         roles.apply();
+        rwas.apply();
         nfts.apply();
         identifier_claims.apply();
         identifier_policies.apply();
@@ -26965,22 +26984,36 @@ impl StateTransaction<'_, '_> {
                 .world
                 .bound_account_aliases(asset_id.account())
                 .into_iter()
-                .filter_map(|alias| alias.domain.map(|domain| domain.to_string()))
+                .filter_map(|alias| {
+                    alias
+                        .domain_id(&self.nexus.dataspace_catalog)
+                        .ok()
+                        .flatten()
+                        .map(|domain| domain.to_string())
+                })
                 .collect();
             let account_domain = self
                 .world
                 .accounts
                 .get(asset_id.account())
                 .and_then(|value| {
-                    value
-                        .as_ref()
-                        .label()
-                        .and_then(|label| label.domain.as_ref().map(ToString::to_string))
+                    value.as_ref().label().and_then(|label| {
+                        label
+                            .domain_id(&self.nexus.dataspace_catalog)
+                            .ok()
+                            .flatten()
+                            .map(|domain| domain.to_string())
+                    })
                 })
                 .or_else(|| {
                     alias_domains
                         .iter()
-                        .find(|domain| matches!(domain.as_str(), "banka" | "bankb" | "sbp"))
+                        .find(|domain| {
+                            let (name, _) = domain
+                                .split_once('.')
+                                .unwrap_or((domain.as_str(), ""));
+                            matches!(name, "banka" | "bankb" | "sbp")
+                        })
                         .cloned()
                 })
                 .or_else(|| alias_domains.first().cloned())
@@ -29106,6 +29139,32 @@ mod tests {
         )
     }
 
+    fn seed_account_alias_lease(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     #[test]
     fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
@@ -29911,7 +29970,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_args_from_asset_event_use_destination_account_domain() {
+    fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alias() {
         let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
         let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("centralbank");
@@ -29945,7 +30004,7 @@ mod tests {
 
         assert_eq!(
             obj.get("account_domain"),
-            Some(&norito::json!("centralbank"))
+            Some(&norito::json!("cbuae.universal"))
         );
         assert_eq!(
             obj.get("account_id"),
@@ -30000,7 +30059,7 @@ mod tests {
 
         assert_eq!(
             obj.get("account_domain"),
-            Some(&norito::json!("centralbank"))
+            Some(&norito::json!("centralbank.universal"))
         );
         assert_eq!(
             obj.get("account_id"),
@@ -38857,9 +38916,12 @@ mod tests {
     #[test]
     fn detached_can_modify_account_metadata_allows_domain_owner() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
+        let bob_alias = alias_in_domain(&domain_id, "bob".parse().expect("alias"));
+        let bob_account = new_sample_account(&BOB_ID)
+            .with_label(Some(bob_alias))
+            .build(&BOB_ID);
 
         let world = World::with([domain], [alice_account, bob_account], []);
         let view = world.view();
@@ -38886,7 +38948,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -38920,7 +38987,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -40924,7 +40996,7 @@ mod tests {
                 }
                 let src = resolve_account_alias("banking@wonderland.universal");
                 let payout = amount * 76;
-                if (dst_domain != name("wonderland")) {
+                if (dst_domain != name("wonderland.universal")) {
                   return;
                 }
                 transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
@@ -41027,6 +41099,17 @@ mod tests {
             )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: rose_def_id.clone(),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &banking_label);
             iroha_data_model::isi::domain_link::SetPrimaryAccountAlias {
                 account: ALICE_ID.clone(),
                 alias: Some(banking_label.clone()),

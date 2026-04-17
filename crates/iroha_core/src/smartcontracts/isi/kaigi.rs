@@ -2,6 +2,7 @@
 use std::{collections::BTreeSet, convert::TryFrom};
 
 use iroha_crypto::{Algorithm, Hash, PublicKey};
+use mv::storage::StorageReadOnly;
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -210,14 +211,24 @@ impl Execute for CreateKaigi {
                 })?;
             }
             KaigiPrivacyMode::ZkRosterV1 => {
-                let host_artifacts = HostPrivacyArtifacts {
-                    commitment: commitment.as_ref(),
-                    nullifier: nullifier.as_ref(),
-                    roster_root: roster_root.as_ref(),
-                    proof: proof.as_deref(),
-                };
-                let expected_root = kaigi_zk::empty_roster_root_hash();
-                privacy::verify_host_create(state_transaction, &host_artifacts, &expected_root)?;
+                let has_privacy_artifacts = commitment.is_some()
+                    || nullifier.is_some()
+                    || roster_root.is_some()
+                    || proof.is_some();
+                if has_privacy_artifacts {
+                    let host_artifacts = HostPrivacyArtifacts {
+                        commitment: commitment.as_ref(),
+                        nullifier: nullifier.as_ref(),
+                        roster_root: roster_root.as_ref(),
+                        proof: proof.as_deref(),
+                    };
+                    let expected_root = kaigi_zk::empty_roster_root_hash();
+                    privacy::verify_host_create(
+                        state_transaction,
+                        &host_artifacts,
+                        &expected_root,
+                    )?;
+                }
             }
         }
 
@@ -992,7 +1003,7 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let mut alias_domains = state_transaction
+    let alias_domains = state_transaction
         .world
         .bound_account_aliases(&relay_id.subject_id())
         .into_iter()
@@ -1002,13 +1013,42 @@ fn relay_domain(
                 .expect("bound account alias dataspace must exist in catalog")
         })
         .collect::<BTreeSet<_>>()
-        .into_iter();
-    match (alias_domains.next(), alias_domains.next()) {
-        (Some(domain_id), None) => Ok(domain_id),
-        (None, _) => Err(relay_error(
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !alias_domains.is_empty() {
+        return match alias_domains.as_slice() {
+            [domain_id] => Ok(domain_id.clone()),
+            _ => Err(relay_error(
+                "relay account has aliases in multiple domains; explicit relay domain is required",
+            )),
+        };
+    }
+
+    let mut allowlisted_domains = Vec::new();
+    let allowlist_key = kaigi_relay_allowlist_key().map_err(|err| {
+        Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
+    })?;
+    for (_domain_id, domain) in state_transaction.world.domains().iter() {
+        let Some(stored) = domain.metadata().get(&allowlist_key) else {
+            continue;
+        };
+        let allowlist: KaigiRelayAllowlist = stored
+            .clone()
+            .try_into_any_norito()
+            .map_err(|err| Error::Conversion(err.to_string()))?;
+        if allowlist.contains(relay_id) {
+            allowlisted_domains.push(domain.id.clone());
+        }
+    }
+    allowlisted_domains.sort();
+    allowlisted_domains.dedup();
+
+    match allowlisted_domains.as_slice() {
+        [domain_id] => Ok(domain_id.clone()),
+        [] => Err(relay_error(
             "relay account has no domain-qualified alias; explicit relay domain is required",
         )),
-        (Some(_), Some(_)) => Err(relay_error(
+        _ => Err(relay_error(
             "relay account has aliases in multiple domains; explicit relay domain is required",
         )),
     }
@@ -2083,6 +2123,7 @@ mod tests {
             Register::account(Account::new(relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
+            add_relay_to_allowlist(stx, &domain_id, &relay_id);
             stx.world.take_external_events();
 
             RegisterKaigiRelay {

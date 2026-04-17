@@ -4426,19 +4426,35 @@ pub mod message {
             }
         }
 
+        enum SuccessorEvidence {
+            Absent,
+            Mismatched,
+            Metadata(RosterMetadata),
+        }
+
         fn roster_metadata_from_successor_block_evidence(
             kura: &Kura,
             block_height: u64,
             block_hash: HashOf<BlockHeader>,
-        ) -> Option<RosterMetadata> {
-            let successor_height = block_height.checked_add(1)?;
-            let successor_height = usize::try_from(successor_height).ok()?;
-            let successor_height = NonZeroUsize::new(successor_height)?;
-            let successor = kura.get_block(successor_height)?;
+        ) -> SuccessorEvidence {
+            let Some(successor_height) = block_height.checked_add(1) else {
+                return SuccessorEvidence::Absent;
+            };
+            let Ok(successor_height) = usize::try_from(successor_height) else {
+                return SuccessorEvidence::Absent;
+            };
+            let Some(successor_height) = NonZeroUsize::new(successor_height) else {
+                return SuccessorEvidence::Absent;
+            };
+            let Some(successor) = kura.get_block(successor_height) else {
+                return SuccessorEvidence::Absent;
+            };
             if successor.header().prev_block_hash() != Some(block_hash) {
-                return None;
+                return SuccessorEvidence::Absent;
             }
-            let evidence = successor.previous_roster_evidence()?;
+            let Some(evidence) = successor.previous_roster_evidence() else {
+                return SuccessorEvidence::Absent;
+            };
             if evidence.height != block_height || evidence.block_hash != block_hash {
                 if let Some(suppressed_since_last) =
                     allow_block_sync_roster_sidecar_mismatch_warning(
@@ -4457,10 +4473,10 @@ pub mod message {
                         "ignoring previous roster evidence with mismatched target"
                     );
                 }
-                return None;
+                return SuccessorEvidence::Mismatched;
             }
 
-            Some(RosterMetadata {
+            SuccessorEvidence::Metadata(RosterMetadata {
                 commit_qc: None,
                 validator_checkpoint: Some(evidence.validator_checkpoint.clone()),
                 stake_snapshot: evidence
@@ -4540,10 +4556,12 @@ pub mod message {
             }
         }
 
-        if let Some(metadata) =
-            roster_metadata_from_successor_block_evidence(kura, block_height, block_hash)
-        {
-            return filter_metadata(fill_snapshot(metadata), "previous_block_evidence");
+        match roster_metadata_from_successor_block_evidence(kura, block_height, block_hash) {
+            SuccessorEvidence::Metadata(metadata) => {
+                return filter_metadata(fill_snapshot(metadata), "previous_block_evidence");
+            }
+            SuccessorEvidence::Mismatched => return None,
+            SuccessorEvidence::Absent => {}
         }
 
         let commit_qc = status::commit_qc_history()

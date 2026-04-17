@@ -304,12 +304,19 @@ fn roster_member_has_live_consensus_key(
         if found_index_record {
             return false;
         }
+    } else {
+        return true;
     }
-    world.consensus_keys().iter().any(|(id, record)| {
+    let mut found_scan_record = false;
+    let live = world.consensus_keys().iter().any(|(id, record)| {
+        if record.public_key == *pk {
+            found_scan_record = true;
+        }
         id.role == ConsensusKeyRole::Validator
             && record.public_key == *pk
             && record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks)
-    })
+    });
+    live || !found_scan_record
 }
 
 pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
@@ -405,10 +412,22 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
         let local_lane_ids = crate::state::validator_lane_ids_for_peer(world, me);
+        let all_active_roster = stake_active_validator_roster_from_world(world);
         let active_roster = if local_lane_ids.is_empty() {
-            stake_active_validator_roster_from_world(world)
+            all_active_roster
         } else {
-            stake_active_validator_roster_for_lanes_from_world(world, &local_lane_ids)
+            let local_lane_roster =
+                stake_active_validator_roster_for_lanes_from_world(world, &local_lane_ids);
+            if local_lane_roster.len() <= 1 && all_active_roster.len() > local_lane_roster.len() {
+                iroha_logger::warn!(
+                    local_lane_roster_len = local_lane_roster.len(),
+                    active_roster_len = all_active_roster.len(),
+                    "local NPoS lane scope would produce a singleton roster; using full active validator roster"
+                );
+                all_active_roster
+            } else {
+                local_lane_roster
+            }
         };
         if !active_roster.is_empty() {
             let mut roster = if use_commit {
