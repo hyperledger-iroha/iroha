@@ -283,6 +283,26 @@ clippy.wildcard_dependencies = "deny"
 
 [workspace]
 resolver = "2"
+default-members = [
+    "crates/norito",
+    "crates/norito_derive",
+    "crates/iroha_primitives",
+    "crates/iroha_crypto",
+    "crates/iroha_data_model",
+    "crates/iroha_config_base",
+    "crates/iroha_config",
+    "crates/iroha_logger",
+    "crates/iroha_p2p",
+    "crates/iroha_core",
+    "crates/iroha_torii_shared",
+    "crates/iroha_torii",
+    "crates/iroha",
+    "crates/irohad",
+    "crates/iroha_cli",
+    "crates/ivm",
+    "crates/ivm_abi",
+    "crates/kotodama_lang",
+]
 members = [
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",

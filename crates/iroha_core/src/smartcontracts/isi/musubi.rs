@@ -29,6 +29,8 @@ use crate::{
 
 const RELEASE_KEY_PREFIX: &str = "musubi_release_";
 const SHORT_ALIAS_KEY_PREFIX: &str = "musubi_alias_";
+const PACKAGE_RELEASE_INDEX_PREFIX: &str = "musubi_release_index_";
+const PACKAGE_CATALOG_KEY: &str = "musubi_package_catalog";
 
 impl Execute for PublishMusubiRelease {
     fn execute(
@@ -63,6 +65,7 @@ impl Execute for PublishMusubiRelease {
             .world
             .smart_contract_state
             .insert(key, release.encode());
+        index_published_release(&release, state_transaction);
         Ok(())
     }
 }
@@ -118,10 +121,23 @@ impl Execute for SetMusubiShortAlias {
                 .into(),
             ));
         }
-        state_transaction.world.smart_contract_state.insert(
-            short_alias_key(&self.alias.alias),
-            self.alias.target.encode(),
-        );
+        let key = short_alias_key(&self.alias.alias);
+        if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+            let existing = decode_package_id_for_instruction(existing)?;
+            if existing != self.alias.target {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "Musubi short alias `{}` already targets `{}`",
+                        self.alias.alias, existing
+                    )
+                    .into(),
+                ));
+            }
+        }
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, self.alias.target.encode());
         Ok(())
     }
 }
@@ -427,14 +443,26 @@ fn package_releases_in_world(
     package: &MusubiPackageId,
     include_yanked: bool,
 ) -> Vec<MusubiRelease> {
-    let mut releases = world
-        .smart_contract_state()
-        .iter()
-        .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
-        .filter_map(|(_, bytes)| decode_release_lossy(bytes))
-        .filter(|release| release.package.package == *package)
+    let mut releases = package_release_refs_in_world(world, package)
+        .into_iter()
+        .filter_map(|package| {
+            world
+                .smart_contract_state()
+                .get(&release_key(&package))
+                .and_then(|bytes| decode_release_lossy(bytes))
+        })
         .filter(|release| include_yanked || release.status.is_active())
         .collect::<Vec<_>>();
+    if releases.is_empty() {
+        releases = world
+            .smart_contract_state()
+            .iter()
+            .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
+            .filter_map(|(_, bytes)| decode_release_lossy(bytes))
+            .filter(|release| release.package.package == *package)
+            .filter(|release| include_yanked || release.status.is_active())
+            .collect::<Vec<_>>();
+    }
     releases.sort_by(|left, right| {
         left.package
             .version
@@ -451,35 +479,33 @@ fn package_summaries_in_world(
     include_yanked: bool,
 ) -> Vec<MusubiPackageSummary> {
     let mut packages = BTreeMap::<MusubiPackageId, (Option<MusubiVersion>, u32, u32, bool)>::new();
-    for release in world
-        .smart_contract_state()
-        .iter()
-        .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
-        .filter_map(|(_, bytes)| decode_release_lossy(bytes))
-    {
-        if namespace.is_some_and(|namespace| &release.package.package.namespace != namespace) {
-            continue;
-        }
-        if !query.is_empty() && !release.package.package.to_string().contains(query) {
-            continue;
-        }
-        let is_active = release.status.is_active();
-        let entry = packages
-            .entry(release.package.package.clone())
-            .or_insert((None, 0, 0, false));
-        entry.1 = entry.1.saturating_add(1);
-        if is_active {
-            entry.3 = true;
-            let replace_latest = entry.0.as_ref().is_none_or(|latest| {
-                latest
-                    .precedence_cmp(&release.package.version)
-                    .is_ok_and(|ordering| ordering.is_lt())
-            });
-            if replace_latest {
-                entry.0 = Some(release.package.version);
+    let catalog = package_catalog_in_world(world);
+    if catalog.is_empty() {
+        for release in world
+            .smart_contract_state()
+            .iter()
+            .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
+            .filter_map(|(_, bytes)| decode_release_lossy(bytes))
+        {
+            if namespace.is_some_and(|namespace| &release.package.package.namespace != namespace) {
+                continue;
             }
-        } else {
-            entry.2 = entry.2.saturating_add(1);
+            if !query.is_empty() && !release.package.package.to_string().contains(query) {
+                continue;
+            }
+            add_release_to_summary(&mut packages, release);
+        }
+    } else {
+        for package in catalog {
+            if namespace.is_some_and(|namespace| &package.namespace != namespace) {
+                continue;
+            }
+            if !query.is_empty() && !package.to_string().contains(query) {
+                continue;
+            }
+            for release in package_releases_in_world(world, &package, true) {
+                add_release_to_summary(&mut packages, release);
+            }
         }
     }
     packages
@@ -491,6 +517,89 @@ fn package_summaries_in_world(
             },
         )
         .collect()
+}
+
+fn add_release_to_summary(
+    packages: &mut BTreeMap<MusubiPackageId, (Option<MusubiVersion>, u32, u32, bool)>,
+    release: MusubiRelease,
+) {
+    let is_active = release.status.is_active();
+    let entry = packages
+        .entry(release.package.package.clone())
+        .or_insert((None, 0, 0, false));
+    entry.1 = entry.1.saturating_add(1);
+    if is_active {
+        entry.3 = true;
+        let replace_latest = entry.0.as_ref().is_none_or(|latest| {
+            latest
+                .precedence_cmp(&release.package.version)
+                .is_ok_and(|ordering| ordering.is_lt())
+        });
+        if replace_latest {
+            entry.0 = Some(release.package.version);
+        }
+    } else {
+        entry.2 = entry.2.saturating_add(1);
+    }
+}
+
+fn package_release_refs_in_world(
+    world: &impl WorldReadOnly,
+    package: &MusubiPackageId,
+) -> Vec<MusubiPackageRef> {
+    world
+        .smart_contract_state()
+        .get(&package_release_index_key(package))
+        .and_then(|bytes| decode_release_index_lossy(bytes))
+        .unwrap_or_default()
+}
+
+fn package_catalog_in_world(world: &impl WorldReadOnly) -> Vec<MusubiPackageId> {
+    let key = Name::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
+    world
+        .smart_contract_state()
+        .get(&key)
+        .and_then(|bytes| decode_package_catalog_lossy(bytes))
+        .unwrap_or_default()
+}
+
+fn index_published_release(
+    release: &MusubiRelease,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) {
+    let index_key = package_release_index_key(&release.package.package);
+    let mut releases = state_transaction
+        .world
+        .smart_contract_state
+        .get(&index_key)
+        .and_then(|bytes| decode_release_index_lossy(bytes))
+        .unwrap_or_default();
+    releases.push(release.package.clone());
+    releases.sort();
+    releases.dedup();
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(index_key, releases.encode());
+
+    let catalog_key = Name::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
+    let mut catalog = state_transaction
+        .world
+        .smart_contract_state
+        .get(&catalog_key)
+        .and_then(|bytes| decode_package_catalog_lossy(bytes))
+        .unwrap_or_default();
+    catalog.push(release.package.package.clone());
+    catalog.sort();
+    catalog.dedup();
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(catalog_key, catalog.encode());
+}
+
+fn package_release_index_key(package: &MusubiPackageId) -> Name {
+    storage_key(PACKAGE_RELEASE_INDEX_PREFIX, package.canonical_name().as_bytes())
 }
 
 fn release_key(package: &MusubiPackageRef) -> Name {
@@ -513,10 +622,36 @@ fn decode_release_lossy(bytes: &[u8]) -> Option<MusubiRelease> {
     cursor.is_empty().then_some(release)
 }
 
+fn decode_release_index_lossy(bytes: &[u8]) -> Option<Vec<MusubiPackageRef>> {
+    let mut cursor = bytes;
+    let releases = Vec::<MusubiPackageRef>::decode(&mut cursor).ok()?;
+    cursor.is_empty().then_some(releases)
+}
+
+fn decode_package_catalog_lossy(bytes: &[u8]) -> Option<Vec<MusubiPackageId>> {
+    let mut cursor = bytes;
+    let packages = Vec::<MusubiPackageId>::decode(&mut cursor).ok()?;
+    cursor.is_empty().then_some(packages)
+}
+
 fn decode_release_for_instruction(bytes: &[u8]) -> Result<MusubiRelease, Error> {
     decode_release_lossy(bytes).ok_or_else(|| {
         Error::InvariantViolation("stored Musubi release record is malformed".into())
     })
+}
+
+fn decode_package_id_for_instruction(bytes: &[u8]) -> Result<MusubiPackageId, Error> {
+    let mut cursor = bytes;
+    let package = MusubiPackageId::decode(&mut cursor).map_err(|_| {
+        Error::InvariantViolation("stored Musubi short alias is malformed".into())
+    })?;
+    if cursor.is_empty() {
+        Ok(package)
+    } else {
+        Err(Error::InvariantViolation(
+            "stored Musubi short alias has trailing bytes".into(),
+        ))
+    }
 }
 
 fn decode_release_for_query(bytes: &[u8]) -> Result<MusubiRelease, QueryExecutionFail> {

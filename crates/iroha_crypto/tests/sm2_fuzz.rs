@@ -1,5 +1,5 @@
-//! Property-based fuzz tests for SM2 key generation and signatures.
-#![cfg(all(feature = "sm", feature = "sm_proptest"))]
+//! Deterministic regression tests for SM2 key generation and signatures.
+#![cfg(feature = "sm")]
 
 #[path = "sm2_negative_vector_fixture.rs"]
 mod negative_fixture;
@@ -12,13 +12,8 @@ use iroha_crypto::{
 };
 use negative_fixture::{NegativeVector, apply_mutation, load_negative_vectors};
 use norito::json::Value;
-use proptest::{collection::vec, prelude::*, proptest};
 use sm2::dsa::{Signature as Sm2RawSignature, signature::hazmat::PrehashVerifier};
 use sm3::{Digest, Sm3};
-
-fn sm2_keypair() -> KeyPair {
-    KeyPair::random_with_algorithm(Algorithm::Sm2)
-}
 
 #[derive(Clone, Debug)]
 struct WycheproofCase {
@@ -39,21 +34,6 @@ fn decode_hex(value: &str) -> Vec<u8> {
     } else {
         hex_decode(value).unwrap_or_else(|err| panic!("invalid hex '{value}': {err}"))
     }
-}
-
-fn wycheproof_case_strategy() -> impl Strategy<Value = WycheproofCase> {
-    let cases = load_wycheproof_cases();
-    prop::sample::select((*cases).clone())
-}
-
-fn wycheproof_valid_case_strategy() -> impl Strategy<Value = WycheproofCase> {
-    let cases = load_valid_wycheproof_cases();
-    prop::sample::select((*cases).clone())
-}
-
-fn negative_vector_strategy() -> impl Strategy<Value = NegativeVector> {
-    let vectors = load_negative_vectors_arc();
-    prop::sample::select((*vectors).clone())
 }
 
 fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
@@ -127,49 +107,96 @@ fn load_negative_vectors_arc() -> Arc<Vec<NegativeVector>> {
         .clone()
 }
 
-proptest! {
-    #[test]
-    fn sm2_invalid_rs_are_rejected(rs in any::<[u8; Sm2Signature::LENGTH]>()) {
-        let keypair = sm2_keypair();
-        let signature = Signature::from_bytes(&rs);
-        prop_assert!(matches!(
-            signature.verify(keypair.public_key(), b"fuzz"),
+fn byte_array_32(seed: u8) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (idx, byte) in out.iter_mut().enumerate() {
+        *byte = seed
+            .wrapping_add(1)
+            .wrapping_add((idx as u8).wrapping_mul(17));
+    }
+    out
+}
+
+fn byte_array_16(seed: u8) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for (idx, byte) in out.iter_mut().enumerate() {
+        *byte = seed.wrapping_add((idx as u8).wrapping_mul(29));
+    }
+    out
+}
+
+fn sample_message(seed: u8) -> Vec<u8> {
+    let len = (seed as usize % 63) + 1;
+    (0..len)
+        .map(|idx| seed.wrapping_mul(13).wrapping_add(idx as u8))
+        .collect()
+}
+
+#[test]
+fn sm2_invalid_rs_are_rejected() {
+    let private =
+        Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &byte_array_32(0xAA)).expect("key");
+    let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Sm2);
+    let keypair_public = keypair.public_key();
+    let public = private.public_key();
+    let invalid_signatures = [
+        [0_u8; Sm2Signature::LENGTH],
+        [0xFF; Sm2Signature::LENGTH],
+        byte_array_32(1).repeat(2).try_into().expect("64 bytes"),
+    ];
+
+    for bytes in invalid_signatures {
+        let signature = Signature::from_bytes(&bytes);
+        assert!(matches!(
+            signature.verify(keypair_public, b"fuzz"),
             Err(Error::Parse(_) | Error::BadSignature)
         ));
-    }
 
-    #[test]
-    fn sm2_wrong_distid_is_rejected(distid in any::<[u8; 16]>()) {
-        let secret = [0xAA; 32];
-        let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("key");
-        let message = b"sm2 fuzz";
-        let signature = private.sign(message);
-        let pk_bytes = private.public_key().to_sec1_bytes(false);
+        if let Ok(sm2_signature) = Sm2Signature::from_bytes(&bytes) {
+            assert!(matches!(
+                public.verify(b"fuzz", &sm2_signature),
+                Err(Error::BadSignature)
+            ));
+        }
+    }
+}
+
+#[test]
+fn sm2_wrong_distid_is_rejected() {
+    let secret = [0xAA; 32];
+    let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("key");
+    let message = b"sm2 fuzz";
+    let signature = private.sign(message);
+    let pk_bytes = private.public_key().to_sec1_bytes(false);
+
+    for distid in [byte_array_16(0), byte_array_16(3), byte_array_16(0x7F)] {
         let distid_suffix = u128::from_be_bytes(distid);
         let alt_distid = format!("ALT-{distid_suffix:032X}");
         let altered = Sm2PublicKey::from_sec1_bytes(&alt_distid, &pk_bytes)
             .expect("distid alteration should yield valid key point");
-        prop_assert!(matches!(
+        assert!(matches!(
             altered.verify(message, &signature),
             Err(Error::BadSignature)
         ));
     }
+}
 
-    #[test]
-    fn sm2_valid_signature_roundtrip(seed in any::<[u8; 32]>()) {
-        let sk = Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &seed).expect("seeded key");
-        let message = b"sm2 roundtrip";
-        let signature = sk.sign(message);
+#[test]
+fn sm2_valid_signature_roundtrip() {
+    for seed in [1_u8, 2, 7, 31, 127, 255] {
+        let sk = Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &byte_array_32(seed))
+            .expect("seeded key");
+        let message = sample_message(seed);
+        let signature = sk.sign(&message);
         let pk = sk.public_key();
-        prop_assert!(pk.verify(message, &signature).is_ok());
+        assert!(pk.verify(&message, &signature).is_ok());
     }
+}
 
-    #[test]
-    fn sm2_compute_z_matches_signing_key(
-        seed in any::<[u8; 32]>(),
-        distid_entropy in any::<[u8; 8]>(),
-        message in vec(any::<u8>(), 0..64),
-    ) {
+#[test]
+fn sm2_compute_z_matches_signing_key() {
+    for seed in [1_u8, 2, 7, 31, 127, 255] {
+        let distid_entropy = byte_array_16(seed);
         let distid = format!(
             "device:{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
             distid_entropy[0],
@@ -181,25 +208,21 @@ proptest! {
             distid_entropy[6],
             distid_entropy[7]
         );
-        let private = match Sm2PrivateKey::from_seed(&distid, &seed) {
+        let private = match Sm2PrivateKey::from_seed(&distid, &byte_array_32(seed)) {
             Ok(private) => private,
-            Err(_) => return Ok(()),
+            Err(_) => continue,
         };
         let public = private.public_key();
         let za = public
             .compute_z(&distid)
             .expect("compute ZA for generated key");
 
-        let msg: &[u8] = if message.is_empty() {
-            &[0u8][..]
-        } else {
-            message.as_slice()
-        };
-        let signature = private.sign(msg);
+        let message = sample_message(seed);
+        let signature = private.sign(&message);
 
         let mut hasher = Sm3::new();
         hasher.update(za);
-        hasher.update(msg);
+        hasher.update(&message);
         let digest = hasher.finalize();
 
         let raw = Sm2RawSignature::from_bytes(&signature.as_bytes())
@@ -209,30 +232,29 @@ proptest! {
             .verify_prehash(digest.as_slice(), &raw)
             .expect("prehash verification must succeed");
     }
+}
 
-    #[test]
-    fn sm2_upstream_negative_vectors_fail(vector in negative_vector_strategy()) {
-        let private = Sm2PrivateKey::from_seed(
-            Sm2PublicKey::DEFAULT_DISTID,
-            b"sm2-negative-vectors",
-        )
+#[test]
+fn sm2_upstream_negative_vectors_fail() {
+    let private = Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, b"sm2-negative-vectors")
         .expect("deterministic key");
-        let outcome = apply_mutation(&vector, &private);
+
+    for vector in load_negative_vectors_arc().iter() {
+        let outcome = apply_mutation(vector, &private);
         if outcome.public_parse_failed {
-            prop_assert!(true);
-            return Ok(());
+            continue;
         }
         if outcome.expect_signature_parse_error {
             if let Ok(bytes) = outcome.signature_bytes.clone().try_into() {
-                prop_assert!(
+                assert!(
                     Sm2Signature::from_bytes(&bytes).is_err(),
                     "Negative vector `{}` should fail to parse",
                     vector.label
                 );
             } else {
-                prop_assert!(outcome.signature_bytes.len() != Sm2Signature::LENGTH);
+                assert_ne!(outcome.signature_bytes.len(), Sm2Signature::LENGTH);
             }
-            return Ok(());
+            continue;
         }
 
         let sig_bytes: [u8; Sm2Signature::LENGTH] = outcome
@@ -245,114 +267,106 @@ proptest! {
         let verify_result = outcome
             .public_key
             .verify(&outcome.verify_message, &signature);
-        prop_assert!(
+        assert!(
             verify_result.is_err(),
             "Negative vector `{}` unexpectedly verified",
             vector.label
         );
     }
+}
 
-    #[test]
-    fn sm2_wycheproof_cases_hold(case in wycheproof_case_strategy()) {
+#[test]
+fn sm2_wycheproof_cases_hold() {
+    for case in load_wycheproof_cases().iter() {
         let public = match Sm2PublicKey::from_sec1_bytes(&case.distid, &case.public_sec1) {
             Ok(public) => public,
-            Err(_) => return Ok(()),
+            Err(_) => continue,
         };
         match Sm2Signature::from_der(&case.signature_der) {
             Ok(signature) => {
                 let verify = public.verify(&case.message, &signature);
                 if case.expect_valid {
-                    prop_assert!(verify.is_ok());
+                    assert!(verify.is_ok());
                 } else {
-                    prop_assert!(verify.is_err());
+                    assert!(verify.is_err());
                 }
             }
             Err(_) => {
-                prop_assert!(!case.expect_valid);
+                assert!(!case.expect_valid);
             }
         }
     }
+}
 
-    #[test]
-    fn sm2_wycheproof_detects_random_tampering(
-        input in wycheproof_valid_case_strategy().prop_flat_map(|case| {
-            (
-                Just(case),
-                prop_oneof![Just(true), Just(false)],
-                any::<usize>(),
-                any::<u8>(),
-            )
-        })
-    ) {
-        let (case, tamper_message, flip_idx, flip_mask) = input;
-        let WycheproofCase { distid, public_sec1, message, signature_der, .. } = case;
-        let public = match Sm2PublicKey::from_sec1_bytes(&distid, &public_sec1) {
-            Ok(public) => public,
-            Err(_) => return Ok(()),
-        };
-
-        let signature = Sm2Signature::from_der(&signature_der).expect("valid Wycheproof signature");
-
-        // Decide whether to tamper with the message or the signature; fall back to signature tampering
-        // when the message is empty (so we always exercise a mutation).
-        let mut tampered_message = message.clone();
-        let mut tampered_signature = signature_der.clone();
-
-        if tamper_message && !tampered_message.is_empty() {
-            let idx = flip_idx % tampered_message.len();
-            let mask = if flip_mask == 0 { 0x80 } else { flip_mask };
-            tampered_message[idx] ^= mask;
-            let verify = public.verify(&tampered_message, &signature);
-            prop_assert!(verify.is_err());
-        } else {
-            let idx = flip_idx % tampered_signature.len();
-            let mask = if flip_mask == 0 { 0x01 } else { flip_mask };
-            tampered_signature[idx] ^= mask;
-            if let Ok(tampered) = Sm2Signature::from_der(&tampered_signature) {
-                let verify = public.verify(&message, &tampered);
-                prop_assert!(verify.is_err());
-            }
-        }
-    }
-
-    #[test]
-    fn sm2_truncated_signature_is_rejected(case in wycheproof_valid_case_strategy()) {
+#[test]
+fn sm2_wycheproof_detects_deterministic_tampering() {
+    for case in load_valid_wycheproof_cases().iter() {
         let public = match Sm2PublicKey::from_sec1_bytes(&case.distid, &case.public_sec1) {
             Ok(public) => public,
-            Err(_) => return Ok(()),
+            Err(_) => continue,
+        };
+        let signature =
+            Sm2Signature::from_der(&case.signature_der).expect("valid Wycheproof signature");
+
+        if !case.message.is_empty() {
+            let mut tampered_message = case.message.clone();
+            let idx = tampered_message.len() / 2;
+            tampered_message[idx] ^= 0x80;
+            let verify = public.verify(&tampered_message, &signature);
+            assert!(verify.is_err());
+        }
+
+        let mut tampered_signature = case.signature_der.clone();
+        if !tampered_signature.is_empty() {
+            let idx = tampered_signature.len() - 1;
+            tampered_signature[idx] ^= if tampered_signature[idx] == 0 {
+                0x01
+            } else {
+                0x80
+            };
+            if let Ok(tampered) = Sm2Signature::from_der(&tampered_signature) {
+                let verify = public.verify(&case.message, &tampered);
+                assert!(verify.is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn sm2_truncated_signature_is_rejected() {
+    for case in load_valid_wycheproof_cases().iter() {
+        let public = match Sm2PublicKey::from_sec1_bytes(&case.distid, &case.public_sec1) {
+            Ok(public) => public,
+            Err(_) => continue,
         };
         let mut truncated = case.signature_der.clone();
         if truncated.len() < 2 {
-            return Ok(());
+            continue;
         }
         truncated.truncate(truncated.len() - 2);
-        match Sm2Signature::from_der(&truncated) {
-            Ok(sig) => {
-                let verify = public.verify(&case.message, &sig);
-                prop_assert!(verify.is_err());
-            }
-            Err(_) => prop_assert!(true),
+        if let Ok(sig) = Sm2Signature::from_der(&truncated) {
+            let verify = public.verify(&case.message, &sig);
+            assert!(verify.is_err());
         }
     }
+}
 
-    #[test]
-    fn sm2_bitflip_signature_is_rejected(case in wycheproof_valid_case_strategy()) {
+#[test]
+fn sm2_bitflip_signature_is_rejected() {
+    for case in load_valid_wycheproof_cases().iter() {
         let public = match Sm2PublicKey::from_sec1_bytes(&case.distid, &case.public_sec1) {
             Ok(public) => public,
-            Err(_) => return Ok(()),
+            Err(_) => continue,
         };
         let mut tampered = case.signature_der.clone();
         if tampered.is_empty() {
-            return Ok(());
+            continue;
         }
         let idx = tampered.len() - 1;
         tampered[idx] ^= if tampered[idx] == 0 { 0x01 } else { 0x80 };
-        match Sm2Signature::from_der(&tampered) {
-            Ok(sig) => {
-                let verify = public.verify(&case.message, &sig);
-                prop_assert!(verify.is_err());
-            }
-            Err(_) => prop_assert!(true),
+        if let Ok(sig) = Sm2Signature::from_der(&tampered) {
+            let verify = public.verify(&case.message, &sig);
+            assert!(verify.is_err());
         }
     }
 }

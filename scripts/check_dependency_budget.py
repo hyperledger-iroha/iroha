@@ -32,6 +32,7 @@ DEFAULT_DENIED_PACKAGES = (
     "eframe",
     "qrcode",
     "image",
+    "proptest",
 )
 
 

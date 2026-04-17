@@ -230,10 +230,7 @@ fn merkle_random_matrix_equivalence() {
     }
 }
 
-#[cfg(feature = "ivm_prop")]
-mod prop_equivalence {
-    use proptest::{array::uniform32, prelude::*};
-
+mod deterministic_equivalence {
     #[inline]
     fn dirs_reference(mut cur: u64, mut dirs: u32, path: &[u64; 32], depth: usize) -> u64 {
         for sib in path.iter().take(depth) {
@@ -248,66 +245,75 @@ mod prop_equivalence {
         cur
     }
 
-    const PROP_DEPTH_MAX: usize = 12;
-    const PROP_CASES_FAST: u32 = 6;
-    const PROP_CASES_SLOW: u32 = 3;
+    fn path_for_seed(seed: u64) -> [u64; 32] {
+        let mut state = seed;
+        let mut path = [0u64; 32];
+        for slot in &mut path {
+            state = state.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            *slot = z ^ (z >> 31);
+        }
+        path
+    }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(PROP_CASES_FAST))]
-        /// Randomised equivalence check between index- and dirs-based verifiers (bounded depth for speed).
-        #[test]
-        fn depth_vs_dirs_equivalence(
-            leaf in any::<u64>(),
-            depth in 1usize..=PROP_DEPTH_MAX,
-            path in uniform32(any::<u64>()),
-            index in any::<u32>(),
-        ) {
-            let mask = if depth == 32 { u32::MAX } else { (1u32 << depth) - 1 };
-            let dirs = index & mask;
-            let root_idx = ivm::halo2::verify_merkle_path_depth(leaf, dirs, &path, depth);
-            let root_dirs = ivm::halo2::verify_merkle_path_with_dirs(leaf, dirs, &path, depth);
-            let ref_root = dirs_reference(leaf, dirs, &path, depth);
-            prop_assert_eq!(
-                root_idx,
-                root_dirs,
-                "depth mismatch depth={} index={:#b}",
-                depth,
-                dirs
-            );
-            prop_assert_eq!(
-                root_dirs,
-                ref_root,
-                "dirs mismatch depth={} index={:#b}",
-                depth,
-                dirs
-            );
+    /// Deterministic equivalence check between index- and dirs-based verifiers.
+    #[test]
+    fn depth_vs_dirs_equivalence_deterministic() {
+        let leaves = [0, 1, 0x0123_4567_89AB_CDEF, u64::MAX];
+        let depths = [1usize, 2, 3, 5, 8, 12];
+        let indices = [0u32, 1, 2, 3, 0x55AA, 0xAAAA, 0xFFFF_FFFF];
+
+        for leaf in leaves {
+            for depth in depths {
+                for seed in [0xC0FFEE_u64, 0x1234_5678_9ABC_DEF0] {
+                    let path = path_for_seed(seed ^ leaf ^ depth as u64);
+                    for index in indices {
+                        let mask = if depth == 32 {
+                            u32::MAX
+                        } else {
+                            (1u32 << depth) - 1
+                        };
+                        let dirs = index & mask;
+                        let root_idx =
+                            ivm::halo2::verify_merkle_path_depth(leaf, dirs, &path, depth);
+                        let root_dirs =
+                            ivm::halo2::verify_merkle_path_with_dirs(leaf, dirs, &path, depth);
+                        let ref_root = dirs_reference(leaf, dirs, &path, depth);
+                        assert_eq!(
+                            root_idx, root_dirs,
+                            "depth mismatch depth={} index={:#b}",
+                            depth, dirs
+                        );
+                        assert_eq!(
+                            root_dirs, ref_root,
+                            "dirs mismatch depth={} index={:#b}",
+                            depth, dirs
+                        );
+                    }
+                }
+            }
         }
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(PROP_CASES_SLOW))]
-        /// Randomised equivalence between full-depth helper variants.
-        #[test]
-        fn full_depth_equivalence(
-            leaf in any::<u64>(),
-            path in uniform32(any::<u64>()),
-            index in any::<u32>(),
-        ) {
-            let full = ivm::halo2::verify_merkle_path(leaf, index, &path);
-            let depth32 = ivm::halo2::verify_merkle_path_depth(leaf, index, &path, 32);
-            let dirs32 = ivm::halo2::verify_merkle_path_with_dirs(leaf, index, &path, 32);
-            prop_assert_eq!(
-                full,
-                depth32,
-                "full vs depth32 mismatch index={:#b}",
-                index
-            );
-            prop_assert_eq!(
-                full,
-                dirs32,
-                "full vs dirs32 mismatch index={:#b}",
-                index
-            );
+    /// Deterministic equivalence between full-depth helper variants.
+    #[test]
+    fn full_depth_equivalence_deterministic() {
+        let leaves = [0, 1, 0x0123_4567_89AB_CDEF, u64::MAX];
+        let indices = [0u32, 1, 2, 3, 0x55AA, 0xAAAA, 0xFFFF_FFFF];
+
+        for leaf in leaves {
+            for seed in [0xBADC0FFEE_u64, 0xCAFE_BABE_DEAD_BEEF] {
+                let path = path_for_seed(seed ^ leaf);
+                for index in indices {
+                    let full = ivm::halo2::verify_merkle_path(leaf, index, &path);
+                    let depth32 = ivm::halo2::verify_merkle_path_depth(leaf, index, &path, 32);
+                    let dirs32 = ivm::halo2::verify_merkle_path_with_dirs(leaf, index, &path, 32);
+                    assert_eq!(full, depth32, "full vs depth32 mismatch index={:#b}", index);
+                    assert_eq!(full, dirs32, "full vs dirs32 mismatch index={:#b}", index);
+                }
+            }
         }
     }
 }

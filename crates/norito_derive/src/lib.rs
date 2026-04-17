@@ -851,10 +851,7 @@ fn derive_struct_serialize(
                 if is_u8_arr {
                     Some(quote! {
                         let __len_bytes = core::mem::size_of_val(&self.#name);
-                        #[cfg(feature = "compact-len")]
-                        { norito::core::write_len(&mut writer, __len_bytes as u64)?; }
-                        #[cfg(not(feature = "compact-len"))]
-                        { writer.write_u64::<norito::core::LittleEndian>(__len_bytes as u64)?; }
+                        norito::core::write_len(&mut writer, __len_bytes as u64)?;
                         writer.write_all(&self.#name)?;
                     })
                 } else {
@@ -884,10 +881,7 @@ fn derive_struct_serialize(
                 if is_u8_arr {
                     Some(quote! {
                         let __len_bytes = core::mem::size_of_val(&self.#idx);
-                        #[cfg(feature = "compact-len")]
-                        { norito::core::write_len(&mut writer, __len_bytes as u64)?; }
-                        #[cfg(not(feature = "compact-len"))]
-                        { writer.write_u64::<norito::core::LittleEndian>(__len_bytes as u64)?; }
+                        norito::core::write_len(&mut writer, __len_bytes as u64)?;
                         writer.write_all(&self.#idx)?;
                     })
                 } else {

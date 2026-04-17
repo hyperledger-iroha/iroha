@@ -967,7 +967,6 @@ mod tests {
     };
 
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
-    use proptest::{collection::vec as pvec, prelude::*};
 
     use super::*;
     use crate::backend;
@@ -976,12 +975,27 @@ mod tests {
 
     const MAX_TRACE_LOG: u32 = 4;
 
-    fn random_column_set() -> impl Strategy<Value = (u32, Vec<Vec<u64>>)> {
-        (0u32..=MAX_TRACE_LOG, 1usize..=3).prop_flat_map(|(trace_log, column_count)| {
+    fn deterministic_column_sets() -> Vec<(u32, Vec<Vec<u64>>)> {
+        let mut cases = Vec::new();
+        for trace_log in 0..=MAX_TRACE_LOG {
             let len = 1usize << trace_log;
-            pvec(pvec(0u64..FIELD_MODULUS, len), column_count)
-                .prop_map(move |columns| (trace_log, columns))
-        })
+            for column_count in 1..=3 {
+                let mut columns = Vec::with_capacity(column_count);
+                for column in 0..column_count {
+                    let values = (0..len)
+                        .map(|idx| {
+                            let seed = ((trace_log as u64 + 1) << 40)
+                                ^ ((column as u64 + 17) << 24)
+                                ^ idx as u64;
+                            seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) % FIELD_MODULUS
+                        })
+                        .collect();
+                    columns.push(values);
+                }
+                cases.push((trace_log, columns));
+            }
+        }
+        cases
     }
 
     #[cfg(feature = "fastpq-gpu")]
@@ -1604,10 +1618,9 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-        #[test]
-        fn fft_roundtrip_over_random_columns_is_deterministic((_trace_log, columns) in random_column_set()) {
+    #[test]
+    fn fft_roundtrip_over_deterministic_columns_is_deterministic() {
+        for (_trace_log, columns) in deterministic_column_sets() {
             let params = CANONICAL_PARAMETER_SETS[0];
             let planner = Planner::new(&params);
 
@@ -1618,31 +1631,34 @@ mod tests {
 
             let mut fft_second = original.clone();
             planner.fft_columns(&mut fft_second);
-            prop_assert_eq!(&fft_first, &fft_second);
+            assert_eq!(&fft_first, &fft_second);
 
             let mut fft_roundtrip = fft_second.clone();
             planner.ifft_columns(&mut fft_roundtrip);
-            prop_assert_eq!(&fft_roundtrip, &original);
+            assert_eq!(&fft_roundtrip, &original);
 
             let mut fft_gpu = original.clone();
             planner.fft_gpu(&mut fft_gpu);
-            prop_assert_eq!(&fft_gpu, &fft_second);
+            assert_eq!(&fft_gpu, &fft_second);
         }
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-        #[test]
-        fn lde_columns_over_random_polynomials_are_deterministic((trace_log, columns) in random_column_set()) {
+    #[test]
+    fn lde_columns_over_deterministic_polynomials_are_deterministic() {
+        for (trace_log, columns) in deterministic_column_sets() {
             let params = CANONICAL_PARAMETER_SETS[0];
             let planner = Planner::new(&params);
             let evaluations_a = planner.lde_columns(&columns);
             let evaluations_b = planner.lde_columns(&columns);
-            prop_assert_eq!(&evaluations_a, &evaluations_b);
+            assert_eq!(&evaluations_a, &evaluations_b);
 
             let trace_len = 1usize << trace_log;
             let expected_len = trace_len << planner.blowup_log();
-            prop_assert!(evaluations_a.iter().all(|column| column.len() == expected_len));
+            assert!(
+                evaluations_a
+                    .iter()
+                    .all(|column| column.len() == expected_len)
+            );
         }
     }
 }

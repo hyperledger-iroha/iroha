@@ -96,7 +96,6 @@ iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
 hex-literal = { workspace = true }
 ivm = { path = "../ivm" }
 
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 tempfile = { workspace = true }
 
 #[build-dependencies]

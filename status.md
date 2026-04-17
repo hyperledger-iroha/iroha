@@ -276,12 +276,28 @@ Last updated: 2026-04-17
   and configured bucket cap.
 - Focused tests were added for signed query verification, direct Torii metric
   observation without an actor sync, and concurrent limiter admission.
+- An ignored release-mode Torii hot-path profile now lives beside the focused
+  routing tests and samples signed query verification, Norito query handling,
+  transaction admission, and concurrent pre-auth limiter admission without
+  mixing setup work into the measured loops. On this host it measured:
+  `signed_query_verify_direct` p50 1.625 us / p95 1.709 us / p99 1.833 us;
+  `query_find_abi_norito_with_direct_metrics` p50 14.375 us / p95 26.167 us /
+  p99 48.375 us; `transaction_admission_with_direct_metrics` p50 74.458 us /
+  p95 80.167 us / p99 92.459 us; and
+  `preauth_rate_limiter_distinct_keys_concurrent` p50 0.500 us / p95 1.167 us /
+  p99 3.291 us.
 - Validation for this slice:
   - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/src/limits.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/telemetry.rs`
   - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target signed_query_verification_tests -- --nocapture`
   - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
   - `cargo test -p iroha_torii --lib --target-dir /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently -- --nocapture`
   - `cargo test -p iroha_core --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --release --lib --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile -- --ignored --nocapture`
+    passed and produced the profile sample above. A later same-command rerun
+    after tightening the profile percentile helper is currently blocked before
+    Torii by unrelated dirty-tree Musubi core errors in
+    `crates/iroha_core/src/smartcontracts/isi/musubi.rs` for missing helper
+    functions.
   - `git diff --check -- crates/iroha_torii/src/routing.rs crates/iroha_torii/src/limits.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/telemetry.rs status.md roadmap.md`
 
 ## 2026-04-17 Follow-up: Musubi composable package flow hardened
@@ -319,6 +335,15 @@ Last updated: 2026-04-17
   auto pin registration during publish, and permission-gated short aliases.
 - Validation for this slice:
   - `cargo check -p musubi -p sorafs_car --target-dir /tmp/iroha-musubi-impl-check-target`
+  - `cargo test -p musubi -p sorafs_car chunk_plan_digest_depends_on_ordered_chunk_metadata --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+    (SoraFS helper test selected; Musubi tests filtered in that run)
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+    (11 tests)
+  - `cargo test -p iroha_data_model --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+    (10 tests)
+  - `cargo test -p iroha_core --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+    (3 tests)
+  - `cargo fmt --all --check`
 
 ## 2026-04-16 Follow-up: Musubi registry publish/yank path wired
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`

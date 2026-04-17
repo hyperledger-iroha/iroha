@@ -54,10 +54,6 @@ num-traits = { version = "0.2.19", default-features = false, features = ["std"] 
 criterion = { workspace = true, optional = true }
 trybuild = { workspace = true, optional = true }
 
-
-[dev-dependencies]
-proptest = "1.9.0"
-
 [[bench]]
 name = "smallvec"
 harness = false

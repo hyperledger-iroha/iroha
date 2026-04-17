@@ -132,19 +132,10 @@ where
         });
 
         let decode_name = format!("chain_wire/layout/{label}/{}/decode_framed", candidate.name);
-        match norito::decode_from_bytes::<T>(&framed) {
-            Ok(_) => {
-                c.bench_function(&decode_name, |b| {
-                    b.iter(|| black_box(decode_framed_with_layout::<T>(black_box(&framed))))
-                });
-            }
-            Err(err) => {
-                eprintln!(
-                    "{label}/{} decode_framed=unsupported error={err:?}",
-                    candidate.name
-                );
-            }
-        }
+        let _: T = decode_framed_with_layout(&framed);
+        c.bench_function(&decode_name, |b| {
+            b.iter(|| black_box(decode_framed_with_layout::<T>(black_box(&framed))))
+        });
     }
 }
 

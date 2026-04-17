@@ -46382,6 +46382,205 @@ mod lane_admission_metrics_tests {
     }
 }
 
+#[cfg(all(test, feature = "telemetry"))]
+mod hot_path_load_profile_tests {
+    use std::{
+        num::NonZeroUsize,
+        sync::{Arc, Mutex as StdMutex},
+        time::{Duration, Instant},
+    };
+
+    use iroha_config::parameters::actual::TelemetryProfile;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State, World},
+        telemetry::{StateTelemetry, Telemetry},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        prelude::*,
+        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+    };
+    use iroha_logger::Level;
+    use iroha_telemetry::metrics::Metrics;
+
+    use super::*;
+
+    const VERIFY_SAMPLES: usize = 2_048;
+    const QUERY_SAMPLES: usize = 512;
+    const TX_SAMPLES: usize = 256;
+    const LIMITER_WORKERS: usize = 16;
+    const LIMITER_OPS_PER_WORKER: usize = 512;
+
+    fn direct_metrics_telemetry() -> MaybeTelemetry {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::from(StateTelemetry::new(metrics, true));
+        MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator)
+    }
+
+    fn signed_find_abi_version(key_pair: &KeyPair) -> SignedQuery {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn micros(duration: Duration) -> f64 {
+        duration.as_secs_f64() * 1_000_000.0
+    }
+
+    fn percentile_permille(sorted_samples: &[Duration], permille: usize) -> Duration {
+        assert!(!sorted_samples.is_empty());
+        let index = (sorted_samples.len() - 1)
+            .saturating_mul(permille)
+            .saturating_add(500)
+            / 1_000;
+        sorted_samples[index.min(sorted_samples.len() - 1)]
+    }
+
+    fn print_profile(label: &str, mut samples: Vec<Duration>) {
+        samples.sort_unstable();
+        let total: f64 = samples.iter().map(|sample| sample.as_secs_f64()).sum();
+        let sample_count =
+            u32::try_from(samples.len()).expect("load profile sample count fits in u32");
+        let avg_us = total * 1_000_000.0 / f64::from(sample_count);
+        eprintln!(
+            "torii_load_profile label={label} samples={} avg_us={avg_us:.3} p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3}",
+            samples.len(),
+            micros(percentile_permille(&samples, 500)),
+            micros(percentile_permille(&samples, 950)),
+            micros(percentile_permille(&samples, 990)),
+            micros(*samples.last().expect("non-empty samples")),
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "load profile; run explicitly with --ignored --nocapture"]
+    async fn torii_hot_path_load_profile() {
+        let key_pair = KeyPair::random();
+        let signed_queries = (0..VERIFY_SAMPLES)
+            .map(|_| signed_find_abi_version(&key_pair))
+            .collect::<Vec<_>>();
+        let mut verify_samples = Vec::with_capacity(VERIFY_SAMPLES);
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let verified = verify_signed_query_request(signed_query).expect("query verifies");
+            std::hint::black_box(verified);
+            verify_samples.push(start.elapsed());
+        }
+        print_profile("signed_query_verify_direct", verify_samples);
+
+        let query_store = LiveQueryStore::start_test();
+        let query_state = Arc::new(State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query_store.clone(),
+        ));
+        let signed_queries = (0..QUERY_SAMPLES)
+            .map(|_| signed_find_abi_version(&key_pair))
+            .collect::<Vec<_>>();
+        let query_telemetry = direct_metrics_telemetry();
+        let mut query_samples = Vec::with_capacity(QUERY_SAMPLES);
+        for signed_query in signed_queries {
+            let start = Instant::now();
+            let response = handle_queries_with_opts(
+                query_store.clone(),
+                Arc::clone(&query_state),
+                signed_query,
+                query_telemetry.clone(),
+                crate::NoritoQuery(QueryOptions::default()),
+                crate::utils::ResponseFormat::Norito,
+            )
+            .await
+            .expect("query should complete");
+            std::hint::black_box(response);
+            query_samples.push(start.elapsed());
+        }
+        print_profile("query_find_abi_norito_with_direct_metrics", query_samples);
+
+        let tx_state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(TX_SAMPLES * 2).0;
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(TX_SAMPLES * 2).expect("non-zero queue capacity"),
+            capacity_per_user: NonZeroUsize::new(TX_SAMPLES * 2)
+                .expect("non-zero user queue capacity"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let tx_queue = Arc::new(Queue::from_config(queue_cfg, events));
+        let chain_id: Arc<ChainId> =
+            Arc::new("torii_load_profile_chain".parse().expect("valid chain id"));
+        let tx_key_pair = KeyPair::random();
+        let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
+        let transactions = (0..TX_SAMPLES)
+            .map(|index| {
+                let instruction = Log::new(Level::INFO, format!("torii-load-profile-{index}"));
+                TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+                    .with_instructions([InstructionBox::from(instruction)])
+                    .sign(tx_key_pair.private_key())
+            })
+            .collect::<Vec<_>>();
+        let tx_telemetry = direct_metrics_telemetry();
+        let mut tx_samples = Vec::with_capacity(TX_SAMPLES);
+        for tx in transactions {
+            let start = Instant::now();
+            let decision = handle_transaction_with_metrics(
+                Arc::clone(&chain_id),
+                Arc::clone(&tx_queue),
+                Arc::clone(&tx_state),
+                tx,
+                tx_telemetry.clone(),
+                iroha_torii_shared::uri::TRANSACTION,
+            )
+            .await
+            .expect("transaction should be admitted");
+            std::hint::black_box(decision);
+            tx_samples.push(start.elapsed());
+        }
+        print_profile("transaction_admission_with_direct_metrics", tx_samples);
+
+        let limiter = crate::limits::RateLimiter::new(Some(1_000_000), Some(1_000_000));
+        let limiter_samples = Arc::new(StdMutex::new(Vec::with_capacity(
+            LIMITER_WORKERS * LIMITER_OPS_PER_WORKER,
+        )));
+        let mut handles = Vec::with_capacity(LIMITER_WORKERS);
+        for worker in 0..LIMITER_WORKERS {
+            let limiter = limiter.clone();
+            let limiter_samples = Arc::clone(&limiter_samples);
+            handles.push(tokio::spawn(async move {
+                for index in 0..LIMITER_OPS_PER_WORKER {
+                    let key = format!("load-profile-{worker}-{index}");
+                    let start = Instant::now();
+                    let allowed = limiter.allow(&key).await;
+                    let elapsed = start.elapsed();
+                    assert!(allowed, "fresh limiter key should be admitted");
+                    limiter_samples
+                        .lock()
+                        .expect("limiter samples lock")
+                        .push(elapsed);
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("limiter worker should complete");
+        }
+        let limiter_samples = Arc::try_unwrap(limiter_samples)
+            .expect("all limiter sample handles dropped")
+            .into_inner()
+            .expect("limiter samples lock");
+        print_profile(
+            "preauth_rate_limiter_distinct_keys_concurrent",
+            limiter_samples,
+        );
+    }
+}
+
 #[cfg(feature = "app_api")]
 fn parse_tx_status(s: &str) -> Option<TransactionStatus> {
     match s {

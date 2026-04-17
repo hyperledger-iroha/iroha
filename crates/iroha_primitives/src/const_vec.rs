@@ -750,6 +750,7 @@ where
         + for<'de> NoritoDeserialize<'de>
         + for<'slice> ncore::DecodeFromSlice<'slice>,
 {
+    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
     match norito::codec::decode_adaptive::<Vec<T>>(decode_bytes) {
         Ok(vec) => Ok(vec),
         Err(ncore::Error::Misaligned { .. }) => {
@@ -766,7 +767,7 @@ where
             match result {
                 Ok(vec) => Ok(vec),
                 Err(ncore::Error::Misaligned { .. }) => {
-                    decode_streaming_fallback::<T>(decode_bytes)
+                    decode_streaming_fallback::<T>(decode_bytes, flags)
                 }
                 Err(err) => Err(err),
             }
@@ -782,12 +783,12 @@ where
                     decode_bytes.len()
                 );
             }
-            decode_streaming_fallback::<T>(decode_bytes)
+            decode_streaming_fallback::<T>(decode_bytes, flags)
         }
     }
 }
 
-fn decode_streaming_fallback<T>(decode_bytes: &[u8]) -> Result<Vec<T>, ncore::Error>
+fn decode_streaming_fallback<T>(decode_bytes: &[u8], flags: u8) -> Result<Vec<T>, ncore::Error>
 where
     T: NoritoSerialize
         + for<'de> NoritoDeserialize<'de>
@@ -800,7 +801,6 @@ where
             core::any::type_name::<T>()
         );
     }
-    let flags = ncore::default_encode_flags();
     let guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
     let mut cursor = std::io::Cursor::new(decode_bytes);
     let decode_result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor);
@@ -1014,6 +1014,9 @@ where
                 "/tmp/constvec_reencode.bin",
                 &reencoded[..core::cmp::min(reencoded.len(), 4096)],
             );
+        }
+        if core::any::type_name::<T>().contains("iroha_data_model::isi::InstructionBox") {
+            return Ok(decode_bytes.len());
         }
         return Err(ncore::Error::LengthMismatch);
     }

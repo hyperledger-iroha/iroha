@@ -1,8 +1,7 @@
 #![cfg(feature = "json")]
-//! Property-like tests for Norito JSON string parsing and skipping.
+//! Deterministic tests for Norito JSON string parsing and skipping.
 
 use norito::json::{Arena, Parser, TapeWalker, from_json_fast, write_json_string};
-use proptest::prelude::*;
 
 fn json_quote(s: &str) -> String {
     let mut out = String::new();
@@ -10,14 +9,31 @@ fn json_quote(s: &str) -> String {
     out
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, max_shrink_time: 1000, .. ProptestConfig::default() })]
-    #[test]
-    fn parse_string_matches_input(ref s in ".{0,64}") {
+#[test]
+fn parse_string_matches_input() {
+    let cases = [
+        "",
+        "a",
+        "abc",
+        "\"",
+        "\\",
+        "quote\"inside",
+        "back\\slash",
+        "line\nbreak",
+        "tab\tchar",
+        "carriage\rreturn",
+        "π",
+        "😀",
+        "mix 😀 π ascii",
+        "multi\\\\slashes",
+        "braces{}not structural",
+    ];
+
+    for s in cases {
         let quoted = json_quote(s);
         let mut p = Parser::new(&quoted);
         let out = p.parse_string().expect("parse string");
-        prop_assert_eq!(out, s.as_str());
+        assert_eq!(out, s);
     }
 }
 
