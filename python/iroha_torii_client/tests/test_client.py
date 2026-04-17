@@ -652,7 +652,7 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
                     {
                         "id": 4,
                         "key": "ton_raw",
-                        "description": "TON raw addresses in workchain:account_hex form.",
+                        "description": "Canonical TON raw addresses in workchain:account_hex form.",
                     }
                 ],
                 "counterparties": [

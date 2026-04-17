@@ -2088,7 +2088,7 @@ fn resolve_dependency_release(
             include_yanked: false,
         })
         .wrap_err_with(|| format!("failed to resolve Musubi package `{}`", dependency.package))?;
-    releases
+    let selected = releases
         .into_iter()
         .filter(|release| {
             dependency

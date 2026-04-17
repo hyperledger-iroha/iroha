@@ -661,7 +661,7 @@ mod tests {
                 SccpCodecCapability {
                     id: iroha_sccp::SCCP_CODEC_EVM_HEX,
                     key: "evm_hex".to_owned(),
-                    description: "0x-prefixed 20-byte EVM account addresses.".to_owned(),
+                    description: "0x-prefixed canonical EIP-55 EVM account addresses.".to_owned(),
                 },
             ],
             counterparties: vec![
