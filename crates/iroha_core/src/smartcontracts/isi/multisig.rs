@@ -2896,7 +2896,7 @@ mod tests {
             authority,
             account_id,
             domain_id,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             label,
         )
     }
@@ -4455,7 +4455,7 @@ mod tests {
         let retail_dataspace = DataSpaceId::new(17);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,

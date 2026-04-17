@@ -1101,6 +1101,21 @@ pub struct LaneRelayStore {
 }
 
 impl LaneRelayStore {
+    fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
+        let lane = envelope.lane_id;
+        let height = envelope.block_height;
+        let key = (lane, envelope.dataspace_id, height);
+        self.entries.get(&key).and_then(|existing| {
+            if existing.settlement_hash != envelope.settlement_hash
+                || existing.block_header.hash() != envelope.block_header.hash()
+            {
+                Some(LaneRelayError::ConflictingRelay { lane, height })
+            } else {
+                None
+            }
+        })
+    }
+
     /// Insert or replace a lane relay envelope.
     ///
     /// # Errors
@@ -8319,7 +8334,7 @@ mod storage_migration_tests {
         AccountAlias::new(
             label,
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
     }
 
@@ -8461,7 +8476,7 @@ mod storage_migration_tests {
             scopes,
             BTreeMap::from([
                 (
-                    DataSpaceId::GLOBAL,
+                    DataSpaceId::UNIVERSAL,
                     BTreeSet::from([AccountAliasDomain::new(
                         "treasury".parse::<Name>().expect("global domain name"),
                     )]),
@@ -11893,8 +11908,8 @@ fn derive_account_scope_directory_entry(
         }
     }
 
-    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::GLOBAL) {
-        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::UNIVERSAL) {
+        entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
     }
 
     Ok(Some(entry))
@@ -12488,7 +12503,7 @@ pub trait WorldReadOnly {
     /// Collect the account's dataspace -> domain hierarchy from primary label
     /// materialization, Space Directory bindings, and bound aliases.
     ///
-    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// Accounts materialized with a non-universal primary label inherit that label's dataspace/domain
     /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
     /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
     /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
@@ -12511,7 +12526,7 @@ pub trait WorldReadOnly {
     ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
         match self.account_scope_entry(account_id)? {
             Some(entry) => entry.hierarchy(self.dataspace_catalog()),
-            None => Ok(BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())])),
+            None => Ok(BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())])),
         }
     }
 
@@ -18888,10 +18903,8 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
-            let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
             bindings.retain(|binding| {
-                present_peers.contains(&binding.peer_id)
-                    && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                peer_has_live_consensus_key(world, &binding.peer_id, block_height)
             });
             bindings.sort_by(|lhs, rhs| {
                 lhs.validator
@@ -19208,6 +19221,9 @@ impl State {
         )?;
         envelope.verify_with_quorum(quorum)?;
         self.verify_lane_relay_qc(envelope, &committee)?;
+        if let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
+            return Err(error);
+        }
         envelope.verify_fastpq_proof_material()?;
 
         let inserted = {
@@ -22482,7 +22498,7 @@ impl<'state> StateBlock<'state> {
             };
             let mut lane = iroha_data_model::nexus::LaneConfig {
                 id: next_lane_id,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: format!("elastic-lane-{}", next_lane_id.as_u32()),
                 description: Some("Consensus-managed elastic lane".to_owned()),
                 visibility: iroha_data_model::nexus::LaneVisibility::Public,
@@ -24331,6 +24347,7 @@ mod replay_validation_tests {
         ChainId,
         block::SignedBlock,
         isi::Log,
+        peer::PeerId,
         prelude::{Account, Domain, DomainId},
         transaction::TransactionBuilder,
     };
@@ -24342,6 +24359,34 @@ mod replay_validation_tests {
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
+    }
+
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
     }
 
     #[test]
@@ -24431,6 +24476,10 @@ mod replay_validation_tests {
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
         let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
             .chain(0, Some(&signed_block2))
+            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
+                &signed_block2,
+                topology.as_ref(),
+            )))
             .sign(leader.private_key())
             .unpack(|_| {});
         let signed_block3: SignedBlock = block3.into();
@@ -25077,7 +25126,7 @@ mod permission_cache_tests {
         )
         .expect("deserialize permission");
         let target = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         });
 
         let permissions = BTreeSet::from([stored]);
@@ -29053,7 +29102,7 @@ mod tests {
         AccountAlias::new(
             label,
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
     }
 
@@ -29484,7 +29533,7 @@ mod tests {
         let retail_dataspace = DataSpaceId::new(17);
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -29517,7 +29566,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 universal_domain.name().clone(),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
             "retaildesk".parse().expect("label"),
@@ -29541,7 +29590,7 @@ mod tests {
             .account_scope_hierarchy(&account_id)
             .expect("account hierarchy");
         assert_eq!(
-            hierarchy.get(&DataSpaceId::GLOBAL),
+            hierarchy.get(&DataSpaceId::UNIVERSAL),
             Some(&BTreeSet::from([universal_domain.clone()])),
             "universal dataspace should expose the bound universal domain",
         );
@@ -29554,7 +29603,7 @@ mod tests {
             stx.world
                 .account_dataspaces(&account_id)
                 .expect("account dataspaces"),
-            BTreeSet::from([DataSpaceId::GLOBAL, retail_dataspace]),
+            BTreeSet::from([DataSpaceId::UNIVERSAL, retail_dataspace]),
             "accounts should expose the universal dataspace plus extra bindings",
         );
         assert_eq!(
@@ -29616,7 +29665,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
             initial_scopes,
-            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "materialized accounts should start in the universal dataspace only",
         );
 
@@ -29633,7 +29682,7 @@ mod tests {
         assert_eq!(
             bound_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (
                     retail_dataspace,
                     BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -29655,7 +29704,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
             unbound_scopes,
-            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "alias unbinds should remove the extra dataspace from the account scope directory",
         );
     }
@@ -29806,7 +29855,7 @@ mod tests {
         assert_eq!(
             retail_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (retail_dataspace, BTreeSet::new()),
             ]),
             "UAID bindings should surface the manifest dataspace in the account scope directory",
@@ -29830,7 +29879,7 @@ mod tests {
         assert_eq!(
             treasury_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (treasury_dataspace, BTreeSet::new()),
             ]),
             "manifest-driven UAID binding changes should refresh the account scope directory",
@@ -30280,7 +30329,7 @@ mod tests {
             .iter()
             .map(|lane| lane.dataspace_id)
             .collect();
-        ids.insert(DataSpaceId::GLOBAL);
+        ids.insert(DataSpaceId::UNIVERSAL);
         let entries = ids
             .into_iter()
             .map(|id| DataSpaceMetadata {
@@ -31099,8 +31148,8 @@ mod tests {
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31111,7 +31160,7 @@ mod tests {
                     LaneConfig::default(),
                     LaneConfig {
                         id: LaneId::new(1),
-                        dataspace_id: DataSpaceId::GLOBAL,
+                        dataspace_id: DataSpaceId::UNIVERSAL,
                         alias: "historical".to_string(),
                         ..LaneConfig::default()
                     },
@@ -31147,8 +31196,8 @@ mod tests {
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31178,7 +31227,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding"));
 
@@ -31187,7 +31236,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31217,7 +31266,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31246,7 +31295,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding-only"));
 
@@ -31255,7 +31304,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31284,7 +31333,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31307,7 +31356,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31315,7 +31364,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31360,7 +31409,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31388,7 +31437,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31396,7 +31445,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31439,7 +31488,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31467,7 +31516,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31475,7 +31524,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31531,7 +31580,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31584,7 +31633,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid_mixed = UniversalAccountId::from_hash(Hash::new(b"uaid::mixed-manifests"));
         let uaid_stale_only =
@@ -31595,7 +31644,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31645,7 +31694,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31680,7 +31729,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
         let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
@@ -31690,7 +31739,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31725,7 +31774,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31759,7 +31808,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(9);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -31768,7 +31817,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31869,7 +31918,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31924,7 +31973,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(11);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -31933,7 +31982,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -32488,7 +32537,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -32533,7 +32582,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32566,7 +32619,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32591,7 +32648,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32616,7 +32677,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32659,7 +32724,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32683,7 +32752,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32726,7 +32799,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32768,7 +32845,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32780,7 +32861,7 @@ mod tests {
         assert!(matches!(
             err,
             LaneRelayError::DataspaceMismatch { expected, actual }
-                if expected == DataSpaceId::GLOBAL && actual == DataSpaceId::new(1)
+                if expected == DataSpaceId::UNIVERSAL && actual == DataSpaceId::new(1)
         ));
     }
 
@@ -32796,7 +32877,11 @@ mod tests {
         let signers_bitmap = signer_bitmap(&[0], validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32819,7 +32904,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32843,7 +32932,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -32856,7 +32945,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![ALICE_ID.clone(), BOB_ID.clone()],
             )],
         );
@@ -32908,7 +32997,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -32921,7 +33010,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -32976,7 +33065,7 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
         let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
         let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
         let fillers =
@@ -33008,7 +33097,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -33063,7 +33152,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33076,7 +33165,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33112,7 +33201,7 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
         let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
         let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
         let fillers =
@@ -33144,7 +33233,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -33182,7 +33271,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33198,7 +33287,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33233,7 +33322,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33249,7 +33338,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33288,7 +33377,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33304,7 +33393,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33341,7 +33430,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33357,7 +33446,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33389,12 +33478,12 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
-        let same = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
+        let same = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
         assert_eq!(seed, same);
 
         let different_lane =
-            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(1), 1);
+            state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(1), 1);
         assert_ne!(seed, different_lane);
         let different_ds = state.lane_relay_committee_seed(DataSpaceId::new(1), LaneId::new(0), 1);
         assert_ne!(seed, different_ds);
@@ -33546,7 +33635,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         let keypairs = configure_commit_topology(&state, 1);
 
@@ -33592,7 +33685,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33610,8 +33703,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -33671,7 +33772,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33689,8 +33790,12 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
         configure_commit_topology(&state, 1);
@@ -33730,7 +33835,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33748,8 +33853,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -40387,6 +40500,14 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            },
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -40617,8 +40738,7 @@ mod tests {
                 MintRequestCanceledAt[sequence] = canceled_at_ms;
               }
 
-              #[access(read="*", write="*")]
-              kotoage fn run() {
+              fn main() {
                 let ev = trigger_event();
                 let action_key = name("action");
                 let request_id_key = name("request_id");
@@ -40629,19 +40749,19 @@ mod tests {
                 let created_at_ms_key = name("created_at_ms");
                 let expires_at_ms_key = name("expires_at_ms");
 
-                let action = json_get_name(ev, action_key);
+                let action = ev.get_name(action_key);
 
                 if (action == name("create")) {
-                  let request_id = json_get_name(ev, request_id_key);
-                  assert(!contains(MintRequestSequenceById, request_id), "mint request already exists");
+                  let request_id = ev.get_name(request_id_key);
+                  assert(!MintRequestSequenceById.contains(request_id), "mint request already exists");
 
                   let sequence = MintRequestNextSequence + 1;
-                  let fi_id = json_get_name(ev, fi_id_key);
-                  let to_account_id = json_get_account_id(ev, to_account_id_key);
-                  let amount_i64 = json_get_int(ev, amount_i64_key);
-                  let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
-                  let created_at_ms = json_get_int(ev, created_at_ms_key);
-                  let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+                  let fi_id = ev.get_name(fi_id_key);
+                  let to_account_id = ev.get_account_id(to_account_id_key);
+                  let amount_i64 = ev.get_int(amount_i64_key);
+                  let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+                  let created_at_ms = ev.get_int(created_at_ms_key);
+                  let expires_at_ms = ev.get_int(expires_at_ms_key);
 
                   MintRequestNextSequence = sequence;
                   MintRequestSequenceById[request_id] = sequence;
@@ -40783,23 +40903,22 @@ mod tests {
         let banking_label = AccountAlias::new(
             "banking".parse().expect("banking label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
 
         let src = r#"
             seiyaku AliasTransfer {
-              #[access(read="*", write="*")]
-              kotoage fn run() permission(alias_transfer_run) {
+              fn main() {
                 let ev = trigger_event();
-                if (json_get_name(ev, name("kind")) != name("asset_change")) {
+                if (ev.get_name(name("kind")) != name("asset_change")) {
                   return;
                 }
-                if (json_get_name(ev, name("op")) != name("added")) {
+                if (ev.get_name(name("op")) != name("added")) {
                   return;
                 }
-                let dst_domain = json_get_name(ev, name("account_domain"));
-                let dst = json_get_account_id(ev, name("account_id"));
-                let amount = json_get_int(ev, name("amount_i64"));
+                let dst_domain = ev.get_name(name("account_domain"));
+                let dst = ev.get_account_id(name("account_id"));
+                let amount = ev.get_int(name("amount_i64"));
                 if (amount <= 0) {
                   return;
                 }
@@ -40864,7 +40983,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
                         ),
                     },
                 ),
@@ -40888,7 +41007,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
                         ),
                     },
                 ),

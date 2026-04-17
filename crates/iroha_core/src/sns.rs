@@ -71,7 +71,7 @@ pub enum SnsError {
 pub enum SnsNamespace {
     /// Full account-alias key (`name@domain.dataspace` or `name@dataspace`).
     AccountAlias,
-    /// Canonical domain literal.
+    /// Canonical `domain.dataspace` literal.
     Domain,
     /// Canonical dataspace alias.
     Dataspace,
@@ -728,10 +728,13 @@ fn canonicalize_request_selector(
     let namespace = SnsNamespace::from_suffix_id(selector.suffix_id)?;
     let canonical = match namespace {
         SnsNamespace::AccountAlias => selector_for_account_alias_literal(&selector.label, catalog)?,
-        SnsNamespace::Domain | SnsNamespace::Dataspace => {
-            NameSelectorV1::new(selector.suffix_id, selector.label)
-                .map_err(|err| SnsError::BadRequest(err.to_string()))?
+        SnsNamespace::Domain => {
+            let domain = DomainId::parse_fully_qualified(selector.label.trim())
+                .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
+            selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))?
         }
+        SnsNamespace::Dataspace => NameSelectorV1::new(selector.suffix_id, selector.label)
+            .map_err(|err| SnsError::BadRequest(err.to_string()))?,
     };
     Ok((namespace, canonical))
 }
@@ -1361,7 +1364,7 @@ mod tests {
         let label = AccountAlias::new(
             "gas".parse().expect("label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -1384,7 +1387,7 @@ mod tests {
                     alias: Some(AccountAlias::new(
                         "ops".parse().expect("label"),
                         Some(AccountAliasDomain::new(domain_id.name().clone())),
-                        DataSpaceId::GLOBAL,
+                        DataSpaceId::UNIVERSAL,
                     )),
                     lease_expiry_ms: None,
                 }),
@@ -1409,7 +1412,7 @@ mod tests {
             &AccountAlias::new(
                 "ops".parse().expect("label"),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             ),
             &dataspace_catalog,
         )
@@ -1568,7 +1571,7 @@ mod tests {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: DOMAIN_NAME_SUFFIX_ID,
-                        label: "soraswap".to_owned(),
+                        label: "soraswap.universal".to_owned(),
                     },
                     owner: owner.clone(),
                     controllers: vec![controller(&owner)],
@@ -1589,6 +1592,43 @@ mod tests {
         assert!(
             record.expires_at_ms > before_ms + MS_PER_DAY,
             "one-year registration should not appear expired immediately"
+        );
+    }
+
+    #[test]
+    fn register_domain_name_rejects_bare_domain_literal() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        let err = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "soraswap".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect_err("bare domain labels must be rejected");
+
+        assert!(
+            err.to_string().contains("domain.dataspace"),
+            "unexpected error: {err}"
         );
     }
 
@@ -1687,7 +1727,7 @@ mod tests {
             &view,
             &DataSpaceCatalog::default(),
             SnsNamespace::Domain,
-            "trade",
+            "trade.universal",
             11,
         )
         .expect("fetch record");

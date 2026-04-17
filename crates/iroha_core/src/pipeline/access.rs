@@ -1387,14 +1387,23 @@ fn add_domain_detail_rw(set: &mut AccessSet, id: &DomainId, key: &Name) {
     set.add_write(d);
 }
 fn add_asset_def_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     let k = key_asset_def(id);
     set.add_read(k.clone());
     set.add_write(k);
 }
 fn add_asset_def_r(set: &mut AccessSet, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     set.add_read(key_asset_def(id));
 }
 fn add_asset_def_detail_rw(set: &mut AccessSet, id: &AssetDefinitionId, key: &Name) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     set.add_read(key_asset_def(id));
     let d = key_asset_def_detail(id, key);
     set.add_read(d.clone());

@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn account_scope_entry_json_roundtrip() {
         let mut entry = AccountScopeDirectoryEntry::default();
-        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+        entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
         entry.ensure_dataspace(DataSpaceId::new(12));
 
         let encoded = json::to_json(&entry).expect("scope entry should serialize to JSON");
