@@ -2,6 +2,12 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: `koto_compile` smoke fixture restored to current ZK semantics
+- `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/10_meta_header.ko` now uses `poseidon2(1, 2)` alongside `setvl(8)` so the example actually emits both ZK and vector opcodes under the current compiler. The previous `assert(true)` path lowers to an abort syscall and no longer satisfies `meta { zk: true; }`.
+- `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/README.md` now describes the example in the same terms, so the documented fixture matches the compiler behavior and the CLI smoke tests again compile successfully.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test cli_smoke -- --nocapture`
+
 ## 2026-04-17 Follow-up: AXT descriptor binding no longer drifts across crate feature sets
 - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nexus/axt.rs` now derives `compute_descriptor_binding` from the descriptor's bare Norito payload (`codec::encode_adaptive`) instead of the header-framed bytes. This removes schema-hash/header drift from the binding preimage while keeping the payload layout deterministic.
 - The same module now has a focused unit test that pins the Poseidon preimage to the `iroha:axt:desc:v1\0` domain separator plus bare payload bytes.
