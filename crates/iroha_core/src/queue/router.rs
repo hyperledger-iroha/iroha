@@ -11,6 +11,7 @@ use std::sync::Arc;
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
+    asset::AssetDefinitionId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
@@ -20,7 +21,14 @@ use iroha_data_model::{
     permission::Permission,
     transaction::Executable,
 };
-use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+use iroha_executor_data_model::permission::{
+    asset::{
+        CanBurnAssetWithDefinition, CanMintAssetWithDefinition,
+        CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
+    },
+    asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
+    nexus::CanPublishSpaceDirectoryManifest,
+};
 
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
@@ -210,9 +218,10 @@ fn dataspace_scoped_permission_routing_decision(
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                let Some(dataspace_id) =
-                    instruction_dataspace_scoped_permission_target(&**instruction)
-                else {
+                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
+                    &**instruction,
+                    dataspace_catalog,
+                ) else {
                     continue;
                 };
                 if let Some(existing) = target_dataspace {
@@ -230,9 +239,10 @@ fn dataspace_scoped_permission_routing_decision(
         Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
-                let Some(dataspace_id) =
-                    instruction_dataspace_scoped_permission_target(&**instruction)
-                else {
+                let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
+                    &**instruction,
+                    dataspace_catalog,
+                ) else {
                     continue;
                 };
                 if let Some(existing) = target_dataspace {
@@ -333,7 +343,7 @@ fn instruction_account_permission_holder(
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
-                if dataspace_scoped_permission_target(&grant.object).is_some() {
+                if dataspace_scoped_permission_target(&grant.object, None).is_some() {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&grant.destination)
@@ -346,7 +356,7 @@ fn instruction_account_permission_holder(
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
-                if dataspace_scoped_permission_target(&revoke.object).is_some() {
+                if dataspace_scoped_permission_target(&revoke.object, None).is_some() {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&revoke.destination)
@@ -363,19 +373,24 @@ fn instruction_account_permission_holder(
 
 fn instruction_dataspace_scoped_permission_target(
     instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
 
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
-            GrantBox::Permission(grant) => dataspace_scoped_permission_target(&grant.object),
+            GrantBox::Permission(grant) => {
+                dataspace_scoped_permission_target(&grant.object, dataspace_catalog)
+            }
             GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
         };
     }
 
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
-            RevokeBox::Permission(revoke) => dataspace_scoped_permission_target(&revoke.object),
+            RevokeBox::Permission(revoke) => {
+                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog)
+            }
             RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
         };
     }
@@ -383,9 +398,69 @@ fn instruction_dataspace_scoped_permission_target(
     None
 }
 
-fn dataspace_scoped_permission_target(permission: &Permission) -> Option<DataSpaceId> {
+fn asset_definition_dataspace_target(
+    asset_definition_id: &AssetDefinitionId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    let dataspace_alias = asset_definition_id.try_domain()?.dataspace().as_ref();
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::GLOBAL);
+    }
+    dataspace_catalog?
+        .by_alias(dataspace_alias)
+        .map(|entry| entry.id)
+}
+
+fn dataspace_scoped_permission_target(
+    permission: &Permission,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
     if permission.name() != "CanPublishSpaceDirectoryManifest" {
-        return None;
+        return match permission.name() {
+            "CanMintAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            "CanBurnAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanBurnAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            "CanTransferAssetWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanTransferAssetWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            "CanModifyAssetMetadataWithDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanModifyAssetMetadataWithDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            "CanUnregisterAssetDefinition" => permission
+                .payload()
+                .try_into_any_norito::<CanUnregisterAssetDefinition>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            "CanModifyAssetDefinitionMetadata" => permission
+                .payload()
+                .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(&token.asset_definition, dataspace_catalog)
+                }),
+            _ => None,
+        };
     }
 
     permission
