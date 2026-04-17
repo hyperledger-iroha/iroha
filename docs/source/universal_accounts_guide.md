@@ -25,7 +25,7 @@ publish` run (roadmap reference: `roadmap.md:2209`).
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
 - `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the global dataspace when none exists, so the UAID is immediately bound.
+  the universal dataspace when none exists, so the UAID is immediately bound.
   Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
 - All SDKs expose helpers for canonicalising UAID literals (e.g.,
   `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests

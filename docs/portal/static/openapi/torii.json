@@ -4084,7 +4084,7 @@
     },
     "/v1/accounts/onboard": {
       "post": {
-        "description": "Register or onboard an account; when the UAID is not bound to the global dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+        "description": "Register or onboard an account; when the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
         "requestBody": {
           "content": {
             "application/json": {

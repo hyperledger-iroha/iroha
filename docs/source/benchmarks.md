@@ -6,6 +6,16 @@ artefacts to roadmap reviews or SRE audits. Regenerate it with
 `python3 scripts/fastpq/update_benchmark_history.py` whenever new GPU captures
 or Poseidon manifests land.
 
+Criterion harness dependencies are dev-dependencies, so the default benchmark
+targets are available to plain `cargo bench`. Use package and bench selectors
+when isolating a target, for example:
+
+```bash
+cargo bench -p iroha_core --bench queries
+cargo bench -p ivm --bench bench_poseidon
+cargo bench -p norito --bench crc64
+```
+
 ## Acceleration evidence bundle
 
 Every GPU or mixed-mode benchmark must include the applied acceleration settings
@@ -49,7 +59,7 @@ These measurements come from a microbenchmark comparing an enum-based dispatch a
 The Poseidon benchmark (`crates/ivm/benches/bench_poseidon.rs`) now includes workloads that exercise both single-hash permutations and the new batched helpers. Run the suite with:
 
 ```bash
-cargo bench -p ivm bench_poseidon -- --save-baseline poseidon_cuda
+cargo bench -p ivm --bench bench_poseidon -- --save-baseline poseidon_cuda
 ```
 
 Criterion will record results under `target/criterion/poseidon*_many`. When a GPU worker is available, export the JSON summaries (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/criterion_poseidon2_many_cuda.json`) (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/`) so downstream teams can compare CPU vs CUDA throughput for each batch size. Until the dedicated GPU lane goes live, the benchmark falls back to the SIMD/CPU implementation and still provides useful regression data for batch performance.

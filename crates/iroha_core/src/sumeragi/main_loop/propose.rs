@@ -2943,10 +2943,9 @@ impl Actor {
         if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, highest_qc) {
             match reason {
                 LockedQcRejection::HeightRegressed { locked, highest } => {
-                    let Some(lock) = self.locked_qc else {
+                    let Some(lock) = self.promote_locked_qc_to_highest_if_needed("proposal") else {
                         return false;
                     };
-                    self.promote_locked_qc_to_highest_if_needed("proposal");
                     iroha_logger::info!(
                         locked_height = locked,
                         highest_height = highest,
@@ -2954,9 +2953,9 @@ impl Actor {
                         view = view_idx,
                         queue_len = pending_queue_len,
                         lock_hash = %lock.subject_block_hash,
-                        "deferring proposal: highest QC lags locked QC; retrying after promotion"
+                        "replacing regressed highest QC with locked QC for proposal assembly"
                     );
-                    return false;
+                    highest_qc = lock;
                 }
                 LockedQcRejection::HashMismatch { .. } => {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);

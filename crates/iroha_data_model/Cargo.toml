@@ -41,7 +41,7 @@ transparent_api = ["iroha_data_model_derive/transparent_api"]
 fault_injection = []
 fast_dsl = []
 trybuild-tests = ["dep:trybuild"]
-bench = ["dep:criterion"]
+bench = []
 ids_projection = []
 governance = []
 zk-ballot = []
@@ -88,10 +88,10 @@ idna = { version = "1.1.0", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
-criterion = { workspace = true, optional = true }
 trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
 hex-literal = { workspace = true }
 ivm = { path = "../ivm" }
@@ -106,23 +106,19 @@ tempfile = { workspace = true }
 [[bench]]
 name = "time_event_filter"
 harness = false
-required-features = ["bench"]
 
 
 [[bench]]
 name = "decode_registry"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "enum_vs_trait"
 harness = false
-required-features = ["bench"]
 
 [[bench]]
 name = "chain_wire"
 harness = false
-required-features = ["bench"]
 
 [[test]]
 name = "ui"
