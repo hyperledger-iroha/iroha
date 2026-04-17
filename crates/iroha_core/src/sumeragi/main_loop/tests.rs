@@ -22301,6 +22301,134 @@ async fn known_block_commit_qc_recovery_requests_pending_block_fetch() {
     harness.shutdown.send();
 }
 
+fn persist_commit_roster_snapshot_for_known_block_test(
+    actor: &mut Actor,
+    key_pairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> Qc {
+    let roster = actor.effective_commit_topology();
+    assert!(
+        !roster.is_empty(),
+        "test requires a non-empty commit topology"
+    );
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        mode_tag,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        commit_qc.parent_state_root,
+        commit_qc.post_state_root,
+        roster,
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc.clone(), checkpoint, None);
+    }
+    commit_qc
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_skips_fetch_when_commit_roster_snapshot_exists() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let commit_qc = persist_commit_roster_snapshot_for_known_block_test(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+    );
+    assert_eq!(
+        actor.cached_commit_qc_for_block(block_hash, height, view),
+        Some(commit_qc),
+        "durable commit-roster snapshots should rehydrate commit-QC lookups",
+    );
+    assert!(
+        actor.pending_block_has_commit_qc(block_hash, height, view),
+        "pending commit-QC checks should accept durable snapshot evidence",
+    );
+    assert!(
+        actor.pending_block_has_qc(block_hash, height, view),
+        "generic pending QC checks should accept durable snapshot evidence",
+    );
+
+    let targets = actor.effective_commit_topology();
+    let before = super::status::snapshot();
+    assert!(
+        !actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_commit_roster_snapshot",
+        ),
+        "durable local commit-roster evidence should suppress redundant known-block commit-QC fetches",
+    );
+    let after = super::status::snapshot();
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "skipped recovery should not leave a tracked missing commit-QC request behind",
+    );
+    assert_eq!(
+        after.missing_block_fetch_total, before.missing_block_fetch_total,
+        "skipped recovery should not record a fetch attempt",
+    );
+
+    harness.shutdown.send();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn known_block_commit_qc_recovery_requests_fetch_for_retry_aborted_pending() {
     let _guard = super::status::missing_block_fetch_test_guard();
@@ -22340,6 +22468,63 @@ async fn known_block_commit_qc_recovery_requests_fetch_for_retry_aborted_pending
     assert_eq!(request.phase, Phase::Commit);
     assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
     assert_eq!(request.attempts, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_known_block_commit_qc_requests_clears_request_when_commit_roster_snapshot_exists() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    let _ = persist_commit_roster_snapshot_for_known_block_test(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+    );
+
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "retry loop should make progress by clearing requests that already have durable local commit-QC evidence",
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "durable local commit-QC evidence should retire the missing commit-QC request",
+    );
 
     harness.shutdown.send();
 }
@@ -84424,6 +84609,78 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
             .len(),
         1,
         "only one active defer marker should exist for the same key"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_uses_locked_qc_when_incoming_highest_qc_regresses() {
+    use std::borrow::Cow;
+
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: genesis_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(locked_qc);
+    super::status::set_locked_qc(
+        locked_qc.height,
+        locked_qc.view,
+        Some(locked_qc.subject_block_hash),
+    );
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = locked_qc.height.saturating_add(1);
+    let view = 0u64;
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            sample_qc_ref(0, 0),
+            &mut topology,
+            usize::try_from(local_idx).expect("leader index fits usize"),
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed");
+
+    assert!(
+        assembled,
+        "proposal assembly should continue with the locked QC when the incoming highest QC regresses"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(locked_qc),
+        "proposal path should promote the locked QC into highest QC state"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height == height && pending.view == view && !pending.aborted),
+        "proposal assembly should create a pending block for the locked-QC branch"
     );
 
     super::status::set_locked_qc(0, 0, None);

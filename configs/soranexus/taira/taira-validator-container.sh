@@ -9,6 +9,7 @@ Commands:
   config   Print the resolved `docker run` command.
   up       Pull the image when missing, replace any existing container, and start it.
   down     Remove the container if it exists.
+  reset    Stop the container and wipe the configured storage directory.
   restart  Recreate the container.
   pull     Pull the configured image tag.
   status   Show `docker ps` status for the configured container.
@@ -153,6 +154,26 @@ do_down() {
     fi
 }
 
+resolve_storage_path() {
+    mkdir -p "$TAIRA_STORAGE_PATH"
+    (
+        cd "$TAIRA_STORAGE_PATH"
+        pwd -P
+    )
+}
+
+do_reset() {
+    local storage_real
+
+    do_down
+    storage_real="$(resolve_storage_path)"
+    if [[ -z "$storage_real" || "$storage_real" == "/" ]]; then
+        printf 'refusing to wipe invalid storage directory: %s\n' "$storage_real" >&2
+        exit 1
+    fi
+    find "$storage_real" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+
 do_up() {
     build_run_args
 
@@ -175,6 +196,9 @@ case "$command_name" in
         ;;
     down)
         do_down
+        ;;
+    reset)
+        do_reset
         ;;
     restart)
         do_up
