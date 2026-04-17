@@ -2485,6 +2485,35 @@ pub(crate) mod valid {
         sumeragi::network_topology::Role,
     };
 
+    fn charge_rejected_overlay_fees(
+        state_block_mut: &mut StateBlock<'_>,
+        tx: &iroha_data_model::transaction::SignedTransaction,
+        authority: &AccountId,
+        overlay: &crate::pipeline::overlay::TxOverlay,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        validation_error: &iroha_data_model::ValidationFail,
+    ) -> Result<(), TransactionRejectionReason> {
+        if matches!(
+            validation_error,
+            iroha_data_model::ValidationFail::InternalError(_)
+        ) {
+            return Ok(());
+        }
+
+        let mut fee_tx = state_block_mut.transaction();
+        fee_tx.current_lane_id = Some(lane_id);
+        fee_tx.current_dataspace_id = Some(dataspace_id);
+        fee_tx.world.current_dataspace_id = Some(dataspace_id);
+        fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        fee_tx.current_tx_hash = Some(tx.hash());
+
+        charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
+            .map_err(TransactionRejectionReason::Validation)?;
+        fee_tx.apply();
+        Ok(())
+    }
+
     /// Block that was validated and accepted.
     #[derive(Debug, Clone)]
     pub struct ValidBlock {
@@ -7890,7 +7919,6 @@ pub(crate) mod valid {
             // Helper removed to avoid borrow checker conflicts; inline application below.
             // When `pipeline.gpu_key_bucket` is enabled we first attempt to build per-key
             // inverted indices via the CUDA bitonic sorter (with an identical CPU fallback).
-
             // Apply overlays either via parallel-detached path (per conflict-free layer)
             // or via the sequential path based on the `pipeline.parallel_apply` knob.
             if state_block.pipeline.parallel_apply {
@@ -8692,7 +8720,21 @@ pub(crate) mod valid {
                                 &authority,
                                 chunk_size,
                             ) {
-                                Err(e) => Err(TransactionRejectionReason::Validation(e)),
+                                Err(e) => {
+                                    drop(state_tx);
+                                    match charge_rejected_overlay_fees(
+                                        state_block_mut,
+                                        tx,
+                                        &authority,
+                                        overlay.as_ref(),
+                                        routing_decisions[idx].lane_id,
+                                        routing_decisions[idx].dataspace_id,
+                                        &e,
+                                    ) {
+                                        Ok(()) => Err(TransactionRejectionReason::Validation(e)),
+                                        Err(err) => Err(err),
+                                    }
+                                }
                                 Ok(()) => {
                                     if let Err(err) = charge_fees_for_applied_overlay(
                                         &mut state_tx,
@@ -8982,11 +9024,25 @@ pub(crate) mod valid {
                                         &authority,
                                         chunk_size,
                                     ) {
-                                        Err(e) => Err(
-                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                                e,
-                                            ),
-                                        ),
+                                        Err(e) => {
+                                            drop(state_tx);
+                                            match charge_rejected_overlay_fees(
+                                                state_block,
+                                                tx,
+                                                &authority,
+                                                overlay.as_ref(),
+                                                routing_decisions[idx].lane_id,
+                                                routing_decisions[idx].dataspace_id,
+                                                &e,
+                                            ) {
+                                                Ok(()) => Err(
+                                                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                        e,
+                                                    ),
+                                                ),
+                                                Err(err) => Err(err),
+                                            }
+                                        }
                                         Ok(()) => {
                                             if let Err(err) = charge_fees_for_applied_overlay(
                                                 &mut state_tx,
@@ -9132,12 +9188,30 @@ pub(crate) mod valid {
                                     ),
                                 )
                             } else {
-                                match overlay.apply_with_chunk(&mut state_tx, &authority, chunk_size) {
-                                    Err(e) => Err(
-                                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                            e,
-                                        ),
-                                    ),
+                                match overlay.apply_with_chunk(
+                                    &mut state_tx,
+                                    &authority,
+                                    chunk_size,
+                                ) {
+                                    Err(e) => {
+                                        drop(state_tx);
+                                        match charge_rejected_overlay_fees(
+                                            state_block,
+                                            tx,
+                                            &authority,
+                                            overlay.as_ref(),
+                                            routing_decisions[idx].lane_id,
+                                            routing_decisions[idx].dataspace_id,
+                                            &e,
+                                        ) {
+                                            Ok(()) => Err(
+                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                    e,
+                                                ),
+                                            ),
+                                            Err(err) => Err(err),
+                                        }
+                                    }
                                     Ok(()) => {
                                         if let Err(err) = charge_fees_for_applied_overlay(
                                             &mut state_tx,
@@ -15862,6 +15936,116 @@ mod tests {
             lookup(&accept_hash, "accept tx").is_ok(),
             "Second tx must succeed"
         );
+    }
+
+    #[test]
+    fn rejected_business_execution_still_charges_nexus_fee() {
+        let chain_id = ChainId::from("rejected-business-fee-test");
+        let (payer_id, payer_keypair) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), payer_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let recipient_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), recipient_id.clone()),
+            Numeric::zero(),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_definition_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [payer, recipient, sink],
+            [asset_definition],
+            [payer_asset, recipient_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+
+        let instruction: InstructionBox = Transfer::asset_numeric(
+            AssetId::of(asset_definition_id.clone(), payer_id.clone()),
+            Numeric::from(20_u32),
+            recipient_id.clone(),
+        )
+        .into();
+        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(payer_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert_eq!(
+            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
+            Some(0)
+        );
+        let assets = state_block.world.assets();
+        let payer_balance = assets
+            .get(&AssetId::of(asset_definition_id.clone(), payer_id))
+            .expect("payer balance exists")
+            .0
+            .to_string();
+        let recipient_balance = assets
+            .get(&AssetId::of(asset_definition_id.clone(), recipient_id))
+            .expect("recipient balance exists")
+            .0
+            .to_string();
+        let sink_balance = assets
+            .get(&AssetId::of(asset_definition_id, sink_id))
+            .expect("sink balance exists")
+            .0
+            .to_string();
+
+        assert_eq!(payer_balance, "9");
+        assert_eq!(recipient_balance, "0");
+        assert_eq!(sink_balance, "1");
     }
 
     #[tokio::test]
