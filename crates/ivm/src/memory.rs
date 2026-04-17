@@ -893,6 +893,8 @@ mod tests {
         let mut base = Memory::new(0);
         base.preload_input(0, &[1, 2, 3, 4])
             .expect("preload template input");
+        base.set_heap_limit(Memory::HEAP_MAX_SIZE - 128)
+            .expect("lower template heap limit");
 
         let mut worker = base.clone();
         worker.alloc(32).expect("alloc");
@@ -943,6 +945,8 @@ mod tests {
     #[test]
     fn grow_heap_rejects_overflow() {
         let mut mem = Memory::new(0);
+        mem.set_heap_limit(Memory::HEAP_MAX_SIZE - 64)
+            .expect("lower heap limit before bounded grow");
         let original_limit = mem.heap_limit();
         assert!(matches!(mem.grow_heap(u64::MAX), Err(VMError::OutOfMemory)));
         assert_eq!(mem.heap_limit(), original_limit);

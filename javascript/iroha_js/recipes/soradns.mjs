@@ -11,6 +11,7 @@
  *   npm install
  *   npm run build:native
  *   node ./recipes/soradns.mjs docs.sora --gar-patterns canonical,pretty,*.gw.sora.id
+ *   node ./recipes/soradns.mjs solswap-indexer.sora --pretty-suffix mon.taira.sora.org
  */
 import process from "node:process";
 import {
@@ -21,13 +22,26 @@ import {
 function parseArgs(argv) {
   const args = [...argv];
   let garArg;
+  let prettySuffix;
   let fqdn;
   for (let idx = 0; idx < args.length; idx += 1) {
     const value = args[idx];
     if (value === "--gar-patterns") {
+      if (!args[idx + 1] || args[idx + 1].startsWith("--")) {
+        throw new Error("--gar-patterns requires a comma-separated value");
+      }
       garArg = args[idx + 1];
       args.splice(idx, 2);
-      break;
+      idx -= 1;
+      continue;
+    }
+    if (value === "--pretty-suffix") {
+      if (!args[idx + 1] || args[idx + 1].startsWith("--")) {
+        throw new Error("--pretty-suffix requires a domain suffix");
+      }
+      prettySuffix = args[idx + 1];
+      args.splice(idx, 2);
+      idx -= 1;
     }
   }
   if (args.length > 0) {
@@ -35,6 +49,8 @@ function parseArgs(argv) {
   }
   const name = fqdn ?? process.env.SORADNS_NAME ?? "docs.sora";
   const patternsSource = garArg ?? process.env.SORADNS_GAR ?? "";
+  const selectedPrettySuffix =
+    prettySuffix ?? process.env.SORADNS_PRETTY_SUFFIX ?? null;
   const garPatterns =
     patternsSource === ""
       ? []
@@ -42,15 +58,26 @@ function parseArgs(argv) {
           .split(/[,\n]/)
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0);
-  return { name, garPatterns };
+  return { name, prettySuffix: selectedPrettySuffix, garPatterns };
 }
 
 async function main() {
-  const { name, garPatterns } = parseArgs(process.argv.slice(2));
+  let parsed;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error("Invalid arguments:", error?.message ?? error);
+    process.exitCode = 1;
+    return;
+  }
+  const { name, prettySuffix, garPatterns } = parsed;
   console.log(`Deriving deterministic hosts for: ${name}`);
   let bindings;
   try {
-    bindings = deriveSoradnsGatewayHosts(name);
+    bindings = deriveSoradnsGatewayHosts(
+      name,
+      prettySuffix ? { prettySuffix } : undefined,
+    );
   } catch (error) {
     console.error("Failed to derive gateway hosts:", error?.message ?? error);
     process.exitCode = 1;
@@ -61,6 +88,9 @@ async function main() {
   console.log("Canonical label :", bindings.canonicalLabel);
   console.log("Canonical host  :", bindings.canonicalHost);
   console.log("Pretty host     :", bindings.prettyHost);
+  if (prettySuffix) {
+    console.log("Pretty suffix   :", prettySuffix);
+  }
   console.log("Wildcard        :", bindings.canonicalWildcard);
   console.log("GAR patterns    :");
   bindings.hostPatterns.forEach((pattern) => console.log(`  - ${pattern}`));
@@ -78,7 +108,7 @@ async function main() {
     }
   } else {
     console.log(
-      "\nTip: pass --gar-patterns host1,host2,host3 (or set SORADNS_GAR) to validate a live GAR payload.",
+      "\nTip: pass --pretty-suffix mon.taira.sora.org for Taira Mon hosts, and --gar-patterns host1,host2,host3 (or set SORADNS_GAR) to validate a live GAR payload.",
     );
   }
 }

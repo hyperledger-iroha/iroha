@@ -5791,6 +5791,57 @@ test("submitTransaction retries broken pipe failures via pipeline profile", asyn
   assert.equal(attempts, 2);
 });
 
+test("submitTransaction retries broken pipe failures without an explicit error code", async () => {
+  const payload = new Uint8Array([0xac]);
+  let attempts = 0;
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    attempts += 1;
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    if (attempts === 1) {
+      throw new Error("write EPIPE");
+    }
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+  assert.equal(attempts, 2);
+});
+
 test("submitTransaction falls back to /transaction when pipeline submit is unavailable", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
   const encodedPayload = Buffer.from([0xfa, 0xce, 0x01]);

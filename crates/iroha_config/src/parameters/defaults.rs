@@ -1811,6 +1811,10 @@ pub mod torii {
     pub const DA_REPLAY_CACHE_TTL_SECS: u64 = 15 * 60;
     /// Maximum sequence lag tolerated before rejecting manifests.
     pub const DA_REPLAY_CACHE_MAX_SEQUENCE_LAG: u64 = 4_096;
+    /// Maximum number of DA spool batches queued for async disk persistence.
+    pub const DA_SPOOL_QUEUE_CAPACITY: NonZeroUsize = nonzero!(1024usize);
+    /// Maximum number of DA spool batches flushed by one worker write pass.
+    pub const DA_SPOOL_BATCH_MAX: NonZeroUsize = nonzero!(32usize);
     /// Default directory for persisted DA replay cursors.
     pub fn da_replay_cache_store_dir() -> PathBuf {
         PathBuf::from("./storage/da_replay")

@@ -6217,6 +6217,10 @@ pub struct DaIngest {
     pub replay_cache_store_dir: PathBuf,
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of DA spool batches queued for async disk persistence.
+    pub spool_queue_capacity: NonZeroUsize,
+    /// Maximum number of DA spool batches flushed by one worker write pass.
+    pub spool_batch_max: NonZeroUsize,
     /// Symmetric key used to encrypt governance-only metadata entries.
     pub governance_metadata_key: Option<[u8; 32]>,
     /// Optional label advertised inside encrypted governance metadata envelopes.
@@ -6250,6 +6254,8 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: super::defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: super::defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: super::defaults::torii::da_manifest_store_dir(),
+            spool_queue_capacity: super::defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
+            spool_batch_max: super::defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key: defaults::torii::da_governance_metadata_key(),
             governance_metadata_key_label: defaults::torii::da_governance_metadata_key_label(),
             taikai_anchor: None,

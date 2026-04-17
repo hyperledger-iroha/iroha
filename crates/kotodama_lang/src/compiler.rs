@@ -7954,6 +7954,37 @@ impl Compiler {
         Ok((bytes, manifest))
     }
 
+    /// Compile an already parsed program and produce a manifest with code_hash and abi_hash.
+    pub fn compile_program_with_manifest(
+        &self,
+        program: &Program,
+    ) -> Result<
+        (
+            Vec<u8>,
+            iroha_data_model::smart_contract::manifest::ContractManifest,
+        ),
+        String,
+    > {
+        let (bytes, manifest, _report) = self.compile_program_with_manifest_and_report(program)?;
+        Ok((bytes, manifest))
+    }
+
+    /// Compile an already parsed program and produce a manifest plus compiler report data.
+    pub fn compile_program_with_manifest_and_report(
+        &self,
+        program: &Program,
+    ) -> Result<
+        (
+            Vec<u8>,
+            iroha_data_model::smart_contract::manifest::ContractManifest,
+            CompileReport,
+        ),
+        String,
+    > {
+        let artifacts = self.compile_program(program)?;
+        self.manifest_from_artifacts(artifacts)
+    }
+
     /// Compile source and produce a manifest plus compiler report data.
     pub fn compile_source_with_manifest_and_report(
         &self,
@@ -7969,6 +8000,20 @@ impl Compiler {
         let program =
             parser::parse(src).map_err(|e| i18n::translate(self.lang, Message::ParserError(&e)))?;
         let artifacts = self.compile_program(&program)?;
+        self.manifest_from_artifacts(artifacts)
+    }
+
+    fn manifest_from_artifacts(
+        &self,
+        artifacts: CompilationArtifacts,
+    ) -> Result<
+        (
+            Vec<u8>,
+            iroha_data_model::smart_contract::manifest::ContractManifest,
+            CompileReport,
+        ),
+        String,
+    > {
         let bytes = artifacts.bytes.clone();
         let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
             .map_err(|e| format!("manifest parse header: {e}"))?;

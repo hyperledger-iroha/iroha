@@ -1,6 +1,6 @@
 //! Helpers for generating default genesis manifests aligned with Kagami defaults.
 
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, sync::LazyLock};
 
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
@@ -20,6 +20,34 @@ use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction}
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use iroha_version::BuildLine;
+
+static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
+    let wonderland_id =
+        DomainId::try_new("wonderland", "universal").expect("sample wonderland domain is valid");
+    let rose = "rose".parse().expect("sample rose asset name is valid");
+    AssetDefinitionId::new(wonderland_id, rose)
+});
+
+static SAMPLE_CABBAGE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
+    let garden_id = DomainId::try_new("garden_of_live_flowers", "universal")
+        .expect("sample garden domain is valid");
+    let cabbage = "cabbage"
+        .parse()
+        .expect("sample cabbage asset name is valid");
+    AssetDefinitionId::new(garden_id, cabbage)
+});
+
+/// Canonical asset definition id for the bundled `rose` sample asset.
+#[must_use]
+pub fn sample_rose_definition_id() -> AssetDefinitionId {
+    SAMPLE_ROSE_DEFINITION_ID.clone()
+}
+
+/// Canonical asset definition id for the bundled `cabbage` sample asset.
+#[must_use]
+pub fn sample_cabbage_definition_id() -> AssetDefinitionId {
+    SAMPLE_CABBAGE_DEFINITION_ID.clone()
+}
 
 /// Build a default genesis manifest with Kagami-equivalent instructions and metadata.
 ///
@@ -43,8 +71,8 @@ pub fn default_manifest(
 
     let wonderland_id = DomainId::try_new("wonderland", "universal")?;
     let garden_id = DomainId::try_new("garden_of_live_flowers", "universal")?;
-    let rose_definition = AssetDefinitionId::new(wonderland_id.clone(), "rose".parse()?);
-    let cabbage_definition = AssetDefinitionId::new(garden_id.clone(), "cabbage".parse()?);
+    let rose_definition = sample_rose_definition_id();
+    let cabbage_definition = sample_cabbage_definition_id();
 
     let mut builder = builder
         .domain_with_metadata(wonderland_id.clone(), meta.clone())
@@ -164,6 +192,32 @@ mod tests {
     use iroha_primitives::json::Json;
 
     use super::*;
+
+    #[test]
+    fn bundled_sample_asset_ids_match_default_manifest_assets() {
+        let chain_id: ChainId = "local-testnet".parse().expect("infallible chain id");
+        let keypair = KeyPair::random();
+        let ivm_dir = tempfile::tempdir().expect("tmp dir for ivm");
+        let manifest = default_manifest(
+            chain_id,
+            keypair.public_key(),
+            ivm_dir.path(),
+            SumeragiConsensusMode::Permissioned,
+            None,
+        )
+        .expect("build default manifest");
+        let json = norito::json::to_value(&manifest).expect("manifest json");
+        let text = norito::json::to_string(&json).expect("manifest text");
+
+        assert!(
+            text.contains(&sample_rose_definition_id().to_string()),
+            "default manifest should include the bundled rose asset id"
+        );
+        assert!(
+            text.contains(&sample_cabbage_definition_id().to_string()),
+            "default manifest should include the bundled cabbage asset id"
+        );
+    }
 
     #[test]
     fn default_manifest_matches_kagami_parameter_baseline() {

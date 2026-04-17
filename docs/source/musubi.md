@@ -48,7 +48,7 @@ version = "0.1.0"
 
 [dependencies.math]
 package = "std.universal/math"
-version = "1.0.0"
+version = "^1.0.0"
 
 [exports]
 functions = ["quote"]
@@ -58,9 +58,11 @@ namespace = "dex.universal"
 contracts = ["router::dex.universal"]
 ```
 
-Dependencies are exact release references in this first slice. The lockfile
-stores canonical package ids only; global short names are not accepted as lock
-keys.
+Dependencies may use exact versions, caret requirements, tilde requirements,
+wildcards such as `1.*`, or comparator lists such as `>=1.0.0,<2.0.0`.
+`Musubi.lock` records the exact active release selected from the on-chain
+registry plus the source archive commitment. Lockfile keys are always canonical
+package ids; short aliases are resolved before they enter the lockfile.
 
 ## CLI
 
@@ -71,10 +73,12 @@ Useful local commands:
 
 ```bash
 cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
-cargo run -p musubi -- add std.universal/math@1.0.0 --alias math
+cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias math
 cargo run -p musubi -- install --config client.toml
+cargo run -p musubi -- cache import math --source-root ../math
 cargo run -p musubi -- pack
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
+cargo run -p musubi -- search swap --config client.toml
 cargo run -p musubi -- versions dex.universal/swap-core --config client.toml
 cargo run -p musubi -- alias resolve swap --config client.toml
 ```
@@ -85,20 +89,31 @@ For source installs from crates.io after publication:
 cargo install musubi
 ```
 
-`install` resolves exact dependencies against the on-chain Musubi registry by
-default and records the canonical package ref, SoraFS manifest digest, source
-archive hash, byte count, and file count in `Musubi.lock`. Use
-`install --offline` to write an unresolved exact-version lockfile without
-querying a node.
+`install` resolves dependency requirements against the on-chain Musubi registry
+by default and records the canonical package ref, selected requirement, SoraFS
+manifest digest, source archive hash, byte count, file count, and exported
+functions in `Musubi.lock`. Use `install --offline` to write an unresolved
+lockfile for exact-version dependencies without querying a node. Use
+`install --locked` in CI to reject stale lockfiles.
+
+`cache import` copies a fetched or checked-out source tree into the local
+Musubi cache and verifies it against the archive commitment in `Musubi.lock`.
+`build` links cached dependency sources by rewriting calls such as
+`math::add()` to deterministic internal Kotodama function names, and rejects
+calls to functions that the dependency did not export.
 
 `pack` computes the deterministic BLAKE3-256 source archive hash plus the source
-byte and file counts. `publish --dry-run` prints the release payload. Without
-`--dry-run`, `publish` submits a signed `PublishMusubiRelease` transaction using
-the Iroha client config. Publish also parses package `.ko` sources and rejects
-exports that are not defined by a Kotodama function in the source tree. `yank`
-works the same way for `YankMusubiRelease`.
-`versions` and `alias resolve` query the same registry. `alias set --dry-run`
-prints a curated short-alias binding, and without `--dry-run` submits
+byte and file counts. With `--car-out` or `--sorafs-manifest-out`, it also
+builds a deterministic SoraFS CAR payload and SoraFS manifest. `publish
+--dry-run` prints the release payload. Without `--dry-run`, `publish` submits a
+SoraFS pin registration first when it generated the manifest locally, then
+submits the signed `PublishMusubiRelease` transaction using the Iroha client
+config. Publish also parses package `.ko` sources and rejects exports that are
+not defined by a Kotodama function in the source tree. `yank` works the same way
+for `YankMusubiRelease`.
+
+`search`, `versions`, and `alias resolve` query the same registry. `alias set
+--dry-run` prints a curated short-alias binding, and without `--dry-run` submits
 `SetMusubiShortAlias`.
 
 ## Name Squatting Policy
@@ -118,9 +133,9 @@ The registry policy is:
 - package namespaces are enforced on-chain: `<dataspace>` namespaces require an
   active SNS dataspace owner, and `<domain>.<dataspace>` namespaces require the
   registered domain owner
-- global short aliases are not first-come package ownership; the current handler
-  only permits the target namespace owner as a temporary fallback until the
-  governance permission token is wired
+- global short aliases are not first-come package ownership; setting one
+  requires the explicit `CanSetMusubiShortAlias` permission and the target
+  package must already have at least one active release
 - lockfiles record canonical package ids, never short aliases
 
 This means a project can use convenient import aliases locally while the shared

@@ -51,12 +51,21 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_asset_definition_by_id(FindAssetDefinitionById),
         visit_find_trigger_by_id(FindTriggerById),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
+        visit_find_domain_endorsements(FindDomainEndorsements),
+        visit_find_domain_endorsement_policy(FindDomainEndorsementPolicy),
+        visit_find_domain_committee(FindDomainCommittee),
         visit_find_da_pin_intent_by_ticket(FindDaPinIntentByTicket),
         visit_find_da_pin_intent_by_manifest(FindDaPinIntentByManifest),
         visit_find_da_pin_intent_by_alias(FindDaPinIntentByAlias),
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
         visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
+        visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
+        visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
+        visit_find_musubi_package_versions(FindMusubiPackageVersions),
+        visit_find_musubi_package_releases(FindMusubiPackageReleases),
+        visit_search_musubi_packages(SearchMusubiPackages),
+        visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
         visit_find_domain_by_id(FindDomainById),
     }
 }
@@ -141,6 +150,15 @@ macro_rules! query_visitors {
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
             ),
+            visit_find_domain_endorsements(
+                &$crate::query::endorsement::prelude::FindDomainEndorsements
+            ),
+            visit_find_domain_endorsement_policy(
+                &$crate::query::endorsement::prelude::FindDomainEndorsementPolicy
+            ),
+            visit_find_domain_committee(
+                &$crate::query::endorsement::prelude::FindDomainCommittee
+            ),
             visit_find_da_pin_intent_by_ticket(
                 &$crate::query::da::prelude::FindDaPinIntentByTicket
             ),
@@ -158,6 +176,24 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_provider_owner(
                 &$crate::query::sorafs::prelude::FindSorafsProviderOwner
+            ),
+            visit_find_dataspace_name_owner_by_id(
+                &$crate::query::sns::prelude::FindDataspaceNameOwnerById
+            ),
+            visit_find_musubi_release_by_ref(
+                &$crate::query::musubi::prelude::FindMusubiReleaseByRef
+            ),
+            visit_find_musubi_package_versions(
+                &$crate::query::musubi::prelude::FindMusubiPackageVersions
+            ),
+            visit_find_musubi_package_releases(
+                &$crate::query::musubi::prelude::FindMusubiPackageReleases
+            ),
+            visit_search_musubi_packages(
+                &$crate::query::musubi::prelude::SearchMusubiPackages
+            ),
+            visit_find_musubi_short_alias_by_name(
+                &$crate::query::musubi::prelude::FindMusubiShortAliasByName
             ),
             visit_find_domain_by_id(&$crate::query::domain::FindDomainById),
 
@@ -244,6 +280,8 @@ mod tests {
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindMusubiReleaseByRef(_) => {}
             SingularQueryBox::FindMusubiPackageVersions(_) => {}
+            SingularQueryBox::FindMusubiPackageReleases(_) => {}
+            SingularQueryBox::SearchMusubiPackages(_) => {}
             SingularQueryBox::FindMusubiShortAliasByName(_) => {}
             SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}

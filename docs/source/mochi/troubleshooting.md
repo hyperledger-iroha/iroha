@@ -27,6 +27,9 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    - `scripts/mochi_local_sandbox.sh status`
    - `<workspace>/.mochi/sandbox/<profile>/serve.log`
    - `<workspace>/.mochi/sandbox/<profile>/session.json`
+   - `<workspace>/.mochi/sandbox/<profile>/serve.pid`
+   A `stale-session` status means `session.json` exists but the recorded Mochi
+   process is gone; inspect `serve.log`, then rerun `up` or `reset`.
 
 ## 2. Collect logs & telemetry evidence
 
@@ -116,6 +119,22 @@ validating local MCP`, confirm:
 The helper script will not mark the sandbox ready until both `ready` and
 `mcp_ready` are `true` in `session.json`.
 
+### Readiness smoke failed after `/status` was ready
+
+The local smoke path signs with the bundled primary development signer and
+updates metadata on the existing `wonderland.universal` domain. It does not
+create a new SNS-gated domain. Submission uses `Content-Type:
+application/x-norito` and waits for commit through block/event streams plus
+HTTP status fallback (`/v1/pipeline/transactions/status?hash=...`, then
+explorer transaction lookup). A closed WebSocket stream should not fail
+readiness by itself if the HTTP status endpoint reports the transaction as
+committed.
+
+If the smoke transaction rejects, treat the rejection text in `serve.log` as
+authoritative. Common causes are stale storage from an older genesis, a
+mismatched generated config, or a non-default profile whose genesis does not
+include the sample domain/assets.
+
 ### Genesis and storage corruption
 
 If Kagami exits before emitting a manifest, peers will crash immediately. Check
@@ -133,6 +152,9 @@ config with the validator-safe defaults Mochi now pins automatically:
 - `confidential.enabled = true` for validator peers.
 - `sumeragi.consensus_mode` must match the genesis block consensus mode Mochi
   asked Kagami to generate.
+- `[torii.mcp]` should be enabled with `profile = "writer"` on local sandboxes.
+- `[torii.transport.norito_rpc]` should have `enabled = true`,
+  `require_mtls = false`, and `stage = "ga"` for the local SDK/RPC path.
 
 When you explicitly enable Nexus, Mochi now rejects permissioned profiles before
 launch and requires `sumeragi.consensus_mode = "npos"`.

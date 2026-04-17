@@ -11,14 +11,13 @@ use std::{
     num::NonZeroU32,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
-    asset::AssetId,
     block::{self, SignedBlock, consensus::SumeragiStatusWire},
     events::{
         EventBox,
@@ -26,12 +25,13 @@ use iroha_data_model::{
         pipeline::PipelineEventBox,
         stream::EventMessage,
     },
-    isi::Mint,
+    isi::SetKeyValue,
     nexus::LaneLifecyclePlan,
-    prelude::ChainId,
+    prelude::{ChainId, DomainId},
     query::{QueryOutput, SignedQuery},
     transaction::{SignedTransaction, TransactionBuilder},
 };
+use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status as TelemetryStatus;
 pub use iroha_telemetry::metrics::{GovernanceStatus, Uptime};
 use iroha_version::{codec::EncodeVersioned, error::Error as VersionError};
@@ -59,6 +59,8 @@ use tokio_tungstenite::{
 use url::Url;
 
 use crate::compose::SigningAuthority;
+
+const NORITO_MIME_TYPE: &str = "application/x-norito";
 
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
@@ -285,9 +287,26 @@ fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
 }
 
 fn error_message_from_body(body: &[u8]) -> Option<String> {
-    decode_norito_with_alignment::<ToriiErrorEnvelope>(body)
-        .ok()
-        .map(|envelope| envelope.summary())
+    if let Ok(envelope) = decode_norito_with_alignment::<ToriiErrorEnvelope>(body) {
+        return Some(envelope.summary());
+    }
+
+    if let Ok(value) = norito::json::from_slice::<json::Value>(body) {
+        if let Some(message) = value
+            .get("message")
+            .or_else(|| value.get("error"))
+            .and_then(json::Value::as_str)
+        {
+            let code = value.get("code").and_then(json::Value::as_str);
+            return Some(match code {
+                Some(code) if !code.is_empty() => format!("{code}: {message}"),
+                _ => message.to_owned(),
+            });
+        }
+    }
+
+    let text = String::from_utf8_lossy(body).trim().to_owned();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
@@ -372,6 +391,13 @@ pub struct SmokeCommitSnapshot {
     pub elapsed: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SmokeTransactionStatus {
+    Committed(u64),
+    Rejected(String),
+    Expired,
+}
+
 /// Options governing a full readiness smoke probe (status poll + commit check).
 #[derive(Debug, Clone)]
 pub struct ReadinessSmokePlan {
@@ -397,7 +423,7 @@ impl ReadinessSmokePlan {
         }
     }
 
-    /// Build a plan that mints a small amount of `62Fk4FPcMuLvW5QjDGNF2a4jAmjM` with the supplied signer.
+    /// Build a plan that updates metadata on the bundled genesis domain.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
     pub fn for_signer_with_attempts(
@@ -441,9 +467,9 @@ impl ReadinessSmokePlan {
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
-    /// Failed to parse the default smoke asset identifier.
-    #[error("invalid readiness smoke asset `{0}`")]
-    InvalidAsset(String),
+    /// Failed to construct the smoke domain identifier.
+    #[error("invalid readiness smoke domain `{0}`")]
+    InvalidDomain(String),
 }
 
 /// Result of a readiness smoke probe.
@@ -555,7 +581,6 @@ impl LocalMcpProbeResult {
     }
 }
 
-const SMOKE_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 
 fn build_readiness_smoke_transaction(
@@ -564,13 +589,19 @@ fn build_readiness_smoke_transaction(
     attempt: usize,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
     let chain_id = ChainId::from(chain_id.to_owned());
-    let definition = SMOKE_ASSET_ID
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis();
+    let domain_id = DomainId::try_new("wonderland", "universal")
+        .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
+    let key = "mochi_smoke"
         .parse()
-        .map_err(|_| ReadinessSmokeBuildError::InvalidAsset(SMOKE_ASSET_ID.to_owned()))?;
-    let asset_id = AssetId::new(definition, signer.account_id().clone());
+        .expect("readiness smoke metadata key is valid");
+    let value = Json::new(format!("{now_ms}:{attempt}"));
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
     let mut builder = TransactionBuilder::new(chain_id, signer.account_id().clone())
-        .with_instructions([Mint::asset_numeric(quantity, asset_id)]);
+        .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
 
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
@@ -1727,6 +1758,85 @@ fn parse_u64_value(value: &json::Value, allow_zero: bool, context: &str) -> Tori
     Ok(parsed)
 }
 
+fn parse_optional_u64_field(
+    record: &json::Map,
+    keys: &[&str],
+    context: &str,
+) -> ToriiResult<Option<u64>> {
+    pick_value(record, keys)
+        .map(|value| parse_u64_value(value, true, context))
+        .transpose()
+}
+
+fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
+    let record = value
+        .as_object()
+        .ok_or_else(|| decode_error("pipeline transaction status", "must be a JSON object"))?;
+    let status = record
+        .get("status")
+        .and_then(json::Value::as_object)
+        .ok_or_else(|| {
+            decode_error(
+                "pipeline transaction status.status",
+                "must be a JSON object",
+            )
+        })?;
+    let kind = parse_required_string(status, &["kind"], "pipeline transaction status.kind")?;
+    let height = parse_optional_u64_field(
+        status,
+        &["block_height", "blockHeight"],
+        "pipeline transaction status.block_height",
+    )?;
+
+    match kind.as_str() {
+        "Committed" | "Applied" => Ok(Some(SmokeTransactionStatus::Committed(
+            height.unwrap_or_default(),
+        ))),
+        "Approved" => Ok(height.map(SmokeTransactionStatus::Committed)),
+        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
+            smoke_rejection_reason(status),
+        ))),
+        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        "Queued" => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
+    let record = value
+        .as_object()
+        .ok_or_else(|| decode_error("explorer transaction record", "must be a JSON object"))?;
+    let status = parse_required_string(record, &["status"], "explorer transaction record.status")?;
+    match status.as_str() {
+        "Committed" | "Applied" | "Approved" => {
+            let height = parse_optional_u64_field(
+                record,
+                &["block", "block_height", "blockHeight"],
+                "explorer transaction record.block",
+            )?
+            .unwrap_or_default();
+            Ok(Some(SmokeTransactionStatus::Committed(height)))
+        }
+        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
+            smoke_rejection_reason(record),
+        ))),
+        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        _ => Ok(None),
+    }
+}
+
+fn smoke_rejection_reason(record: &json::Map) -> String {
+    pick_value(record, &["rejection_reason", "rejectionReason", "reason"])
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| json::to_string(value).unwrap_or_else(|_| format!("{value:?}")))
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "rejected".to_owned())
+}
+
 fn pick_value<'a>(record: &'a json::Map, keys: &[&str]) -> Option<&'a json::Value> {
     keys.iter().find_map(|key| record.get(*key))
 }
@@ -2202,6 +2312,16 @@ impl ToriiClient {
         self.http_endpoint("v1/explorer/nfts")
     }
 
+    /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
+    pub fn explorer_transaction_endpoint(&self, hash: &str) -> ToriiResult<Url> {
+        self.http_endpoint(&format!("v1/explorer/transactions/{hash}"))
+    }
+
+    /// URL of the `/v1/pipeline/transactions/status` endpoint.
+    pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/pipeline/transactions/status")
+    }
+
     /// URL of the `/v1/triggers` endpoint.
     pub fn triggers_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/triggers")
@@ -2323,7 +2443,7 @@ impl ToriiClient {
         let response = self
             .http
             .post(url)
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", NORITO_MIME_TYPE)
             .body(payload.to_vec())
             .send()
             .await?;
@@ -2349,7 +2469,7 @@ impl ToriiClient {
         let response = self
             .http
             .post(url)
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", NORITO_MIME_TYPE)
             .body(payload.to_vec())
             .send()
             .await?;
@@ -2377,7 +2497,7 @@ impl ToriiClient {
         self.submit_transaction(&bytes).await
     }
 
-    /// Submit a signed transaction and wait until it appears in the committed block stream.
+    /// Submit a signed transaction and wait until local Torii reports it as committed.
     ///
     /// This helper is primarily intended for readiness smoke checks in local tooling.
     pub async fn submit_and_wait_for_commit(
@@ -2391,17 +2511,98 @@ impl ToriiClient {
 
         let block_stream = self.block_stream().await?;
         let events_stream = self.events_stream().await?;
-        let block_rx = block_stream.subscribe();
-        let event_rx = events_stream.subscribe();
+        let mut block_rx = block_stream.subscribe();
+        let mut event_rx = events_stream.subscribe();
 
-        let result = submit_and_wait_for_commit_with_receivers(
-            tx_hash,
-            options,
-            self.submit_signed_transaction(transaction),
-            block_rx,
-            event_rx,
-        )
-        .await;
+        self.submit_signed_transaction(transaction).await?;
+
+        let wait = async {
+            let mut status_poll = tokio::time::interval(Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = status_poll.tick() => {
+                        if let Some(status) =
+                            self.fetch_smoke_transaction_status(tx_hash_str.as_str()).await?
+                        {
+                            match status {
+                                SmokeTransactionStatus::Committed(height) => return Ok(height),
+                                SmokeTransactionStatus::Rejected(reason) => {
+                                    return Err(ToriiError::SmokeRejected {
+                                        hash: tx_hash_str.clone(),
+                                        reason,
+                                    });
+                                }
+                                SmokeTransactionStatus::Expired => {
+                                    return Err(ToriiError::SmokeRejected {
+                                        hash: tx_hash_str.clone(),
+                                        reason: "expired".to_owned(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    message = block_rx.recv() => {
+                        match message {
+                            Ok(BlockStreamEvent::Block { block, .. }) => {
+                                if block.transactions_vec().iter().any(|tx| tx.hash() == tx_hash) {
+                                    return Ok(block.header().height().get());
+                                }
+                            }
+                            Ok(BlockStreamEvent::DecodeError { error }) => {
+                                return Err(ToriiError::Decode(error.message));
+                            }
+                            Ok(BlockStreamEvent::Closed) => {}
+                            Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
+                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                        }
+                    }
+                    message = event_rx.recv() => {
+                        match message {
+                            Ok(EventStreamEvent::Event { event, .. }) => {
+                                if let EventBox::Pipeline(PipelineEventBox::Transaction(tx_event)) = event.as_ref()
+                                    && tx_event.hash() == &tx_hash
+                                {
+                                    match tx_event.status() {
+                                        iroha_data_model::events::pipeline::TransactionStatus::Rejected(reason) => {
+                                            return Err(ToriiError::SmokeRejected {
+                                                hash: tx_hash_str.clone(),
+                                                reason: format!("{reason:?}"),
+                                            });
+                                        }
+                                        iroha_data_model::events::pipeline::TransactionStatus::Expired => {
+                                            return Err(ToriiError::SmokeRejected {
+                                                hash: tx_hash_str.clone(),
+                                                reason: "expired".to_owned(),
+                                            });
+                                        }
+                                        iroha_data_model::events::pipeline::TransactionStatus::Approved => {
+                                            if let Some(height) =
+                                                tx_event.block_height().map(std::num::NonZeroU64::get)
+                                            {
+                                                return Ok(height);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Ok(EventStreamEvent::DecodeError { error }) => {
+                                return Err(ToriiError::Decode(error.message));
+                            }
+                            Ok(EventStreamEvent::Closed) => {}
+                            Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
+                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                        }
+                    }
+                }
+            }
+        };
+
+        let result = tokio::time::timeout(options.timeout, wait)
+            .await
+            .map_err(|_| ToriiError::Timeout {
+                context: format!("smoke commit {tx_hash_str}"),
+            })?;
 
         drop(block_stream);
         drop(events_stream);
@@ -2421,6 +2622,69 @@ impl ToriiClient {
         }
     }
 
+    async fn fetch_smoke_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        if let Some(status) = self.fetch_pipeline_transaction_status(tx_hash).await? {
+            return Ok(Some(status));
+        }
+        self.fetch_explorer_transaction_status(tx_hash).await
+    }
+
+    async fn fetch_pipeline_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        let url = self.pipeline_transaction_status_endpoint()?;
+        let response = self
+            .http
+            .get(url)
+            .query(&[("hash", tx_hash)])
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        parse_pipeline_smoke_status(&value)
+    }
+
+    async fn fetch_explorer_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        let url = self.explorer_transaction_endpoint(tx_hash)?;
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        parse_explorer_smoke_status(&value)
+    }
+
     /// Submit a signed query and decode the response into a typed [`QueryOutput`].
     pub async fn execute_query(&self, query: &SignedQuery) -> ToriiResult<QueryOutput> {
         let response = self.submit_query(&query.encode_versioned()).await?;
@@ -2433,7 +2697,7 @@ impl ToriiClient {
         let response = self
             .http
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/norito")
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
 
@@ -2446,7 +2710,8 @@ impl ToriiClient {
         }
 
         let body = response.bytes().await?;
-        decode_norito_with_alignment(body.as_ref())
+        norito::codec::decode_adaptive(body.as_ref())
+            .map_err(|err| ToriiError::Decode(err.to_string()))
     }
 
     /// Fetch a telemetry snapshot together with derived metrics.
@@ -2466,7 +2731,7 @@ impl ToriiClient {
         let response = self
             .http
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/norito")
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
 
@@ -3118,6 +3383,7 @@ impl ToriiClient {
     }
 }
 
+#[cfg(test)]
 async fn submit_and_wait_for_commit_with_receivers<Fut>(
     tx_hash: HashOf<SignedTransaction>,
     options: SmokeCommitOptions,
@@ -4863,7 +5129,7 @@ mod tests {
                             "Service Unavailable"
                         };
                         let header = format!(
-                            "HTTP/1.1 {status} {reason}\r\ncontent-length: {}\r\ncontent-type: application/norito\r\n\r\n",
+                            "HTTP/1.1 {status} {reason}\r\ncontent-length: {}\r\ncontent-type: {NORITO_MIME_TYPE}\r\n\r\n",
                             body.len()
                         );
                         let _ = stream.write_all(header.as_bytes());
@@ -5444,7 +5710,7 @@ mod tests {
             return;
         };
         let status = TelemetryStatus::default();
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
@@ -5834,6 +6100,16 @@ mod tests {
 
     fn data_event_fixture_event() -> EventBox {
         data_event_fixture_message().into()
+    }
+
+    fn encode_status_payload(status: &TelemetryStatus) -> Vec<u8> {
+        norito::codec::encode_adaptive(status)
+    }
+
+    fn encode_sumeragi_status_payload(status: &SumeragiStatusWire) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        norito::core::to_bytes_in(status, &mut encoded).expect("encode framed status");
+        encoded
     }
 
     fn sample_sumeragi_status_wire() -> SumeragiStatusWire {
@@ -6709,20 +6985,20 @@ mod tests {
             queue_size: 7,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         server.mock(|when, then| {
@@ -6804,12 +7080,12 @@ mod tests {
             queue_size: 3,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
@@ -6875,20 +7151,20 @@ mod tests {
             queue_size: 2,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         let metrics_mock = server.mock(|when, then| {
@@ -6948,20 +7224,20 @@ mod tests {
             queue_size: 4,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         let metrics_mock = server.mock(|when, then| {
@@ -7007,20 +7283,20 @@ mod tests {
             queue_size: 5,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         server.mock(|when, then| {
@@ -7064,7 +7340,7 @@ mod tests {
             queue_size: 9,
             ..TelemetryStatus::default()
         };
-        let ok_body = norito::to_bytes(&status).expect("encode status");
+        let ok_body = encode_status_payload(&status);
         let Some((addr, shutdown, handle)) =
             spawn_status_stub(vec![(503, Vec::new()), (200, ok_body.clone())])
         else {
@@ -7387,14 +7663,14 @@ mod tests {
             taikai_ingest: Vec::new(),
             da_receipt_cursors: Vec::new(),
         };
-        let encoded = norito::to_bytes(&status).expect("encode status");
+        let encoded = norito::codec::encode_adaptive(&status);
 
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(encoded.clone());
         });
 
@@ -7469,8 +7745,8 @@ mod tests {
         };
 
         let responses = vec![
-            norito::to_bytes(&initial).expect("encode initial status"),
-            norito::to_bytes(&updated).expect("encode updated status"),
+            norito::codec::encode_adaptive(&initial),
+            norito::codec::encode_adaptive(&updated),
         ];
 
         let server_task = tokio::spawn(async move {
@@ -7489,7 +7765,7 @@ mod tests {
                         }
                     }
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/norito\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {NORITO_MIME_TYPE}\r\nConnection: close\r\n\r\n",
                         payload.len()
                     )
                     .into_bytes();
@@ -7552,7 +7828,7 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200).body(vec![0, 1, 2, 3, 4]);
         });
 
@@ -7572,14 +7848,15 @@ mod tests {
             return;
         };
         let status = sample_sumeragi_status_wire();
-        let encoded = norito::to_bytes(&status).expect("encode status");
+        let mut encoded = Vec::new();
+        norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
 
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/sumeragi/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(encoded.clone());
         });
 
@@ -7631,7 +7908,7 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(502);
         });
 
@@ -8819,6 +9096,106 @@ state_tiered_cold_entries 2
         mock.assert();
         assert_eq!(page.pagination.page, 3);
         assert_eq!(page.items[0].id, "art#gallery");
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_accepts_approved_height() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": {
+                "kind": "Approved",
+                "block_height": 7
+            },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("terminal status");
+        assert_eq!(status, SmokeTransactionStatus::Committed(7));
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_reports_rejection_reason() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": {
+                "kind": "Rejected",
+                "rejection_reason": { "Validation": "TooComplex" }
+            },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("terminal status");
+        match status {
+            SmokeTransactionStatus::Rejected(reason) => {
+                assert!(reason.contains("TooComplex"), "reason was `{reason}`");
+            }
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_smoke_transaction_status_uses_pipeline_status() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let body = norito::json!({
+            "hash": "abcd",
+            "status": { "kind": "Committed", "block_height": 9 },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/pipeline/transactions/status")
+                .query_param("hash", "abcd");
+            then.status(200)
+                .body(norito::json::to_string(&body).expect("serialize"));
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let status = client
+            .fetch_smoke_transaction_status("abcd")
+            .await
+            .expect("status")
+            .expect("terminal status");
+        mock.assert();
+        assert_eq!(status, SmokeTransactionStatus::Committed(9));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let pipeline = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/pipeline/transactions/status")
+                .query_param("hash", "abcd");
+            then.status(404);
+        });
+        let explorer = server.mock(|when, then| {
+            when.method(GET).path("/v1/explorer/transactions/abcd");
+            then.status(200).body(
+                norito::json::to_string(&norito::json!({
+                    "hash": "abcd",
+                    "status": "Committed",
+                    "block": 12
+                }))
+                .expect("serialize"),
+            );
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let status = client
+            .fetch_smoke_transaction_status("abcd")
+            .await
+            .expect("status")
+            .expect("terminal status");
+        pipeline.assert();
+        explorer.assert();
+        assert_eq!(status, SmokeTransactionStatus::Committed(12));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -1138,7 +1138,7 @@ impl MockWorldStateView {
 
     pub fn has_permission(&self, account: &AccountId, token: &PermissionToken) -> bool {
         let subject = Self::account_subject(account);
-        if !self.subject_has_any_domain(&subject) {
+        if !self.account_is_linked(account) {
             return false;
         }
         // Direct permission
@@ -6349,7 +6349,7 @@ mod tests_governance_elections {
             "wonderland",
         );
         let mapped = test_account_id(
-            "ed012021F5A4D9D9476A9C9B4F7A7E377B2F756D3A6B7CD57E9C535C84D0D4D716D404",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "finance",
         );
         let caller_subject = caller.clone();
@@ -6690,9 +6690,9 @@ mod tests_zk_asset_bindings {
             "rose".parse().unwrap(),
         );
         let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
         wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
         assert!(wsv.register_domain(&caller, domain.clone()));
-        wsv.add_account_unchecked(caller.clone());
         wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
         assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
         wsv.grant_permission(&caller, PermissionToken::RegisterZkAsset(asset.clone()));
@@ -6756,7 +6756,7 @@ mod tests_nft_decode {
 
     #[test]
     fn decode_nft_payload_accepts_norito_encoded_bytes() {
-        let nft_id: NftId = "n0$wonderland".parse().unwrap();
+        let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
         let payload = norito::to_bytes(&nft_id).expect("encode nft id");
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -6844,7 +6844,7 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn add_signatory_syscall_rejects_non_literal_account_payloads() {
+    fn add_signatory_syscall_accepts_account_id_payloads() {
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
@@ -6870,8 +6870,37 @@ mod tests_null_decode {
 
         vm.set_register(10, account_ptr);
         vm.set_register(11, signatory_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY).expect("account payload accepted");
+    }
+
+    #[test]
+    fn add_signatory_syscall_rejects_malformed_account_payloads() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, b"not-an-account-id"))
+            .expect("alloc account tlv");
+        let signatory = Json::from_str_norito(
+            "\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"",
+        )
+        .expect("json signatory");
+        let signatory_bytes = norito::to_bytes(&signatory).expect("encode signatory json");
+        let signatory_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &signatory_bytes))
+            .expect("alloc signatory tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, signatory_ptr);
         let err = call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY)
-            .expect_err("opaque account payload should be rejected");
+            .expect_err("malformed account payload should be rejected");
         assert!(matches!(err, VMError::DecodeError));
     }
 
@@ -7045,9 +7074,9 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let bad = b"not-norito-encoded-name";
+        let bad = [0xff, 0xfe, 0xfd];
         let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, bad))
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &bad))
             .expect("alloc tlv");
         vm.set_register(10, ptr);
 

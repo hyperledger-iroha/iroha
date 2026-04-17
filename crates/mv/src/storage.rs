@@ -222,6 +222,8 @@ mod block {
             'store: 'block,
         {
             Transaction {
+                applied: false,
+                dirty_before: self.dirty,
                 block: self,
                 revert: BTreeMap::new(),
             }
@@ -270,7 +272,9 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             let prev_value = self.blocks.remove(&key);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
-            self.dirty = true;
+            if prev_value.is_some() {
+                self.dirty = true;
+            }
             prev_value
         }
     }
@@ -307,6 +311,8 @@ mod block {
 
     /// Part of block's aggregated changes which applied or aborted at the same time
     pub struct Transaction<'block, 'store, K: Key, V: Value> {
+        pub(crate) applied: bool,
+        pub(crate) dirty_before: bool,
         pub(crate) revert: BTreeMap<K, Option<V>>,
         pub(crate) block: &'block mut Block<'store, K, V>,
     }
@@ -322,6 +328,7 @@ mod block {
             for (key, value) in core::mem::take(&mut self.revert) {
                 self.block.revert.entry(key).or_insert(value);
             }
+            self.applied = true;
         }
 
         /// Get mutable access to the value stored in
@@ -346,7 +353,9 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             let prev_value = self.block.blocks.remove(&key);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
-            self.block.dirty = true;
+            if prev_value.is_some() {
+                self.block.dirty = true;
+            }
             prev_value
         }
     }
@@ -379,6 +388,9 @@ mod block {
 
     impl<'block, 'store: 'block, K: Key, V: Value> Drop for Transaction<'block, 'store, K, V> {
         fn drop(&mut self) {
+            if self.applied {
+                return;
+            }
             // revert changes made so far by current transaction
             // if transaction was applied set would be empty
             for (key, value) in core::mem::take(&mut self.revert) {
@@ -387,6 +399,7 @@ mod block {
                     Some(value) => self.block.blocks.insert(key, value),
                 };
             }
+            self.block.dirty = self.dirty_before;
         }
     }
 }
@@ -735,6 +748,73 @@ mod tests {
                 let mut transaction = block.transaction();
                 transaction.insert(0, 1);
             }
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), None);
+    }
+
+    #[test]
+    fn aborted_transaction_preserves_existing_dirty_state() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            block.insert(0, 1);
+            {
+                let mut transaction = block.transaction();
+                transaction.insert(1, 2);
+            }
+            assert!(block.dirty);
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), Some(&1));
+        assert_eq!(view.get(&1), None);
+    }
+
+    #[test]
+    fn remove_missing_key_is_noop_commit() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            block.insert(0, 1);
+            block.commit();
+        }
+
+        {
+            let mut block = storage.block();
+            assert_eq!(block.remove(1), None);
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        {
+            let block = storage.block_and_revert();
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), Some(&1));
+        assert_eq!(view.get(&1), None);
+    }
+
+    #[test]
+    fn transaction_remove_missing_key_keeps_block_clean() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            {
+                let mut transaction = block.transaction();
+                assert_eq!(transaction.remove(0), None);
+                transaction.apply();
+            }
+            assert!(!block.dirty);
             block.commit();
         }
 

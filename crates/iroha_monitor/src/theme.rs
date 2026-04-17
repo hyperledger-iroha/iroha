@@ -117,7 +117,7 @@ async fn render_ascii_intro() -> Result<()> {
 fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     #[cfg(test)]
     if crate::theme::test_support::should_force_failure() {
-        return Err(eyre!("forced builtin audio failure (test)"));
+        return Err(eyre::eyre!("forced builtin audio failure (test)"));
     }
 
     let path = render_builtin_theme_wav()?;
@@ -215,7 +215,7 @@ fn spawn_default_audio_player(path: &Path) -> Result<Child> {
             Err(err) => last_error = Some(err),
         }
     }
-    Err(eyre!(
+    Err(eyre::eyre!(
         "no default audio player found ({})",
         last_error
             .map(|err| err.to_string())

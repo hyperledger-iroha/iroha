@@ -18,6 +18,20 @@
       "purpose": "Iroha 2 Explorer frontend for the Taira testnet"
     },
     {
+      "name": "mon.taira.sora.org",
+      "type": "CNAME",
+      "target": "taira-explorer-edge.sora.org.",
+      "ttl": 300,
+      "purpose": "Owned public browser gateway apex for Taira Soracloud aliases"
+    },
+    {
+      "name": "*.mon.taira.sora.org",
+      "type": "CNAME",
+      "target": "taira-explorer-edge.sora.org.",
+      "ttl": 300,
+      "purpose": "Wildcard DNS for Taira Soracloud pretty hosts such as solswap-indexer.sora.mon.taira.sora.org; do not add per-alias DNS records under this zone"
+    },
+    {
       "name": "taira-validator-1.sora.org",
       "type": "CNAME",
       "target": "taira-explorer-edge.sora.org.",

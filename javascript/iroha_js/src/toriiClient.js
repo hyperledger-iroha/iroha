@@ -8994,11 +8994,20 @@ export class ToriiClient {
     if (this._isAbortError(error)) {
       return timedOut;
     }
+    const errorCode =
+      error && typeof error.code === "string"
+        ? error.code.trim().toUpperCase()
+        : "";
+    const errorMessage =
+      error && typeof error.message === "string"
+        ? error.message.toUpperCase()
+        : "";
     if (
       error &&
       (error.name === "TypeError" ||
-        error.code === "ECONNRESET" ||
-        error.code === "EPIPE")
+        errorCode === "ECONNRESET" ||
+        errorCode === "EPIPE" ||
+        /\b(?:ECONNRESET|EPIPE)\b/u.test(errorMessage))
     ) {
       return true;
     }

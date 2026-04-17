@@ -228,18 +228,40 @@ cmd_up() {
 
   local -a cmd=(cargo run -p mochi-ui -- sandbox serve --build-binaries --workspace-root "$workspace_root" --profile "$profile_arg")
 
-  (
-    cd "$REPO_ROOT"
-    export CARGO_TARGET_DIR="$cargo_target_dir"
-    exec "${cmd[@]}"
-  ) >"$log_file" 2>&1 &
-  pid=$!
+  pid="$(python3 - "$REPO_ROOT" "$cargo_target_dir" "$log_file" "${cmd[@]}" <<'PY'
+import os
+import subprocess
+import sys
+
+repo_root, cargo_target_dir, log_file, *cmd = sys.argv[1:]
+env = os.environ.copy()
+env["CARGO_TARGET_DIR"] = cargo_target_dir
+env["MOCHI_DETACHED"] = "1"
+with open(log_file, "ab", buffering=0) as log:
+    process = subprocess.Popen(
+        cmd,
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+print(process.pid)
+PY
+)"
   printf '%s\n' "$pid" >"$pid_file"
 
   local timeout="${MOCHI_START_TIMEOUT_SECONDS:-1200}"
   local started_at=$SECONDS
   while true; do
     if session_ready "$session_file"; then
+      local session_pid
+      if session_pid="$(json_field "$session_file" pid 2>/dev/null)" && pid_running "$session_pid"; then
+        pid="$session_pid"
+        printf '%s\n' "$pid" >"$pid_file"
+      fi
       printf 'MOCHI sandbox ready.\n'
       print_status
       return 0

@@ -122,6 +122,8 @@ mod block {
             'storage: 'block,
         {
             Transaction {
+                applied: false,
+                dirty_before: self.dirty,
                 block: self,
                 revert: None,
             }
@@ -171,6 +173,8 @@ mod block {
 
     /// Part of block's aggregated changes which applied or aborted at the same time
     pub struct Transaction<'block, 'storage, V: Value> {
+        pub(crate) applied: bool,
+        pub(crate) dirty_before: bool,
         pub(crate) revert: Option<V>,
         pub(crate) block: &'block mut Block<'storage, V>,
     }
@@ -181,6 +185,7 @@ mod block {
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
                 self.block.revert.get_or_insert(prev_value);
             }
+            self.applied = true;
         }
 
         /// Get mutable access to the value stored in cell
@@ -199,11 +204,15 @@ mod block {
 
     impl<'block, 'store: 'block, V: Value> Drop for Transaction<'block, 'store, V> {
         fn drop(&mut self) {
-            // revert changes made so fur by current transaction
+            if self.applied {
+                return;
+            }
+            // revert changes made so far by current transaction
             // if transaction was applied set would be empty
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
                 *self.block.blocks.get_mut() = prev_value;
             }
+            self.block.dirty = self.dirty_before;
         }
     }
 
@@ -361,10 +370,30 @@ mod tests {
                 let mut transaction = block.transaction();
                 *transaction.get_mut() = 1;
             }
+            assert!(!block.dirty);
             block.commit();
         }
 
         let view = cell.view();
         assert_eq!(view.get(), &0);
+    }
+
+    #[test]
+    fn aborted_transaction_preserves_existing_dirty_state() {
+        let cell = Cell::new(0_u64);
+
+        {
+            let mut block = cell.block();
+            *block.get_mut() = 1;
+            {
+                let mut transaction = block.transaction();
+                *transaction.get_mut() = 2;
+            }
+            assert!(block.dirty);
+            block.commit();
+        }
+
+        let view = cell.view();
+        assert_eq!(view.get(), &1);
     }
 }

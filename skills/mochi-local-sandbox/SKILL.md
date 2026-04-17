@@ -16,6 +16,7 @@ Use Mochi as the local Iroha devnet launcher and MCP bridge.
 2. Confirm the sandbox is healthy:
    - `scripts/mochi_local_sandbox.sh status`
    - Healthy means `status: ready`, `ready: true`, and `mcp_ready: true`.
+   - `stale-session` means `session.json` exists but the detached Mochi process is gone; inspect `serve.log` and rerun `up` or `reset`.
 3. If Codex needs the local MCP endpoint, print the exact add command:
    - `scripts/mochi_local_sandbox.sh mcp-add-command`
 4. Use the workspace bootstrap artifacts:
@@ -30,11 +31,14 @@ Use Mochi as the local Iroha devnet launcher and MCP bridge.
 2. Treat `.env.local`, `session.json`, and any generated `IROHA_PRIVATE_KEY` value as runtime-only local-dev material. Do not commit them or copy them into permanent docs.
 3. Use `scripts/mochi_local_sandbox.sh env` when you need copy/paste shell exports for a local app.
 4. Use `scripts/mochi_local_sandbox.sh reset` when the local chain must be wiped and regenerated.
-5. If `up` fails, inspect:
+5. Expect generated local configs to enable `[torii.mcp]` with the curated writer profile and `[torii.transport.norito_rpc]` with `enabled = true`, `require_mtls = false`, and `stage = "ga"`.
+6. If `up` fails, inspect:
    - `scripts/mochi_local_sandbox.sh status`
    - `<workspace>/.mochi/sandbox/<profile>/serve.log`
    - `<workspace>/.mochi/sandbox/<profile>/session.json` when it exists
-6. If the user wants a custom non-preset profile, prefer the GUI or direct `mochi sandbox serve` flow instead of stretching the helper script beyond `single-peer` and `four-peer-bft`.
+   - `<workspace>/.mochi/sandbox/<profile>/serve.pid` when `status` reports `stale-session`
+7. If readiness smoke fails, treat `serve.log` as authoritative. The smoke path updates metadata on the existing `wonderland.universal` domain and confirms commit through block/event streams plus HTTP transaction-status fallback.
+8. If the user wants a custom non-preset profile, prefer the GUI or direct `mochi sandbox serve` flow instead of stretching the helper script beyond `single-peer` and `four-peer-bft`.
 
 ## Response Pattern
 

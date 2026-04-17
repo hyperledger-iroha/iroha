@@ -508,6 +508,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindMusubiPackageVersions(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindMusubiPackageReleases(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::SearchMusubiPackages(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindMusubiShortAliasByName(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

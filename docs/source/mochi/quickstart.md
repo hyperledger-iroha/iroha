@@ -91,12 +91,15 @@ scripts/mochi_local_sandbox.sh env
 scripts/mochi_local_sandbox.sh mcp-add-command
 ```
 
-`up` backgrounds `cargo run -p mochi-ui -- sandbox serve`, waits for `/status` readiness plus local
-MCP validation, writes `<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes
-`.env.local` plus `.mochi/generated/*`. By default the helper uses
-`<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup isolated from
-other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a different cache
-location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
+`up` launches `cargo run -p mochi-ui -- sandbox serve` in a detached process group, waits for
+`/status` readiness, runs a local smoke transaction, validates local MCP, writes
+`<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
+`.mochi/generated/*`. The helper records the actual long-lived Mochi PID in `serve.pid`, so
+`scripts/mochi_local_sandbox.sh status` should remain `ready` after `up` returns and
+`scripts/mochi_local_sandbox.sh down` can stop the sandbox cleanly with SIGTERM. By default the
+helper uses `<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup
+isolated from other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a
+different cache location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
 `MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another workspace. The
 repo-shared Codex guidance for this flow lives at
 `skills/mochi-local-sandbox/`; install or symlink it into
@@ -105,6 +108,8 @@ repo-shared Codex guidance for this flow lives at
 Local validator configs now pin `nexus.enabled = false`, `confidential.enabled = true`, and the
 same `sumeragi.consensus_mode` that Mochi asked Kagami to use for genesis. Enabling Nexus requires
 an NPoS profile; Mochi rejects `nexus.enabled = true` on permissioned presets before peers launch.
+The rendered local Torii config also enables `[torii.mcp]` with the curated writer profile and
+`[torii.transport.norito_rpc]` with `enabled = true`, `require_mtls = false`, and `stage = "ga"`.
 
 After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
 

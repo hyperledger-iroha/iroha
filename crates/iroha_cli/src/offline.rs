@@ -5,19 +5,25 @@ mod petal;
 #[cfg(not(feature = "offline-visual-codecs"))]
 mod petal {
     use super::*;
+    use std::ffi::OsString;
 
     #[derive(clap::Subcommand, Debug)]
     pub enum PetalCommand {
         /// Petal visual codec support is available through the offline-visual-codecs feature.
         #[command(external_subcommand)]
-        Command(Vec<std::ffi::OsString>),
+        Command(Vec<OsString>),
     }
 
     impl Run for PetalCommand {
         fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
-            Err(eyre!(
-                "petal visual codecs are not enabled in this build; rebuild iroha_cli with `--features offline-visual-codecs`"
-            ))
+            match self {
+                Self::Command(args) => {
+                    drop(args);
+                    Err(eyre!(
+                        "petal visual codecs are not enabled in this build; rebuild iroha_cli with `--features offline-visual-codecs`"
+                    ))
+                }
+            }
         }
     }
 }

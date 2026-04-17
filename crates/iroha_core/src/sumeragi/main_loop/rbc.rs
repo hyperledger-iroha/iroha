@@ -1677,9 +1677,9 @@ impl Actor {
         &mut self,
         chunk: &super::OutboundRbcChunk,
         targets: &[super::RbcOutboundTarget],
-    ) {
+    ) -> usize {
         if targets.is_empty() {
-            return;
+            return 0;
         }
         let (block_hash, height, view, epoch, chunk_idx, bytes) = match chunk.message.as_ref() {
             BlockMessage::RbcChunk(inner) => (
@@ -1703,10 +1703,11 @@ impl Actor {
                     kind = ?other,
                     "skipping outbound RBC chunk post: unexpected message variant"
                 );
-                return;
+                return 0;
             }
         };
         let local_peer_id = self.common_config.peer.id().clone();
+        let mut posted = 0usize;
         for target in targets {
             if !target.allows_chunk(chunk_idx) {
                 continue;
@@ -1748,6 +1749,7 @@ impl Actor {
                     peer: peer_id.clone(),
                     msg: BlockMessageWire::new(message_chunk),
                 });
+                posted = posted.saturating_add(1);
                 continue;
             }
             self.schedule_background(BackgroundRequest::Post {
@@ -1757,7 +1759,9 @@ impl Actor {
                     Arc::clone(&chunk.encoded),
                 ),
             });
+            posted = posted.saturating_add(1);
         }
+        posted
     }
 
     pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
@@ -1825,6 +1829,7 @@ impl Actor {
                 roster: &topology_peers,
                 rs16_layout,
                 rs16_fanout,
+                record_target_metrics: true,
             }),
         );
         for peer in &topology_peers {

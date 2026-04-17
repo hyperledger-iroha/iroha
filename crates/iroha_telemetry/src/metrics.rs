@@ -6723,6 +6723,8 @@ pub struct Metrics {
     pub sumeragi_rbc_chunk_requests_total: IntCounter,
     /// Sumeragi RBC: encoded chunk indices requested via targeted repair (cumulative)
     pub sumeragi_rbc_requested_chunks_total: IntCounter,
+    /// Sumeragi RBC: initial chunk target outcomes by encoding and fanout policy.
+    pub sumeragi_rbc_initial_chunk_targets_total: IntCounterVec,
     /// Sumeragi RBC: targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)
     pub sumeragi_rbc_repair_fallback_total: IntCounterVec,
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
@@ -7463,6 +7465,14 @@ pub struct Metrics {
     pub torii_da_receipt_highest_sequence: GenericGaugeVec<AtomicU64>,
     /// DA chunking + erasure coding duration (seconds).
     pub torii_da_chunking_seconds: Histogram,
+    /// DA spool worker batch outcomes.
+    pub torii_da_spool_batches_total: IntCounterVec,
+    /// DA spool worker artifact outcomes.
+    pub torii_da_spool_artifacts_total: IntCounterVec,
+    /// Current DA spool worker queue depth.
+    pub torii_da_spool_queue_depth: GenericGauge<AtomicU64>,
+    /// DA spool worker batch disk-write duration (milliseconds).
+    pub torii_da_spool_batch_write_ms: Histogram,
     /// DA shard cursor events grouped by outcome/lane/shard.
     pub da_shard_cursor_events_total: IntCounterVec,
     /// Latest block height recorded for each shard cursor advance.
@@ -10012,6 +10022,14 @@ impl Default for Metrics {
         let sumeragi_rbc_requested_chunks_total = IntCounter::new(
             "sumeragi_rbc_requested_chunks_total",
             "Sumeragi RBC encoded chunk indices requested via targeted repair",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_initial_chunk_targets_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_initial_chunk_targets_total",
+                "Sumeragi RBC initial chunk target outcomes by encoding and fanout policy",
+            ),
+            &["encoding", "fanout", "outcome"],
         )
         .expect("Infallible");
         let sumeragi_rbc_repair_fallback_total = IntCounterVec::new(
@@ -12661,6 +12679,37 @@ impl Default for Metrics {
             ]),
         )
         .expect("Infallible");
+        let torii_da_spool_batches_total = IntCounterVec::new(
+            Opts::new(
+                "torii_da_spool_batches_total",
+                "DA spool worker batch outcomes",
+            ),
+            &["outcome"],
+        )
+        .expect("Infallible");
+        let torii_da_spool_artifacts_total = IntCounterVec::new(
+            Opts::new(
+                "torii_da_spool_artifacts_total",
+                "DA spool worker artifact outcomes by artifact kind",
+            ),
+            &["kind", "outcome"],
+        )
+        .expect("Infallible");
+        let torii_da_spool_queue_depth = GenericGauge::new(
+            "torii_da_spool_queue_depth",
+            "Current number of DA spool batches waiting for disk persistence",
+        )
+        .expect("Infallible");
+        let torii_da_spool_batch_write_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "torii_da_spool_batch_write_ms",
+                "DA spool worker batch disk-write duration in milliseconds",
+            )
+            .buckets(vec![
+                0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+            ]),
+        )
+        .expect("Infallible");
         let da_shard_cursor_events_total = IntCounterVec::new(
             Opts::new(
                 "da_shard_cursor_events_total",
@@ -12969,6 +13018,10 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_da_receipts_total);
         register_guarded(&registry, &torii_da_receipt_highest_sequence);
         register_guarded(&registry, &torii_da_chunking_seconds);
+        register_guarded(&registry, &torii_da_spool_batches_total);
+        register_guarded(&registry, &torii_da_spool_artifacts_total);
+        register_guarded(&registry, &torii_da_spool_queue_depth);
+        register_guarded(&registry, &torii_da_spool_batch_write_ms);
         register_guarded(&registry, &da_shard_cursor_events_total);
         register_guarded(&registry, &da_shard_cursor_height);
         register_guarded(&registry, &da_shard_cursor_lag_blocks);
@@ -13858,6 +13911,7 @@ impl Default for Metrics {
             sumeragi_rbc_init_requests_total,
             sumeragi_rbc_chunk_requests_total,
             sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_initial_chunk_targets_total,
             sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
@@ -14400,6 +14454,7 @@ impl Default for Metrics {
             sumeragi_rbc_init_requests_total,
             sumeragi_rbc_chunk_requests_total,
             sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_initial_chunk_targets_total,
             sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
@@ -14720,6 +14775,10 @@ impl Default for Metrics {
             torii_da_receipts_total,
             torii_da_receipt_highest_sequence,
             torii_da_chunking_seconds,
+            torii_da_spool_batches_total,
+            torii_da_spool_artifacts_total,
+            torii_da_spool_queue_depth,
+            torii_da_spool_batch_write_ms,
             da_shard_cursor_events_total,
             da_shard_cursor_height,
             da_shard_cursor_lag_blocks,
@@ -15120,6 +15179,35 @@ impl Metrics {
     /// Observe DA chunking + erasure coding duration in seconds.
     pub fn observe_da_chunking_seconds(&self, seconds: f64) {
         self.torii_da_chunking_seconds.observe(seconds);
+    }
+
+    /// Record a Torii DA spool batch write outcome.
+    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
+        self.torii_da_spool_batches_total
+            .with_label_values(&[outcome])
+            .inc();
+        self.torii_da_spool_batch_write_ms
+            .observe(write_ms.max(0.0));
+    }
+
+    /// Record Torii DA spool artifact outcomes.
+    pub fn record_torii_da_spool_artifact(
+        &self,
+        kind: &'static str,
+        outcome: &'static str,
+        count: u64,
+    ) {
+        if count == 0 {
+            return;
+        }
+        self.torii_da_spool_artifacts_total
+            .with_label_values(&[kind, outcome])
+            .inc_by(count);
+    }
+
+    /// Set the current Torii DA spool queue depth.
+    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
+        self.torii_da_spool_queue_depth.set(depth);
     }
 
     /// Update the highest-seen DA receipt sequence for a lane/epoch.
