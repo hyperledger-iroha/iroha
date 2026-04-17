@@ -241,6 +241,12 @@ fn create_implicit_account(
         state_transaction.invalidate_permission_cache_for_account(destination);
     }
 
+    state_transaction
+        .world
+        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+            AccountCreated::new(account, implicit_account_event_domain()),
+        ))));
+
     if let Some(role) = default_role_granted {
         state_transaction
             .world
@@ -251,6 +257,14 @@ fn create_implicit_account(
     }
 
     Ok(())
+}
+
+fn implicit_account_event_domain() -> DomainId {
+    DomainId::try_new(
+        crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+    )
+    .expect("reserved universal dataspace alias should form a domain id")
 }
 
 /// Ensure `destination` account exists, creating it implicitly when allowed by policy.
