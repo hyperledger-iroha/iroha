@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 `koto_compile` smoke fixture restored to current ZK semantics):
+The `10_meta_header.ko` example now uses `poseidon2(1, 2)` instead of
+`assert(true)` for its ZK path, matching the compiler's current behavior where
+`assert` lowers to an abort syscall rather than a ZK opcode. The example README
+was updated in the same slice so the documented smoke fixture still describes
+the actual header-feature exercise.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/10_meta_header.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/README.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test cli_smoke -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 AXT descriptor binding bare-payload stabilization):
 AXT descriptor bindings no longer depend on Norito header/schema bytes. The
 binding preimage is now the domain tag plus the descriptor's bare Norito
