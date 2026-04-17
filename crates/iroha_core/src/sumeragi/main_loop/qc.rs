@@ -1830,6 +1830,7 @@ impl Actor {
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         if self.missing_hash_is_non_actionable_dependency(
             subject_height,
+            view,
             block_hash,
             committed_height,
             now,
@@ -5572,6 +5573,7 @@ impl Actor {
                 Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
             if self.missing_hash_is_non_actionable_dependency(
                 subject_height,
+                qc.view,
                 qc.subject_block_hash,
                 committed_height,
                 now,

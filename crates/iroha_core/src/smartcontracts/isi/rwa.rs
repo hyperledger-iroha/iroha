@@ -28,10 +28,21 @@ pub mod isi {
     use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
 
     fn ensure_positive_quantity(quantity: &Numeric, context: &str) -> Result<(), Error> {
-        if quantity.is_zero() {
+        if quantity.is_zero() || quantity.mantissa().is_negative() {
             return Err(Error::InvariantViolation(
                 format!("{context} quantity must be greater than zero").into(),
             ));
+        }
+        Ok(())
+    }
+
+    fn ensure_quantity_available(
+        available: &Numeric,
+        quantity: &Numeric,
+        message: impl Into<String>,
+    ) -> Result<(), Error> {
+        if quantity > available {
+            return Err(Error::InvariantViolation(message.into().into()));
         }
         Ok(())
     }
@@ -279,20 +290,14 @@ pub mod isi {
                     .into(),
                 )
             })?;
-            let remaining_available =
-                available
-                    .clone()
-                    .checked_sub(quantity.clone())
-                    .ok_or_else(|| {
-                        Error::InvariantViolation(
-                            format!(
-                                "transfer quantity exceeds available quantity for RWA {}",
-                                source_lot.id()
-                            )
-                            .into(),
-                        )
-                    })?;
-            let _ = remaining_available;
+            ensure_quantity_available(
+                &available,
+                &quantity,
+                format!(
+                    "transfer quantity exceeds available quantity for RWA {}",
+                    source_lot.id()
+                ),
+            )?;
 
             if quantity == source_lot.quantity && source_lot.held_quantity.is_zero() {
                 let rwa_mut = state_transaction.world.rwa_mut(&rwa)?;
@@ -429,17 +434,14 @@ pub mod isi {
                         .into(),
                     )
                 })?;
-                let _ = available
-                    .checked_sub(parent.quantity().clone())
-                    .ok_or_else(|| {
-                        Error::InvariantViolation(
-                            format!(
-                                "merge quantity exceeds available quantity for parent RWA {}",
-                                source_lot.id()
-                            )
-                            .into(),
-                        )
-                    })?;
+                ensure_quantity_available(
+                    &available,
+                    parent.quantity(),
+                    format!(
+                        "merge quantity exceeds available quantity for parent RWA {}",
+                        source_lot.id()
+                    ),
+                )?;
 
                 merged_quantity = merged_quantity
                     .checked_add(parent.quantity().clone())
@@ -529,17 +531,14 @@ pub mod isi {
                     format!("RWA {} has invalid held quantity accounting", rwa.id()).into(),
                 )
             })?;
-            let _ = available
-                .checked_sub(self.quantity.clone())
-                .ok_or_else(|| {
-                    Error::InvariantViolation(
-                        format!(
-                            "redeem quantity exceeds available quantity for RWA {}",
-                            rwa.id()
-                        )
-                        .into(),
-                    )
-                })?;
+            ensure_quantity_available(
+                &available,
+                &self.quantity,
+                format!(
+                    "redeem quantity exceeds available quantity for RWA {}",
+                    rwa.id()
+                ),
+            )?;
             let new_quantity = rwa
                 .quantity
                 .clone()
@@ -738,17 +737,14 @@ pub mod isi {
                     .into(),
                 )
             })?;
-            let _ = available
-                .checked_sub(self.quantity.clone())
-                .ok_or_else(|| {
-                    Error::InvariantViolation(
-                        format!(
-                            "force transfer quantity exceeds available quantity for RWA {}",
-                            source_lot.id()
-                        )
-                        .into(),
-                    )
-                })?;
+            ensure_quantity_available(
+                &available,
+                &self.quantity,
+                format!(
+                    "force transfer quantity exceeds available quantity for RWA {}",
+                    source_lot.id()
+                ),
+            )?;
 
             if self.quantity == source_lot.quantity && source_lot.held_quantity.is_zero() {
                 let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
