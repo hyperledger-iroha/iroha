@@ -6181,51 +6181,34 @@ impl Actor {
     }
 
     fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
-        self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == frontier_height
-                && !matches!(
-                    slot.mode,
-                    FrontierSlotMode::PassiveCatchup | FrontierSlotMode::Finalized
-                )
-                && (slot.body_present
-                    || slot.block_created_seen
-                    || slot.frontier_info.is_some()
-                    || slot.quorum_progress.votes_observed
-                    || slot.quorum_progress.commit_qc_observed
-                    || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
-        }) || self
-            .subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .keys()
-            .any(|(height, _)| *height == frontier_height)
+        let frontier_view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .or_else(|| {
+                self.frontier_slot
+                    .as_ref()
+                    .and_then(|slot| (slot.height == frontier_height).then_some(slot.view))
+            })
+            .unwrap_or(0);
+        let strong_exact_slot_evidence = self
+            .slot_has_authoritative_payload(frontier_height, frontier_view)
+            || self
+                .slot_tracker
+                .proposals_seen
+                .contains(&(frontier_height, frontier_view))
             || self
                 .subsystems
                 .propose
                 .proposal_cache
-                .proposals
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .proposals_seen
-                .iter()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_slots
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_frontiers
-                .keys()
-                .any(|(height, _, _)| *height == frontier_height)
+                .get_proposal(frontier_height, frontier_view)
+                .is_some();
+        self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+            || strong_exact_slot_evidence
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.validation_status != ValidationStatus::Invalid
                     && pending.height == frontier_height
+                    && pending.view == frontier_view
             })
             || self
                 .subsystems
@@ -6236,6 +6219,7 @@ impl Actor {
                     !inflight.pending.aborted
                         && inflight.pending.validation_status != ValidationStatus::Invalid
                         && inflight.pending.height == frontier_height
+                        && inflight.pending.view == frontier_view
                 })
     }
 

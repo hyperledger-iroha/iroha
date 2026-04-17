@@ -80897,6 +80897,97 @@ async fn committed_edge_conflict_owner_clears_when_canonical_frontier_evidence_a
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn committed_edge_conflict_owner_hint_only_frontier_metadata_does_not_release_owner() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    let committed_hash = committed_block.hash();
+    actor
+        .kura
+        .store_block(committed_block)
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_hash);
+
+    let committed_height = 1_u64;
+    let frontier_height = committed_height.saturating_add(1);
+    let frontier_view = 0_u64;
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA6; Hash::LENGTH]));
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
+    let stalled_at = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or_else(Instant::now);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        frontier_view,
+        missing_hash,
+        stalled_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor.suppress_committed_edge_conflicting_highest_qc(
+            QcHeaderRef {
+                height: committed_height,
+                view: 0,
+                epoch: actor.epoch_for_height(committed_height),
+                subject_block_hash: conflicting_hash,
+                phase: Phase::Commit,
+            },
+            "test_committed_edge_owner_hint_only_metadata",
+        ),
+        "committed-edge conflicting highest QC should activate the dedicated owner"
+    );
+    assert!(
+        actor.committed_edge_conflict_owner.is_some(),
+        "owner must remain active before canonical frontier evidence is restored"
+    );
+
+    let hinted_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(super::message::ProposalHint {
+            height: frontier_height,
+            view: frontier_view,
+            block_hash: hinted_block_hash,
+            highest_qc: QcHeaderRef {
+                height: committed_height,
+                view: 0,
+                epoch: actor.epoch_for_height(committed_height),
+                subject_block_hash: committed_hash,
+                phase: Phase::Commit,
+            },
+        });
+
+    assert!(
+        actor.committed_edge_conflict_owner.is_some(),
+        "hint-only same-height metadata must not release committed-edge ownership"
+    );
+    assert!(
+        actor.committed_edge_conflict_owner_blocks_height(frontier_height),
+        "hint-only same-height metadata must not stop committed-edge owner activation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_empty() {
     use iroha_data_model::consensus::ConsensusKeyStatus;
 

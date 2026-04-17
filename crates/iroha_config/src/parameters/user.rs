@@ -13337,7 +13337,8 @@ impl Nexus {
                     continue;
                 };
 
-                if alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS && id != DataSpaceId::UNIVERSAL {
+                if alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS && id != DataSpaceId::UNIVERSAL
+                {
                     dataspace_errors = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                         "dataspace[{idx}] alias \"{}\" must map to id {}",

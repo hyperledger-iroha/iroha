@@ -2521,7 +2521,8 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
 
         let tx = sample_transaction(

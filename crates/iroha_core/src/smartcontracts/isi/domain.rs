@@ -7058,7 +7058,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
-        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let label =
+            AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -7088,7 +7089,8 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
-        let label = AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let label =
+            AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let account = Account {
             id: authority.clone(),
             metadata: Metadata::default(),

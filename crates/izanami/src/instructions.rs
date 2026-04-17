@@ -1107,7 +1107,10 @@ impl ChaosState {
     }
 
     fn random_dataspace(&self, rng: &mut StdRng) -> DataSpaceId {
-        *self.dataspaces.choose(rng).unwrap_or(&DataSpaceId::UNIVERSAL)
+        *self
+            .dataspaces
+            .choose(rng)
+            .unwrap_or(&DataSpaceId::UNIVERSAL)
     }
 
     fn random_lane(&self, rng: &mut StdRng) -> LaneId {

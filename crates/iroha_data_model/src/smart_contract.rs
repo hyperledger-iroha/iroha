@@ -638,9 +638,13 @@ mod contract_address_tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("nonce+1 address");
-        let taira =
-            ContractAddress::derive(CHAIN_DISCRIMINANT_TAIRA, &authority, 0, DataSpaceId::UNIVERSAL)
-                .expect("taira address");
+        let taira = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_TAIRA,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("taira address");
 
         assert_ne!(mainnet, next_nonce);
         assert_ne!(mainnet, taira);

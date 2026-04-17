@@ -9525,8 +9525,10 @@ pub(crate) mod valid {
                 );
             }
             for entry_hash in &time_trg_hashes {
-                fastpq_entry_dataspaces
-                    .insert(iroha_crypto::Hash::from(*entry_hash), DataSpaceId::UNIVERSAL);
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
             }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
