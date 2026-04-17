@@ -4664,6 +4664,15 @@ fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
     Ok(resp)
 }
 
+fn sccp_runtime_envelope_response(bytes: Vec<u8>) -> Result<Response> {
+    let mut resp = Response::new(Body::from(bytes));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/octet-stream"),
+    );
+    Ok(resp)
+}
+
 fn sccp_bundle_response_with_json_value<T>(
     bundle: &T,
     json_value: serde_json::Value,
@@ -4810,7 +4819,7 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
 pub struct SccpCodecCapabilityDto {
     /// Numeric SCCP codec identifier.
     pub id: u8,
-    /// Stable logical key relayers can branch on.
+    /// Stable logical key bridge UIs and proof tooling can branch on.
     pub key: String,
     /// Human-readable format summary.
     pub description: String,
@@ -4863,7 +4872,7 @@ pub struct SccpCounterpartyCapabilityDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Public SCCP capability snapshot for relayers and proof workers.
+/// Public SCCP capability snapshot for relay-operator UIs and proof tooling.
 pub struct SccpCapabilitiesDto {
     /// Numeric SCCP domain identifier for the local Nexus chain.
     pub local_domain: u32,
@@ -4877,6 +4886,22 @@ pub struct SccpCapabilitiesDto {
     pub governance_bundle_path: String,
     /// Generic SCCP message bundle fetch path.
     pub message_bundle_path: String,
+    /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
+    #[serde(default)]
+    #[norito(default)]
+    pub runtime_proof_family: Option<String>,
+    /// Runtime verifier backend label accepted by the SORA SCCP pallet.
+    #[serde(default)]
+    #[norito(default)]
+    pub runtime_verifier_backend: Option<String>,
+    /// Optional runtime SCALE governance-envelope fetch path.
+    #[serde(default)]
+    #[norito(default)]
+    pub governance_runtime_bundle_path: Option<String>,
+    /// Optional runtime SCALE message-envelope fetch path.
+    #[serde(default)]
+    #[norito(default)]
+    pub message_runtime_bundle_path: Option<String>,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
     /// Generic SCCP normalized counterparty proof-job fetch path.
@@ -5011,6 +5036,7 @@ fn sccp_codec_capabilities() -> Result<Vec<SccpCodecCapabilityDto>> {
         iroha_sccp::SCCP_CODEC_SOLANA_BASE58,
         iroha_sccp::SCCP_CODEC_TON_RAW,
         iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+        iroha_sccp::SCCP_CODEC_SORA_ASSET_ID,
     ]
     .into_iter()
     .map(|codec| {
@@ -5056,6 +5082,14 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
         governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
+        runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
+        runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
+        governance_runtime_bundle_path: Some(
+            "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
+        ),
+        message_runtime_bundle_path: Some(
+            "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
+        ),
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
         message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
         recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
@@ -5815,7 +5849,10 @@ mod sccp_message_backend_tests {
                 None
             }
         );
-        assert_eq!(snapshot.codecs.len(), 5);
+        assert_eq!(snapshot.codecs.len(), 6);
+        assert!(snapshot.codecs.iter().any(|codec| {
+            codec.id == iroha_sccp::SCCP_CODEC_SORA_ASSET_ID && codec.key == "sora_asset_id"
+        }));
         assert_eq!(
             snapshot
                 .counterparties
@@ -6738,6 +6775,27 @@ pub async fn handle_v1_sccp_governance_bundle(
     sccp_bundle_response(&bundle, accept.as_ref())
 }
 
+/// GET /v1/sccp/proofs/governance/{message_id}/runtime-scale — SCALE-encoded runtime proof envelope for SORA pallet submission.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_governance_runtime_envelope(
+    message_id_hex: String,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = SCCP_GOVERNANCE_BUNDLES
+        .read()
+        .expect("SCCP governance bundle registry poisoned")
+        .get(&message_id)
+        .cloned()
+        .ok_or_else(sccp_not_found)?;
+    let envelope = iroha_sccp::sccp_runtime_envelope_bytes_from_governance_bundle(&bundle)
+        .ok_or_else(|| {
+            sccp_internal_error(
+                "failed to convert SCCP governance bundle into runtime SCALE envelope",
+            )
+        })?;
+    sccp_runtime_envelope_response(envelope)
+}
+
 /// GET /v1/sccp/proofs/message/{message_id} — Nexus SCCP message bundle keyed by canonical message id.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_bundle(
@@ -6756,6 +6814,29 @@ pub async fn handle_v1_sccp_message_bundle(
         })
         .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
+}
+
+/// GET /v1/sccp/proofs/message/{message_id}/runtime-scale — SCALE-encoded runtime proof envelope for SORA pallet submission.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_message_runtime_envelope(
+    state: &CoreState,
+    message_id_hex: String,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
+        .or_else(|| {
+            SCCP_MESSAGE_BUNDLES
+                .read()
+                .expect("SCCP message bundle registry poisoned")
+                .get(&message_id)
+                .cloned()
+        })
+        .ok_or_else(sccp_not_found)?;
+    let envelope = iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&bundle)
+        .ok_or_else(|| {
+            sccp_internal_error("failed to convert SCCP message bundle into runtime SCALE envelope")
+        })?;
+    sccp_runtime_envelope_response(envelope)
 }
 
 /// GET /v1/sccp/artifacts/message/{message_id} — typed SCCP transparent proof artifact keyed by canonical message id.
@@ -6827,7 +6908,7 @@ pub async fn handle_v1_sccp_message_proof_job(
     sccp_bundle_response_with_json_value(&job, job_json, accept.as_ref())
 }
 
-/// GET /v1/sccp/capabilities — relayer-facing SCCP capability discovery for proof backends, codecs, and routes.
+/// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_capabilities(
     accept: Option<axum::http::HeaderValue>,
@@ -6836,7 +6917,7 @@ pub async fn handle_v1_sccp_capabilities(
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
-/// GET /v1/sccp/manifests — relayer-facing SCCP proof manifest discovery for chain-specific verifier profiles.
+/// GET /v1/sccp/manifests — relay-operator SCCP proof manifest discovery for chain-specific verifier profiles.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_manifests(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snapshot = sccp_proof_manifest_snapshot()?;

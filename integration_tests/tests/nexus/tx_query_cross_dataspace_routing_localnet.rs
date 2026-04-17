@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
 
+use super::localnet_npos::npos_override_transactions;
+
 use std::{
     collections::BTreeSet,
     num::NonZeroU32,
@@ -143,7 +145,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                Vec::new(),
+                npos_override_transactions(VALIDATORS_PER_LANE, TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,
@@ -284,20 +286,7 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
                 )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
         })
 }
 
@@ -571,6 +560,35 @@ fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Opt
         .map(ToOwned::to_owned)
 }
 
+fn routed_response_context(
+    status: HttpStatusCode,
+    headers: &reqwest::header::HeaderMap,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> String {
+    let path = if path_segments.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", path_segments.join("/"))
+    };
+    let query = if query_pairs.is_empty() {
+        String::new()
+    } else {
+        let encoded = query_pairs
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        format!("?{encoded}")
+    };
+    format!(
+        "status={status}, path={path}{query}, routed_by={:?}, route_lane_id={:?}, route_dataspace_id={:?}",
+        routed_header_string(headers, "x-iroha-routed-by"),
+        routed_header_string(headers, "x-iroha-route-lane-id"),
+        routed_header_string(headers, "x-iroha-route-dataspace-id"),
+    )
+}
+
 fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
@@ -629,8 +647,9 @@ async fn torii_json_get(
     let headers = response.headers().clone();
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
+    let response_context = routed_response_context(status, &headers, path_segments, query_pairs);
     let json_body = norito::json::from_slice(&body)
-        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
+        .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?;
 
     Ok(RoutedJsonResponse {
         status,
@@ -693,8 +712,9 @@ async fn torii_json_get_as_account(
     let headers = response.headers().clone();
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
+    let response_context = routed_response_context(status, &headers, path_segments, query_pairs);
     let json_body = norito::json::from_slice(&body)
-        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
+        .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?;
 
     Ok(RoutedJsonResponse {
         status,

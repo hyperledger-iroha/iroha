@@ -67,12 +67,12 @@ pub(super) fn compute_roster_indices_from_topology(
 
     if let Some(provider) = provider {
         let mut positions: BTreeMap<PeerId, u32> = BTreeMap::new();
-        for (idx, peer) in topology.iter().enumerate() {
+        for (idx, peer) in provider.peers().iter().enumerate() {
             if let Ok(idx_u32) = u32::try_from(idx) {
                 positions.insert(peer.clone(), idx_u32);
             } else {
                 warn!(
-                    roster_len = topology.len(),
+                    roster_len = provider.peers().len(),
                     idx, "validator roster index exceeds u32::MAX; omitting remaining peers"
                 );
                 return Vec::new();
@@ -81,7 +81,7 @@ pub(super) fn compute_roster_indices_from_topology(
 
         let mut missing = Vec::new();
         let mut indices = Vec::new();
-        for peer in provider.peers() {
+        for peer in topology {
             if let Some(idx) = positions.get(peer) {
                 indices.push(*idx);
             } else {
@@ -578,17 +578,22 @@ pub(super) fn apply_roster_indices_to_manager(
     roster_len: usize,
     roster_indices: Vec<u32>,
 ) {
-    if roster_indices.is_empty() {
-        if let Ok(len_u32) = u32::try_from(roster_len) {
-            manager.set_validator_roster_indices(0..len_u32);
-        } else {
-            warn!(
-                roster_len,
-                "validator roster exceeds u32::MAX; skipping roster snapshot"
-            );
-        }
+    // VRF commit/reveal messages use signer indices relative to the active topology.
+    // Provider-derived roster indices can be sparse or global across worlds, so normalize
+    // back to the contiguous topology-local index space before validating live messages.
+    let effective_len = if roster_indices.is_empty() {
+        roster_len
     } else {
-        manager.set_validator_roster_indices(roster_indices);
+        roster_indices.len()
+    };
+
+    if let Ok(len_u32) = u32::try_from(effective_len) {
+        manager.set_validator_roster_indices(0..len_u32);
+    } else {
+        warn!(
+            roster_len = effective_len,
+            "validator roster exceeds u32::MAX; skipping roster snapshot"
+        );
     }
 }
 
@@ -683,6 +688,75 @@ mod tests {
 
         let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
         assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn roster_indices_ignore_provider_peers_outside_topology() {
+        let peer_a = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_b = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_c = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let foreign_1 = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let foreign_2 = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+        let provider = Arc::new(WsvEpochRosterAdapter::from_peer_iter([
+            foreign_1, peer_a, foreign_2, peer_b, peer_c,
+        ]));
+
+        let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
+        assert_eq!(indices, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn apply_roster_indices_normalizes_sparse_provider_positions() {
+        let chain = ChainId::from("iroha:test:runtime-roster-normalization");
+        let mut manager = EpochManager::new_from_chain(&chain);
+        manager.set_params(10, 3, 6);
+
+        apply_roster_indices_to_manager(&mut manager, 3, vec![1, 3, 4]);
+
+        assert_eq!(manager.test_current_roster_len(), Some(3));
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                1,
+                crate::sumeragi::consensus::VrfCommit {
+                    epoch: 0,
+                    commitment: [7u8; 32],
+                    signer: 0,
+                },
+            ),
+            crate::sumeragi::epoch::VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                1,
+                crate::sumeragi::consensus::VrfCommit {
+                    epoch: 0,
+                    commitment: [9u8; 32],
+                    signer: 4,
+                },
+            ),
+            crate::sumeragi::epoch::VrfNoteResult::RejectedUnknownSigner
+        );
     }
 
     #[test]
