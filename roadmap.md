@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 IVM AES raw-key decryption parity fix):
+IVM's accelerated AES decryption round now matches the scalar raw-key inverse
+round contract instead of relying on the platform AES decryption-round
+instruction directly. The CPU paths first apply `AddRoundKey` and
+`InvMixColumns`, then finish with an inverse final round, which restores
+parity with `aesdec_impl` and keeps `aesdec(aesenc(state, rk), rk)` stable for
+the same round key bytes.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/aes.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib aes::tests_accel:: -- --nocapture`
+  - `cargo test -p ivm --test crypto_vectors aes_rounds_match_scalar_impl -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 Norito schema doctest compact-layout sync):
 The documented `SamplePayload` wire example now matches Norito's current v1
 default compact-length framing instead of the legacy fixed-width layout, and
