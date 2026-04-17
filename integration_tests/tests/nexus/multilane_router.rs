@@ -46,7 +46,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "core".to_owned(),
                 description: Some("Primary execution lane".to_owned()),
                 visibility: LaneVisibility::Public,
@@ -89,7 +89,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
 
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "universal".to_owned(),
             description: Some("Single-lane data space".to_owned()),
             fault_tolerance: 1,
@@ -111,7 +111,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
 
     let policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
@@ -261,7 +261,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
 
     let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
-    assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
     drop(kura);
     Ok(())

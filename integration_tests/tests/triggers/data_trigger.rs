@@ -142,7 +142,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         let account_alias = AccountAlias::new(
             "mintrose".parse()?,
             Some(AccountAliasDomain::new("wonderland".parse()?)),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let account_alias_literal = "mintrose@wonderland.universal";
         spawn_blocking({
@@ -151,7 +151,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             move || -> Result<()> {
                 client.submit_blocking(Grant::account_permission(
                     Permission::from(CanManageAccountAlias {
-                        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
                     }),
                     ALICE_ID.clone(),
                 ))?;
