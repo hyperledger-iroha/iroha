@@ -11060,6 +11060,44 @@ fn resolve_signed_query_routing(
     )
 }
 
+fn resolve_signed_query_routing_for_app(
+    app: &AppState,
+    query: &SignedQuery,
+) -> Result<RoutingDecision, queue::RoutingResolveError> {
+    match signed_query_scope_for_app(app, query) {
+        SignedQueryScope::TargetAccount(account_id) => {
+            resolve_torii_target_account_routes(app, &account_id).map(|mut routes| {
+                debug_assert!(
+                    routes.len() <= 1,
+                    "single-route signed-query proxy requests must not expand into fanout routes"
+                );
+                routes.pop().unwrap_or_else(RoutingDecision::default)
+            })
+        }
+        SignedQueryScope::TargetAlias(alias) => {
+            resolve_torii_target_alias_routes(app, &alias).map(|mut routes| {
+                debug_assert!(
+                    routes.len() <= 1,
+                    "single-route signed-query proxy requests must not expand into fanout routes"
+                );
+                routes.pop().unwrap_or_else(RoutingDecision::default)
+            })
+        }
+        SignedQueryScope::TargetDomain(domain_id) => {
+            resolve_torii_target_domain_routes(app, &domain_id).map(|mut routes| {
+                debug_assert!(
+                    routes.len() <= 1,
+                    "single-route signed-query proxy requests must not expand into fanout routes"
+                );
+                routes.pop().unwrap_or_else(RoutingDecision::default)
+            })
+        }
+        SignedQueryScope::LocalReplicated
+        | SignedQueryScope::AuthorityRouted
+        | SignedQueryScope::CrossDataspaceFanout => resolve_signed_query_routing(app, query),
+    }
+}
+
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
@@ -11098,14 +11136,25 @@ fn torii_target_account_routes(
     app: &AppState,
     account_id: &AccountId,
 ) -> Result<Vec<RoutingDecision>, Response> {
+    resolve_torii_target_account_routes(app, account_id).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve target-account routes for {account_id}: {error}"),
+        )
+    })
+}
+
+fn resolve_torii_target_account_routes(
+    app: &AppState,
+    account_id: &AccountId,
+) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let account_scope = world.account_scope_entry(account_id).map_err(|error| {
-        torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "account_scope_unavailable",
-            format!("failed to resolve account scope for {account_id}: {error}"),
-        )
+    let account_scope = world.account_scope_entry(account_id).map_err(|_error| {
+        queue::RoutingResolveError::UnknownDataspace {
+            dataspace_id: DataSpaceId::GLOBAL,
+        }
     })?;
 
     let dataspaces: BTreeSet<_> = account_scope.map_or_else(
@@ -11126,20 +11175,14 @@ fn torii_target_account_routes(
         },
     );
 
-    torii_routes_for_dataspaces(app, dataspaces).map_err(|error| {
-        torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            format!("failed to resolve target-account routes for {account_id}: {error}"),
-        )
-    })
+    torii_routes_for_dataspaces(app, dataspaces)
 }
 
 fn torii_target_alias_routes(
     app: &AppState,
     alias: &iroha_data_model::account::AccountAlias,
 ) -> Result<Vec<RoutingDecision>, Response> {
-    torii_routes_for_dataspaces(app, [alias.dataspace]).map_err(|error| {
+    resolve_torii_target_alias_routes(app, alias).map_err(|error| {
         torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -11148,10 +11191,30 @@ fn torii_target_alias_routes(
     })
 }
 
+fn resolve_torii_target_alias_routes(
+    app: &AppState,
+    alias: &iroha_data_model::account::AccountAlias,
+) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
+    torii_routes_for_dataspaces(app, [alias.dataspace])
+}
+
 fn torii_target_domain_routes(
     app: &AppState,
     domain_id: &iroha_data_model::domain::DomainId,
 ) -> Result<Vec<RoutingDecision>, Response> {
+    resolve_torii_target_domain_routes(app, domain_id).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve target-domain routes for {domain_id}: {error}"),
+        )
+    })
+}
+
+fn resolve_torii_target_domain_routes(
+    app: &AppState,
+    domain_id: &iroha_data_model::domain::DomainId,
+) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let dataspace_id = app
         .state
         .view()
@@ -11159,24 +11222,11 @@ fn torii_target_domain_routes(
         .dataspace_catalog
         .by_alias(domain_id.dataspace().as_ref())
         .map(|entry| entry.id)
-        .ok_or_else(|| {
-            torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "route_unavailable",
-                format!(
-                    "unknown dataspace alias `{}` for domain {domain_id}",
-                    domain_id.dataspace()
-                ),
-            )
+        .ok_or(queue::RoutingResolveError::UnknownDataspace {
+            dataspace_id: DataSpaceId::GLOBAL,
         })?;
 
-    torii_routes_for_dataspaces(app, [dataspace_id]).map_err(|error| {
-        torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            format!("failed to resolve target-domain routes for {domain_id}: {error}"),
-        )
-    })
+    torii_routes_for_dataspaces(app, [dataspace_id])
 }
 
 fn torii_proxy_error_response(
@@ -11383,10 +11433,10 @@ fn effective_proxy_signed_query_routing_decision(
             resolved_dataspace = resolved_route.dataspace_id.as_u64(),
             ingress_lane = ingress_hint.lane_id.as_u32(),
             ingress_dataspace = ingress_hint.dataspace_id.as_u64(),
-            "Torii proxy signed-query receiver using ingress route hint over locally recomputed authority route"
+            "Torii proxy signed-query receiver recomputed a different route than the ingress hint"
         );
     }
-    ingress_hint
+    resolved_route
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -11742,12 +11792,12 @@ fn torii_account_read_routes(
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_read_routes(
     app: &AppState,
-    target_account: &AccountId,
+    _target_account: &AccountId,
     caller: Option<&AccountId>,
     use_target_account_routes: bool,
 ) -> Result<Vec<RoutingDecision>, Response> {
     if use_target_account_routes {
-        torii_target_account_routes(app, target_account)
+        Ok(torii_all_dataspace_routes(app))
     } else {
         Ok(torii_visible_account_read_routes(app, caller))
     }
@@ -11755,14 +11805,12 @@ fn torii_account_permissions_read_routes(
 
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_route_scope(
-    target_account: &AccountId,
+    _target_account: &AccountId,
     caller: Option<&AccountId>,
     use_target_account_routes: bool,
 ) -> ToriiFanoutRouteScopeV1 {
     if use_target_account_routes {
-        ToriiFanoutRouteScopeV1::TargetAccount {
-            account_id: target_account.to_string(),
-        }
+        ToriiFanoutRouteScopeV1::AllDataspaces
     } else {
         ToriiFanoutRouteScopeV1::VisibleAccount {
             caller_account_id: caller.map(ToString::to_string),
@@ -12319,6 +12367,11 @@ fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope 
         {
             SignedQueryScope::LocalReplicated
         }
+        iroha_data_model::query::QueryRequest::Start(query)
+            if is_account_permissions_iterable_query(query) =>
+        {
+            SignedQueryScope::CrossDataspaceFanout
+        }
         iroha_data_model::query::QueryRequest::Start(query) => target_domain_iterable_query(query)
             .map(SignedQueryScope::TargetDomain)
             .or_else(|| target_account_iterable_query(query).map(SignedQueryScope::TargetAccount))
@@ -12346,6 +12399,11 @@ fn signed_query_scope_for_app(
             if is_trigger_inventory_query(query) =>
         {
             SignedQueryScope::LocalReplicated
+        }
+        iroha_data_model::query::QueryRequest::Start(query)
+            if is_account_permissions_iterable_query(query) =>
+        {
+            SignedQueryScope::CrossDataspaceFanout
         }
         iroha_data_model::query::QueryRequest::Start(query) => {
             target_domain_iterable_query_for_app(app, query)
@@ -16805,7 +16863,7 @@ async fn process_incoming_torii_proxy_request(
                 expected_route,
                 response_format,
             } => match norito::decode_from_bytes::<SignedQuery>(&query_bytes) {
-                Ok(query) => match resolve_signed_query_routing(app.as_ref(), &query) {
+                Ok(query) => match resolve_signed_query_routing_for_app(app.as_ref(), &query) {
                     Ok(routing_decision) => {
                         let routing_decision = effective_proxy_signed_query_routing_decision(
                             routing_decision,
@@ -35037,7 +35095,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn signed_query_scope_classifies_account_permissions_queries_as_target_account() {
+    fn signed_query_scope_classifies_account_permissions_queries_as_cross_dataspace_fanout() {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let authority = AccountId::new(KeyPair::random().public_key().clone());
 
@@ -35048,7 +35106,28 @@ pub(crate) mod tests_runtime_handlers {
                     build_find_permissions_by_account_query_for_test(account_id.clone()),
                 ),
             )),
-            super::SignedQueryScope::TargetAccount(account_id)
+            super::SignedQueryScope::CrossDataspaceFanout
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_query_scope_for_app_classifies_account_permissions_queries_as_cross_dataspace_fanout()
+     {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let app = mk_app_state_for_tests();
+
+        assert_eq!(
+            super::signed_query_scope_for_app(
+                app.as_ref(),
+                &request_for_test(
+                    &authority,
+                    iroha_data_model::query::QueryRequest::Start(
+                        build_find_permissions_by_account_query_for_test(account_id),
+                    ),
+                ),
+            ),
+            super::SignedQueryScope::CrossDataspaceFanout
         );
     }
 
@@ -35161,7 +35240,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn torii_account_permissions_read_routes_use_target_account_scope_for_signed_and_internal_reads()
+    async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for_signed_and_internal_reads()
      {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let governance_dataspace = DataSpaceId::new(1);
@@ -35190,18 +35269,16 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(
             dataspaces,
-            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, restricted_dataspace]),
-            "signed/internal permissions reads should stay within the target account scope",
-        );
-        assert!(
-            !dataspaces.contains(&governance_dataspace),
-            "unrelated public dataspaces must be excluded from target-account permission routing",
+            std::collections::BTreeSet::from([
+                DataSpaceId::GLOBAL,
+                governance_dataspace,
+                restricted_dataspace,
+            ]),
+            "signed/internal permissions reads must fan out across all configured dataspaces to include dataspace-scoped grants",
         );
         assert_eq!(
             super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
-            ToriiFanoutRouteScopeV1::TargetAccount {
-                account_id: authority.to_string(),
-            }
+            ToriiFanoutRouteScopeV1::AllDataspaces
         );
     }
 
@@ -35673,13 +35750,13 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
-    fn effective_proxy_signed_query_routing_decision_prefers_ingress_route_hint() {
+    fn effective_proxy_signed_query_routing_decision_prefers_receiver_recomputed_route() {
         let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
         let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
 
         assert_eq!(
             super::effective_proxy_signed_query_routing_decision(resolved_route, ingress_hint),
-            ingress_hint
+            resolved_route
         );
     }
 
