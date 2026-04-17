@@ -512,7 +512,7 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world, routing_ledger},
+    queue::{evaluate_policy_with_catalog_and_world, routing_ledger},
     state::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
@@ -6288,7 +6288,7 @@ pub(crate) mod valid {
                                     lane_catalog,
                                     dataspace_catalog,
                                     &accepted,
-                                    &state_block.world.view(),
+                                    &state_block.world,
                                 )
                             })
                             .collect()
@@ -6303,7 +6303,7 @@ pub(crate) mod valid {
                                 lane_catalog,
                                 dataspace_catalog,
                                 &accepted,
-                                &state_block.world.view(),
+                                &state_block.world,
                             )
                         })
                         .collect()
@@ -6318,7 +6318,7 @@ pub(crate) mod valid {
                             lane_catalog,
                             dataspace_catalog,
                             &accepted,
-                            &state_block.world.view(),
+                            &state_block.world,
                         )
                     })
                     .collect()
@@ -16188,6 +16188,7 @@ mod tests {
 
         let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
         let flag_key: Name = "fee_trigger_flag".parse().unwrap();
+        let event_key: Name = "fee_trigger_event".parse().unwrap();
         let trigger = Trigger::new(
             trigger_id,
             Action::new(
@@ -16198,16 +16199,22 @@ mod tests {
                 ))],
                 Repeats::Indefinitely,
                 payer_id.clone(),
-                data_pre::DataEventFilter::Any,
+                DataEventFilter::Any,
             ),
         );
-        let created_domain_id = DomainId::try_new("fee-trigger-created", "universal").unwrap();
         let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
             .with_instructions::<InstructionBox>([
+                Grant::account_permission(
+                    iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                        authority: payer_id.clone(),
+                    },
+                    payer_id.clone(),
+                )
+                .into(),
                 Register::trigger(trigger).into(),
-                Register::domain(Domain::new(created_domain_id.clone())).into(),
+                SetKeyValue::account(payer_id.clone(), event_key.clone(), Json::from(true)).into(),
             ])
             .sign(payer_keypair.private_key());
         let tx = AcceptedTransaction::accept(
@@ -16246,7 +16253,7 @@ mod tests {
 
         let assets = state_block.world.assets();
         let payer_balance = assets
-            .get(&AssetId::of(asset_definition_id.clone(), payer_id))
+            .get(&AssetId::of(asset_definition_id.clone(), payer_id.clone()))
             .expect("payer balance exists")
             .0
             .to_string();
@@ -16258,8 +16265,14 @@ mod tests {
 
         assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
         assert_eq!(sink_balance, "1");
+        let event_value = state_block
+            .world
+            .map_account(&payer_id, |account| {
+                account.value().metadata().get(&event_key).cloned()
+            })
+            .expect("payer account exists");
         assert!(
-            state_block.world.domain(&created_domain_id).is_err(),
+            event_value.is_none(),
             "trigger-rejected transaction state changes must still be rolled back"
         );
     }
