@@ -2,6 +2,89 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Dependency budget and no-gate proptest removal
+- The root workspace now has explicit default members for the core node, CLI,
+  IVM/Kotodama, Norito, config, crypto, data-model, P2P, Torii, and logging
+  crates. Plain `cargo test` therefore exercises the main Iroha graph without
+  dragging every SDK, benchmark, experimental, and integration crate into the
+  default build; full coverage remains available with `cargo test --workspace`.
+- `proptest` has been removed from Rust crate manifests, local feature names,
+  converted tests, and stale regression seed files. The former property-test
+  coverage is now deterministic regression coverage in Norito, IVM, crypto,
+  data-model, FastPQ, primitives, and core replay-cache tests, so the test graph
+  no longer depends on the `proptest` package family.
+- `integration_tests` no longer enables the Iroha Core and P2P QUIC feature
+  stack implicitly. This keeps QUIC artifacts out of dependency-budget runs
+  unless a caller explicitly asks for a QUIC-enabled build.
+- `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  now denies `proptest` by default, and
+  `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_compile_unit_budget.py`
+  records compile-unit counts from Cargo JSON output so dependency growth can
+  be checked directly instead of inferred from `Cargo.lock` size.
+- No `Cargo.lock` edits were made in this slice.
+- Focused validation for this slice:
+  - `python3 -m py_compile scripts/check_dependency_budget.py scripts/check_compile_unit_budget.py`
+  - `cargo metadata --format-version 1 --manifest-path Cargo.toml --locked`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+  - `python3 scripts/check_compile_unit_budget.py --target-dir /tmp/iroha-dep-pass-target` (`compile_units=1455`, `artifact_packages=512`, `registry_packages=456`, `path_packages=56`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p iroha_primitives cmpext --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p norito --locked --test proptest_roundtrip --test json_string_prop --test json_parse_string_prop --test json_equivalence_prop --test opt_column_prop --test combo_u32_delta_prop --test ncb_enum_code_delta_prop --test json_map_key_reject --test ncb_enum_patterns_prop`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p norito --locked --lib streaming::codec::tests::merkle_proof_roundtrip_holds`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p iroha_data_model --locked i105 -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p iroha_data_model --locked deterministic_cases -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p fastpq_prover --locked deterministic -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p iroha_core --locked fresh_then_duplicate_for_replayed_sequences -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p ivm --locked --test merkle_super_hash --test prop_skeleton`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p iroha_crypto --features sm --locked --test sm2_fuzz --test sm4_fuzz --test sm3_sm4_vectors`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p norito --tests --locked`
+- Full workspace test and clippy still need a longer clean validation window.
+
+## 2026-04-17 Follow-up: Norito compact default and chain payload decode closure
+- Norito v1 now keeps `VERSION_MINOR = 0x00` while promoting
+  `COMPACT_LEN` (`flags = 0x02`) as the default encode layout. Packed sequence
+  and packed struct remain explicit header-advertised layouts; no decoder
+  guesses compactness from payload shape.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/norito_chain_layout.rs`
+  adds deterministic signed transaction, transaction entrypoint, and signed
+  block regressions that decode canonical, compact-length, packed-struct, and
+  packed-all framed layouts. The same suite now also asserts that default
+  framed chain payloads exactly match the compact-length frame, compact-length
+  payloads are smaller than canonical payloads for the representative chain
+  corpus, packed payloads fail when their header omits packed-layout flags, and
+  truncated frames are rejected for every candidate.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  now carries the active decode flags into `ConstVec` re-encode verification,
+  so packed-sequence payloads are verified against the layout they decoded
+  under. `InstructionBox` vectors keep the existing semantic acceptance for
+  dynamic inner frame re-encodes after offsets and element decoding succeed.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  now preflights and registers decode benches for every candidate layout
+  instead of silently skipping unsupported candidates.
+- Norito docs now state that default payloads advertise `COMPACT_LEN` in the
+  header flag byte, while legacy fixed-width per-value prefixes require an
+  explicit `flags = 0x00` context.
+- A bounded 30-sample Criterion run with `--measurement-time 3 --warm-up-time 1`
+  measured compact framed signed transactions at 1023 bytes versus 1809 bytes
+  for canonical framed transactions, with point estimates of 8.3260 us for
+  compact encode and 30.705 us for compact framed decode. The same run measured
+  compact framed signed blocks at 8374 bytes versus 17051 bytes for canonical
+  framed blocks, with point estimates of 79.146 us for compact encode and
+  295.25 us for compact framed decode. These local timings are useful for
+  direction and regression tracking, not release-grade performance claims.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_primitives reencode_and_verify_respects_packed_seq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test norito_chain_layout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model decode_versioned_signed_block_handles_genesis_like_payload --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- --sample-size 10 --measurement-time 1 --warm-up-time 1` (quick smoke; `gnuplot` unavailable, plotters backend used)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_transaction --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_block --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/tests/norito_chain_layout.rs`
+  - `git diff --check --`
+  - `bash scripts/check_no_scale.sh`
+
 ## 2026-04-17 Follow-up: DA/RBC reduced-fanout closure and Torii DA spool batching
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
   now refreshes RBC session progress after RS16 reconstruction before making
@@ -392,7 +475,7 @@ Last updated: 2026-04-17
   - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p sorafs_orchestrator --locked`
   - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-feature cargo check -p sorafs_orchestrator --features local-quic-proxy --locked`
 
-## 2026-04-16 Follow-up: Torii core latency fast paths
+## 2026-04-17 Follow-up: Torii core latency fast paths and load profiles
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
   now returns a verified `SignedQuery` payload directly after signature
   verification instead of Norito re-encoding and decoding it on the `/query`
@@ -409,31 +492,38 @@ Last updated: 2026-04-17
   replaces the single async-mutex token bucket with fixed sharded
   `parking_lot`-guarded buckets while preserving the public async limiter API
   and configured bucket cap.
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
+  adds an ignored four-peer HTTP smoke that drives signed `FindParameters`
+  queries and transaction submissions across real Torii sockets.
 - Focused tests were added for signed query verification, direct Torii metric
   observation without an actor sync, and concurrent limiter admission.
 - An ignored release-mode Torii hot-path profile now lives beside the focused
   routing tests and samples signed query verification, Norito query handling,
-  transaction admission, and concurrent pre-auth limiter admission without
-  mixing setup work into the measured loops. On this host it measured:
-  `signed_query_verify_direct` p50 1.625 us / p95 1.709 us / p99 1.833 us;
-  `query_find_abi_norito_with_direct_metrics` p50 14.375 us / p95 26.167 us /
-  p99 48.375 us; `transaction_admission_with_direct_metrics` p50 74.458 us /
-  p95 80.167 us / p99 92.459 us; and
-  `preauth_rate_limiter_distinct_keys_concurrent` p50 0.500 us / p95 1.167 us /
-  p99 3.291 us.
+  parameter-query handling, transaction admission, and distinct-key/same-key
+  concurrent pre-auth limiter admission without mixing setup work into the
+  measured loops. On this host it measured:
+  `signed_query_verify_direct` p50 1.500 us / p95 1.625 us / p99 1.792 us;
+  `query_find_abi_norito_with_direct_metrics` p50 27.792 us / p95 47.417 us /
+  p99 66.333 us; `query_find_parameters_norito_with_direct_metrics` p50
+  29.166 us / p95 48.375 us / p99 57.333 us;
+  `transaction_admission_with_direct_metrics` p50 79.750 us / p95 86.042 us /
+  p99 106.958 us; `preauth_rate_limiter_distinct_keys_concurrent` p50
+  0.500 us / p95 1.125 us / p99 3.792 us; and
+  `preauth_rate_limiter_same_key_concurrent` p50 0.250 us / p95 1.458 us /
+  p99 13.875 us.
+- The four-peer HTTP smoke measured `query_find_parameters` at p50 14.075 ms /
+  p95 16.102 ms / p99 16.401 ms and `transaction_submit` at p50 11.067 ms /
+  p95 13.271 ms / p99 13.804 ms in this local environment.
 - Validation for this slice:
-  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/src/limits.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/telemetry.rs`
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs integration_tests/tests/core_api.rs integration_tests/tests/torii_load_profile.rs`
   - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target signed_query_verification_tests -- --nocapture`
   - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
   - `cargo test -p iroha_torii --lib --target-dir /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently -- --nocapture`
   - `cargo test -p iroha_core --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
   - `cargo test -p iroha_torii --features telemetry --release --lib --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile -- --ignored --nocapture`
-    passed and produced the profile sample above. A later same-command rerun
-    after tightening the profile percentile helper is currently blocked before
-    Torii by unrelated dirty-tree Musubi core errors in
-    `crates/iroha_core/src/smartcontracts/isi/musubi.rs` for missing helper
-    functions.
-  - `git diff --check -- crates/iroha_torii/src/routing.rs crates/iroha_torii/src/limits.rs crates/iroha_torii/src/lib.rs crates/iroha_core/src/telemetry.rs status.md roadmap.md`
+  - `cargo test -p integration_tests --test core_api torii_http_hot_path_load_profile --target-dir /tmp/iroha-torii-http-load-target -- --ignored --nocapture`
+  - `cargo check -p iroha_core --lib --target-dir /tmp/iroha-torii-gap-plan-core-check`
+  - `git diff --check -- crates/iroha_torii/src/routing.rs integration_tests/tests/core_api.rs integration_tests/tests/torii_load_profile.rs status.md roadmap.md`
 
 ## 2026-04-17 Follow-up: Musubi composable package flow hardened
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`

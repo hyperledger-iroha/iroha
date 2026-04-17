@@ -29,6 +29,8 @@ mod iroha_cli;
 mod misc;
 #[path = "multisig.rs"]
 mod multisig;
+#[path = "musubi_registry.rs"]
+mod musubi_registry;
 #[path = "nft.rs"]
 mod nft;
 #[path = "non_mintable.rs"]

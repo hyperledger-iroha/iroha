@@ -28,6 +28,7 @@ ivm = { workspace = true }
 norito = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 toml = { workspace = true }
 
 [dev-dependencies]

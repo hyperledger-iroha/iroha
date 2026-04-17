@@ -7,7 +7,7 @@ import argparse
 import json
 import subprocess
 import sys
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 
@@ -117,12 +117,12 @@ def main() -> int:
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
     assert process.stdout is not None
-    assert process.stderr is not None
 
+    cargo_output: deque[str] = deque(maxlen=200)
     for line in process.stdout:
         line = line.strip()
         if not line:
@@ -130,6 +130,7 @@ def main() -> int:
         try:
             message = json.loads(line)
         except json.JSONDecodeError:
+            cargo_output.append(line)
             continue
         if message.get("reason") != "compiler-artifact":
             continue
@@ -150,10 +151,10 @@ def main() -> int:
         package_name = package["name"] if package else package_id
         package_artifacts[package_name] += 1
 
-    stderr = process.stderr.read()
     return_code = process.wait()
     if return_code != 0:
-        sys.stderr.write(stderr)
+        for line in cargo_output:
+            print(line, file=sys.stderr)
         return return_code
 
     source_counts: Counter[str] = Counter()

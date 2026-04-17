@@ -2,6 +2,93 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 dependency budget and no-gate proptest removal):
+The dependency-reduction pass is now implemented without adding feature gates.
+Plain root `cargo test` uses an explicit default-member set for the main Iroha
+node/tooling graph, `proptest` is removed from Rust manifests and converted
+tests, stale proptest regression seeds are gone, and the dependency budget now
+denies `proptest` by default.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_dependency_budget.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/scripts/check_compile_unit_budget.py`
+  - converted deterministic regression tests across Norito, IVM, crypto,
+    data-model, FastPQ, primitives, and core replay cache
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted Rust formatting on touched Rust files
+  - `python3 -m py_compile scripts/check_dependency_budget.py scripts/check_compile_unit_budget.py`
+  - `cargo metadata --format-version 1 --manifest-path Cargo.toml --locked`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+  - `python3 scripts/check_compile_unit_budget.py --target-dir /tmp/iroha-dep-pass-target` reported `compile_units=1455`, `artifact_packages=512`, `registry_packages=456`, `path_packages=56`
+  - focused deterministic replacements passed for `iroha_primitives`,
+    `norito`, `iroha_data_model`, `fastpq_prover`, `iroha_core`, `ivm`, and
+    `iroha_crypto --features sm`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-pass-target cargo test -p norito --tests --locked`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+  - decide and enforce an initial `--max-compile-units` threshold for the new
+    compile-unit budget script after collecting CI-machine baselines
+  - keep `quinn`, `rcgen`, and `serde_json` on the budget watch list for the
+    next high-win removal pass
+
+Latest sync (2026-04-17 Norito compact default and chain decode closure):
+Norito now emits `COMPACT_LEN` (`flags = 0x02`) by default while keeping the
+v1 minor byte at `0x00`. Representative chain payloads now decode from
+canonical, compact-length, packed-struct, and packed-all framed layouts, and
+the `chain_wire` benchmark registers decode benches for each candidate after
+mandatory preflight. The chain-layout regression suite now also pins default
+framing to the compact-length layout, checks the compact size reduction on
+signed transactions, transaction entrypoints, and signed blocks, rejects packed
+payloads whose headers omit packed flags, and rejects truncated frames.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/core.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/streaming.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito_derive/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/norito_chain_layout.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/norito.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted `rustfmt --edition 2024` on touched Rust files
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_primitives reencode_and_verify_respects_packed_seq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test norito_chain_layout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model decode_versioned_signed_block_handles_genesis_like_payload --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
+  - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; the reduced sample is noisy, but it confirms all candidate decode paths run
+  - bounded 30-sample Criterion filters passed for signed transactions and
+    signed blocks with `--measurement-time 3 --warm-up-time 1`
+  - measured compact framed transaction size: 1023 bytes vs 1809 canonical
+    framed bytes; compact encode/decode point estimates: 8.3260 us / 30.705 us
+  - measured compact framed signed-block size: 8374 bytes vs 17051 canonical
+    framed bytes; compact encode/decode point estimates: 79.146 us / 295.25 us
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/tests/norito_chain_layout.rs`
+  - `git diff --check --`
+  - `bash scripts/check_no_scale.sh`
+- open work after this slice:
+  - run full Criterion before/after samples on a quiet machine before using the
+    timing deltas as release-grade performance claims
+  - keep profiling compact encode overhead versus canonical encode and packed
+    framed decode overhead if Norito remains hot in block propagation
+  - run full workspace test and clippy during a longer validation window
+
 Latest sync (2026-04-17 DA/RBC reduced-fanout closure and Torii DA spool batching):
 the remaining DA/RBC performance gaps are now closed in-tree. RS16 reduced
 initial fanout refreshes reconstruction progress before READY deferral checks,
@@ -104,12 +191,12 @@ scratch before/after comparison against old MV always-commit behavior.
   - continue WSV profiling around remaining `state.view()` lock windows and any
     read-only post-commit work still in critical sections
 
-Latest sync (2026-04-17 Norito chain-wire benchmark corpus and layout gaps):
+Latest sync (2026-04-17 Norito chain-wire benchmark corpus, superseded):
 the Norito chain-wire benchmark now uses deterministic key material and reports
 candidate layout sizes for signed transactions, transaction entrypoints, and
-signed blocks. Canonical decode remains the only supported framed decode path
-for the sampled chain payloads; compact-length and packed candidates show large
-size reductions but currently fail framed decode preflight with `LengthMismatch`.
+signed blocks. This earlier decode-preflight gap is now closed by the later
+Norito compact-default sync above, which added chain-layout regressions and
+enabled compact and packed framed decodes for the representative payloads.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
@@ -123,13 +210,8 @@ size reductions but currently fail framed decode preflight with `LengthMismatch`
   - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; noncanonical candidate decode benches were skipped after preflight because they returned `LengthMismatch`
   - `git diff --check` passed for the Norito/data-model/status/roadmap files touched in this slice
 - open work after this slice:
-  - fix compact-length and packed-layout framed decode for representative chain
-    payloads before considering any layout-flag default or wire-size change
-  - run full Criterion before/after samples on a quiet machine once the decode
-    gap is closed
-  - use the deterministic chain corpus to decide whether compact-length alone
-    is worth optimizing further, since it cuts size substantially but currently
-    adds encode cost in the quick smoke
+  - superseded; remaining Norito validation/performance work is tracked in the
+    latest compact-default section above
 
 Latest sync (2026-04-16 Mochi local sandbox startup/runtime smoke completed):
 the Mochi helper now behaves like a localton/Ganache-style sandbox launcher for
@@ -339,13 +421,17 @@ paths. Signed query verification returns the authenticated payload directly,
 accepted transaction lane-admission metrics and snapshot-query metrics record
 through direct telemetry helpers, and the API rate limiter uses sharded
 short-held locks instead of one global async mutex. An ignored release-mode
-load profile now samples the same paths inside the Torii library test harness.
+load profile now samples those paths inside the Torii library test harness, and
+an ignored four-peer HTTP smoke now exercises signed `FindParameters` queries
+and transaction submissions through real Torii sockets.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/limits.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
@@ -368,22 +454,27 @@ load profile now samples the same paths inside the Torii library test harness.
     `cargo test -p iroha_torii --features telemetry --release --lib
     --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile --
     --ignored --nocapture`
-    and produced the sample below. A later same-command rerun after tightening
-    the percentile helper is currently blocked before Torii by unrelated
-    dirty-tree Musubi core errors in
-    `crates/iroha_core/src/smartcontracts/isi/musubi.rs` for missing helper
-    functions.
+  - ignored four-peer HTTP load smoke passed:
+    `cargo test -p integration_tests --test core_api
+    torii_http_hot_path_load_profile --target-dir
+    /tmp/iroha-torii-http-load-target -- --ignored --nocapture`
+  - `cargo check -p iroha_core --lib --target-dir
+    /tmp/iroha-torii-gap-plan-core-check`
   - profile sample on this host: signed-query verify p50/p95/p99
-    1.625/1.709/1.833 us; Norito `FindAbiVersion` query handling with direct
-    metrics 14.375/26.167/48.375 us; transaction admission with direct metrics
-    74.458/80.167/92.459 us; concurrent distinct-key pre-auth limiter
-    0.500/1.167/3.291 us
-  - `git diff --check` passed for the Torii/core/status/roadmap files touched
-    in this slice
+    1.500/1.625/1.792 us; Norito `FindAbiVersion` query handling with direct
+    metrics 27.792/47.417/66.333 us; Norito `FindParameters` query handling
+    with direct metrics 29.166/48.375/57.333 us; transaction admission with
+    direct metrics 79.750/86.042/106.958 us; concurrent distinct-key pre-auth
+    limiter 0.500/1.125/3.792 us; concurrent same-key pre-auth limiter
+    0.250/1.458/13.875 us
+  - HTTP smoke sample on this host: `FindParameters` query p50/p95/p99
+    14.075/16.102/16.401 ms; transaction submit p50/p95/p99
+    11.067/13.271/13.804 ms
+  - `git diff --check` passed for the Torii/integration/status/roadmap files
+    touched in this slice
 - open work after this slice:
-  - move from in-process load profiles to HTTP-level multi-peer load tests for
-    `/transaction` and `/query`, including payload parsing, middleware, auth,
-    and backpressure behavior under real Torii sockets
+  - repeat the HTTP smoke on a quiet host and add higher-volume before/after
+    samples before treating the timing numbers as release-grade capacity data
   - keep `/status` and `/metrics` actor sync behavior intact while moving only
     pure hot-path observations to direct telemetry helpers
 
