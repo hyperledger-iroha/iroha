@@ -127,27 +127,22 @@ same bootstrap source of truth. It now requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
-## DPN private dataspace profile
+## Private profiles
 
-Use `dpn.config.toml` when you need a four-validator private DPN dataspace that
-still shares the public Taira chain identity and bridge surface:
-
-- `lane_count = 4`
-- dedicated `dpn` lane + dataspace
-- `*@dpn` account routing onto the private lane
-- sponsorship enabled for fee-sponsored end-user traffic
-
-Render that profile explicitly instead of mutating the public shared template:
+Application-specific private-dataspace profiles should live outside this repo.
+When you need one, keep the profile in your own deployment repository and pass
+it to the renderer explicitly:
 
 ```bash
 python3 scripts/render_taira_validator_bundle.py \
-  --base-config configs/soranexus/taira/dpn.config.toml \
+  --base-config /absolute/path/to/private-profile.toml \
   --roster configs/soranexus/taira/validator_roster.local.toml \
   --secrets configs/soranexus/taira/validator_secrets.local.toml \
-  --output-dir dist/taira-dpn-validators
+  --output-dir dist/taira-private-validators
 ```
 
-To reset the four-node DPN deployment back to genesis on each validator host:
+For a true genesis reset on a validator host, stop the runtime and wipe the
+mounted state before starting again:
 
 ```bash
 bash configs/soranexus/taira/taira-validator-container.sh \
@@ -160,21 +155,6 @@ bash configs/soranexus/taira/taira-validator-container.sh \
 That sequence removes the mounted validator state under `TAIRA_STORAGE_PATH`
 after stopping the container, which is the required step for a true genesis
 reset.
-
-After the validators are up, bootstrap the DPN sponsor signer, claim XOR from
-the public faucet, deploy the DPN contract into the private dataspace, and emit
-the backend chain env in one step:
-
-```bash
-python3 ../dpn-sora-nexus/scripts/bootstrap_taira_dpn.py \
-  --torii-root https://taira.sora.org \
-  --output-config ../dpn-sora-nexus/artifacts/taira_dpn_sponsor.toml \
-  --backend-env-out ../dpn-api-rust/tmp_run/dpn_taira_chain.env
-```
-
-By default that script uses the funded sponsor account as both the initial
-contract admin and the Inori account. Override `--admin-account-id` and
-`--inori-account-id` when those should diverge.
 
 When you run the shared nginx edge on one host, keep the same roster as the
 source of truth for the edge upstreams too:
