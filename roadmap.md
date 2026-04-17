@@ -19186,3 +19186,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 1. Completed: committed-block RBC cleanup now refreshes retained summaries from the local payload before finalizing them, so restart-recovery snapshots stay readable as fully delivered sessions even after the live RBC runtime has already retired.
 2. Completed: the focused regression suite now includes `committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists`, and the previously failing `integration_tests` case `sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits` is green on the patched tree.
 3. No additional roadmap item was opened from this fix; the change closes a concrete persisted-summary drift in the existing NPoS/RBC recovery path.
+
+## 2026-04-17 Permission Cache Replay Follow-up
+1. Completed: `state::permission_cache_tests::permission_cache_rebuilds_after_restart` now builds replay-valid post-height-2 blocks with embedded previous-roster evidence and no longer depends on libtest's default worker stack.
+2. No additional roadmap item was opened from this fix; the focused `iroha_core` permission-cache replay regression is green.

@@ -24282,3 +24282,10 @@ Last updated: 2026-04-17
   - `cargo test -p iroha_torii sccp_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
   - `cargo test -p iroha_cli --features bridge --bin iroha sccp_capabilities_text_command_prints_summary -- --nocapture`
   - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload --lib -- --nocapture`
+
+## 2026-04-17 Permission Cache Replay Test Stabilization
+- Fixed `state::permission_cache_tests::permission_cache_rebuilds_after_restart` so manually built post-height-2 test blocks now embed parent `PreviousRosterEvidence` before signing, matching the replay validator's current block-format requirements.
+- The integration-heavy test body now runs on an explicit test thread stack, avoiding libtest worker-stack overflow while still exercising the full replay and permission-cache rebuild path.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib state::permission_cache_tests::permission_cache_rebuilds_after_restart -- --nocapture`
