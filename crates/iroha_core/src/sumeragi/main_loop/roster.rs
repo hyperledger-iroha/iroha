@@ -1225,7 +1225,10 @@ mod tests {
             ConsensusMode::Npos,
         );
 
-        assert_eq!(roster, vec![lane4_local_peer, lane4_peer_b_id]);
+        assert_eq!(
+            roster,
+            canonicalize_roster(vec![lane4_local_peer, lane4_peer_b_id])
+        );
     }
 
     #[test]

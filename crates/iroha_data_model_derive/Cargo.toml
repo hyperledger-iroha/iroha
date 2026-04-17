@@ -13,7 +13,7 @@ workspace = true
 [features]
 std = []
 trybuild-tests = ["dep:trybuild"]
-bench = ["dep:criterion"]
+bench = []
 transparent_api = []
 
 [lib]
@@ -26,10 +26,10 @@ darling = { workspace = true }
 proc-macro2 = { workspace = true }
 manyhow = { workspace = true }
 iroha_derive = { workspace = true }
-criterion = { workspace = true, optional = true }
 trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 norito = {workspace = true}
 iroha_schema = { workspace = true }
 derive_more = { workspace = true }
@@ -38,7 +38,6 @@ iroha_data_model = { workspace = true }
 [[bench]]
 name = "expansion"
 harness = false
-required-features = ["bench"]
 
 [[test]]
 name = "ui"
