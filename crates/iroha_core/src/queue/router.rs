@@ -12,6 +12,7 @@ use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, La
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
     asset::AssetDefinitionId,
+    domain::DomainId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
@@ -105,6 +106,16 @@ pub enum RoutingResolveError {
         /// Conflicting dataspace target found in the transaction.
         second_dataspace_id: DataSpaceId,
     },
+    /// transaction mixes dataspace-routed write targets {first_dataspace_id} and {second_dataspace_id}
+    #[error(
+        "transaction mixes dataspace-routed write targets {first_dataspace_id} and {second_dataspace_id}"
+    )]
+    ConflictingTransactionDataspaceTargets {
+        /// First dataspace-routed write target found in the transaction.
+        first_dataspace_id: DataSpaceId,
+        /// Conflicting dataspace-routed write target found in the transaction.
+        second_dataspace_id: DataSpaceId,
+    },
 }
 
 impl RoutingResolveError {
@@ -118,6 +129,9 @@ impl RoutingResolveError {
             Self::NoLaneForDataspace { .. } => "no_lane_for_dataspace",
             Self::ConflictingDataspaceScopedPermissions { .. } => {
                 "conflicting_dataspace_scoped_permissions"
+            }
+            Self::ConflictingTransactionDataspaceTargets { .. } => {
+                "conflicting_transaction_dataspace_targets"
             }
         }
     }
@@ -139,6 +153,7 @@ pub fn evaluate_policy(
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
         return evaluate_query_policy_with_view(policy, account_id, None);
     }
+    let target_dataspace = transaction_dataspace_routing_target(tx, None, None).unwrap_or(None);
     let matched_rule = policy
         .rules
         .iter()
@@ -146,6 +161,7 @@ pub fn evaluate_policy(
     let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
     let dataspace_id = matched_rule
         .and_then(|rule| rule.dataspace)
+        .or(target_dataspace)
         .unwrap_or(policy.default_dataspace);
     RoutingDecision::new(lane_id, dataspace_id)
 }
@@ -168,13 +184,30 @@ fn evaluate_policy_with_view(
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
         return evaluate_query_policy_with_view(policy, account_id, Some(state_view));
     }
+    let target_dataspace = transaction_dataspace_routing_target(
+        tx,
+        Some(&state_view.nexus().dataspace_catalog),
+        Some(state_view),
+    )
+    .unwrap_or(None);
     let matched_rule = policy
         .rules
         .iter()
         .find(|rule| rule_matches(rule, tx, Some(state_view)));
+    if matched_rule.is_none()
+        && let Some(dataspace_id) = target_dataspace
+    {
+        return canonical_dataspace_route(
+            dataspace_id,
+            &state_view.nexus().lane_catalog,
+            &state_view.nexus().dataspace_catalog,
+        )
+        .unwrap_or_else(|_| RoutingDecision::new(policy.default_lane, dataspace_id));
+    }
     let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
     let dataspace_id = matched_rule
         .and_then(|rule| rule.dataspace)
+        .or(target_dataspace)
         .unwrap_or(policy.default_dataspace);
     RoutingDecision::new(lane_id, dataspace_id)
 }
@@ -203,8 +236,18 @@ pub fn evaluate_policy_with_catalog(
             None,
         );
     }
-    let decision = evaluate_policy(policy, tx);
-    resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
+    let target_dataspace = transaction_dataspace_routing_target(tx, Some(dataspace_catalog), None)?;
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, None));
+    resolve_policy_routing_decision(
+        policy,
+        matched_rule,
+        target_dataspace,
+        lane_catalog,
+        dataspace_catalog,
+    )
 }
 
 /// Evaluate the routing policy against catalogs, resolving opaque dataspace-scoped
@@ -224,7 +267,19 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     )? {
         return Ok(decision);
     }
-    evaluate_policy_with_catalog(policy, lane_catalog, dataspace_catalog, tx)
+    let target_dataspace =
+        transaction_dataspace_routing_target_with_world(tx, Some(dataspace_catalog), world)?;
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, None));
+    resolve_policy_routing_decision(
+        policy,
+        matched_rule,
+        target_dataspace,
+        lane_catalog,
+        dataspace_catalog,
+    )
 }
 
 fn dataspace_scoped_permission_routing_decision(
@@ -375,6 +430,112 @@ fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx
     }
 }
 
+fn merge_transaction_target_dataspace(
+    target_dataspace: &mut Option<DataSpaceId>,
+    candidate: Option<DataSpaceId>,
+) -> Result<(), RoutingResolveError> {
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+
+    if let Some(existing) = target_dataspace {
+        if *existing != candidate {
+            return Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: *existing,
+                    second_dataspace_id: candidate,
+                },
+            );
+        }
+    } else {
+        *target_dataspace = Some(candidate);
+    }
+
+    Ok(())
+}
+
+fn transaction_dataspace_routing_target(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    let Some(executable) = transaction_executable(tx) else {
+        return Ok(None);
+    };
+    let mut target_dataspace = None;
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                merge_transaction_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                )?;
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                merge_transaction_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                )?;
+            }
+        }
+    }
+
+    Ok(target_dataspace)
+}
+
+fn transaction_dataspace_routing_target_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    let Some(executable) = transaction_executable(tx) else {
+        return Ok(None);
+    };
+    let mut target_dataspace = None;
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                merge_transaction_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_transaction_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                )?;
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                merge_transaction_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_transaction_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                )?;
+            }
+        }
+    }
+
+    Ok(target_dataspace)
+}
+
 enum AccountPermissionHolderTarget<'account> {
     Holder(&'account AccountId),
     Skip,
@@ -467,6 +628,298 @@ fn instruction_account_permission_holder(
     }
 
     AccountPermissionHolderTarget::Abort
+}
+
+fn instruction_transaction_dataspace_target(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Domain(register) => {
+                domain_dataspace_target(&register.object.id, dataspace_catalog)
+            }
+            RegisterBox::Account(register) => {
+                register.object.label.as_ref().map(|alias| alias.dataspace)
+            }
+            RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target(
+                &register.object.id,
+                dataspace_catalog,
+                state_view,
+            ),
+            RegisterBox::Peer(_)
+            | RegisterBox::Nft(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        return match unregister {
+            UnregisterBox::Domain(unregister) => {
+                domain_dataspace_target(&unregister.object, dataspace_catalog)
+            }
+            UnregisterBox::AssetDefinition(unregister) => {
+                asset_definition_dataspace_target(&unregister.object, dataspace_catalog, state_view)
+            }
+            UnregisterBox::Peer(_)
+            | UnregisterBox::Account(_)
+            | UnregisterBox::Nft(_)
+            | UnregisterBox::Role(_)
+            | UnregisterBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
+        return match set_key_value {
+            SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
+            SetKeyValueBox::Account(set) => {
+                account_dataspace_target(state_view.map(StateView::world), &set.object)
+            }
+            SetKeyValueBox::AssetDefinition(set) => {
+                asset_definition_dataspace_target(&set.object, dataspace_catalog, state_view)
+            }
+            SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
+        return match remove_key_value {
+            RemoveKeyValueBox::Domain(remove) => {
+                domain_dataspace_target(&remove.object, dataspace_catalog)
+            }
+            RemoveKeyValueBox::Account(remove) => {
+                account_dataspace_target(state_view.map(StateView::world), &remove.object)
+            }
+            RemoveKeyValueBox::AssetDefinition(remove) => {
+                asset_definition_dataspace_target(&remove.object, dataspace_catalog, state_view)
+            }
+            RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Domain(transfer) => {
+                domain_dataspace_target(&transfer.object, dataspace_catalog)
+            }
+            TransferBox::AssetDefinition(transfer) => {
+                asset_definition_dataspace_target(&transfer.object, dataspace_catalog, state_view)
+            }
+            // TODO: Route asset transfers from an explicit route-intent extractor once
+            // transparent cross-dataspace transfers have a dedicated multi-scope policy.
+            TransferBox::Asset(_) | TransferBox::Nft(_) => None,
+        };
+    }
+
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(mint) => asset_definition_dataspace_target(
+                &mint.destination.definition,
+                dataspace_catalog,
+                state_view,
+            ),
+            MintBox::TriggerRepetitions(_) => None,
+        };
+    }
+
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        return match burn {
+            BurnBox::Asset(burn) => asset_definition_dataspace_target(
+                &burn.destination.definition,
+                dataspace_catalog,
+                state_view,
+            ),
+            BurnBox::TriggerRepetitions(_) => None,
+        };
+    }
+
+    None
+}
+
+fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Domain(register) => {
+                domain_dataspace_target(&register.object.id, dataspace_catalog)
+            }
+            RegisterBox::Account(register) => {
+                register.object.label.as_ref().map(|alias| alias.dataspace)
+            }
+            RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target_with_world(
+                &register.object.id,
+                dataspace_catalog,
+                world,
+            ),
+            RegisterBox::Peer(_)
+            | RegisterBox::Nft(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        return match unregister {
+            UnregisterBox::Domain(unregister) => {
+                domain_dataspace_target(&unregister.object, dataspace_catalog)
+            }
+            UnregisterBox::AssetDefinition(unregister) => {
+                asset_definition_dataspace_target_with_world(
+                    &unregister.object,
+                    dataspace_catalog,
+                    world,
+                )
+            }
+            UnregisterBox::Peer(_)
+            | UnregisterBox::Account(_)
+            | UnregisterBox::Nft(_)
+            | UnregisterBox::Role(_)
+            | UnregisterBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
+        return match set_key_value {
+            SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
+            SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
+            SetKeyValueBox::AssetDefinition(set) => {
+                asset_definition_dataspace_target_with_world(&set.object, dataspace_catalog, world)
+            }
+            SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
+        return match remove_key_value {
+            RemoveKeyValueBox::Domain(remove) => {
+                domain_dataspace_target(&remove.object, dataspace_catalog)
+            }
+            RemoveKeyValueBox::Account(remove) => {
+                account_dataspace_target(Some(world), &remove.object)
+            }
+            RemoveKeyValueBox::AssetDefinition(remove) => {
+                asset_definition_dataspace_target_with_world(
+                    &remove.object,
+                    dataspace_catalog,
+                    world,
+                )
+            }
+            RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
+        };
+    }
+
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Domain(transfer) => {
+                domain_dataspace_target(&transfer.object, dataspace_catalog)
+            }
+            TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target_with_world(
+                &transfer.object,
+                dataspace_catalog,
+                world,
+            ),
+            // TODO: Route asset transfers from an explicit route-intent extractor once
+            // transparent cross-dataspace transfers have a dedicated multi-scope policy.
+            TransferBox::Asset(_) | TransferBox::Nft(_) => None,
+        };
+    }
+
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(mint) => asset_definition_dataspace_target_with_world(
+                &mint.destination.definition,
+                dataspace_catalog,
+                world,
+            ),
+            MintBox::TriggerRepetitions(_) => None,
+        };
+    }
+
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        return match burn {
+            BurnBox::Asset(burn) => asset_definition_dataspace_target_with_world(
+                &burn.destination.definition,
+                dataspace_catalog,
+                world,
+            ),
+            BurnBox::TriggerRepetitions(_) => None,
+        };
+    }
+
+    None
+}
+
+fn account_dataspace_target<W: WorldReadOnly>(
+    world: Option<&W>,
+    account_id: &AccountId,
+) -> Option<DataSpaceId> {
+    let hierarchy = world?.account_scope_hierarchy(account_id).ok()?;
+    (hierarchy.len() == 1).then(|| *hierarchy.keys().next().expect("single dataspace"))
+}
+
+fn domain_dataspace_target(
+    domain_id: &DomainId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    if domain_id
+        .dataspace()
+        .as_ref()
+        .eq_ignore_ascii_case("universal")
+    {
+        return Some(DataSpaceId::GLOBAL);
+    }
+    dataspace_catalog?
+        .by_alias(domain_id.dataspace().as_ref())
+        .map(|entry| entry.id)
+}
+
+fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
+    let any = instruction.as_any();
+
+    if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        return matches!(
+            unregister,
+            UnregisterBox::AssetDefinition(unregister)
+                if unregister.object.is_opaque_canonical()
+        );
+    }
+
+    if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
+        return matches!(set_key_value, SetKeyValueBox::Account(_))
+            || matches!(
+                set_key_value,
+                SetKeyValueBox::AssetDefinition(set)
+                    if set.object.is_opaque_canonical()
+            );
+    }
+
+    if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
+        return matches!(remove_key_value, RemoveKeyValueBox::Account(_))
+            || matches!(
+                remove_key_value,
+                RemoveKeyValueBox::AssetDefinition(remove)
+                    if remove.object.is_opaque_canonical()
+            );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return matches!(
+            transfer,
+            TransferBox::AssetDefinition(transfer)
+                if transfer.object.is_opaque_canonical()
+        );
+    }
+
+    false
 }
 
 fn instruction_dataspace_scoped_permission_target(
@@ -851,6 +1304,34 @@ fn canonical_dataspace_route(
     )
 }
 
+fn resolve_policy_routing_decision(
+    policy: &LaneRoutingPolicy,
+    matched_rule: Option<&LaneRoutingRule>,
+    target_dataspace: Option<DataSpaceId>,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    if let Some(rule) = matched_rule {
+        let decision = RoutingDecision::new(
+            rule.lane,
+            rule.dataspace
+                .or(target_dataspace)
+                .unwrap_or(policy.default_dataspace),
+        );
+        return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
+    }
+
+    if let Some(dataspace_id) = target_dataspace {
+        return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog);
+    }
+
+    resolve_routing_decision(
+        RoutingDecision::new(policy.default_lane, policy.default_dataspace),
+        lane_catalog,
+        dataspace_catalog,
+    )
+}
+
 fn evaluate_query_policy_with_view(
     policy: &LaneRoutingPolicy,
     authority: &AccountId,
@@ -1142,8 +1623,12 @@ fn transfer_destination_matches_alias_scope(
     };
 
     let destination = match transfer {
-        TransferBox::Domain(transfer) => &transfer.destination,
-        TransferBox::AssetDefinition(transfer) => &transfer.destination,
+        TransferBox::Domain(transfer) => {
+            return domain_scope_matches(scope, &transfer.object);
+        }
+        TransferBox::AssetDefinition(transfer) => {
+            return asset_definition_scope_matches(scope, &transfer.object, state_view);
+        }
         TransferBox::Asset(transfer) => &transfer.destination,
         TransferBox::Nft(transfer) => &transfer.destination,
     };
@@ -1151,6 +1636,30 @@ fn transfer_destination_matches_alias_scope(
         return false;
     };
     account_matches_alias_scope(scope, destination, state_view)
+}
+
+fn domain_scope_matches(scope: &str, domain_id: &DomainId) -> bool {
+    scope.eq_ignore_ascii_case(domain_id.to_string().as_str())
+        || scope.eq_ignore_ascii_case(domain_id.dataspace().as_ref())
+}
+
+fn asset_definition_scope_matches(
+    scope: &str,
+    asset_definition_id: &AssetDefinitionId,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
+    asset_definition_id
+        .try_domain()
+        .cloned()
+        .or_else(|| {
+            state_view.and_then(|view| {
+                view.world
+                    .asset_definition(asset_definition_id)
+                    .ok()
+                    .and_then(|definition| definition.id.try_domain().cloned())
+            })
+        })
+        .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }
 
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
@@ -1410,6 +1919,7 @@ impl LaneRouter for ConfigLaneRouter {
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
+            || transaction_target_routing_requires_state(tx)
         {
             return None;
         }
@@ -1428,9 +1938,26 @@ impl LaneRouter for ConfigLaneRouter {
         )? {
             return Ok(decision);
         }
-        let decision = evaluate_policy(&self.policy, tx);
-        resolve_routing_decision(
-            decision,
+        if let Some(account_id) = account_permission_holder_routing_target(tx) {
+            return resolve_query_routing_decision(
+                &self.policy,
+                self.lane_catalog.as_ref(),
+                self.dataspace_catalog.as_ref(),
+                account_id,
+                None,
+            );
+        }
+        let target_dataspace =
+            transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)?;
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .find(|rule| rule_matches(rule, tx, None));
+        resolve_policy_routing_decision(
+            &self.policy,
+            matched_rule,
+            target_dataspace,
             self.lane_catalog.as_ref(),
             self.dataspace_catalog.as_ref(),
         )
@@ -1450,8 +1977,32 @@ impl LaneRouter for ConfigLaneRouter {
         )? {
             return Ok(decision);
         }
-        let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
-        resolve_routing_decision(decision, &nexus.lane_catalog, &nexus.dataspace_catalog)
+        if let Some(account_id) = account_permission_holder_routing_target(tx) {
+            return resolve_query_routing_decision(
+                &self.policy,
+                &nexus.lane_catalog,
+                &nexus.dataspace_catalog,
+                account_id,
+                Some(state_view),
+            );
+        }
+        let target_dataspace = transaction_dataspace_routing_target(
+            tx,
+            Some(&nexus.dataspace_catalog),
+            Some(state_view),
+        )?;
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .find(|rule| rule_matches(rule, tx, Some(state_view)));
+        resolve_policy_routing_decision(
+            &self.policy,
+            matched_rule,
+            target_dataspace,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )
     }
 
     fn try_route_without_state(
@@ -1460,6 +2011,7 @@ impl LaneRouter for ConfigLaneRouter {
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
+            || transaction_target_routing_requires_state(tx)
         {
             return Ok(None);
         }
@@ -1486,6 +2038,22 @@ fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
     });
 
     account_needs_state || instruction_needs_state
+}
+
+fn transaction_target_routing_requires_state(tx: &AcceptedTransaction<'_>) -> bool {
+    let Some(executable) = transaction_executable(tx) else {
+        return false;
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
+            instruction_transaction_dataspace_target_needs_state(&**instruction)
+        }),
+        Executable::ContractCall(_) | Executable::Ivm(_) => false,
+        Executable::IvmProved(proved) => proved.overlay.iter().any(|instruction| {
+            instruction_transaction_dataspace_target_needs_state(&**instruction)
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -2080,7 +2648,7 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(11));
+        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -2298,6 +2866,151 @@ mod tests {
         );
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn matches_transferred_domain_scope_rule() {
+        let (sender_id, sender_keypair) = gen_account_in("banka");
+        let (receiver_id, _) = gen_account_in("acme");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("transfer::domain@merchant.acme".to_string()),
+                    description: None,
+                },
+            }],
+        };
+
+        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let transfer = Transfer::domain(
+            sender_id.clone(),
+            DomainId::try_new("merchant", "acme").expect("domain id"),
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        let decision = router.route_with_view(&tx, &blank_state().view());
+        assert_eq!(decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn routes_domain_write_to_target_dataspace_without_explicit_rule() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(7);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "acme")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::new(2), dataspace_id),
+            ]),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "acme").expect("domain id"),
+            )))],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("domain route must resolve"),
+            RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn explicit_lane_rule_infers_target_dataspace_for_domain_write() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(7);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::new(3),
+                    dataspace: None,
+                    matcher: LaneRoutingMatcher {
+                        account: Some(authority_id.to_string()),
+                        instruction: Some("register::domain".to_string()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(dataspace_id, "acme")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::new(3), dataspace_id),
+            ]),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "acme").expect("domain id"),
+            )))],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("domain route must resolve"),
+            RoutingDecision::new(LaneId::new(3), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_domain_write_targets_across_dataspaces() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::GLOBAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "acme"), (second_dataspace, "bank")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::GLOBAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: first_dataspace,
+                    second_dataspace_id: second_dataspace,
+                }
+            )
+        );
     }
 
     #[test]
