@@ -252,12 +252,13 @@ entries.
   - only feature-split the SoraNet relay/VPN QUIC tool binaries if operators
     agree that default full-workspace tests can skip those executable targets
 
-Latest sync (2026-04-16 Torii core latency fast paths):
+Latest sync (2026-04-17 Torii core latency fast paths):
 Torii now removes avoidable work from the `/transaction` and `/query` hot
 paths. Signed query verification returns the authenticated payload directly,
 accepted transaction lane-admission metrics and snapshot-query metrics record
 through direct telemetry helpers, and the API rate limiter uses sharded
-short-held locks instead of one global async mutex.
+short-held locks instead of one global async mutex. An ignored release-mode
+load profile now samples the same paths inside the Torii library test harness.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
@@ -282,11 +283,26 @@ short-held locks instead of one global async mutex.
   - isolated-target validation passed:
     `cargo test -p iroha_core --features telemetry --lib --target-dir
     /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
+  - release-mode load profiling passed:
+    `cargo test -p iroha_torii --features telemetry --release --lib
+    --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile --
+    --ignored --nocapture`
+    and produced the sample below. A later same-command rerun after tightening
+    the percentile helper is currently blocked before Torii by unrelated
+    dirty-tree Musubi core errors in
+    `crates/iroha_core/src/smartcontracts/isi/musubi.rs` for missing helper
+    functions.
+  - profile sample on this host: signed-query verify p50/p95/p99
+    1.625/1.709/1.833 us; Norito `FindAbiVersion` query handling with direct
+    metrics 14.375/26.167/48.375 us; transaction admission with direct metrics
+    74.458/80.167/92.459 us; concurrent distinct-key pre-auth limiter
+    0.500/1.167/3.291 us
   - `git diff --check` passed for the Torii/core/status/roadmap files touched
     in this slice
 - open work after this slice:
-  - run p95/p99 load profiles for `/transaction`, `/query`, and rate-limited
-    pre-auth paths to tune shard count and verify the expected latency drop
+  - move from in-process load profiles to HTTP-level multi-peer load tests for
+    `/transaction` and `/query`, including payload parsing, middleware, auth,
+    and backpressure behavior under real Torii sockets
   - keep `/status` and `/metrics` actor sync behavior intact while moving only
     pure hot-path observations to direct telemetry helpers
 
@@ -322,6 +338,11 @@ publish path satisfies the hardened on-chain checks.
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo check -p musubi -p sorafs_car --target-dir /tmp/iroha-musubi-impl-check-target`
+  - `cargo test -p musubi -p sorafs_car chunk_plan_digest_depends_on_ordered_chunk_metadata --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-impl-check-target -- --nocapture`
+  - `cargo test -p iroha_data_model --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+  - `cargo test -p iroha_core --lib --target-dir /tmp/iroha-musubi-impl-check-target musubi -- --nocapture`
+  - `cargo fmt --all --check`
 - open work after this slice:
   - add a SoraFS gateway fetch path so `musubi install` can fill the cache
     directly from active pin providers; today the lockfile records archive

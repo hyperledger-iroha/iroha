@@ -447,6 +447,109 @@ impl MusubiArchiveRef {
     }
 }
 
+/// Chunk commitment in a canonical Musubi source archive plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceChunkPlan {
+    /// Absolute byte offset of the chunk within the canonical concatenated payload.
+    pub offset: u64,
+    /// Chunk length in bytes.
+    pub length: u32,
+    /// BLAKE3-256 digest of the chunk payload.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub digest_blake3_256: [u8; 32],
+}
+
+impl MusubiSourceChunkPlan {
+    /// Construct a chunk plan entry.
+    #[must_use]
+    pub const fn new(offset: u64, length: u32, digest_blake3_256: [u8; 32]) -> Self {
+        Self {
+            offset,
+            length,
+            digest_blake3_256,
+        }
+    }
+}
+
+/// File range in a canonical Musubi source archive plan.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceFilePlan {
+    /// UTF-8 relative path components under the package source root.
+    pub path: Vec<String>,
+    /// First chunk index belonging to this file.
+    pub first_chunk: u32,
+    /// Number of consecutive chunks belonging to this file.
+    pub chunk_count: u32,
+    /// File size in bytes.
+    pub size: u64,
+}
+
+impl MusubiSourceFilePlan {
+    /// Construct a file plan entry.
+    #[must_use]
+    pub const fn new(path: Vec<String>, first_chunk: u32, chunk_count: u32, size: u64) -> Self {
+        Self {
+            path,
+            first_chunk,
+            chunk_count,
+            size,
+        }
+    }
+}
+
+/// Deterministic reconstruction plan for a Musubi source archive.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiSourceArchivePlan {
+    /// BLAKE3-256 digest of the concatenated source payload.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub payload_hash_blake3_256: [u8; 32],
+    /// Total concatenated source payload length in bytes.
+    pub content_length: u64,
+    /// BLAKE3-256 digest of the generated CAR archive bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub car_hash_blake3_256: [u8; 32],
+    /// Generated CAR archive size in bytes.
+    pub car_size: u64,
+    /// Ordered source chunk commitments.
+    pub chunks: Vec<MusubiSourceChunkPlan>,
+    /// Ordered source file ranges.
+    pub files: Vec<MusubiSourceFilePlan>,
+}
+
+impl MusubiSourceArchivePlan {
+    /// Construct a source archive plan.
+    #[must_use]
+    pub const fn new(
+        payload_hash_blake3_256: [u8; 32],
+        content_length: u64,
+        car_hash_blake3_256: [u8; 32],
+        car_size: u64,
+        chunks: Vec<MusubiSourceChunkPlan>,
+        files: Vec<MusubiSourceFilePlan>,
+    ) -> Self {
+        Self {
+            payload_hash_blake3_256,
+            content_length,
+            car_hash_blake3_256,
+            car_size,
+            chunks,
+            files,
+        }
+    }
+
+    /// Returns true when the plan can reconstruct at least one non-empty file.
+    #[must_use]
+    pub fn is_non_empty(&self) -> bool {
+        self.content_length > 0
+            && self.car_size > 0
+            && !self.chunks.is_empty()
+            && !self.files.is_empty()
+    }
+}
+
 /// Source-library dependency pinned to an exact package release.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -629,6 +732,9 @@ pub struct MusubiRelease {
     pub package: MusubiPackageRef,
     /// Off-chain source archive reference.
     pub archive: MusubiArchiveRef,
+    /// Deterministic source archive plan required for fetch and cache reconstruction.
+    #[norito(default)]
+    pub source_archive_plan: Option<MusubiSourceArchivePlan>,
     /// Source-library dependencies imported by this release.
     pub dependencies: Vec<MusubiDependency>,
     /// Exported Kotodama functions available to downstream packages.
@@ -659,6 +765,7 @@ impl MusubiRelease {
         Self {
             package,
             archive,
+            source_archive_plan: None,
             dependencies,
             exports: MusubiExportSet::new(exports).functions,
             dapp,
@@ -679,6 +786,26 @@ impl MusubiRelease {
                 "musubi release archive must contain at least one source file and one byte",
             ));
         }
+        let Some(source_archive_plan) = self.source_archive_plan.as_ref() else {
+            return Err(ParseError::new(
+                "musubi release must include a deterministic source archive plan",
+            ));
+        };
+        if !source_archive_plan.is_non_empty() {
+            return Err(ParseError::new(
+                "musubi release source archive plan must contain files and chunks",
+            ));
+        }
+        if source_archive_plan.content_length != self.archive.source_bytes {
+            return Err(ParseError::new(
+                "musubi release source archive plan length must match archive source bytes",
+            ));
+        }
+        if source_archive_plan.files.len() != self.archive.source_file_count as usize {
+            return Err(ParseError::new(
+                "musubi release source archive plan file count must match archive file count",
+            ));
+        }
         if self.exports.is_empty() {
             return Err(ParseError::new(
                 "musubi release must export at least one Kotodama function",
@@ -688,6 +815,13 @@ impl MusubiRelease {
             MusubiDappLink::new(dapp.namespace.clone(), dapp.contracts.clone())?;
         }
         Ok(())
+    }
+
+    /// Attach a deterministic source archive plan to this release.
+    #[must_use]
+    pub fn with_source_archive_plan(mut self, plan: MusubiSourceArchivePlan) -> Self {
+        self.source_archive_plan = Some(plan);
+        self
     }
 
     /// Mark the release as yanked while preserving the immutable archive record.
@@ -1077,6 +1211,21 @@ mod tests {
     use super::*;
     use crate::{Decode, Encode};
 
+    fn sample_source_plan(source_bytes: u64, file_count: u32) -> MusubiSourceArchivePlan {
+        let chunks = vec![MusubiSourceChunkPlan::new(0, source_bytes as u32, [3; 32])];
+        let files = (0..file_count)
+            .map(|index| {
+                MusubiSourceFilePlan::new(
+                    vec![format!("file-{index}.ko")],
+                    0,
+                    1,
+                    source_bytes / u64::from(file_count),
+                )
+            })
+            .collect();
+        MusubiSourceArchivePlan::new([4; 32], source_bytes, [5; 32], 256, chunks, files)
+    }
+
     #[test]
     fn package_reference_uses_namespace_slash_name_at_version() {
         let reference: MusubiPackageRef = "dex.universal/swap-core@1.2.3"
@@ -1256,6 +1405,50 @@ mod tests {
 
         let err = release.validate_publishable().expect_err("empty archive");
         assert!(err.reason().contains("archive"));
+    }
+
+    #[test]
+    fn release_validation_requires_source_archive_plan() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            None,
+            publisher,
+            42,
+        );
+
+        let err = release
+            .validate_publishable()
+            .expect_err("missing source plan");
+        assert!(err.reason().contains("source archive plan"));
+    }
+
+    #[test]
+    fn release_validation_accepts_matching_source_archive_plan() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2),
+            Vec::new(),
+            vec!["quote".parse().expect("export")],
+            None,
+            publisher,
+            42,
+        )
+        .with_source_archive_plan(sample_source_plan(128, 2));
+
+        release.validate_publishable().expect("publishable");
     }
 
     #[test]

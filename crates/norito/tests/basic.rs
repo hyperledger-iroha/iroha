@@ -1,7 +1,7 @@
 #![allow(clippy::manual_div_ceil)]
 use norito::{
     Compression,
-    core::{Header, NoritoDeserialize, NoritoSerialize},
+    core::{DecodeFlagsGuard, Header, NoritoDeserialize, NoritoSerialize, header_flags},
     deserialize_from, serialize_into,
 };
 
@@ -57,24 +57,33 @@ fn empty_vec_struct_roundtrip() {
     };
     let bytes = norito::core::to_bytes(&value).unwrap();
     let flags = bytes[Header::SIZE - 1];
-    assert_eq!(flags, 0, "sequential layout must not set FIELD_BITSET");
+    assert_eq!(
+        flags & header_flags::FIELD_BITSET,
+        0,
+        "sequential layout must not set FIELD_BITSET"
+    );
+    assert_eq!(
+        flags & header_flags::COMPACT_LEN,
+        header_flags::COMPACT_LEN,
+        "default layout should use compact length prefixes"
+    );
     let payload = &bytes[Header::SIZE..];
-    assert!(payload.len() >= 8 + 1 + 8 + 8, "payload too short");
+    assert!(payload.len() >= 1 + 1 + 1 + 8, "payload too short");
 
     let mut offset = 0usize;
-    let read_u64 = |data: &[u8], pos: &mut usize| -> usize {
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&data[*pos..*pos + 8]);
-        *pos += 8;
-        u64::from_le_bytes(buf) as usize
+    let _guard = DecodeFlagsGuard::enter(flags);
+    let read_len = |data: &[u8], pos: &mut usize| -> usize {
+        let (len, hdr) = norito::core::read_len_dyn_slice(&data[*pos..]).expect("length prefix");
+        *pos += hdr;
+        len
     };
 
-    let flag_len = read_u64(payload, &mut offset);
+    let flag_len = read_len(payload, &mut offset);
     assert_eq!(flag_len, 1, "bool field must report length 1");
     assert_eq!(payload[offset], 0);
     offset += flag_len;
 
-    let vec_len = read_u64(payload, &mut offset);
+    let vec_len = read_len(payload, &mut offset);
     assert_eq!(
         vec_len, 8,
         "Vec<u8> wrapper should be 8 bytes for empty payload"
@@ -103,7 +112,10 @@ fn fixed_option_without_size_header() {
     let value = OptionStruct {
         value: Some([0xAA; 32]),
     };
-    let fresh = norito::core::to_bytes(&value).unwrap();
+    let fresh = {
+        let _guard = DecodeFlagsGuard::enter(0);
+        norito::core::to_bytes(&value).unwrap()
+    };
     let header_flags = fresh[Header::SIZE - 1];
     assert_eq!(header_flags, 0);
     let mut payload = fresh[Header::SIZE..].to_vec();
