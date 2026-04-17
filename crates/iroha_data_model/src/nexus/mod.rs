@@ -264,6 +264,9 @@ impl DataSpaceId {
     /// Identifier for the reserved `universal` data space.
     pub const UNIVERSAL: Self = Self(0);
 
+    /// Backward-compatible alias for the reserved `universal` data space.
+    pub const GLOBAL: Self = Self::UNIVERSAL;
+
     /// Derive a [`DataSpaceId`] from a stable 32-byte hash.
     #[must_use]
     pub const fn from_hash(hash: &[u8; 32]) -> Self {
@@ -975,6 +978,12 @@ mod tests {
         let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
         assert_eq!(decoded, original);
         assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
+    }
+
+    #[test]
+    fn dataspace_id_global_alias_matches_universal() {
+        assert_eq!(DataSpaceId::GLOBAL, DataSpaceId::UNIVERSAL);
+        assert_eq!(DataSpaceId::GLOBAL.as_u64(), 0);
     }
 
     #[test]
