@@ -1213,6 +1213,8 @@ mod tests {
                     data_shards: 0,
                     parity_shards: 0,
                     chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+                    rs16_initial_fanout:
+                        iroha_config::parameters::actual::RbcRs16InitialFanout::Full,
                     pending_max_chunks:
                         iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                     pending_max_bytes:

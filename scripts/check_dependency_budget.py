@@ -12,14 +12,26 @@ from pathlib import Path
 
 
 DEFAULT_WATCHED_PACKAGES = (
+    "cpal",
     "criterion",
+    "egui_plot",
+    "eframe",
     "trybuild",
     "qrcode",
     "image",
-    "eframe",
     "openssl",
     "serde_json",
     "proptest",
+    "quinn",
+    "rcgen",
+)
+
+DEFAULT_DENIED_PACKAGES = (
+    "cpal",
+    "egui_plot",
+    "eframe",
+    "qrcode",
+    "image",
 )
 
 
@@ -57,6 +69,16 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Additional package name to report. May be repeated.",
+    )
+    parser.add_argument(
+        "--deny",
+        action="append",
+        default=[],
+        help=(
+            "Package name that must not appear in the default resolved graph. "
+            "May be repeated. Defaults also deny UI/media stacks moved behind "
+            "explicit features."
+        ),
     )
     return parser.parse_args()
 
@@ -97,9 +119,15 @@ def main() -> int:
     if not metadata:
         return 1
 
-    packages = metadata["packages"]
+    resolved_ids = {node["id"] for node in metadata.get("resolve", {}).get("nodes", [])}
+    packages = [
+        package
+        for package in metadata["packages"]
+        if not resolved_ids or package["id"] in resolved_ids
+    ]
     source_counts = Counter(package_source(package) for package in packages)
-    watched = sorted(set(DEFAULT_WATCHED_PACKAGES).union(args.watch))
+    denied = sorted(set(DEFAULT_DENIED_PACKAGES).union(args.deny))
+    watched = sorted(set(DEFAULT_WATCHED_PACKAGES).union(args.watch).union(denied))
 
     print(f"total_packages={len(packages)}")
     print(f"registry_packages={source_counts['registry']}")
@@ -119,6 +147,14 @@ def main() -> int:
         print(f"  {name}: {rendered}")
 
     failed = False
+    for name in denied:
+        versions = sorted(set(by_name[name]))
+        if versions:
+            print(
+                f"denied package present: {name} ({', '.join(versions)})",
+                file=sys.stderr,
+            )
+            failed = True
     if (
         args.max_registry_packages is not None
         and source_counts["registry"] > args.max_registry_packages

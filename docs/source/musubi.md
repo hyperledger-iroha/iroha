@@ -64,27 +64,42 @@ keys.
 
 ## CLI
 
-The workspace currently ships `musubi` as a standalone binary in the existing
-`iroha_cli` package to avoid adding a new workspace crate or touching
-`Cargo.lock`.
+The workspace ships `musubi` from the dedicated `musubi` package, so the binary
+name matches the eventual crates.io install path:
 
 Useful local commands:
 
 ```bash
-cargo run -p iroha_cli --bin musubi -- init --namespace dex.universal --name swap-core --dapp
-cargo run -p iroha_cli --bin musubi -- add std.universal/math@1.0.0 --alias math
-cargo run -p iroha_cli --bin musubi -- install
-cargo run -p iroha_cli --bin musubi -- pack
-cargo run -p iroha_cli --bin musubi -- build src/lib.ko --manifest-out target/lib.contract.json
+cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
+cargo run -p musubi -- add std.universal/math@1.0.0 --alias math
+cargo run -p musubi -- install --config client.toml
+cargo run -p musubi -- pack
+cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
+cargo run -p musubi -- versions dex.universal/swap-core --config client.toml
+cargo run -p musubi -- alias resolve swap --config client.toml
 ```
 
-`install` currently validates exact dependencies and writes a registry-pending
-`Musubi.lock`. `pack` computes the deterministic BLAKE3-256 source archive hash
-that the on-chain release record will bind to a SoraFS manifest digest.
+For source installs from crates.io after publication:
 
-`publish --dry-run` and `yank --dry-run` print the release or yank payload. The
-chain-side registry instructions, queries, namespace authority checks, and
-SoraFS upload flow are the next implementation step.
+```bash
+cargo install musubi
+```
+
+`install` resolves exact dependencies against the on-chain Musubi registry by
+default and records the canonical package ref, SoraFS manifest digest, source
+archive hash, byte count, and file count in `Musubi.lock`. Use
+`install --offline` to write an unresolved exact-version lockfile without
+querying a node.
+
+`pack` computes the deterministic BLAKE3-256 source archive hash plus the source
+byte and file counts. `publish --dry-run` prints the release payload. Without
+`--dry-run`, `publish` submits a signed `PublishMusubiRelease` transaction using
+the Iroha client config. Publish also parses package `.ko` sources and rejects
+exports that are not defined by a Kotodama function in the source tree. `yank`
+works the same way for `YankMusubiRelease`.
+`versions` and `alias resolve` query the same registry. `alias set --dry-run`
+prints a curated short-alias binding, and without `--dry-run` submits
+`SetMusubiShortAlias`.
 
 ## Name Squatting Policy
 
@@ -93,14 +108,19 @@ Musubi avoids Cargo-style global name squatting by making
 must be authorized by the same ownership or delegated permission model used for
 that Kotodama dapp namespace.
 
-The intended registry policy is:
+The registry policy is:
 
 - packages are canonicalized as `namespace/package`
 - releases are immutable; yanking hides a release from new resolution but keeps
   existing lockfiles reproducible
-- empty reservations are rejected
-- global short aliases are curated governance records, not first-come package
-  ownership
+- empty reservations are rejected because a release must contain a non-empty
+  canonical source archive and at least one exported Kotodama function
+- package namespaces are enforced on-chain: `<dataspace>` namespaces require an
+  active SNS dataspace owner, and `<domain>.<dataspace>` namespaces require the
+  registered domain owner
+- global short aliases are not first-come package ownership; the current handler
+  only permits the target namespace owner as a temporary fallback until the
+  governance permission token is wired
 - lockfiles record canonical package ids, never short aliases
 
 This means a project can use convenient import aliases locally while the shared

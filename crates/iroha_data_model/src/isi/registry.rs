@@ -4,8 +4,9 @@ use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, account_recovery, asset_alias,
         asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link, endorsement,
-        identifier, kaigi, ministry, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade, rwa,
-        settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
+        identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, sorafs,
+        space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -188,6 +189,10 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<account_recovery::CancelAccountRecovery>,
     InstructionRegistry::register::<account_recovery::FinalizeAccountRecovery>,
     InstructionRegistry::register::<contract_alias::SetContractAlias>,
+    InstructionRegistry::register::<musubi::PublishMusubiRelease>,
+    InstructionRegistry::register::<musubi::YankMusubiRelease>,
+    InstructionRegistry::register::<musubi::SetMusubiShortAlias>,
+    InstructionRegistry::register::<musubi::AssertMusubiReleaseExists>,
     InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::DeactivateRamLfeProgramPolicy>,
@@ -320,6 +325,15 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
     registry = registry.register_with_id::<GrantBox>(GrantBox::WIRE_ID);
     registry = registry.register_with_id::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry
+        .register_with_id::<musubi::PublishMusubiRelease>(musubi::PublishMusubiRelease::WIRE_ID);
+    registry =
+        registry.register_with_id::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
+    registry = registry
+        .register_with_id::<musubi::SetMusubiShortAlias>(musubi::SetMusubiShortAlias::WIRE_ID);
+    registry = registry.register_with_id::<musubi::AssertMusubiReleaseExists>(
+        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    );
     registry = registry.register_with_id::<crate::isi::staking::ActivatePublicLaneValidator>(
         "iroha.staking.activate_public_lane_validator",
     );

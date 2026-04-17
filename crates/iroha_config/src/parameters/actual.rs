@@ -82,6 +82,17 @@ use crate::{
 
 type Result<T, E> = core::result::Result<T, Report<E>>;
 
+/// Initial RS16 shard fanout policy for RBC chunk broadcasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RbcRs16InitialFanout {
+    /// Send every encoded chunk to every selected target.
+    Full,
+    /// Send the minimum number of shards needed to reconstruct each stripe.
+    Data,
+    /// Send one shard above the minimum needed to reconstruct each stripe.
+    DataPlusOne,
+}
+
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
 pub struct Root {
@@ -4572,6 +4583,8 @@ pub struct SumeragiRbc {
     pub parity_shards: u16,
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub chunk_fanout: Option<NonZeroUsize>,
+    /// Initial RS16 shard fanout policy.
+    pub rs16_initial_fanout: RbcRs16InitialFanout,
     /// Maximum pending RBC chunks stashed before INIT.
     pub pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.

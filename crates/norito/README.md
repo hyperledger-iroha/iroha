@@ -449,3 +449,16 @@ For faster serialization without reallocations, Norito adds `encoded_len_exact(&
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
 - Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.
 - `to_bytes()` and `to_compressed_bytes()` now prefer `encoded_len_exact()` and fall back to `encoded_len_hint()` when unavailable, improving buffer preallocation and reducing copies.
+
+## Exact Slice Decoding
+
+For hot paths that already hold a complete bare payload in memory, use
+`norito::codec::decode_exact_from_slice::<T>(&bytes)` when `T` implements
+`DecodeFromSlice`.
+
+- It avoids the `Read::read_to_end` copy used by the generic streaming
+  `Decode` facade.
+- It rejects truncated and trailing data through the type's exact
+  `DecodeFromSlice` implementation.
+- It uses the fixed v1 default layout flags for headerless payloads, matching
+  `codec::encode_adaptive`/`Encode`.

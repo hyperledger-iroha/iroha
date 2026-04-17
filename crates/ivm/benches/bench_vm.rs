@@ -37,6 +37,17 @@ fn predecoded_program() -> Vec<u8> {
     bytes
 }
 
+fn straight_line_program(instructions: usize) -> Vec<u8> {
+    let mut bytes = ProgramMetadata::default().encode();
+    for idx in 0..instructions {
+        let rd = ((idx % 64) + 1) as u8;
+        let add = encode_addi_word(rd, rd, 1);
+        bytes.extend_from_slice(&add.to_le_bytes());
+    }
+    bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    bytes
+}
+
 fn bench_loop(c: &mut Criterion) {
     let program = loop_program();
     let tx = loop_transaction(&program);
@@ -86,6 +97,29 @@ fn bench_predecoded_runs(c: &mut Criterion) {
     });
 }
 
+fn bench_straight_line_runs(c: &mut Criterion) {
+    for (name, instructions) in [
+        ("ivm_run_straight_line_simple_8", 8usize),
+        ("ivm_run_straight_line_simple_64", 64usize),
+    ] {
+        let program = straight_line_program(instructions);
+        c.bench_function(name, |b| {
+            b.iter_batched(
+                || {
+                    let prog = program.clone();
+                    let mut vm = IVM::new(u64::MAX);
+                    vm.load_program(&prog).unwrap();
+                    vm
+                },
+                |mut vm| {
+                    vm.run().unwrap();
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+}
+
 fn bench_merkle_build(c: &mut Criterion) {
     let data = vec![0u8; 32 * 1024];
     c.bench_function("byte_tree_from_bytes", |b| {
@@ -112,6 +146,7 @@ fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_loop(&mut c);
     bench_predecoded_runs(&mut c);
+    bench_straight_line_runs(&mut c);
     bench_merkle_build(&mut c);
     bench_merkle_update(&mut c);
     c.final_summary();

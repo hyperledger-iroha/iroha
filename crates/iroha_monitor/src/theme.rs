@@ -9,39 +9,32 @@
 //! The builtin audio path renders a gagaku-inspired chamber arrangement of
 //! Etenraku with softer winds and a slower shō bed.
 
-use std::io::Write as _;
+use std::{
+    fs,
+    io::{BufWriter, Write as _},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use eyre::{Context as _, Result, eyre};
+use eyre::{Context as _, Result};
 use tokio::{
     process::Child,
     time::{Duration, sleep},
 };
 
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-use crate::synth;
-use crate::{ascii::AsciiAnimator, etenraku};
+use crate::{ascii::AsciiAnimator, etenraku, synth};
+
+const THEME_WAV_SAMPLE_RATE: u32 = 44_100;
+const THEME_WAV_CHANNELS: usize = 2;
+const THEME_WAV_SECONDS: u32 = 82;
+const THEME_WAV_CHUNK_FRAMES: usize = 2048;
 
 pub struct ThemeIntro;
 
 #[derive(Default)]
 pub struct ThemePlayback {
     midi_child: Option<Child>,
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "windows",
-        all(target_os = "linux", feature = "linux-builtin-synth")
-    ))]
-    synth: Option<SoftSynthHandle>,
+    audio_file: Option<PathBuf>,
 }
 
 #[derive(Default, Clone)]
@@ -72,19 +65,13 @@ impl ThemeIntro {
                     .wrap_err("spawn midi player")?;
                 playback.midi_child = Some(child);
             } else {
-                #[cfg(any(
-                    target_os = "macos",
-                    target_os = "windows",
-                    all(target_os = "linux", feature = "linux-builtin-synth")
-                ))]
-                {
-                    match start_builtin_synth_demo() {
-                        Ok(handle) => {
-                            playback.synth = Some(handle);
-                        }
-                        Err(err) => {
-                            eprintln!("iroha_monitor: theme audio disabled ({err:?})");
-                        }
+                match start_builtin_synth_demo() {
+                    Ok((child, audio_file)) => {
+                        playback.midi_child = Some(child);
+                        playback.audio_file = Some(audio_file);
+                    }
+                    Err(err) => {
+                        eprintln!("iroha_monitor: theme audio disabled ({err:?})");
                     }
                 }
             }
@@ -99,19 +86,12 @@ impl ThemeIntro {
 impl ThemePlayback {
     #[allow(clippy::future_not_send)]
     pub async fn stop(&mut self) {
-        #[cfg(any(
-            target_os = "macos",
-            target_os = "windows",
-            all(target_os = "linux", feature = "linux-builtin-synth")
-        ))]
-        {
-            // Drop the CPAL stream on the current thread before awaiting child shutdown.
-            let _ = self.synth.take();
-        }
-
         if let Some(mut child) = self.midi_child.take() {
             let _ = child.kill().await;
             let _ = child.wait().await;
+        }
+        if let Some(path) = self.audio_file.take() {
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -134,169 +114,112 @@ async fn render_ascii_intro() -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-pub struct SoftSynthHandle {
-    _stream: cpal::Stream,
-    _state: Option<std::sync::Arc<std::sync::Mutex<SynthPlaybackState>>>,
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-struct SynthPlaybackState {
-    synth: synth::SynthState,
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-fn render_samples(state: &mut SynthPlaybackState, dest: &mut [f32]) {
-    state.synth.render_chunk(dest);
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-#[allow(clippy::too_many_lines)]
-fn start_builtin_synth_demo() -> eyre::Result<SoftSynthHandle> {
+fn start_builtin_synth_demo() -> eyre::Result<(Child, PathBuf)> {
     #[cfg(test)]
     if crate::theme::test_support::should_force_failure() {
         return Err(eyre!("forced builtin audio failure (test)"));
     }
 
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| eyre!("no default audio output device available"))?;
-    let config = device
-        .default_output_config()
-        .wrap_err("query audio output configuration")?;
-    let stream_config: cpal::StreamConfig = config.clone().into();
-
-    let synth_state = synth::prepare(stream_config.sample_rate.0, stream_config.channels as usize);
-
-    let shared = std::sync::Arc::new(std::sync::Mutex::new(SynthPlaybackState {
-        synth: synth_state,
-    }));
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            let shared = shared.clone();
-            device.build_output_stream(
-                &stream_config,
-                move |data: &mut [f32], _| {
-                    if let Ok(mut guard) = shared.lock() {
-                        render_samples(&mut guard, data);
-                    } else {
-                        data.fill(0.0);
-                    }
-                },
-                |err| eprintln!("iroha_monitor: audio output error: {err}"),
-                None,
-            )?
-        }
-        cpal::SampleFormat::I16 => {
-            let shared = shared.clone();
-            let mut frame_buf = Vec::<f32>::new();
-            device.build_output_stream(
-                &stream_config,
-                move |data: &mut [i16], _| {
-                    if let Ok(mut guard) = shared.lock() {
-                        if frame_buf.len() != data.len() {
-                            frame_buf.resize(data.len(), 0.0);
-                        }
-                        render_samples(&mut guard, &mut frame_buf);
-                        for (dst, src) in data.iter_mut().zip(frame_buf.iter()) {
-                            let scaled = (src * 32_767.0).clamp(-32_767.0, 32_767.0).round() as i16;
-                            *dst = scaled;
-                        }
-                    } else {
-                        data.fill(0);
-                    }
-                },
-                |err| eprintln!("iroha_monitor: audio output error: {err}"),
-                None,
-            )?
-        }
-        cpal::SampleFormat::I32 => {
-            let shared = shared.clone();
-            let mut frame_buf = Vec::<f32>::new();
-            device.build_output_stream(
-                &stream_config,
-                move |data: &mut [i32], _| {
-                    if let Ok(mut guard) = shared.lock() {
-                        if frame_buf.len() != data.len() {
-                            frame_buf.resize(data.len(), 0.0);
-                        }
-                        render_samples(&mut guard, &mut frame_buf);
-                        for (dst, src) in data.iter_mut().zip(frame_buf.iter()) {
-                            let scaled = (src * 2_147_483_647.0)
-                                .clamp(-2_147_483_647.0, 2_147_483_647.0)
-                                .round() as i32;
-                            *dst = scaled;
-                        }
-                    } else {
-                        data.fill(0);
-                    }
-                },
-                |err| eprintln!("iroha_monitor: audio output error: {err}"),
-                None,
-            )?
-        }
-        cpal::SampleFormat::U16 => {
-            let shared = shared.clone();
-            let mut frame_buf = Vec::<f32>::new();
-            device.build_output_stream(
-                &stream_config,
-                move |data: &mut [u16], _| {
-                    if let Ok(mut guard) = shared.lock() {
-                        if frame_buf.len() != data.len() {
-                            frame_buf.resize(data.len(), 0.0);
-                        }
-                        render_samples(&mut guard, &mut frame_buf);
-                        for (dst, src) in data.iter_mut().zip(frame_buf.iter()) {
-                            let scaled =
-                                ((src * 0.5 + 0.5) * 65_535.0).clamp(0.0, 65_535.0).round() as u16;
-                            *dst = scaled;
-                        }
-                    } else {
-                        data.fill(65_535 / 2);
-                    }
-                },
-                |err| eprintln!("iroha_monitor: audio output error: {err}"),
-                None,
-            )?
-        }
-        other => {
-            return Err(eyre!(
-                "unsupported audio sample format for etenraku synth playback: {other:?}"
-            ));
-        }
-    };
-    stream.play().wrap_err("start etenraku synth playback")?;
-    Ok(SoftSynthHandle {
-        _stream: stream,
-        _state: Some(shared),
-    })
+    let path = render_builtin_theme_wav()?;
+    let child = spawn_default_audio_player(&path)
+        .wrap_err_with(|| format!("start default audio player for {}", path.display()))?;
+    Ok((child, path))
 }
 
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-)))]
-fn start_builtin_synth_demo() -> eyre::Result<()> {
+fn render_builtin_theme_wav() -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "iroha-monitor-etenraku-{}-{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let file = fs::File::create(&path).wrap_err("create theme wav")?;
+    let mut writer = BufWriter::new(file);
+    let frames = THEME_WAV_SAMPLE_RATE * THEME_WAV_SECONDS;
+    write_wav_header(&mut writer, frames)?;
+
+    let mut state = synth::prepare(THEME_WAV_SAMPLE_RATE, THEME_WAV_CHANNELS);
+    let mut chunk = vec![0.0f32; THEME_WAV_CHUNK_FRAMES * THEME_WAV_CHANNELS];
+    let mut remaining = frames as usize;
+    while remaining > 0 {
+        let chunk_frames = remaining.min(THEME_WAV_CHUNK_FRAMES);
+        let sample_len = chunk_frames * THEME_WAV_CHANNELS;
+        state.render_chunk(&mut chunk[..sample_len]);
+        for sample in &chunk[..sample_len] {
+            let pcm = (sample * 32_767.0).clamp(-32_768.0, 32_767.0).round() as i16;
+            writer.write_all(&pcm.to_le_bytes())?;
+        }
+        remaining -= chunk_frames;
+    }
+    writer.flush()?;
+    Ok(path)
+}
+
+fn write_wav_header(writer: &mut impl std::io::Write, frames: u32) -> Result<()> {
+    let channels = THEME_WAV_CHANNELS as u16;
+    let bits_per_sample = 16u16;
+    let block_align = channels * bits_per_sample / 8;
+    let byte_rate = THEME_WAV_SAMPLE_RATE * u32::from(block_align);
+    let data_len = frames * u32::from(block_align);
+    writer.write_all(b"RIFF")?;
+    writer.write_all(&(36 + data_len).to_le_bytes())?;
+    writer.write_all(b"WAVEfmt ")?;
+    writer.write_all(&16u32.to_le_bytes())?;
+    writer.write_all(&1u16.to_le_bytes())?;
+    writer.write_all(&channels.to_le_bytes())?;
+    writer.write_all(&THEME_WAV_SAMPLE_RATE.to_le_bytes())?;
+    writer.write_all(&byte_rate.to_le_bytes())?;
+    writer.write_all(&block_align.to_le_bytes())?;
+    writer.write_all(&bits_per_sample.to_le_bytes())?;
+    writer.write_all(b"data")?;
+    writer.write_all(&data_len.to_le_bytes())?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_default_audio_player(path: &Path) -> Result<Child> {
+    tokio::process::Command::new("afplay")
+        .arg(path)
+        .spawn()
+        .wrap_err("spawn afplay")
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_default_audio_player(path: &Path) -> Result<Child> {
+    let path = path.to_string_lossy().replace('\'', "''");
+    tokio::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("(New-Object Media.SoundPlayer '{path}').PlaySync()"),
+        ])
+        .spawn()
+        .wrap_err("spawn powershell audio player")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_default_audio_player(path: &Path) -> Result<Child> {
+    let candidates: &[(&str, &[&str])] = &[
+        ("paplay", &[]),
+        ("aplay", &[]),
+        ("ffplay", &["-nodisp", "-autoexit", "-loglevel", "quiet"]),
+    ];
+    let mut last_error = None;
+    for (program, args) in candidates {
+        let mut command = tokio::process::Command::new(program);
+        command.args(*args).arg(path);
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(err) => last_error = Some(err),
+        }
+    }
     Err(eyre!(
-        "builtin synth disabled (enable linux-builtin-synth or build on macOS/Windows)"
+        "no default audio player found ({})",
+        last_error
+            .map(|err| err.to_string())
+            .unwrap_or_else(|| "no candidates tried".to_string())
     ))
 }
 
@@ -344,11 +267,6 @@ mod tests {
         assert!(playback.midi_child.is_none());
     }
 
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "windows",
-        all(target_os = "linux", feature = "linux-builtin-synth")
-    ))]
     #[tokio::test]
     async fn intro_survives_synth_start_failure() {
         let _guard = test_support::FailureGuard::enable();

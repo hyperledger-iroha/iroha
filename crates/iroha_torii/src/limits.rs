@@ -1,14 +1,15 @@
 //! Rate limiting and API token utilities for Torii.
 //!
-//! Implements a simple token-bucket rate limiter keyed by a caller identity
+//! Implements a sharded token-bucket rate limiter keyed by a caller identity
 //! (API token or authority id). This protects the node from abuse without
 //! introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
+    hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::{
         Arc,
@@ -19,16 +20,21 @@ use std::{
 
 use axum::http::HeaderMap;
 use dashmap::{DashMap, mapref::entry::Entry};
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {
-    inner: Arc<Mutex<InnerLimiter>>,
+    inner: Arc<ShardedLimiter>,
+}
+
+struct ShardedLimiter {
+    disabled: bool,
+    shards: Vec<Mutex<InnerLimiter>>,
 }
 
 struct InnerLimiter {
-    rate_per_sec: Option<f64>,
+    rate_per_sec: f64,
     burst: f64,
     buckets: HashMap<String, TokenBucket>,
     order: VecDeque<String>,
@@ -42,84 +48,84 @@ struct TokenBucket {
 }
 
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
+const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
 const PREAUTH_NOFILE_RESERVE: u64 = 128;
 
-impl RateLimiter {
-    /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
-    pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
-        Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
-    }
-
-    /// Create a new limiter configured with `u64`-sized token buckets.
-    pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
-        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
-        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
-        Self {
-            inner: Arc::new(Mutex::new(InnerLimiter {
-                rate_per_sec: rate,
-                burst,
-                buckets: HashMap::new(),
-                order: VecDeque::new(),
-                max_buckets: DEFAULT_MAX_BUCKETS,
-            })),
-        }
-    }
-
-    pub(crate) fn new_with_capacity(
-        rate_per_sec: Option<u32>,
-        burst: Option<u32>,
-        max_buckets: usize,
-    ) -> Self {
-        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
-        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
-        Self {
-            inner: Arc::new(Mutex::new(InnerLimiter {
-                rate_per_sec: rate,
-                burst,
-                buckets: HashMap::new(),
-                order: VecDeque::new(),
-                max_buckets: max_buckets.max(1),
-            })),
-        }
-    }
-
-    /// Returns true if allowed (consumed 1 token), false if limited.
-    pub async fn allow(&self, key: &str) -> bool {
-        self.allow_cost(key, 1).await
-    }
-
-    /// Returns true if allowed after consuming `cost` tokens, false if limited.
-    pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
-        let mut inner = self.inner.lock().await;
-        // No limiting configured
-        let Some(rate) = inner.rate_per_sec else {
-            return true;
+impl ShardedLimiter {
+    fn new(rate_per_sec: Option<f64>, burst: f64, max_buckets: usize) -> Self {
+        let max_buckets = max_buckets.max(1);
+        let disabled = rate_per_sec.is_none();
+        let shard_count = if disabled {
+            1
+        } else {
+            max_buckets.min(DEFAULT_RATE_LIMITER_SHARDS).max(1)
         };
-        let now = Instant::now();
-        let burst = inner.burst;
-        let key_owned = key.to_string();
-        if !inner.buckets.contains_key(&key_owned) {
-            if inner.buckets.len() >= inner.max_buckets {
-                if let Some(oldest) = inner.order.pop_front() {
-                    inner.buckets.remove(&oldest);
+        let rate_per_sec = rate_per_sec.unwrap_or(0.0);
+        let base_capacity = max_buckets / shard_count;
+        let extra_capacity = max_buckets % shard_count;
+        let shards = (0..shard_count)
+            .map(|index| {
+                let shard_capacity = if disabled {
+                    max_buckets
+                } else {
+                    base_capacity + usize::from(index < extra_capacity)
+                };
+                Mutex::new(InnerLimiter::new(
+                    rate_per_sec,
+                    burst,
+                    shard_capacity.max(1),
+                ))
+            })
+            .collect();
+
+        Self { disabled, shards }
+    }
+
+    fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let shard_count = u64::try_from(self.shards.len()).expect("shard count fits in u64");
+        let index =
+            usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize");
+        &self.shards[index]
+    }
+}
+
+impl InnerLimiter {
+    fn new(rate_per_sec: f64, burst: f64, max_buckets: usize) -> Self {
+        Self {
+            rate_per_sec,
+            burst,
+            buckets: HashMap::new(),
+            order: VecDeque::new(),
+            max_buckets,
+        }
+    }
+
+    fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
+        let burst = self.burst;
+        if !self.buckets.contains_key(key) {
+            if self.buckets.len() >= self.max_buckets {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.buckets.remove(&oldest);
                 }
             }
-            inner.order.push_back(key_owned.clone());
-            inner.buckets.insert(
-                key_owned.clone(),
+            let key_owned = key.to_string();
+            self.order.push_back(key_owned.clone());
+            self.buckets.insert(
+                key_owned,
                 TokenBucket {
                     tokens: burst,
                     last: now,
                 },
             );
         }
-        let Some(bucket) = inner.buckets.get_mut(&key_owned) else {
+        let Some(bucket) = self.buckets.get_mut(key) else {
             return true;
         };
-        // Refill
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         if elapsed > 0.0 {
-            bucket.tokens = (bucket.tokens + elapsed * rate).min(burst);
+            bucket.tokens = (bucket.tokens + elapsed * self.rate_per_sec).min(burst);
             bucket.last = now;
         }
         let required = (cost.max(1) as f64).min(f64::MAX);
@@ -133,10 +139,60 @@ impl RateLimiter {
             false
         }
     }
+}
+
+impl RateLimiter {
+    /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
+    pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
+        Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
+    }
+
+    /// Create a new limiter configured with `u64`-sized token buckets.
+    pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
+        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
+        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
+        }
+    }
+
+    pub(crate) fn new_with_capacity(
+        rate_per_sec: Option<u32>,
+        burst: Option<u32>,
+        max_buckets: usize,
+    ) -> Self {
+        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
+        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(ShardedLimiter::new(rate, burst, max_buckets)),
+        }
+    }
+
+    /// Returns true if allowed (consumed 1 token), false if limited.
+    pub async fn allow(&self, key: &str) -> bool {
+        self.allow_cost(key, 1).await
+    }
+
+    /// Returns true if allowed after consuming `cost` tokens, false if limited.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
+        if self.inner.disabled {
+            return true;
+        }
+        self.inner
+            .shard_for(key)
+            .lock()
+            .allow_cost(key, cost, Instant::now())
+    }
 
     #[cfg(test)]
+    #[allow(clippy::unused_async)]
     pub(crate) async fn bucket_count(&self) -> usize {
-        self.inner.lock().await.buckets.len()
+        self.inner
+            .shards
+            .iter()
+            .map(|shard| shard.lock().buckets.len())
+            .sum()
     }
 }
 
@@ -833,7 +889,7 @@ mod tests {
         let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
         assert!(limiter.allow("a").await);
         assert!(limiter.allow("b").await);
-        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(limiter.bucket_count().await <= 2);
 
         assert!(limiter.allow("c").await);
         // Capacity is 2, so one bucket must have been evicted.
@@ -842,6 +898,24 @@ mod tests {
         // Previously inserted keys should still be serviced without panicking.
         assert!(limiter.allow("a").await);
         assert!(limiter.bucket_count().await <= 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_allows_distinct_keys_concurrently() {
+        let limiter = RateLimiter::new(Some(10_000), Some(10_000));
+        let mut handles = Vec::new();
+
+        for index in 0..128 {
+            let limiter = limiter.clone();
+            handles.push(tokio::spawn(async move {
+                limiter.allow(&format!("client-{index}")).await
+            }));
+        }
+
+        for handle in handles {
+            assert!(handle.await.expect("limiter task should finish"));
+        }
+        assert!(limiter.bucket_count().await <= DEFAULT_MAX_BUCKETS);
     }
 
     #[tokio::test]

@@ -596,6 +596,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 parity_shards:
                     iroha_config::parameters::defaults::sumeragi::RBC_RS16_PARITY_SHARDS,
                 chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+                rs16_initial_fanout: A::RbcRs16InitialFanout::Full,
                 pending_max_chunks:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,

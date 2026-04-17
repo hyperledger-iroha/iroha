@@ -343,16 +343,33 @@ pub struct MusubiArchiveRef {
     /// BLAKE3-256 hash of the canonical source archive payload.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub archive_hash_blake3_256: [u8; 32],
+    /// Total bytes included in the canonical source archive.
+    pub source_bytes: u64,
+    /// Total regular files included in the canonical source archive.
+    pub source_file_count: u32,
 }
 
 impl MusubiArchiveRef {
     /// Construct a source archive reference.
     #[must_use]
-    pub const fn new(sorafs_manifest: ManifestDigest, archive_hash_blake3_256: [u8; 32]) -> Self {
+    pub const fn new(
+        sorafs_manifest: ManifestDigest,
+        archive_hash_blake3_256: [u8; 32],
+        source_bytes: u64,
+        source_file_count: u32,
+    ) -> Self {
         Self {
             sorafs_manifest,
             archive_hash_blake3_256,
+            source_bytes,
+            source_file_count,
         }
+    }
+
+    /// Returns true when this archive can back a first-class registry release.
+    #[must_use]
+    pub const fn is_non_empty(&self) -> bool {
+        self.source_bytes > 0 && self.source_file_count > 0
     }
 }
 
@@ -371,6 +388,32 @@ impl MusubiDependency {
     #[must_use]
     pub const fn new(alias: Name, package: MusubiPackageRef) -> Self {
         Self { alias, package }
+    }
+}
+
+/// Exported Kotodama library symbols for a Musubi release.
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct MusubiExportSet {
+    /// Functions callable by downstream packages as `alias::function(...)`.
+    pub functions: Vec<Name>,
+}
+
+impl MusubiExportSet {
+    /// Construct an export set from function names.
+    #[must_use]
+    pub fn new(mut functions: Vec<Name>) -> Self {
+        functions.sort();
+        functions.dedup();
+        Self { functions }
+    }
+
+    /// Returns true if no source-library symbols are exported.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.functions.is_empty()
     }
 }
 
@@ -440,7 +483,7 @@ pub struct MusubiYankInfo {
 }
 
 /// Immutable registry record for a single package release.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiRelease {
     /// Exact package release identifier.
@@ -478,12 +521,34 @@ impl MusubiRelease {
             package,
             archive,
             dependencies,
-            exports,
+            exports: MusubiExportSet::new(exports).functions,
             dapp,
             published_by,
             published_at_ms,
             status: MusubiReleaseStatus::Active,
         }
+    }
+
+    /// Validate this release as a publishable registry record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when anti-squatting release requirements fail.
+    pub fn validate_publishable(&self) -> Result<(), ParseError> {
+        if !self.archive.is_non_empty() {
+            return Err(ParseError::new(
+                "musubi release archive must contain at least one source file and one byte",
+            ));
+        }
+        if self.exports.is_empty() {
+            return Err(ParseError::new(
+                "musubi release must export at least one Kotodama function",
+            ));
+        }
+        if let Some(dapp) = &self.dapp {
+            MusubiDappLink::new(dapp.namespace.clone(), dapp.contracts.clone())?;
+        }
+        Ok(())
     }
 
     /// Mark the release as yanked while preserving the immutable archive record.
@@ -701,7 +766,7 @@ mod tests {
         let package = "dex.universal/swap-core@1.2.3"
             .parse::<MusubiPackageRef>()
             .expect("package ref");
-        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32]);
+        let archive = MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 128, 2);
         let dependency = MusubiDependency::new(
             "math".parse().expect("alias"),
             "std.universal/math@1.0.0".parse().expect("dep"),
@@ -731,5 +796,39 @@ mod tests {
         assert!(cursor.is_empty());
         assert_eq!(decoded, release);
         assert!(!decoded.status.is_active());
+    }
+
+    #[test]
+    fn release_validation_rejects_empty_archive_or_exports() {
+        let package = "dex.universal/swap-core@1.2.3"
+            .parse::<MusubiPackageRef>()
+            .expect("package ref");
+        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let publisher = AccountId::new(keypair.public_key().clone());
+        let release = MusubiRelease::new(
+            package,
+            MusubiArchiveRef::new(ManifestDigest::new([1; 32]), [2; 32], 0, 0),
+            Vec::new(),
+            Vec::new(),
+            None,
+            publisher,
+            42,
+        );
+
+        let err = release.validate_publishable().expect_err("empty archive");
+        assert!(err.reason().contains("archive"));
+    }
+
+    #[test]
+    fn export_set_sorts_and_deduplicates_functions() {
+        let exports = MusubiExportSet::new(vec![
+            "quote".parse().expect("name"),
+            "swap".parse().expect("name"),
+            "quote".parse().expect("name"),
+        ]);
+
+        assert_eq!(exports.functions.len(), 2);
+        assert_eq!(exports.functions[0].as_ref(), "quote");
+        assert_eq!(exports.functions[1].as_ref(), "swap");
     }
 }

@@ -180,18 +180,21 @@ struct RbcEncodingScenario {
     encoding: &'static str,
     data_shards: u16,
     parity_shards: u16,
+    rs16_initial_fanout: &'static str,
 }
 
 const RBC_SCENARIO_PLAIN: RbcEncodingScenario = RbcEncodingScenario {
     encoding: "plain",
     data_shards: 0,
     parity_shards: 0,
+    rs16_initial_fanout: "full",
 };
 
 const RBC_SCENARIO_RS16: RbcEncodingScenario = RbcEncodingScenario {
     encoding: "rs16",
     data_shards: 4,
     parity_shards: 2,
+    rs16_initial_fanout: "data_plus_one",
 };
 
 impl RbcEncodingScenario {
@@ -548,6 +551,10 @@ async fn sumeragi_rbc_da_large_payload_four_peers_rs16() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "parity_shards"],
                     i64::from(RBC_SCENARIO_RS16.parity_shards),
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "rs16_initial_fanout"],
+                    RBC_SCENARIO_RS16.rs16_initial_fanout,
                 );
         },
         |_| Ok(()),
@@ -626,6 +633,10 @@ async fn sumeragi_rbc_da_large_payload_six_peers_rs16() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "rbc", "parity_shards"],
                     i64::from(RBC_SCENARIO_RS16.parity_shards),
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "rs16_initial_fanout"],
+                    RBC_SCENARIO_RS16.rs16_initial_fanout,
                 );
         },
         |_| Ok(()),

@@ -5,7 +5,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 ## Quickstart
 - Build workspace: `cargo build --workspace`
 - Builds can take about 20 minutes; use a 20-minute timeout for build steps.
-- Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
+- Test everything: `cargo test` or `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
 - Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
 - Format code: `cargo fmt --all` (edition 2024)
 - Test one crate: `cargo test -p <crate>`
@@ -80,7 +80,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Add a `TODO:` comment explaining any temporary or incomplete implementation.
 - Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
 - Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally for the default top-level smoke set, fix any build issues, and ensure it passes. Use `cargo test -p <crate>` for focused crate suites and `cargo test --workspace` for the entire repository.
+- Run `cargo test` locally for the full workspace, fix any build issues, and ensure it passes when the validation budget allows. Use `cargo test -p <crate>` for focused crate suites.
 - Optionally run `cargo clippy -- -D warnings` for additional lint checks.
 
 ## Documentation

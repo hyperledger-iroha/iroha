@@ -242,6 +242,9 @@ mod tests {
             SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
+            SingularQueryBox::FindMusubiReleaseByRef(_) => {}
+            SingularQueryBox::FindMusubiPackageVersions(_) => {}
+            SingularQueryBox::FindMusubiShortAliasByName(_) => {}
             SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}

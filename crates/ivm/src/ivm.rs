@@ -13,7 +13,7 @@
 use std::time::Duration;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, OnceLock,
@@ -58,6 +58,14 @@ const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 const DEFAULT_VECTOR_LENGTH: usize = 4;
 /// Baseline lane count used for gas accounting of vector ops.
 const GAS_VECTOR_BASE_LANES: usize = crate::gas::VECTOR_BASE_LANES;
+/// Canonical instruction width for first-release IVM bytecode.
+const WIDE_INSTRUCTION_LEN: u64 = 4;
+/// Avoid Rayon scheduling overhead for tiny straight-line simple blocks.
+const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
+/// Number of prepared instruction streams retained outside the decode cache.
+const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
+/// Approximate byte budget for cached prepared instruction streams.
+const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
@@ -921,6 +929,212 @@ impl From<IvmConfigBuilder> for IvmBuilder {
     }
 }
 
+#[derive(Clone)]
+struct PreparedOp {
+    inst: u32,
+    len: u32,
+    wide_op: u8,
+    base_gas: Option<u64>,
+    simple: Option<SimpleInstruction>,
+}
+
+impl PreparedOp {
+    fn from_decoded(op: &crate::ivm_cache::DecodedOp) -> Result<Self, VMError> {
+        if op.len as u64 != WIDE_INSTRUCTION_LEN || !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
+            return Err(VMError::DecodeError);
+        }
+        let wide_op = instruction::wide::opcode(op.inst);
+        if !instruction::wide::is_valid_opcode(wide_op) {
+            return Err(VMError::InvalidOpcode((op.inst & 0xFFFF) as u16));
+        }
+        Ok(Self {
+            inst: op.inst,
+            len: op.len,
+            wide_op,
+            base_gas: gas::cost_of(op.inst),
+            simple: to_simple(op.inst),
+        })
+    }
+
+    fn fetched(&self) -> FetchedOp {
+        FetchedOp {
+            inst: self.inst,
+            len: self.len,
+            wide_op: self.wide_op,
+            base_gas: self.base_gas,
+            simple: self.simple,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PreparedProgram {
+    first_pc: u64,
+    end_pc: u64,
+    ops: Arc<[PreparedOp]>,
+}
+
+impl PreparedProgram {
+    fn prepare_ops(
+        decoded: &[crate::ivm_cache::DecodedOp],
+        instruction_len: usize,
+    ) -> Result<Arc<[PreparedOp]>, VMError> {
+        let expected_len = decoded.len().saturating_mul(WIDE_INSTRUCTION_LEN as usize);
+        if instruction_len != expected_len {
+            return Err(VMError::DecodeError);
+        }
+        let mut ops = Vec::with_capacity(decoded.len());
+        for (idx, op) in decoded.iter().enumerate() {
+            if op.pc != (idx as u64).saturating_mul(WIDE_INSTRUCTION_LEN) {
+                return Err(VMError::DecodeError);
+            }
+            ops.push(PreparedOp::from_decoded(op)?);
+        }
+        Ok(Arc::from(ops.into_boxed_slice()))
+    }
+
+    fn from_prepared_ops(
+        ops: Arc<[PreparedOp]>,
+        first_pc: u64,
+        instruction_len: usize,
+    ) -> Result<Self, VMError> {
+        let expected_len = ops.len().saturating_mul(WIDE_INSTRUCTION_LEN as usize);
+        if instruction_len != expected_len {
+            return Err(VMError::DecodeError);
+        }
+        let end_pc = first_pc
+            .checked_add(instruction_len as u64)
+            .ok_or(VMError::DecodeError)?;
+        Ok(Self {
+            first_pc,
+            end_pc,
+            ops,
+        })
+    }
+
+    fn op_at(&self, pc: u64) -> Option<&PreparedOp> {
+        if pc < self.first_pc || pc >= self.end_pc {
+            return None;
+        }
+        let offset = pc - self.first_pc;
+        if !offset.is_multiple_of(WIDE_INSTRUCTION_LEN) {
+            return None;
+        }
+        let idx = (offset / WIDE_INSTRUCTION_LEN) as usize;
+        self.ops.get(idx)
+    }
+
+    fn contains_pc(&self, pc: u64) -> bool {
+        self.op_at(pc).is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PreparedProgramCacheKey {
+    hash: [u8; 32],
+    version_major: u8,
+    version_minor: u8,
+}
+
+struct PreparedProgramCache {
+    map: HashMap<PreparedProgramCacheKey, Arc<[PreparedOp]>>,
+    sizes: HashMap<PreparedProgramCacheKey, usize>,
+    order: VecDeque<PreparedProgramCacheKey>,
+    bytes: usize,
+}
+
+impl PreparedProgramCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            sizes: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+
+    fn key_for(code: &[u8], metadata: &ProgramMetadata) -> PreparedProgramCacheKey {
+        let mut hasher = Sha256::new();
+        hasher.update(code);
+        let hash = hasher.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&hash);
+        PreparedProgramCacheKey {
+            hash: out,
+            version_major: metadata.version_major,
+            version_minor: metadata.version_minor,
+        }
+    }
+
+    fn get_or_prepare(
+        &mut self,
+        code: &[u8],
+        metadata: &ProgramMetadata,
+        decoded: &[crate::ivm_cache::DecodedOp],
+    ) -> Result<Arc<[PreparedOp]>, VMError> {
+        let key = Self::key_for(code, metadata);
+        if let Some(hit) = self.map.get(&key).cloned() {
+            self.touch(key);
+            return Ok(hit);
+        }
+
+        let prepared = PreparedProgram::prepare_ops(decoded, code.len())?;
+        let size = Self::entry_size(&prepared);
+        if size <= PREPARED_PROGRAM_CACHE_MAX_BYTES {
+            self.bytes = self.bytes.saturating_add(size);
+            self.map.insert(key, Arc::clone(&prepared));
+            self.sizes.insert(key, size);
+            self.touch(key);
+            self.enforce_capacity();
+        }
+        Ok(prepared)
+    }
+
+    fn entry_size(prepared: &Arc<[PreparedOp]>) -> usize {
+        core::mem::size_of::<PreparedOp>() * prepared.len()
+    }
+
+    fn touch(&mut self, key: PreparedProgramCacheKey) {
+        if let Some(pos) = self.order.iter().position(|candidate| *candidate == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key);
+    }
+
+    fn enforce_capacity(&mut self) {
+        while self.order.len() > PREPARED_PROGRAM_CACHE_CAPACITY
+            || self.bytes > PREPARED_PROGRAM_CACHE_MAX_BYTES
+        {
+            if let Some(old) = self.order.pop_front() {
+                self.remove_entry(old);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn remove_entry(&mut self, key: PreparedProgramCacheKey) {
+        if self.map.remove(&key).is_some() {
+            let size = self.sizes.remove(&key).unwrap_or(0);
+            self.bytes = self.bytes.saturating_sub(size);
+        }
+    }
+}
+
+fn prepared_program_cache() -> &'static Mutex<PreparedProgramCache> {
+    static CACHE: OnceLock<Mutex<PreparedProgramCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(PreparedProgramCache::new()))
+}
+
+#[derive(Clone, Copy)]
+struct FetchedOp {
+    inst: u32,
+    len: u32,
+    wide_op: u8,
+    base_gas: Option<u64>,
+    simple: Option<SimpleInstruction>,
+}
+
 pub struct IVM {
     pub registers: Registers,
     // The vector register file has been folded into `registers`. Vector
@@ -949,7 +1163,7 @@ pub struct IVM {
     code_hash: [u8; 32],
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
-    predecoded_index: HashMap<u64, usize>,
+    prepared: Option<PreparedProgram>,
     branch_predictor: crate::branch_predictor::BranchPredictor,
     branch_predictions: u64,
     branch_correct: u64,
@@ -1018,7 +1232,7 @@ impl Clone for IVM {
             code_hash: self.code_hash,
             contract_debug: self.contract_debug.clone(),
             predecoded: self.predecoded.clone(),
-            predecoded_index: self.predecoded_index.clone(),
+            prepared: self.prepared.clone(),
             branch_predictor: self.branch_predictor.clone(),
             branch_predictions: 0,
             branch_correct: 0,
@@ -1329,7 +1543,7 @@ impl IVM {
             code_hash: [0u8; 32],
             contract_debug: None,
             predecoded: None,
-            predecoded_index: HashMap::new(),
+            prepared: None,
             branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
             branch_predictions: 0,
             branch_correct: 0,
@@ -2003,7 +2217,7 @@ impl IVM {
         self.contract_debug = None;
         self.last_diagnostic = None;
         self.predecoded = None;
-        self.predecoded_index.clear();
+        self.prepared = None;
         Ok(())
     }
 
@@ -2023,6 +2237,7 @@ impl IVM {
             return Err(VMError::InvalidMetadata);
         }
         let instruction_region = &code_region[literal_prefix..];
+        let entry_pc = literal_prefix as u64;
         let meta = parsed.metadata;
         self.metadata = meta.clone();
         self.contract_debug = parsed.contract_debug;
@@ -2040,16 +2255,16 @@ impl IVM {
         // Overlay code region while preserving INPUT/STACK contents that may
         // have been preloaded by the host/tests. OUTPUT is cleared per load.
         self.predecoded = None;
-        self.predecoded_index.clear();
+        self.prepared = None;
         self.memory.load_code(code_region);
         self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
         let mut hasher = Sha256::new();
         hasher.update(code_region);
         self.code_hash = hasher.finalize().into();
-        self.pc = literal_prefix as u64;
+        self.pc = entry_pc;
         self.entrypoint_pc = Some(self.pc);
-        self.program_prefix_len = literal_prefix as u64;
+        self.program_prefix_len = entry_pc;
         self.last_diagnostic = None;
         self.pc_alignment = self.pc & 0b11;
         self.halted = false;
@@ -2063,22 +2278,22 @@ impl IVM {
         if !instruction_region.is_empty() {
             let decoded =
                 crate::ivm_cache::global_get_with_meta(instruction_region, &self.metadata)?;
-            for op in decoded.iter() {
-                let instr = op.inst;
-                let wide_op = instruction::wide::opcode(instr);
-                if !instruction::wide::is_valid_opcode(wide_op) {
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
-                }
-            }
-            let mut index = HashMap::with_capacity(decoded.len());
-            for (idx, op) in decoded.iter().enumerate() {
-                index.insert(op.pc + literal_prefix as u64, idx);
-            }
+            let prepared_ops = {
+                let mut guard = prepared_program_cache()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                guard.get_or_prepare(instruction_region, &self.metadata, decoded.as_ref())?
+            };
+            let prepared = PreparedProgram::from_prepared_ops(
+                prepared_ops,
+                entry_pc,
+                instruction_region.len(),
+            )?;
             self.predecoded = Some(decoded);
-            self.predecoded_index = index;
+            self.prepared = Some(prepared);
         } else {
             self.predecoded = None;
-            self.predecoded_index.clear();
+            self.prepared = None;
         }
         // Recompute the INPUT bump allocator based on any preloaded TLVs so that
         // host allocations append instead of overwriting existing entries.
@@ -2119,6 +2334,44 @@ impl IVM {
         })
     }
 
+    fn prepared_contains_pc(&self, pc: u64) -> bool {
+        self.prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.contains_pc(pc))
+    }
+
+    fn fetch_instruction(&mut self) -> Result<FetchedOp, VMError> {
+        if let Some(op) = self
+            .prepared
+            .as_ref()
+            .and_then(|prepared| prepared.op_at(self.pc))
+        {
+            return Ok(op.fetched());
+        }
+
+        #[cfg(test)]
+        {
+            self.predecoded_misses += 1;
+        }
+        #[cfg(any(test, debug_assertions))]
+        eprintln!(
+            "[ivm] predecoded miss: has_predecoded={} contains_pc={} pc=0x{pc:x}",
+            self.prepared.is_some(),
+            self.prepared_contains_pc(self.pc),
+            pc = self.pc
+        );
+
+        let (inst, len) = decoder::decode(&self.memory, self.pc)?;
+        let wide_op = instruction::wide::opcode(inst);
+        Ok(FetchedOp {
+            inst,
+            len,
+            wide_op,
+            base_gas: gas::cost_of(inst),
+            simple: to_simple(inst),
+        })
+    }
+
     fn classify_trap(err: &VMError) -> VmTrapKind {
         match err {
             VMError::OutOfGas => VmTrapKind::OutOfGas,
@@ -2149,9 +2402,9 @@ impl IVM {
     }
 
     fn build_execution_diagnostic(&self, err: &VMError) -> VmExecutionDiagnostic {
-        let predecoded_loaded = self.predecoded.is_some();
+        let predecoded_loaded = self.prepared.is_some();
         let predecoded_hit = if predecoded_loaded {
-            Some(self.predecoded_index.contains_key(&self.pc))
+            Some(self.prepared_contains_pc(self.pc))
         } else {
             Some(false)
         };
@@ -2292,7 +2545,7 @@ impl IVM {
     /// Returns [`VMError::DecodeError`] when `pc` does not refer to a decoded
     /// instruction in the currently loaded program.
     pub fn set_program_counter(&mut self, pc: u64) -> Result<(), VMError> {
-        if self.predecoded_index.contains_key(&pc) {
+        if self.prepared_contains_pc(pc) {
             self.pc = pc;
             self.entrypoint_pc = Some(pc);
             Ok(())
@@ -2645,7 +2898,11 @@ impl IVM {
 
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
-        let resume_pc = self.predecoded_index.keys().copied().min().unwrap_or(0);
+        let resume_pc = self
+            .prepared
+            .as_ref()
+            .map(|prepared| prepared.first_pc)
+            .unwrap_or(0);
         self.registers = Registers::new();
         self.pc = resume_pc;
         self.cycles = 0;
@@ -2854,15 +3111,6 @@ impl IVM {
                 self.trace_log = DeltaTraceLog::default();
                 self.step_log = zk::StepLog::default();
             }
-            // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
-            // Use global, thread-safe cache keyed by header version when available
-            // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
-            // Use global, thread-safe cache keyed by header version when available
-            let _code_bytes = self.memory.read_code_bytes();
-            let _predecoded: Option<(
-                Arc<[crate::ivm_cache::DecodedOp]>,
-                std::collections::HashMap<u64, usize>,
-            )> = None;
 
             let mut last_logged_cycle = 0;
             // Fetch-Decode-Execute loop
@@ -2883,36 +3131,10 @@ impl IVM {
                 if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
                     return Err(VMError::ExceededMaxCycles);
                 }
-                // Decode the next instruction. Prefer pre-decoded mapping when available.
-                let (instr, length) = if let Some(decoded) = &self.predecoded {
-                    if let Some(&idx) = self.predecoded_index.get(&self.pc) {
-                        let op = &decoded[idx];
-                        (op.inst, op.len)
-                    } else {
-                        #[cfg(test)]
-                        {
-                            self.predecoded_misses += 1;
-                        }
-                        #[cfg(any(test, debug_assertions))]
-                        eprintln!(
-                            "[ivm] predecoded miss: has_predecoded=true contains_pc={} pc=0x{pc:x}",
-                            self.predecoded_index.contains_key(&self.pc),
-                            pc = self.pc
-                        );
-                        decoder::decode(&self.memory, self.pc)?
-                    }
-                } else {
-                    #[cfg(test)]
-                    {
-                        self.predecoded_misses += 1;
-                    }
-                    #[cfg(any(test, debug_assertions))]
-                    eprintln!(
-                        "[ivm] predecoded miss: has_predecoded=false contains_pc=false pc=0x{pc:x}",
-                        pc = self.pc
-                    );
-                    decoder::decode(&self.memory, self.pc)?
-                };
+                let fetched = self.fetch_instruction()?;
+                let instr = fetched.inst;
+                let length = fetched.len;
+                let wide_op = fetched.wide_op;
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "pc=0x{pc:08x} instr=0x{w:08x} len={len}",
@@ -2927,7 +3149,7 @@ impl IVM {
                 // cycle limit is set so that every instruction executes
                 // sequentially and the trace contains one entry per step.
                 if self.max_cycles == 0 {
-                    if let Some(simple) = to_simple(instr) {
+                    if let Some(simple) = fetched.simple {
                         // Part of a parallelisable block – defer execution.
                         self.pc = self.pc.wrapping_add(length as u64);
                         ilp_block.push(simple);
@@ -2940,7 +3162,6 @@ impl IVM {
                 }
 
                 let opcode_hi = (instr >> 24) as u8;
-                let wide_op = instruction::wide::opcode(instr);
                 if !instruction::wide::is_valid_opcode(wide_op) {
                     return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
                 }
@@ -2948,7 +3169,7 @@ impl IVM {
                 // Determine the gas cost for this operation and deduct it.
                 // Scale vector op costs by the current logical vector length.
                 // Future: include HTM retry penalties if enabled.
-                let cost = gas::cost_of_with_params(instr, self.vector_length, 0)
+                let cost = gas::cost_from_parts(fetched.base_gas, wide_op, self.vector_length, 0)
                     .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
                 if unlikely(self.gas_remaining < cost) {
                     return Err(VMError::OutOfGas);
@@ -5843,6 +6064,13 @@ fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
 impl IVM {
     /// Execute a slice of instructions using simple ILP scheduling.
     pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
+        if block.len() < ILP_MIN_PARALLEL_BLOCK_LEN {
+            for instr in block {
+                self.execute_instruction(*instr)?;
+            }
+            return Ok(());
+        }
+
         let mut vl = self.vector_length;
         let mut metas = Vec::with_capacity(block.len());
         let mut vls = Vec::with_capacity(block.len());
@@ -5997,13 +6225,62 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("program loads");
         assert!(vm.predecoded.is_some());
-        assert!(vm.predecoded_index.contains_key(&vm.pc));
+        assert!(vm.prepared_contains_pc(vm.pc));
         let decoded_len = vm
             .predecoded
             .as_ref()
             .map(|ops| ops.len())
             .unwrap_or_default();
-        assert_eq!(vm.predecoded_index.len(), decoded_len);
+        let prepared_len = vm
+            .prepared
+            .as_ref()
+            .map(|prepared| prepared.ops.len())
+            .unwrap_or_default();
+        assert_eq!(prepared_len, decoded_len);
+    }
+
+    #[test]
+    fn load_program_reuses_cached_prepared_ops() {
+        set_banner_enabled(false);
+        ivm_cache::init_global_with_capacity(64);
+        let program = program_with_imm(7);
+
+        let mut first_vm = IVM::new(u64::MAX);
+        first_vm
+            .load_program(&program)
+            .expect("first load succeeds");
+        let first_ops = first_vm.prepared.as_ref().expect("prepared").ops.clone();
+
+        let mut second_vm = IVM::new(u64::MAX);
+        second_vm
+            .load_program(&program)
+            .expect("second load succeeds");
+        let second_ops = second_vm.prepared.as_ref().expect("prepared").ops.clone();
+
+        assert!(Arc::ptr_eq(&first_ops, &second_ops));
+    }
+
+    #[test]
+    fn load_program_runs_unaligned_prefix_from_prepared_ops() {
+        set_banner_enabled(false);
+        let mut program = ProgramMetadata::default().encode();
+        program.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        program.extend_from_slice(&(2u32).to_le_bytes());
+        program.extend_from_slice(&(1u32).to_le_bytes());
+        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+        program.extend_from_slice(&0x99aa_bbcc_ddee_f010u64.to_le_bytes());
+        program.push(0);
+        program.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("program loads");
+        assert_eq!(vm.pc() & 0b11, 1);
+        assert!(vm.prepared_contains_pc(vm.pc()));
+
+        vm.reset_predecode_misses();
+        vm.run().expect("unaligned prefix program runs");
+        assert_eq!(vm.predecode_misses(), 0);
     }
 
     #[test]
@@ -6349,10 +6626,10 @@ seiyaku Demo {
             .expect("program with literals loads");
         assert_eq!(vm.pc(), literal_pc);
         assert!(vm.predecoded.is_some());
-        assert!(vm.predecoded_index.contains_key(&literal_pc));
+        assert!(vm.prepared_contains_pc(literal_pc));
 
         vm.reset();
         assert_eq!(vm.pc(), literal_pc);
-        assert!(vm.predecoded_index.contains_key(&literal_pc));
+        assert!(vm.prepared_contains_pc(literal_pc));
     }
 }

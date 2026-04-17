@@ -1051,6 +1051,7 @@ impl Actor {
                 proposal,
                 proposal_hint,
                 transactions_for_plan,
+                tx_sizes_for_plan,
                 block_hash,
             ) = loop {
                 let nexus = self.state.nexus_snapshot();
@@ -1455,6 +1456,7 @@ impl Actor {
                     proposal,
                     proposal_hint,
                     tx_batch.clone(),
+                    tx_sizes.clone(),
                     block_hash,
                 );
             };
@@ -1488,6 +1490,7 @@ impl Actor {
                     signed_block: &signed_block,
                     transactions: &transactions_for_plan,
                     routing: &routing_batch,
+                    tx_sizes: &tx_sizes_for_plan,
                     payload: &payload_bytes,
                     payload_hash,
                     height: proposal_height,

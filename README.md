@@ -42,12 +42,17 @@ cargo fmt --all
 
 Notes:
 
-- Plain `cargo test` runs the workspace `default-members`: a top-level
-  `iroha` library smoke build. Use `cargo test -p <crate>` for a focused crate
-  suite and `cargo test --workspace` for the full repository.
+- Plain `cargo test` from the repository root runs every workspace member.
+  `cargo test --workspace` is kept in examples when an explicit full-workspace
+  command is clearer. Use `cargo test -p <crate>` for a focused crate suite.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - The workspace targets `std` (WASM/no-std builds are not supported).
+- Heavier local UI/media helpers are explicit features in default builds:
+  `cargo run -p mochi-ui --features gui` for the egui desktop shell and
+  `cargo run -p iroha_cli --features offline-visual-codecs -- ...` for Petal
+  visual-codec commands. The SoraFS browser/SDK local QUIC proxy is available
+  with `cargo build -p sorafs_orchestrator --features local-quic-proxy`.
 
 ### Targeted Test Commands
 

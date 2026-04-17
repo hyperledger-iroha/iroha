@@ -7413,6 +7413,49 @@ impl Telemetry {
         }
     }
 
+    /// Record Torii transaction lane-admission latency without synchronizing the telemetry actor.
+    pub fn observe_torii_lane_admission_latency(
+        &self,
+        endpoint: &str,
+        lane_id: LaneId,
+        elapsed_seconds: f64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let lane_label = lane_id.as_u32().to_string();
+            self.metrics
+                .torii_lane_admission_latency_seconds
+                .with_label_values(&[lane_label.as_str(), endpoint])
+                .observe(elapsed_seconds);
+        }
+    }
+
+    /// Record Torii snapshot query metrics without synchronizing the telemetry actor.
+    pub fn observe_torii_query_snapshot(
+        &self,
+        mode: &str,
+        first_batch_latency_ms: Option<f64>,
+        gas_units: &[u64],
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&[mode])
+                .inc();
+            if let Some(ms) = first_batch_latency_ms {
+                self.metrics
+                    .torii_query_snapshot_first_batch_ms
+                    .with_label_values(&[mode])
+                    .observe(ms);
+            }
+            for units in gas_units {
+                self.metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode])
+                    .inc_by(*units);
+            }
+        }
+    }
+
     /// Record Torii API version negotiation outcomes.
     pub fn observe_torii_api_version(&self, result: &str, version: &str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -9241,6 +9284,50 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), telemetry.metrics())
             .await
             .expect("metrics() should not hang when the actor channel is closed");
+    }
+
+    #[test]
+    fn direct_torii_lane_admission_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_lane_admission_latency_seconds
+            .with_label_values(&["0", "transaction"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_lane_admission_latency("transaction", LaneId::SINGLE, 0.25);
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_query_snapshot_metric_records_request_latency_and_gas() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.observe_torii_query_snapshot("stored", Some(7.5), &[11, 13]);
+
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&["stored"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_first_batch_ms
+                .with_label_values(&["stored"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_gas_consumed_units_total
+                .with_label_values(&["stored"])
+                .get(),
+            24
+        );
     }
 
     #[tokio::test]

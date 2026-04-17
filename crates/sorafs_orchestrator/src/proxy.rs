@@ -7,30 +7,38 @@
 
 #![allow(unexpected_cfgs)]
 
+#[cfg(feature = "local-quic-proxy")]
+use std::path::{Component, Path, PathBuf};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
+#[cfg(feature = "local-quic-proxy")]
 use std::{
-    net::SocketAddr,
-    path::{Component, Path, PathBuf},
     pin::Pin,
-    str::FromStr,
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use hex::ToHex;
-use iroha_logger::{info, warn};
+#[cfg(feature = "local-quic-proxy")]
+use iroha_logger::info;
+#[cfg(feature = "local-quic-proxy")]
+use iroha_logger::warn;
+#[cfg(feature = "local-quic-proxy")]
 use iroha_telemetry::metrics::{global_or_default, global_sorafs_fetch_otel};
-use norito::{
-    NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice, decode_from_bytes, to_bytes,
-};
+use norito::{NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice};
+#[cfg(feature = "local-quic-proxy")]
+use norito::{decode_from_bytes, to_bytes};
+#[cfg(feature = "local-quic-proxy")]
 use quinn::{
     ConnectionError, Endpoint, ServerConfig, VarInt,
     crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
 use rand::{rand_core::TryRngCore, rngs::OsRng};
+#[cfg(feature = "local-quic-proxy")]
 use rcgen::generate_simple_self_signed;
+#[cfg(feature = "local-quic-proxy")]
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+#[cfg(feature = "local-quic-proxy")]
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
@@ -41,10 +49,13 @@ use tokio::{
 
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 
+#[cfg(feature = "local-quic-proxy")]
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
+#[cfg(feature = "local-quic-proxy")]
 const PROXY_ALPN_LABEL: &str = "sorafs-proxy/1";
 pub(crate) const PROXY_PROTOCOL_LABEL: &str = "local_quic_proxy";
 pub(crate) const PROXY_MANIFEST_ID: &str = "local_quic_proxy";
+#[cfg(feature = "local-quic-proxy")]
 const PROXY_CAPABILITIES: &[&str] = &[
     "raw-stream",
     "car",
@@ -54,15 +65,25 @@ const PROXY_CAPABILITIES: &[&str] = &[
 ];
 const PROXY_SESSION_ID_LEN: usize = 16;
 const PROXY_CACHE_TAG_SALT_LEN: usize = 16;
+#[cfg(feature = "local-quic-proxy")]
 const PROXY_STREAM_VERSION: u8 = 1;
+#[cfg(feature = "local-quic-proxy")]
 const PROXY_MAX_FRAME_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_OK: u8 = 0;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_UNSUPPORTED_SERVICE: u8 = 1;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_MODE_DISABLED: u8 = 2;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_BAD_REQUEST: u8 = 3;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_INTERNAL_ERROR: u8 = 4;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_UNSUPPORTED_VERSION: u8 = 5;
+#[cfg(feature = "local-quic-proxy")]
 const STREAM_ACK_NOT_IMPLEMENTED: u8 = 7;
+#[cfg(feature = "local-quic-proxy")]
 const CACHE_TAG_FIELD_SEPARATOR: u8 = 0x1f;
 
 /// Configuration for the local QUIC proxy.
@@ -256,6 +277,7 @@ fn default_kaigi_bridge_extension() -> Option<String> {
     Some("norito".to_string())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone, Default)]
 struct ProxyBridgeConfig {
     norito: Option<ProxyNoritoBridge>,
@@ -263,6 +285,7 @@ struct ProxyBridgeConfig {
     kaigi: Option<ProxyKaigiBridge>,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyBridgeConfig {
     fn from_config(config: &LocalQuicProxyConfig) -> Self {
         let norito = config
@@ -293,12 +316,14 @@ impl ProxyBridgeConfig {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyNoritoBridge {
     spool_dir: PathBuf,
     extension: Option<String>,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyNoritoBridge {
     fn from_config(cfg: &ProxyNoritoBridgeConfig) -> Option<Self> {
         let spool_dir = cfg.spool_dir.trim();
@@ -327,6 +352,7 @@ impl ProxyNoritoBridge {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyCarBridge {
     cache_dir: PathBuf,
@@ -334,6 +360,7 @@ struct ProxyCarBridge {
     allow_zst: bool,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyCarBridge {
     fn from_config(cfg: &ProxyCarBridgeConfig) -> Option<Self> {
         let cache_dir = cfg.cache_dir.trim();
@@ -368,6 +395,7 @@ impl ProxyCarBridge {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxyKaigiBridge {
     spool_dir: PathBuf,
@@ -375,6 +403,7 @@ struct ProxyKaigiBridge {
     room_policy: ProxyKaigiRoomPolicy,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyKaigiBridge {
     fn from_config(cfg: &ProxyKaigiBridgeConfig) -> Option<Self> {
         let spool_dir = cfg.spool_dir.trim();
@@ -423,6 +452,7 @@ impl ProxyKaigiBridge {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn sanitize_extension(ext: &str) -> Option<String> {
     let trimmed = ext.trim().trim_start_matches('.');
     if trimmed.is_empty() {
@@ -432,6 +462,7 @@ fn sanitize_extension(ext: &str) -> Option<String> {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn sanitize_relative_target(target: &str) -> Result<PathBuf, String> {
     if target.trim().is_empty() {
         return Err("target must not be empty".to_string());
@@ -454,12 +485,14 @@ fn sanitize_relative_target(target: &str) -> Result<PathBuf, String> {
     Ok(sanitized)
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProxyKaigiRoomPolicy {
     Public,
     Authenticated,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyKaigiRoomPolicy {
     fn from_str(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -513,7 +546,13 @@ pub enum ProxyError {
     /// Guard cache key could not be parsed.
     #[error(transparent)]
     GuardCacheKey(#[from] GuardCacheKeyError),
+    /// Local QUIC proxy support was not enabled at compile time.
+    #[error(
+        "local QUIC proxy support is not compiled in; rebuild with the `local-quic-proxy` feature"
+    )]
+    Unavailable,
     /// Generating the self-signed certificate failed.
+    #[cfg(feature = "local-quic-proxy")]
     #[error("failed to generate proxy certificate: {0}")]
     Certificate(rcgen::Error),
     /// Preparing the proxy private key failed.
@@ -574,6 +613,7 @@ impl LocalQuicProxyHandle {
     }
 
     /// Gracefully shuts the proxy down.
+    #[cfg(feature = "local-quic-proxy")]
     pub async fn shutdown(&self) {
         if self.inner.shutdown_tx.send(true).is_ok()
             && let Some(handle) = self.inner.join_handle.lock().await.take()
@@ -581,9 +621,14 @@ impl LocalQuicProxyHandle {
             let _ = handle.await;
         }
     }
+
+    /// Gracefully shuts the proxy down.
+    #[cfg(not(feature = "local-quic-proxy"))]
+    pub async fn shutdown(&self) {}
 }
 
 struct LocalQuicProxyInner {
+    #[cfg(feature = "local-quic-proxy")]
     #[allow(unused)]
     endpoint: Endpoint,
     local_addr: SocketAddr,
@@ -591,7 +636,9 @@ struct LocalQuicProxyInner {
     browser_manifest: Option<BrowserManifestTemplate>,
     mode: ProxyMode,
     guard_cache_key: Option<GuardCacheKey>,
+    #[cfg(feature = "local-quic-proxy")]
     shutdown_tx: watch::Sender<bool>,
+    #[cfg(feature = "local-quic-proxy")]
     join_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -601,6 +648,7 @@ struct BrowserManifestTemplate {
 }
 
 impl BrowserManifestTemplate {
+    #[cfg(feature = "local-quic-proxy")]
     fn new(base: BrowserExtensionManifest) -> Self {
         Self { base }
     }
@@ -619,6 +667,7 @@ impl BrowserManifestTemplate {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn build_manifest_template(
     config: &LocalQuicProxyConfig,
     local_addr: SocketAddr,
@@ -948,6 +997,7 @@ pub struct ProxyTelemetryPrivacy {
 }
 
 impl ProxyTelemetryPrivacy {
+    #[cfg(feature = "local-quic-proxy")]
     fn new_default() -> Self {
         Self {
             fingerprint_prefix_bits: Some(20),
@@ -1010,6 +1060,7 @@ impl<'a> DecodeFromSlice<'a> for ProxyCacheTagging {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct ProxySession {
     telemetry_label: String,
@@ -1020,6 +1071,7 @@ struct ProxySession {
     bridge: Arc<ProxyBridgeConfig>,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Clone)]
 struct CacheTagContext {
     alg: String,
@@ -1027,6 +1079,7 @@ struct CacheTagContext {
     salt: Vec<u8>,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl CacheTagContext {
     fn from_cache_tagging(tagging: &ProxyCacheTagging) -> Option<Self> {
         let salt_hex = tagging.salt_hex.as_deref()?;
@@ -1066,6 +1119,7 @@ impl CacheTagContext {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxySession {
     fn cache_tag_for(
         &self,
@@ -1097,11 +1151,13 @@ impl ProxySession {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 struct QuicBidirectionalStream {
     send: quinn::SendStream,
     recv: quinn::RecvStream,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl QuicBidirectionalStream {
     fn new(send: quinn::SendStream, recv: quinn::RecvStream) -> Self {
         Self { send, recv }
@@ -1113,6 +1169,7 @@ impl QuicBidirectionalStream {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl AsyncRead for QuicBidirectionalStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1123,6 +1180,7 @@ impl AsyncRead for QuicBidirectionalStream {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl AsyncWrite for QuicBidirectionalStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -1153,6 +1211,7 @@ impl AsyncWrite for QuicBidirectionalStream {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn append_tag_component(buffer: &mut Vec<u8>, value: Option<&str>) {
     buffer.push(CACHE_TAG_FIELD_SEPARATOR);
     if let Some(raw) = value {
@@ -1163,6 +1222,7 @@ fn append_tag_component(buffer: &mut Vec<u8>, value: Option<&str>) {
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn hmac_sha256_128(key: &[u8], message: &[u8]) -> [u8; 16] {
     const BLOCK: usize = 64;
     let mut key_block = [0u8; BLOCK];
@@ -1196,6 +1256,7 @@ fn hmac_sha256_128(key: &[u8], message: &[u8]) -> [u8; 16] {
 }
 
 /// Spawn a QUIC proxy bound to the configured address.
+#[cfg(feature = "local-quic-proxy")]
 pub fn spawn_local_quic_proxy(
     config: LocalQuicProxyConfig,
 ) -> Result<LocalQuicProxyHandle, ProxyError> {
@@ -1272,6 +1333,17 @@ pub fn spawn_local_quic_proxy(
     })
 }
 
+/// Report that local QUIC proxy runtime support was not compiled in.
+#[cfg(not(feature = "local-quic-proxy"))]
+pub fn spawn_local_quic_proxy(
+    config: LocalQuicProxyConfig,
+) -> Result<LocalQuicProxyHandle, ProxyError> {
+    let _ = config.parsed_bind_addr()?;
+    let _ = config.guard_cache_key()?;
+    Err(ProxyError::Unavailable)
+}
+
+#[cfg(feature = "local-quic-proxy")]
 async fn run_accept_loop(
     endpoint: Endpoint,
     telemetry_label: String,
@@ -1337,6 +1409,7 @@ async fn run_accept_loop(
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_connection(
     connection: quinn::Connection,
     manifest_template: Option<BrowserManifestTemplate>,
@@ -1445,6 +1518,7 @@ async fn handle_connection(
     Ok(())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, Error)]
 enum FrameError {
     #[error("frame length {len} exceeds max {max} bytes")]
@@ -1453,6 +1527,7 @@ enum FrameError {
     Read(#[from] quinn::ReadExactError),
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, FrameError> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
@@ -1468,6 +1543,7 @@ async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, FrameErro
     Ok(buf)
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn write_frame<T: NoritoSerialize>(
     stream: &mut quinn::SendStream,
     payload: &T,
@@ -1486,6 +1562,7 @@ async fn write_frame<T: NoritoSerialize>(
     Ok(())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_application_stream(
     mut send_stream: quinn::SendStream,
     mut recv_stream: quinn::RecvStream,
@@ -1568,6 +1645,7 @@ async fn handle_application_stream(
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn record_transport_event(label: &str, event: &str, reason: &str) {
     let metrics = global_or_default();
     metrics.inc_sorafs_orchestrator_transport_event(label, PROXY_PROTOCOL_LABEL, event, reason);
@@ -1582,6 +1660,7 @@ fn record_transport_event(label: &str, event: &str, reason: &str) {
     );
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn send_failure_ack(
     mut send_stream: quinn::SendStream,
     mut recv_stream: quinn::RecvStream,
@@ -1595,6 +1674,7 @@ async fn send_failure_ack(
     Ok(())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_tcp_stream(
     mut send_stream: quinn::SendStream,
     recv_stream: quinn::RecvStream,
@@ -1688,6 +1768,7 @@ async fn handle_tcp_stream(
     Ok(())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_norito_stream(
     mut send_stream: quinn::SendStream,
     mut recv_stream: quinn::RecvStream,
@@ -1856,6 +1937,7 @@ async fn handle_norito_stream(
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_kaigi_stream(
     mut send_stream: quinn::SendStream,
     mut recv_stream: quinn::RecvStream,
@@ -1981,6 +2063,7 @@ async fn handle_kaigi_stream(
     Ok(())
 }
 
+#[cfg(feature = "local-quic-proxy")]
 async fn handle_car_stream(
     mut send_stream: quinn::SendStream,
     mut recv_stream: quinn::RecvStream,
@@ -2149,6 +2232,7 @@ async fn handle_car_stream(
     }
 }
 
+#[cfg(feature = "local-quic-proxy")]
 fn extract_stream_target(open_frame: &ProxyStreamOpenV1) -> Option<&str> {
     open_frame
         .target
@@ -2174,6 +2258,7 @@ fn generate_cache_salt() -> String {
 }
 
 /// Proxy handshake payload dispatched by clients.
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyHandshakeV1 {
     version: u8,
@@ -2184,6 +2269,7 @@ struct ProxyHandshakeV1 {
 }
 
 /// Acknowledgement returned to clients after the handshake completes.
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyHandshakeAckV1 {
     version: u8,
@@ -2195,6 +2281,7 @@ struct ProxyHandshakeAckV1 {
 }
 
 /// Stream open frame dispatched per application channel.
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyStreamOpenV1 {
     version: u8,
@@ -2213,6 +2300,7 @@ struct ProxyStreamOpenV1 {
 }
 
 /// Stream acknowledgement returned once the proxy routes a request.
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
 struct ProxyStreamAckV1 {
     version: u8,
@@ -2224,6 +2312,7 @@ struct ProxyStreamAckV1 {
     cache_tag_hex: Option<String>,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyStreamService {
     Tcp,
@@ -2233,6 +2322,7 @@ enum ProxyStreamService {
     Unknown,
 }
 
+#[cfg(feature = "local-quic-proxy")]
 impl ProxyStreamService {
     fn from_label(label: &str) -> Self {
         match label.trim().to_ascii_lowercase().as_str() {
@@ -2255,7 +2345,7 @@ impl ProxyStreamService {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
     use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
@@ -2274,11 +2364,11 @@ mod tests {
         ClientConfig, Endpoint, ServerConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
         crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
-    };
-    use rustls::{
-        DigitallySignedStruct, Error as RustlsError, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
+        rustls::{
+            self, DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+            client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+            pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
+        },
     };
 
     fn should_skip_socket_permission(message: &str) -> bool {
@@ -3034,6 +3124,36 @@ mod tests {
                 SignatureScheme::ED25519,
                 SignatureScheme::RSA_PSS_SHA256,
             ]
+        }
+    }
+}
+
+#[cfg(all(test, not(feature = "local-quic-proxy")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawn_local_quic_proxy_reports_disabled_feature() {
+        let result = spawn_local_quic_proxy(LocalQuicProxyConfig::default());
+        match result {
+            Err(ProxyError::Unavailable) => {}
+            Ok(_) => panic!("local QUIC proxy must not spawn without the feature"),
+            Err(other) => panic!("expected unavailable feature error, got {other}"),
+        }
+    }
+
+    #[test]
+    fn disabled_proxy_still_validates_loopback_binding() {
+        let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
+            bind_addr: "0.0.0.0:0".into(),
+            ..LocalQuicProxyConfig::default()
+        });
+        match result {
+            Err(ProxyError::BindAddressNotLoopback(addr)) => {
+                assert_eq!(addr, "0.0.0.0:0".parse().expect("addr"));
+            }
+            Ok(_) => panic!("non-loopback bind must be rejected"),
+            Err(other) => panic!("expected loopback bind rejection, got {other}"),
         }
     }
 }
