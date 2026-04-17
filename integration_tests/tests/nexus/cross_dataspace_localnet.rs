@@ -1784,7 +1784,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     }
 
     let setup_grants_tx = {
-        let submitter = nexus_alice_submitter.clone();
+        let submitter = alice_on_ds1.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let setup_grants_tx = submitter.build_transaction(
             vec![InstructionBox::from(Grant::account_permission(
@@ -1801,26 +1801,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     {
         let _phase = phase_timings.phase("setup grants: tx committed outcome");
         let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
-        let setup_grants_pre_barrier_height = alice
+        let setup_grants_pre_barrier_height = alice_on_ds1
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err))?
             .commit_qc
-            .height
-            .max(
-                bob.get_sumeragi_status_wire()
-                    .map_err(|err| eyre!(err))?
-                    .commit_qc
-                    .height,
-            );
+            .height;
         wait_for_committed_success_or_height_fallback(
-            // Committed transaction history is authority-routed, so observe the grant through
-            // the submitting authority. Polling Bob's authority route here can only ever see
-            // the fallback height barrier and masks rejected or still-unseen grant outcomes.
-            &nexus_alice_submitter,
-            &nexus_alice_submitter,
+            &alice_on_ds1,
+            &alice_on_ds1,
             setup_grants_entry_hash,
-            "setup grants committed outcome",
-            "setup grants commit barrier",
+            "setup grants committed outcome on ds1 authoritative observer",
+            "setup grants commit barrier on ds1 authoritative observer",
             setup_grants_pre_barrier_height,
             BLOCKING_CONFIRMATION_TIMEOUT,
             BLOCKING_CONFIRMATION_TIMEOUT,
