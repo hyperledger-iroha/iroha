@@ -17,10 +17,12 @@ mod merkle_unified;
 mod nexus;
 #[path = "norito_burn_fixture.rs"]
 mod norito_burn_fixture;
+#[cfg(feature = "quic")]
 #[path = "norito_streaming_end_to_end.rs"]
 mod norito_streaming_end_to_end;
 #[path = "norito_streaming_fec.rs"]
 mod norito_streaming_fec;
+#[cfg(feature = "quic")]
 #[path = "norito_streaming_feedback.rs"]
 mod norito_streaming_feedback;
 #[path = "norito_streaming_negative.rs"]

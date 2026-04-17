@@ -44,6 +44,7 @@ default = ["telemetry"]
 fault_injection = []
 telemetry = ["iroha_core/telemetry"]
 norito_streaming_fec = ["reed-solomon-erasure"]
+quic = ["iroha_core/quic", "iroha_p2p/quic"]
 js_host_parity = []
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 
