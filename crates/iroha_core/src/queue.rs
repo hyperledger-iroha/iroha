@@ -1764,6 +1764,7 @@ impl Queue {
                     });
                 }
                 if let Some(authority) = checked.as_ref().authority_opt()
+                    && !rules.validators.is_empty()
                     && !allows_multisig_envelope_authority
                     && !rules
                         .validators
@@ -4147,16 +4148,17 @@ pub mod tests {
 
     #[test]
     fn apply_lane_lifecycle_reconfigures_router_and_limits() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
-        let nexus = Nexus {
-            enabled: true,
-            lane_catalog: lane_catalog.clone(),
-            ..Nexus::default()
-        };
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog.clone();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial Nexus config");
@@ -4185,8 +4187,16 @@ pub mod tests {
         );
         queue.time_source = time_source.clone();
 
-        let (account_id, keypair) = gen_account_in("wonderland");
-        let tx = accepted_tx_by(account_id, &keypair, &time_source);
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "lane lifecycle reroute".into(),
+            ))],
+            Metadata::default(),
+        );
         let tx_hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push");
 
@@ -4730,6 +4740,11 @@ pub mod tests {
             DataSpaceId::GLOBAL,
         )
         .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
 
         // Metadata with a governed contract address is accepted for protected contract ops.
         let mut metadata = Metadata::default();
@@ -4741,7 +4756,7 @@ pub mod tests {
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate.clone()],
             metadata,
         );
         queue
@@ -4770,7 +4785,7 @@ pub mod tests {
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate.clone()],
             metadata_missing_cid,
         );
         let err = queue
@@ -4808,7 +4823,7 @@ pub mod tests {
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate],
             valid_metadata,
         );
         let err = queue

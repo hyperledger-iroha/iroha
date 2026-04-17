@@ -98859,6 +98859,7 @@ async fn validation_records_state_roots_for_valid_block() {
         block_hash,
         PendingBlock::new(block, payload_hash, height, view_u64),
     );
+    actor.slot_tracker.proposals_seen.insert((height, view_u64));
 
     let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
     assert!(
@@ -98904,6 +98905,7 @@ async fn validation_inline_records_state_roots_for_valid_block() {
         block_hash,
         PendingBlock::new(block, payload_hash, height, view_u64),
     );
+    actor.slot_tracker.proposals_seen.insert((height, view_u64));
 
     let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
     assert!(
