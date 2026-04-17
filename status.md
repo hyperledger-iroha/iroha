@@ -15,12 +15,18 @@ Last updated: 2026-04-17
   scoping. Musubi rejects mixing `--provider-payload` with
   `--gateway-provider`, rejects gateway tuning flags without a provider, and
   requires `package=<alias-or-ref-or-id>` or `manifest=<64-hex>` when more than
-  one lockfile source is missing.
+  one lockfile source is missing. Provider and privacy URLs must be `https://`
+  unless `--gateway-allow-insecure-localhost` is explicitly set for loopback
+  `http://localhost`, `http://127.0.0.1`, or `http://[::1]` development
+  gateways.
 - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/musubi_registry.rs`
-  adds a 4-peer registry smoke covering SoraFS pin registration, dependency
-  publish order, transitive dependency recording, package version/release
-  queries, package search, curated short aliases, and yank filtering from a
-  different peer.
+  adds 4-peer registry smokes covering SoraFS pin registration, dependency
+  publish order, post-genesis publish/alias/yank transactions, transitive
+  dependency recording, package version/release queries, package search,
+  curated short aliases, and yank filtering from a different peer.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
+  has focused registry guard tests for short-alias retarget rejection, active
+  release requirements, and dapp contract alias existence checks.
 - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md` now documents
   the live gateway fetch CLI, provider scoping rules, payload/gateway
   exclusivity, runtime-only stream tokens, and gateway retry/scoreboard knobs.
@@ -605,7 +611,7 @@ Last updated: 2026-04-17
   - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p sorafs_orchestrator --locked`
   - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-feature cargo check -p sorafs_orchestrator --features local-quic-proxy --locked`
 
-## 2026-04-17 Follow-up: Torii core latency fast paths and load profiles
+## 2026-04-17 Follow-up: Torii core latency fast paths and profiling gap closure
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
   now returns a verified `SignedQuery` payload directly after signature
   verification instead of Norito re-encoding and decoding it on the `/query`
@@ -623,37 +629,54 @@ Last updated: 2026-04-17
   `parking_lot`-guarded buckets while preserving the public async limiter API
   and configured bucket cap.
 - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
-  adds an ignored four-peer HTTP smoke that drives signed `FindParameters`
-  queries and transaction submissions across real Torii sockets.
+  now runs an ignored four-peer HTTP profile with bounded concurrency, warmup
+  samples, environment overrides for local load sizing, and separate
+  submit-only versus submit-to-commit transaction measurements.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/profile_stats.rs`
+  centralizes profile summaries so ignored profiles and Criterion smokes print
+  the same `torii_profile` schema: samples, warmup samples, concurrency,
+  wall-clock time, throughput, average, p50/p95/p99, p999 when sample size
+  supports it, and max latency.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_telemetry/src/metrics.rs`
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
+  now expose `torii_route_stage_latency_seconds`, labelled by route kind,
+  route stage, and outcome. Torii records query verify/handle/response stages
+  and transaction build/verify/enqueue/handle stages without actor sync.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/benches/torii_hot_paths.rs`
+  adds Criterion coverage for signed query verification, `FindParameters`
+  query handling, transaction admission, and same-key/distinct-key limiter
+  checks using the existing optional `bench` feature.
 - Focused tests were added for signed query verification, direct Torii metric
   observation without an actor sync, and concurrent limiter admission.
-- An ignored release-mode Torii hot-path profile now lives beside the focused
-  routing tests and samples signed query verification, Norito query handling,
-  parameter-query handling, transaction admission, and distinct-key/same-key
-  concurrent pre-auth limiter admission without mixing setup work into the
-  measured loops. On this host it measured:
-  `signed_query_verify_direct` p50 1.500 us / p95 1.625 us / p99 1.792 us;
-  `query_find_abi_norito_with_direct_metrics` p50 27.792 us / p95 47.417 us /
-  p99 66.333 us; `query_find_parameters_norito_with_direct_metrics` p50
-  29.166 us / p95 48.375 us / p99 57.333 us;
-  `transaction_admission_with_direct_metrics` p50 79.750 us / p95 86.042 us /
-  p99 106.958 us; `preauth_rate_limiter_distinct_keys_concurrent` p50
-  0.500 us / p95 1.125 us / p99 3.792 us; and
-  `preauth_rate_limiter_same_key_concurrent` p50 0.250 us / p95 1.458 us /
-  p99 13.875 us.
-- The four-peer HTTP smoke measured `query_find_parameters` at p50 14.075 ms /
-  p95 16.102 ms / p99 16.401 ms and `transaction_submit` at p50 11.067 ms /
-  p95 13.271 ms / p99 13.804 ms in this local environment.
+- The release-mode in-process profile now uses warmup and larger samples. On
+  this host it measured: signed query verify p50/p95/p99/p999
+  1.541/1.667/1.792/23.250 us at ~614.8k ops/s; Norito `FindAbiVersion`
+  query handling 15.208/62.083/79.291/147.250 us at ~43.8k ops/s; Norito
+  `FindParameters` query handling 18.292/67.625/90.083/108.041 us at
+  ~36.8k ops/s; transaction admission 87.834/133.708/197.792/246.834 us at
+  ~10.8k ops/s; distinct-key limiter 0.667/1.416/5.166/34.292 us at ~1.41M
+  ops/s; and same-key limiter 0.167/2.292/16.833/59.458 us at ~3.18M ops/s.
+- The four-peer release HTTP profile measured `query_find_parameters` at
+  p50/p95/p99 1.272/1.663/1.886 ms with ~16.7k req/s, `transaction_submit` at
+  0.836/1.098/1.203 ms with ~17.5k req/s, and
+  `transaction_submit_to_commit` at 4.058/5.546/5.546 s with ~5.74 tx/s in
+  this local DA/RBC test network.
+- The short Criterion smoke measured signed query verification at
+  1.477-1.494 us, `FindParameters` query handling at 48.430-67.752 us,
+  transaction admission at 54.117-55.085 us, distinct-key limiter checks at
+  358.44-375.34 ns, and same-key limiter checks at 148.01-149.08 ns.
 - Validation for this slice:
-  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs integration_tests/tests/core_api.rs integration_tests/tests/torii_load_profile.rs`
-  - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target signed_query_verification_tests -- --nocapture`
-  - `cargo test -p iroha_torii --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
-  - `cargo test -p iroha_torii --lib --target-dir /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently -- --nocapture`
-  - `cargo test -p iroha_core --features telemetry --lib --target-dir /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
-  - `cargo test -p iroha_torii --features telemetry --release --lib --target-dir /tmp/iroha-torii-load-target torii_hot_path_load_profile -- --ignored --nocapture`
-  - `cargo test -p integration_tests --test core_api torii_http_hot_path_load_profile --target-dir /tmp/iroha-torii-http-load-target -- --ignored --nocapture`
-  - `cargo check -p iroha_core --lib --target-dir /tmp/iroha-torii-gap-plan-core-check`
-  - `git diff --check -- crates/iroha_torii/src/routing.rs integration_tests/tests/core_api.rs integration_tests/tests/torii_load_profile.rs status.md roadmap.md`
+  - `rustfmt --edition 2024 crates/iroha_torii/src/profile_stats.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_telemetry/src/metrics.rs crates/iroha_core/src/telemetry.rs integration_tests/tests/torii_load_profile.rs crates/iroha_torii/benches/torii_hot_paths.rs`
+  - `cargo check -p iroha_core --features telemetry --lib --target-dir /tmp/iroha-torii-profile-core-check`
+  - `cargo check -p iroha_torii --features telemetry,bench --bench torii_hot_paths --target-dir /tmp/iroha-torii-profile-bench-check`
+  - `cargo test -p iroha_torii --features telemetry --lib profile_stats --target-dir /tmp/iroha-torii-profile-tests -- --nocapture`
+  - `cargo test -p iroha_core --features telemetry --lib direct_torii_route_stage_metric_records_without_actor --target-dir /tmp/iroha-torii-profile-core-check -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --lib signed_query_verification_tests --target-dir /tmp/iroha-torii-profile-tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --lib lane_admission_latency_tests --target-dir /tmp/iroha-torii-profile-tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --release --lib --target-dir /tmp/iroha-torii-profile-release torii_hot_path_load_profile -- --ignored --nocapture`
+  - `cargo test -p integration_tests --release --test torii_load_profile torii_http_hot_path_load_profile --target-dir /tmp/iroha-torii-profile-release -- --ignored --nocapture`
+  - `cargo bench -p iroha_torii --features bench,telemetry --bench torii_hot_paths --target-dir /tmp/iroha-torii-profile-release -- --sample-size 10 --warm-up-time 1 --measurement-time 1`
+  - `git diff --check -- crates/iroha_torii/src/profile_stats.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_telemetry/src/metrics.rs crates/iroha_core/src/telemetry.rs integration_tests/tests/torii_load_profile.rs crates/iroha_torii/benches/torii_hot_paths.rs crates/iroha_torii/Cargo.toml integration_tests/Cargo.toml status.md roadmap.md`
 
 ## 2026-04-17 Follow-up: Musubi composable package flow hardened
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`

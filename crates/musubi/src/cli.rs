@@ -411,6 +411,9 @@ struct GatewayFetchArgs {
     /// Persist the gateway fetch scoreboard JSON artifact
     #[arg(long, value_name = "PATH")]
     gateway_scoreboard_out: Option<PathBuf>,
+    /// Permit http://localhost, http://127.0.0.1, or http://[::1] gateway URLs for local testing
+    #[arg(long = "gateway-allow-insecure-localhost")]
+    gateway_allow_insecure_localhost: bool,
 }
 
 impl GatewayFetchArgs {
@@ -425,6 +428,7 @@ impl GatewayFetchArgs {
             || self.gateway_max_peers.is_some()
             || self.gateway_telemetry_region.is_some()
             || self.gateway_scoreboard_out.is_some()
+            || self.gateway_allow_insecure_localhost
     }
 }
 
@@ -2759,7 +2763,57 @@ fn validate_source_fetch_inputs(
     if !gateway.has_providers() && gateway.has_any_args() {
         bail!("gateway fetch options require at least one --gateway-provider");
     }
+    if gateway.has_providers() {
+        validate_gateway_provider_urls(gateway)?;
+    }
     Ok(())
+}
+
+fn validate_gateway_provider_urls(gateway: &GatewayFetchArgs) -> Result<()> {
+    for provider in &gateway.gateway_provider {
+        validate_gateway_provider_url(
+            &provider.base_url,
+            "--gateway-provider base-url",
+            gateway.gateway_allow_insecure_localhost,
+        )?;
+        if let Some(privacy_events_url) = &provider.privacy_events_url {
+            validate_gateway_provider_url(
+                privacy_events_url,
+                "--gateway-provider privacy-url",
+                gateway.gateway_allow_insecure_localhost,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_gateway_provider_url(
+    raw: &str,
+    label: &str,
+    allow_insecure_localhost: bool,
+) -> Result<()> {
+    let url =
+        url::Url::parse(raw.trim()).map_err(|err| eyre!("{label} must be a valid URL: {err}"))?;
+    if url.host().is_none() {
+        bail!("{label} must include a host");
+    }
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if allow_insecure_localhost && is_loopback_gateway_url(&url) => Ok(()),
+        "http" => bail!(
+            "{label} must use https; http is only allowed for localhost with --gateway-allow-insecure-localhost"
+        ),
+        scheme => bail!("{label} must use https, found `{scheme}`"),
+    }
+}
+
+fn is_loopback_gateway_url(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        None => false,
+    }
 }
 
 fn count_missing_lockfile_sources(lockfile: &MusubiLockfile, cache_dir: &Path) -> usize {
@@ -3518,7 +3572,18 @@ fn join_contract_aliases(aliases: &[ContractAlias]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::HashMap,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread,
+        time::Duration,
+    };
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use iroha_data_model::{Decode, Encode};
+    use sorafs_car::{gateway::GatewayFetchContext, multi_fetch::FetchOptions};
+    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
 
     #[test]
     fn manifest_parses_namespace_dependencies_exports_and_dapp_link() {
@@ -3813,6 +3878,70 @@ mod tests {
     }
 
     #[test]
+    fn gateway_provider_rejects_public_http_url() {
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "http://gw.example".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: None,
+                package: None,
+                manifest_id_hex: None,
+            }],
+            ..GatewayFetchArgs::default()
+        };
+
+        let err = validate_source_fetch_inputs(&[], &gateway).expect_err("http rejected");
+
+        assert!(err.to_string().contains("must use https"));
+    }
+
+    #[test]
+    fn gateway_provider_accepts_https_url() {
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "https://gw.example".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: Some("https://privacy.example/events".into()),
+                package: None,
+                manifest_id_hex: None,
+            }],
+            ..GatewayFetchArgs::default()
+        };
+
+        validate_source_fetch_inputs(&[], &gateway).expect("https accepted");
+    }
+
+    #[test]
+    fn gateway_provider_accepts_local_http_only_with_explicit_flag() {
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "http://127.0.0.1:8080".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: Some("http://[::1]:8081/privacy/events".into()),
+                package: None,
+                manifest_id_hex: None,
+            }],
+            ..GatewayFetchArgs::default()
+        };
+
+        let err =
+            validate_source_fetch_inputs(&[], &gateway).expect_err("localhost http needs flag");
+        assert!(err.to_string().contains("gateway-allow-insecure-localhost"));
+
+        let gateway = GatewayFetchArgs {
+            gateway_allow_insecure_localhost: true,
+            ..gateway
+        };
+        validate_source_fetch_inputs(&[], &gateway).expect("localhost http accepted with flag");
+    }
+
+    #[test]
     fn source_archive_plan_reconstructs_gateway_car_plan() {
         let source = tempfile::tempdir().expect("source tempdir");
         fs::write(
@@ -3851,6 +3980,7 @@ mod tests {
         struct StaticGatewayRunner {
             manifest_id_hex: String,
             payload: Vec<u8>,
+            scoreboard_path: PathBuf,
         }
 
         impl GatewayFetchRunner for StaticGatewayRunner {
@@ -3865,6 +3995,14 @@ mod tests {
                 assert_eq!(request.providers[0].name, "gw");
                 assert_eq!(request.options.retry_budget, Some(2));
                 assert_eq!(request.options.max_peers, Some(1));
+                assert_eq!(
+                    request
+                        .options
+                        .scoreboard
+                        .as_ref()
+                        .and_then(|scoreboard| scoreboard.persist_path.as_ref()),
+                    Some(&self.scoreboard_path)
+                );
                 assert_eq!(request.plan.content_length, self.payload.len() as u64);
                 Ok(self.payload.clone())
             }
@@ -3902,6 +4040,7 @@ mod tests {
             direct: true,
             resolved: true,
         };
+        let scoreboard_path = source.path().join("scoreboard.json");
         let gateway = GatewayFetchArgs {
             gateway_provider: vec![GatewayProviderSpec {
                 name: "gw".into(),
@@ -3916,11 +4055,13 @@ mod tests {
             gateway_retry_budget: Some(2),
             gateway_max_peers: Some(1),
             gateway_telemetry_region: Some("test-region".into()),
-            gateway_scoreboard_out: None,
+            gateway_scoreboard_out: Some(scoreboard_path.clone()),
+            gateway_allow_insecure_localhost: false,
         };
         let runner = StaticGatewayRunner {
             manifest_id_hex,
             payload: sorafs.payload,
+            scoreboard_path,
         };
         let cache = tempfile::tempdir().expect("cache tempdir");
 
@@ -3941,6 +4082,193 @@ mod tests {
                 .expect("read fetched");
         assert_eq!(fetched, "fn add() {}\n");
         verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    #[test]
+    fn cache_fetch_reconstructs_source_from_live_gateway() {
+        struct RealGatewayRunner;
+
+        impl GatewayFetchRunner for RealGatewayRunner {
+            fn fetch(&self, request: GatewayFetchRequest) -> Result<Vec<u8>> {
+                let context =
+                    GatewayFetchContext::new(request.gateway_config, request.providers)
+                        .map_err(|err| eyre!("failed to build gateway fetch context: {err}"))?;
+                let mut options = FetchOptions::default();
+                options.per_chunk_retry_limit = request.options.retry_budget;
+                options.global_parallel_limit = request.options.max_peers;
+                let runtime = tokio::runtime::Runtime::new()
+                    .wrap_err("failed to initialise Tokio runtime")?;
+                let outcome = runtime
+                    .block_on(context.execute_plan(&request.plan, options))
+                    .map_err(|err| eyre!("gateway fetch failed: {err}"))?;
+                Ok(outcome.assemble_payload())
+            }
+        }
+
+        let source = tempfile::tempdir().expect("source tempdir");
+        fs::write(
+            source.path().join("Musubi.toml"),
+            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir(source.path().join("src")).expect("src dir");
+        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+
+        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
+        let archive_stats = hash_source_tree(source.path()).expect("archive hash");
+        let sorafs =
+            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive_stats)
+                .expect("sorafs manifest");
+        let manifest_id_hex = hex::encode(sorafs.digest.as_bytes());
+        let chunks = sorafs
+            .source_plan
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let chunk_start = usize::try_from(chunk.offset).expect("chunk offset");
+                let chunk_end = chunk_start + usize::try_from(chunk.length).expect("chunk length");
+                (
+                    format!(
+                        "/v1/sorafs/storage/chunk/{}/{}",
+                        manifest_id_hex,
+                        hex::encode(chunk.digest_blake3_256)
+                    ),
+                    sorafs.payload[chunk_start..chunk_end].to_vec(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let base_url = spawn_chunk_gateway(chunks);
+        let provider_id_hex = "11".repeat(32);
+        let chunker_handle = chunker_registry::default_descriptor().aliases[0].to_owned();
+        let token = stream_token_b64(&manifest_id_hex, &provider_id_hex, &chunker_handle, 4);
+        let package = LockedPackage {
+            alias: "math".parse().unwrap(),
+            package: "std.universal/math@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: Some(MusubiArchiveRef::new(
+                sorafs.digest,
+                archive_stats.archive_hash_blake3_256,
+                archive_stats.source_bytes,
+                archive_stats.source_file_count,
+            )),
+            source_plan: Some(sorafs.source_plan),
+            cache_path: None,
+            exports: vec!["add".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex,
+                base_url,
+                stream_token_b64: token,
+                privacy_events_url: None,
+                package: Some("math".into()),
+                manifest_id_hex: None,
+            }],
+            gateway_retry_budget: Some(1),
+            gateway_max_peers: Some(1),
+            gateway_allow_insecure_localhost: true,
+            ..GatewayFetchArgs::default()
+        };
+        validate_source_fetch_inputs(&[], &gateway).expect("localhost gateway accepted");
+
+        let cache = tempfile::tempdir().expect("cache tempdir");
+        fetch_locked_package_source_from(
+            &package,
+            cache.path(),
+            SourceFetchMode::Gateway {
+                runner: &RealGatewayRunner,
+                args: &gateway,
+                allow_unscoped_providers: false,
+            },
+            false,
+        )
+        .expect("live gateway fetch source");
+
+        let fetched =
+            fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
+                .expect("read fetched");
+        assert_eq!(fetched, "fn add() {}\n");
+        verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    fn spawn_chunk_gateway(chunks: HashMap<String, Vec<u8>>) -> String {
+        let request_count = chunks.len();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind gateway");
+        let addr = listener.local_addr().expect("gateway addr");
+        thread::spawn(move || {
+            for _ in 0..request_count {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    serve_chunk_gateway(&mut stream, &chunks);
+                }
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn serve_chunk_gateway(stream: &mut TcpStream, chunks: &HashMap<String, Vec<u8>>) {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let bytes_read = stream.read(&mut buffer).expect("read request");
+            if bytes_read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..bytes_read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&request);
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or_default();
+        if let Some(body) = chunks.get(path) {
+            write_http_response(stream, 200, "OK", body);
+        } else {
+            write_http_response(stream, 404, "Not Found", b"missing chunk");
+        }
+    }
+
+    fn write_http_response(stream: &mut TcpStream, status: u16, reason: &str, body: &[u8]) {
+        let header = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(header.as_bytes()).expect("write header");
+        stream.write_all(body).expect("write body");
+    }
+
+    fn stream_token_b64(
+        manifest_cid_hex: &str,
+        provider_id_hex: &str,
+        profile_handle: &str,
+        max_streams: u16,
+    ) -> String {
+        let mut provider_id = [0_u8; 32];
+        provider_id.copy_from_slice(&hex::decode(provider_id_hex).expect("provider id hex"));
+        let token = StreamTokenV1 {
+            body: StreamTokenBodyV1 {
+                token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_owned(),
+                manifest_cid: hex::decode(manifest_cid_hex).expect("manifest cid hex"),
+                provider_id,
+                profile_handle: profile_handle.to_owned(),
+                max_streams,
+                ttl_epoch: 9_999_999_999,
+                rate_limit_bytes: 8 * 1024 * 1024,
+                issued_at: 1_735_000_000,
+                requests_per_minute: 120,
+                token_pk_version: 1,
+            },
+            signature: vec![0; 64],
+        };
+        STANDARD.encode(norito::to_bytes(&token).expect("encode stream token"))
     }
 
     #[test]

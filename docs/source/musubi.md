@@ -121,7 +121,10 @@ scope each gateway provider with `package=<dependency-alias>`,
 `manifest=<64-hex SoraFS manifest digest>` so Musubi cannot fetch the wrong
 archive for a lockfile node. Runtime gateway options include
 `--gateway-client-id`, `--gateway-retry-budget`, `--gateway-max-peers`,
-`--gateway-telemetry-region`, and `--gateway-scoreboard-out`.
+`--gateway-telemetry-region`, and `--gateway-scoreboard-out`. Gateway
+`base-url` and `privacy-url` values must use `https://` by default. Local
+test gateways can use `http://localhost`, `http://127.0.0.1`, or
+`http://[::1]` only when `--gateway-allow-insecure-localhost` is supplied.
 Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
 `build` links cached dependency sources by rewriting calls such as
 `math::add()` to deterministic internal Kotodama function names, and rejects

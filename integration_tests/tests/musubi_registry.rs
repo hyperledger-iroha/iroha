@@ -9,6 +9,7 @@ use iroha::{
     client::Client,
     data_model::{
         isi::{
+            InstructionBox,
             musubi::{PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease},
             sorafs::RegisterPinManifest,
         },
@@ -160,6 +161,96 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     })?;
     assert!(active_search.is_empty());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Result<()> {
+    init_instruction_registry();
+
+    let math_ref: MusubiPackageRef = "wonderland.universal/math-post@1.0.0".parse()?;
+    let swap_ref: MusubiPackageRef = "wonderland.universal/swap-post@1.0.0".parse()?;
+    let legacy_ref: MusubiPackageRef = "wonderland.universal/legacy-post@0.9.0".parse()?;
+
+    let math_release = build_release(&math_ref, 0x51, b"fn add(a, b) { a + b }", [], ["add"])?;
+    let math_dependency = MusubiDependency::new("math".parse()?, math_ref.clone());
+    let swap_release = build_release(
+        &swap_ref,
+        0x61,
+        b"fn quote(x) { math::add(x, x) }",
+        [math_dependency],
+        ["quote"],
+    )?;
+    let legacy_release = build_release(&legacy_ref, 0x71, b"fn quote(x) { x }", [], ["quote"])?;
+
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanSetMusubiShortAlias),
+            ALICE_ID.clone(),
+        ));
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(musubi_registry_post_genesis_transactions_commit_on_four_peers),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    network.ensure_blocks(1).await?;
+    let client = network.client();
+    let query_client = network
+        .peers()
+        .last()
+        .ok_or_else(|| eyre!("network must include at least one peer"))?
+        .client();
+
+    submit_instructions(
+        &client,
+        vec![
+            register_manifest_instruction(&math_release)?.into(),
+            PublishMusubiRelease::new(math_release.clone()).into(),
+            register_manifest_instruction(&swap_release)?.into(),
+            PublishMusubiRelease::new(swap_release.clone()).into(),
+        ],
+    )?;
+    eventually_find_release(&query_client, &math_ref).await?;
+    let propagated_swap = eventually_find_release(&query_client, &swap_ref).await?;
+    assert_eq!(propagated_swap.dependencies.len(), 1);
+    assert_eq!(propagated_swap.dependencies[0].package, math_ref);
+
+    client.submit(SetMusubiShortAlias::new(MusubiShortAlias::new(
+        "swap-post".parse()?,
+        swap_ref.package.clone(),
+    )))?;
+    let alias_target = eventually_find_alias(&query_client, "swap-post".parse()?).await?;
+    assert_eq!(alias_target, swap_ref.package);
+
+    submit_instructions(
+        &client,
+        vec![
+            register_manifest_instruction(&legacy_release)?.into(),
+            PublishMusubiRelease::new(legacy_release.clone()).into(),
+        ],
+    )?;
+    eventually_find_release(&query_client, &legacy_ref).await?;
+
+    client.submit(YankMusubiRelease::new(
+        legacy_ref.clone(),
+        "superseded by post-genesis release",
+    ))?;
+    let yanked_legacy = eventually_find_yanked_release(&query_client, &legacy_ref).await?;
+    assert!(matches!(
+        yanked_legacy.status,
+        MusubiReleaseStatus::Yanked(_)
+    ));
+
+    Ok(())
+}
+
+fn submit_instructions(client: &Client, instructions: Vec<InstructionBox>) -> Result<()> {
+    client.submit_all(instructions)?;
     Ok(())
 }
 
