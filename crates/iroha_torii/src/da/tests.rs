@@ -5,7 +5,7 @@ use std::{
     cell::Cell,
     fs,
     io::Write,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, LazyLock},
@@ -69,7 +69,9 @@ use crate::da::taikai::{
     TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
     TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR,
 };
-use crate::da::{DaReceiptLog, ReplayCursorStore};
+use crate::da::{
+    DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
+};
 
 use super::*;
 
@@ -91,6 +93,29 @@ fn parse_storage_ticket_hex_validates_variants() {
     assert!(parse_storage_ticket_hex("").is_err());
     assert!(parse_storage_ticket_hex("zz").is_err());
     assert!(parse_storage_ticket_hex("ab").is_err(), "too short");
+}
+
+#[tokio::test]
+async fn da_spooler_executes_batch_before_ack() {
+    let marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let spooler = DaSpooler::spawn(
+        NonZeroUsize::new(4).expect("non-zero queue"),
+        NonZeroUsize::new(2).expect("non-zero batch"),
+        crate::routing::MaybeTelemetry::disabled(),
+    );
+    let mut batch = DaSpoolBatch::new();
+    let marker_for_action = Arc::clone(&marker);
+    batch.push(DaSpoolAction::new("test_artifact", move || {
+        marker_for_action.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(DaSpoolActionOutput::None)
+    }));
+
+    let report = spooler.submit(batch).await;
+
+    assert_eq!(marker.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(report.actions().len(), 1);
+    assert_eq!(report.actions()[0].kind(), "test_artifact");
+    assert!(report.actions()[0].error().is_none());
 }
 
 #[test]

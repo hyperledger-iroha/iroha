@@ -375,6 +375,7 @@ export {
   hostPatternsCoverDerivedHosts,
   canonicalGatewaySuffix,
   prettyGatewaySuffix,
+  tairaMonPrettyGatewaySuffix,
   canonicalGatewayWildcard,
 } from "./soradns.js";
 export {

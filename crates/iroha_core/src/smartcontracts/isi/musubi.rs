@@ -11,7 +11,8 @@ use iroha_data_model::{
         },
     },
     musubi::{
-        MusubiPackageId, MusubiPackageRef, MusubiRelease, MusubiReleaseStatus, MusubiVersion,
+        MusubiPackageId, MusubiPackageRef, MusubiPackageSummary, MusubiRelease,
+        MusubiReleaseStatus, MusubiReleaseSummary, MusubiVersion,
     },
     name::Name,
     query::{error::QueryExecutionFail, musubi::prelude::*},
@@ -44,6 +45,8 @@ impl Execute for PublishMusubiRelease {
             .map_err(|err| invalid_parameter(err.reason()))?;
         ensure_namespace_authority(&release.package.package, authority, state_transaction)?;
         ensure_dependencies_exist(&release, state_transaction)?;
+        ensure_sorafs_pin_active(&release, state_transaction)?;
+        ensure_dapp_contracts_exist(&release, state_transaction)?;
 
         let key = release_key(&release.package);
         if state_transaction
@@ -103,18 +106,18 @@ impl Execute for SetMusubiShortAlias {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_namespace_authority(&self.alias.target, authority, state_transaction)?;
-        if package_versions_in_world(state_transaction.world(), &self.alias.target).is_empty() {
+        require_permission(state_transaction, authority, "CanSetMusubiShortAlias")?;
+        if package_releases_in_world(state_transaction.world(), &self.alias.target, false)
+            .is_empty()
+        {
             return Err(Error::InvariantViolation(
                 format!(
-                    "Musubi short alias `{}` targets package `{}` with no releases",
+                    "Musubi short alias `{}` targets package `{}` with no active releases",
                     self.alias.alias, self.alias.target
                 )
                 .into(),
             ));
         }
-        // TODO: replace this namespace-owner fallback with the governance permission
-        // token once the registry authority model is wired into permissions.
         state_transaction.world.smart_contract_state.insert(
             short_alias_key(&self.alias.alias),
             self.alias.target.encode(),
@@ -169,6 +172,38 @@ impl ValidSingularQuery for FindMusubiPackageVersions {
     }
 }
 
+impl ValidSingularQuery for FindMusubiPackageReleases {
+    fn execute(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<Vec<MusubiReleaseSummary>, QueryExecutionFail> {
+        let releases =
+            package_releases_in_world(state_ro.world(), &self.package, self.include_yanked);
+        Ok(releases
+            .iter()
+            .map(MusubiReleaseSummary::from_release)
+            .collect())
+    }
+}
+
+impl ValidSingularQuery for SearchMusubiPackages {
+    fn execute(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<Vec<MusubiPackageSummary>, QueryExecutionFail> {
+        let mut packages = package_summaries_in_world(
+            state_ro.world(),
+            self.namespace.as_ref(),
+            &self.query,
+            self.include_yanked,
+        );
+        packages.sort_by(|left, right| left.package.cmp(&right.package));
+        let offset = usize::try_from(self.offset).unwrap_or(usize::MAX);
+        let limit = usize::try_from(self.limit).unwrap_or(usize::MAX).min(100);
+        Ok(packages.into_iter().skip(offset).take(limit).collect())
+    }
+}
+
 impl ValidSingularQuery for FindMusubiShortAliasByName {
     fn execute(
         &self,
@@ -213,15 +248,24 @@ fn ensure_dependencies_exist(
             ));
         }
         let key = release_key(&dependency.package);
-        if state_transaction
+        let bytes = state_transaction
             .world
             .smart_contract_state
             .get(&key)
-            .is_none()
-        {
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    format!(
+                        "Musubi dependency `{}` is not published",
+                        dependency.package
+                    )
+                    .into(),
+                )
+            })?;
+        let dependency_release = decode_release_for_instruction(bytes)?;
+        if !dependency_release.status.is_active() {
             return Err(Error::InvariantViolation(
                 format!(
-                    "Musubi dependency `{}` is not published",
+                    "Musubi dependency `{}` is yanked and cannot be selected by new releases",
                     dependency.package
                 )
                 .into(),
@@ -229,6 +273,91 @@ fn ensure_dependencies_exist(
         }
     }
     Ok(())
+}
+
+fn ensure_sorafs_pin_active(
+    release: &MusubiRelease,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    let digest = release.archive.sorafs_manifest;
+    let record = state_transaction
+        .world
+        .pin_manifests
+        .get(&digest)
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                format!(
+                    "Musubi release `{}` references unregistered SoraFS manifest {}",
+                    release.package,
+                    hex::encode(digest.as_bytes())
+                )
+                .into(),
+            )
+        })?;
+    if record.status.is_active() {
+        Ok(())
+    } else {
+        Err(Error::InvariantViolation(
+            format!(
+                "Musubi release `{}` references inactive SoraFS manifest {}",
+                release.package,
+                hex::encode(digest.as_bytes())
+            )
+            .into(),
+        ))
+    }
+}
+
+fn ensure_dapp_contracts_exist(
+    release: &MusubiRelease,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    let Some(dapp) = release.dapp.as_ref() else {
+        return Ok(());
+    };
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    for alias in &dapp.contracts {
+        if state_transaction
+            .world
+            .contract_address_by_alias_at(alias, now_ms)
+            .is_none()
+        {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "Musubi dapp link for `{}` references unknown or expired contract alias `{alias}`",
+                    release.package
+                )
+                .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn has_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &str,
+) -> bool {
+    state_transaction
+        .world
+        .account_permissions
+        .get(authority)
+        .is_some_and(|perms| perms.iter().any(|perm| perm.name() == permission))
+}
+
+fn require_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &str,
+) -> Result<(), Error> {
+    if has_permission(state_transaction, authority, permission) {
+        Ok(())
+    } else {
+        Err(Error::InvariantViolation(
+            format!("permission {permission} required for Musubi registry operation").into(),
+        ))
+    }
 }
 
 fn ensure_namespace_authority(
@@ -287,13 +416,80 @@ fn package_versions_in_world(
     world: &impl WorldReadOnly,
     package: &MusubiPackageId,
 ) -> Vec<MusubiVersion> {
-    world
+    package_releases_in_world(world, package, true)
+        .into_iter()
+        .map(|release| release.package.version)
+        .collect()
+}
+
+fn package_releases_in_world(
+    world: &impl WorldReadOnly,
+    package: &MusubiPackageId,
+    include_yanked: bool,
+) -> Vec<MusubiRelease> {
+    let mut releases = world
         .smart_contract_state()
         .iter()
         .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
         .filter_map(|(_, bytes)| decode_release_lossy(bytes))
         .filter(|release| release.package.package == *package)
-        .map(|release| release.package.version)
+        .filter(|release| include_yanked || release.status.is_active())
+        .collect::<Vec<_>>();
+    releases.sort_by(|left, right| {
+        left.package
+            .version
+            .precedence_cmp(&right.package.version)
+            .unwrap_or_else(|_| left.package.version.cmp(&right.package.version))
+    });
+    releases
+}
+
+fn package_summaries_in_world(
+    world: &impl WorldReadOnly,
+    namespace: Option<&iroha_data_model::musubi::MusubiNamespace>,
+    query: &str,
+    include_yanked: bool,
+) -> Vec<MusubiPackageSummary> {
+    let mut packages = BTreeMap::<MusubiPackageId, (Option<MusubiVersion>, u32, u32, bool)>::new();
+    for release in world
+        .smart_contract_state()
+        .iter()
+        .filter(|(key, _)| key.as_ref().starts_with(RELEASE_KEY_PREFIX))
+        .filter_map(|(_, bytes)| decode_release_lossy(bytes))
+    {
+        if namespace.is_some_and(|namespace| &release.package.package.namespace != namespace) {
+            continue;
+        }
+        if !query.is_empty() && !release.package.package.to_string().contains(query) {
+            continue;
+        }
+        let is_active = release.status.is_active();
+        let entry = packages
+            .entry(release.package.package.clone())
+            .or_insert((None, 0, 0, false));
+        entry.1 = entry.1.saturating_add(1);
+        if is_active {
+            entry.3 = true;
+            let replace_latest = entry.0.as_ref().is_none_or(|latest| {
+                latest
+                    .precedence_cmp(&release.package.version)
+                    .is_ok_and(|ordering| ordering.is_lt())
+            });
+            if replace_latest {
+                entry.0 = Some(release.package.version);
+            }
+        } else {
+            entry.2 = entry.2.saturating_add(1);
+        }
+    }
+    packages
+        .into_iter()
+        .filter(|(_, (_, _, _, has_active))| include_yanked || *has_active)
+        .map(
+            |(package, (latest_active, release_count, yanked_count, _))| {
+                MusubiPackageSummary::new(package, latest_active, release_count, yanked_count)
+            },
+        )
         .collect()
 }
 

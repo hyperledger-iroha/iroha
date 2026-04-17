@@ -510,8 +510,10 @@ impl DefaultHost {
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("[DefaultHost] decode_any_tlv ptr=0x{ptr:08x} resolved=0x{resolved:08x}");
         }
-        if let Ok(tlv) = Self::decode_tlv_from_memory(vm, resolved) {
-            return Ok(tlv);
+        match Self::decode_tlv_from_memory(vm, resolved) {
+            Ok(tlv) => return Ok(tlv),
+            Err(err @ VMError::AbiTypeNotAllowed { .. }) => return Err(err),
+            Err(_) => {}
         }
         let code_len = vm.memory.code_len();
         if resolved >= code_len || resolved + 7 > code_len {
@@ -536,7 +538,8 @@ impl DefaultHost {
             .memory
             .load_region(resolved, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
-        pointer_abi::validate_tlv_bytes(envelope)
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
     }
 
     fn decode_tlv_from_memory<'a>(vm: &'a IVM, addr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
@@ -556,7 +559,23 @@ impl DefaultHost {
             .memory
             .load_region(addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
-        pointer_abi::validate_tlv_bytes(envelope)
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
+    }
+
+    fn enforce_pointer_policy<'a>(
+        vm: &IVM,
+        tlv: pointer_abi::Tlv<'a>,
+    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let (policy, abi_version) = pointer_abi::current_policy()
+            .unwrap_or_else(|| (vm.syscall_policy(), vm.abi_version()));
+        if abi_version != 1 || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: abi_version,
+                type_id: tlv.type_id as u16,
+            });
+        }
+        Ok(tlv)
     }
 
     fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {

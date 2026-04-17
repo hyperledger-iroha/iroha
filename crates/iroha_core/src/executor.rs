@@ -4516,6 +4516,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsRepair",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
+    "CanSetMusubiShortAlias",
     "CanIngestSoranetPrivacy",
 ];
 

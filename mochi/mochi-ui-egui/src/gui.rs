@@ -86,7 +86,8 @@ use mochi_core::{
     ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
     development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
     fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root, run_chaos_preset,
-    run_state_query, sandbox_root_for_workspace,
+    run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
+    sandbox_root_for_workspace,
     supervisor::RestartPolicy,
     torii::{
         ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
@@ -1050,6 +1051,41 @@ fn write_bootstrap_files_for_session(
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
+        if std::env::var_os("MOCHI_DETACHED").is_some() {
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+            let mut hangup =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
+            loop {
+                tokio::select! {
+                    received = async {
+                        match &mut terminate {
+                            Some(signal) => signal.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if received.is_some() {
+                            break;
+                        }
+                    }
+                    _ = async {
+                        match &mut interrupt {
+                            Some(signal) => signal.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {}
+                    _ = async {
+                        match &mut hangup {
+                            Some(signal) => signal.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {}
+                }
+            }
+            return;
+        }
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(mut terminate) => {
                 tokio::select! {
@@ -1098,10 +1134,12 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
             let plan = supervisor
                 .default_readiness_smoke_plan()
                 .map_err(|err| format!("failed while preparing readiness smoke: {err}"))?;
-            client
-                .wait_for_readiness_smoke(plan)
-                .await
-                .map_err(|err| format!("failed while waiting for readiness smoke: {err}"))?;
+            client.wait_for_readiness_smoke(plan).await.map_err(|err| {
+                format!(
+                    "failed while waiting for readiness smoke: {err} ({:?})",
+                    err.summarize()
+                )
+            })?;
         } else {
             client
                 .wait_for_ready(
@@ -1109,7 +1147,12 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
                         .with_poll_interval(READINESS_POLL_INTERVAL),
                 )
                 .await
-                .map_err(|err| format!("failed while waiting for /status readiness: {err}"))?;
+                .map_err(|err| {
+                    format!(
+                        "failed while waiting for /status readiness: {err} ({:?})",
+                        err.summarize()
+                    )
+                })?;
         }
         Ok::<(), String>(())
     })?;
@@ -1502,6 +1545,7 @@ impl ComposerTemplate {
         match self {
             ComposerTemplate::MintRoseToSigner => {
                 app.composer_instruction_kind = ComposerInstructionKind::MintAsset;
+                let rose = sample_rose_definition_literal();
                 let (owner, label) = signer
                     .map(|authority| (authority.account_id(), authority.label()))
                     .unwrap_or_else(|| {
@@ -1510,14 +1554,15 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned());
+                app.composer_asset_id =
+                    template_asset_id(&rose, owner).unwrap_or_else(|| rose.clone());
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose mint template for {label}."));
             }
             ComposerTemplate::MintCabbageToSigner => {
                 app.composer_instruction_kind = ComposerInstructionKind::MintAsset;
+                let cabbage = sample_cabbage_definition_literal();
                 let (owner, label) = signer
                     .map(|authority| (authority.account_id(), authority.label()))
                     .unwrap_or_else(|| {
@@ -1526,14 +1571,15 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("5CJ6HCMxWw9xhuHmxDrzEfWGeE7M", owner)
-                    .unwrap_or_else(|| "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned());
+                app.composer_asset_id =
+                    template_asset_id(&cabbage, owner).unwrap_or_else(|| cabbage.clone());
                 app.composer_quantity = "5".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded cabbage mint template for {label}."));
             }
             ComposerTemplate::BurnRoseFromSigner => {
                 app.composer_instruction_kind = ComposerInstructionKind::BurnAsset;
+                let rose = sample_rose_definition_literal();
                 let (owner, label) = signer
                     .map(|authority| (authority.account_id(), authority.label()))
                     .unwrap_or_else(|| {
@@ -1542,8 +1588,8 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned());
+                app.composer_asset_id =
+                    template_asset_id(&rose, owner).unwrap_or_else(|| rose.clone());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose burn template for {label}."));
@@ -1555,9 +1601,9 @@ impl ComposerTemplate {
                         .first()
                         .expect("development authorities must not be empty")
                 });
+                let rose = sample_rose_definition_literal();
                 app.composer_asset_id =
-                    template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned());
+                    template_asset_id(&rose, signer.account_id()).unwrap_or_else(|| rose.clone());
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
@@ -1577,9 +1623,9 @@ impl ComposerTemplate {
                         .first()
                         .expect("development authorities must not be empty")
                 });
+                let rose = sample_rose_definition_literal();
                 app.composer_asset_id =
-                    template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned());
+                    template_asset_id(&rose, signer.account_id()).unwrap_or_else(|| rose.clone());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
@@ -1660,24 +1706,27 @@ impl ComposerTemplate {
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = "wonderland".to_owned();
+                let domain = "wonderland.universal".to_owned();
                 app.composer_admission_domain = domain.clone();
                 app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
                 app.composer_admission_max_per_tx = "3".to_owned();
                 app.composer_admission_max_per_block = "10".to_owned();
                 app.composer_admission_fee_enabled = true;
-                app.composer_admission_fee_asset = format!("rose#{domain}");
+                app.composer_admission_fee_asset = sample_rose_definition_literal();
                 app.composer_admission_fee_amount = "1".to_owned();
                 app.composer_admission_fee_destination_burn = true;
                 app.composer_admission_fee_destination_account.clear();
-                app.composer_admission_min_initial_amounts =
-                    format!("rose#{domain} = 5\ncabbage#{domain} = 1");
+                app.composer_admission_min_initial_amounts = format!(
+                    "{} = 5\n{} = 1",
+                    sample_rose_definition_id(),
+                    sample_cabbage_definition_id()
+                );
                 app.composer_admission_default_role = "basic_user".to_owned();
                 app.last_info = Some("Loaded implicit receive policy template.".to_owned());
             }
             ComposerTemplate::AdmissionPolicyExplicitOnly => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = "wonderland".to_owned();
+                let domain = "wonderland.universal".to_owned();
                 app.composer_admission_domain = domain;
                 app.composer_admission_mode = AccountAdmissionMode::ExplicitOnly;
                 app.composer_admission_max_per_tx.clear();
@@ -1742,6 +1791,14 @@ fn template_asset_id(definition: &str, owner: &AccountId) -> Option<String> {
     let definition = definition.parse::<AssetDefinitionId>().ok()?;
     let asset_id = AssetId::new(definition, owner.clone());
     Some(asset_literal(&asset_id))
+}
+
+fn sample_rose_definition_literal() -> String {
+    sample_rose_definition_id().to_string()
+}
+
+fn sample_cabbage_definition_literal() -> String {
+    sample_cabbage_definition_id().to_string()
 }
 
 fn account_literal(account_id: &AccountId) -> String {
@@ -10783,7 +10840,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_admission_min_initial_amounts)
                     .desired_rows(3)
-                    .hint_text("62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5"),
+                    .hint_text(format!("{} = 5", sample_rose_definition_id())),
             );
             ui.horizontal(|ui| {
                 ui.label("Default role on create");
@@ -10824,9 +10881,10 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text(
-                        r#"[ { "kind": "mint_asset", "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "quantity": "1" } ]"#,
-                    ),
+                    .hint_text(format!(
+                        r#"[ {{ "kind": "mint_asset", "asset": "{}", "quantity": "1" }} ]"#,
+                        sample_rose_definition_id()
+                    )),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -13356,7 +13414,7 @@ mod tests {
     use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountFeeDestination},
-        asset::{AssetDefinitionId, id::AssetId},
+        asset::id::AssetId,
         block::{
             BlockHeader,
             consensus::{
@@ -13965,11 +14023,11 @@ mod tests {
 
     #[test]
     fn parse_min_initial_amounts_parses_lines() {
-        let raw = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5\n5f9QzYSrzikeDsmrBouSTHREggYu = 1";
-        let parsed = MochiApp::parse_min_initial_amounts(raw).expect("amounts parse");
+        let rose = sample_rose_definition_id();
+        let cabbage = sample_cabbage_definition_id();
+        let raw = format!("{rose} = 5\n{cabbage} = 1");
+        let parsed = MochiApp::parse_min_initial_amounts(&raw).expect("amounts parse");
         assert_eq!(parsed.len(), 2);
-        let rose: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
-        let cabbage: AssetDefinitionId = "5f9QzYSrzikeDsmrBouSTHREggYu".parse().unwrap();
         assert_eq!(parsed.get(&rose), Some(&"5".parse::<Numeric>().unwrap()));
         assert_eq!(parsed.get(&cabbage), Some(&"1".parse::<Numeric>().unwrap()));
     }
@@ -14007,27 +14065,27 @@ mod tests {
     #[test]
     fn parse_account_admission_policy_builds_policy() {
         let mut app = MochiApp::default();
-        app.composer_admission_domain = "wonderland".to_owned();
+        app.composer_admission_domain = "wonderland.universal".to_owned();
         app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
         app.composer_admission_max_per_tx = "2".to_owned();
         app.composer_admission_max_per_block = "5".to_owned();
         app.composer_admission_fee_enabled = true;
-        app.composer_admission_fee_asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned();
+        app.composer_admission_fee_asset = sample_rose_definition_literal();
         app.composer_admission_fee_amount = "1".to_owned();
         app.composer_admission_fee_destination_burn = false;
         app.composer_admission_fee_destination_account = account_literal(&ALICE_ID);
-        app.composer_admission_min_initial_amounts = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5".to_owned();
+        app.composer_admission_min_initial_amounts = format!("{} = 5", sample_rose_definition_id());
         app.composer_admission_default_role = "basic_user".to_owned();
 
         let (domain, policy) = app
             .parse_account_admission_policy()
             .expect("policy should parse");
-        assert_eq!(domain, "wonderland");
+        assert_eq!(domain, "wonderland.universal");
         assert_eq!(policy.mode, AccountAdmissionMode::ImplicitReceive);
         assert_eq!(policy.max_implicit_creations_per_tx, Some(2));
         assert_eq!(policy.max_implicit_creations_per_block, Some(5));
         let fee = policy.implicit_creation_fee.expect("fee configured");
-        let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
+        let asset = sample_rose_definition_id();
         assert_eq!(fee.asset_definition_id, asset);
         assert_eq!(fee.amount, "1".parse::<Numeric>().unwrap());
         let treasury = ALICE_ID.clone();
@@ -14037,7 +14095,7 @@ mod tests {
         }
         let min_amounts = policy.min_initial_amounts;
         assert_eq!(min_amounts.len(), 1);
-        let min_asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
+        let min_asset = sample_rose_definition_id();
         assert_eq!(
             min_amounts.get(&min_asset),
             Some(&"5".parse::<Numeric>().unwrap())
@@ -14830,7 +14888,7 @@ mod tests {
             domain: "wonderland".to_owned(),
             owner: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
                 .to_owned(),
-            asset_definition: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
+            asset_definition: sample_rose_definition_literal(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);
         assert_eq!(
@@ -15509,10 +15567,7 @@ mod tests {
     fn add_instruction_to_batch_appends_draft() {
         let mut app = MochiApp::default();
         app.composer_selected_signer = Some(0);
-        let asset = AssetId::new(
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
-            ALICE_ID.clone(),
-        );
+        let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
         app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "5".to_owned();
         app.add_instruction_to_batch(None);
@@ -15525,10 +15580,7 @@ mod tests {
         let mut app = MochiApp::default();
         app.composer_instruction_kind = ComposerInstructionKind::TransferAsset;
         app.composer_selected_signer = Some(0);
-        let asset = AssetId::new(
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
-            ALICE_ID.clone(),
-        );
+        let asset = AssetId::new(sample_rose_definition_id(), ALICE_ID.clone());
         app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "1".to_owned();
         app.add_instruction_to_batch(None);
@@ -15596,7 +15648,7 @@ mod tests {
         );
         assert!(
             app.composer_asset_id
-                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                .contains(&sample_rose_definition_literal()),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );
@@ -15649,7 +15701,7 @@ mod tests {
         );
         assert!(
             app.composer_asset_id
-                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                .contains(&sample_rose_definition_literal()),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );
@@ -15702,7 +15754,7 @@ mod tests {
         );
         assert!(
             app.composer_asset_id
-                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                .contains(&sample_rose_definition_literal()),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );

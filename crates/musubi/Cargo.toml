@@ -26,6 +26,8 @@ iroha = { workspace = true }
 iroha_data_model = { workspace = true }
 ivm = { workspace = true }
 norito = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_manifest = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]

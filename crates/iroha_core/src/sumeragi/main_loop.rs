@@ -10174,6 +10174,9 @@ struct RbcOutboundChunks {
     chunks: Vec<OutboundRbcChunk>,
     cursor: usize,
     targets: Vec<RbcOutboundTarget>,
+    encoding_label: &'static str,
+    fanout_label: &'static str,
+    record_target_metrics: bool,
 }
 
 pub(super) struct RbcOutboundSeed<'a> {
@@ -10181,6 +10184,7 @@ pub(super) struct RbcOutboundSeed<'a> {
     pub(super) roster: &'a [PeerId],
     pub(super) rs16_layout: Option<RbcPayloadLayout>,
     pub(super) rs16_fanout: RbcRs16InitialFanout,
+    pub(super) record_target_metrics: bool,
 }
 
 impl<'a> RbcOutboundSeed<'a> {
@@ -10190,6 +10194,7 @@ impl<'a> RbcOutboundSeed<'a> {
             roster,
             rs16_layout: None,
             rs16_fanout: RbcRs16InitialFanout::Full,
+            record_target_metrics: false,
         }
     }
 }
@@ -10229,6 +10234,9 @@ impl RbcOutboundTarget {
 struct RbcOutboundChunkDispatch {
     stored: bool,
     sent: usize,
+    target_candidates: usize,
+    target_posts: usize,
+    target_skipped: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -20008,9 +20016,9 @@ impl Actor {
                 );
                 return Ok(None);
             }
-            let total_chunks = session.total_chunks();
-            let received_chunks = session.received_chunks();
-            let ready_count = session.ready_signatures.len();
+            let mut total_chunks = session.total_chunks();
+            let mut received_chunks = session.received_chunks();
+            let mut ready_count = session.ready_signatures.len();
 
             let allow_unverified = self.allow_unverified_rbc_roster(key);
             if commit_topology.is_empty() {
@@ -20048,6 +20056,11 @@ impl Actor {
                 roster_source,
                 commit_topology.as_slice(),
             );
+            authoritative_known_payload =
+                self.rbc_session_has_authoritative_payload_for_progress(key, &session);
+            total_chunks = session.total_chunks();
+            received_chunks = session.received_chunks();
+            ready_count = session.ready_signatures.len();
             if !roster_source.is_authoritative() && !allow_unverified {
                 if self.should_emit_rbc_ready_deferral(
                     key,
@@ -20535,6 +20548,21 @@ impl Actor {
         let mut dispatch = RbcOutboundChunkDispatch::default();
 
         if let Some(seed) = seed {
+            let encoding_label = seed
+                .rs16_layout
+                .map_or(RbcEncoding::Plain.as_str(), |layout| {
+                    layout.encoding.as_str()
+                });
+            let fanout_label = if seed.rs16_layout.is_some() {
+                match seed.rs16_fanout {
+                    RbcRs16InitialFanout::Full => "full",
+                    RbcRs16InitialFanout::Data => "data",
+                    RbcRs16InitialFanout::DataPlusOne => "data_plus_one",
+                }
+            } else {
+                "full"
+            };
+            let record_target_metrics = seed.record_target_metrics;
             let chunks = seed.chunks;
             if chunks.is_empty() || seed.roster.is_empty() {
                 return dispatch;
@@ -20595,6 +20623,9 @@ impl Actor {
                     chunks: outbound_chunks,
                     cursor: 0,
                     targets,
+                    encoding_label,
+                    fanout_label,
+                    record_target_metrics,
                 },
             );
             dispatch.stored = true;
@@ -20604,13 +20635,27 @@ impl Actor {
             return dispatch;
         }
 
-        let (targets, chunks_to_send, exhausted) = {
+        let (
+            targets,
+            chunks_to_send,
+            exhausted,
+            encoding_label,
+            fanout_label,
+            record_target_metrics,
+        ) = {
             let Some(entry) = self.subsystems.da_rbc.rbc.outbound_chunks.get_mut(&key) else {
                 return dispatch;
             };
             let available = entry.chunks.len().saturating_sub(entry.cursor);
             if available == 0 {
-                (Vec::new(), Vec::new(), true)
+                (
+                    Vec::new(),
+                    Vec::new(),
+                    true,
+                    entry.encoding_label,
+                    entry.fanout_label,
+                    entry.record_target_metrics,
+                )
             } else {
                 let to_send = available.min(requested);
                 let end = entry.cursor.saturating_add(to_send);
@@ -20618,7 +20663,14 @@ impl Actor {
                 let chunks_to_send = entry.chunks[entry.cursor..end].to_vec();
                 entry.cursor = end;
                 let exhausted = entry.cursor >= entry.chunks.len();
-                (targets, chunks_to_send, exhausted)
+                (
+                    targets,
+                    chunks_to_send,
+                    exhausted,
+                    entry.encoding_label,
+                    entry.fanout_label,
+                    entry.record_target_metrics,
+                )
             }
         };
 
@@ -20628,10 +20680,27 @@ impl Actor {
         if chunks_to_send.is_empty() {
             return dispatch;
         }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = (encoding_label, fanout_label, record_target_metrics);
 
         dispatch.sent = chunks_to_send.len();
         for chunk in &chunks_to_send {
-            self.schedule_rbc_chunk_posts(chunk, &targets);
+            dispatch.target_candidates = dispatch.target_candidates.saturating_add(targets.len());
+            let posted = self.schedule_rbc_chunk_posts(chunk, &targets);
+            dispatch.target_posts = dispatch.target_posts.saturating_add(posted);
+        }
+        dispatch.target_skipped = dispatch
+            .target_candidates
+            .saturating_sub(dispatch.target_posts);
+        #[cfg(feature = "telemetry")]
+        if record_target_metrics && dispatch.target_candidates != 0 {
+            self.telemetry.add_rbc_initial_chunk_targets(
+                encoding_label,
+                fanout_label,
+                u64::try_from(dispatch.target_candidates).unwrap_or(u64::MAX),
+                u64::try_from(dispatch.target_posts).unwrap_or(u64::MAX),
+                u64::try_from(dispatch.target_skipped).unwrap_or(u64::MAX),
+            );
         }
 
         dispatch

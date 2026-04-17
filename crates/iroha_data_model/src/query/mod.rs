@@ -900,6 +900,10 @@ mod model {
         FindMusubiReleaseByRef(musubi::prelude::FindMusubiReleaseByRef),
         /// Fetch all registered versions for a Musubi package id.
         FindMusubiPackageVersions(musubi::prelude::FindMusubiPackageVersions),
+        /// Fetch release summaries for a Musubi package id.
+        FindMusubiPackageReleases(musubi::prelude::FindMusubiPackageReleases),
+        /// Search Musubi packages.
+        SearchMusubiPackages(musubi::prelude::SearchMusubiPackages),
         /// Fetch a Musubi short alias target package id.
         FindMusubiShortAliasByName(musubi::prelude::FindMusubiShortAliasByName),
         /// Fetch an account by stable alias.
@@ -964,6 +968,10 @@ mod model {
         MusubiRelease(crate::musubi::MusubiRelease),
         /// Musubi version list payload.
         MusubiVersions(Vec<crate::musubi::MusubiVersion>),
+        /// Musubi release summary list payload.
+        MusubiReleaseSummaries(Vec<crate::musubi::MusubiReleaseSummary>),
+        /// Musubi package summary list payload.
+        MusubiPackageSummaries(Vec<crate::musubi::MusubiPackageSummary>),
         /// Musubi package id payload.
         MusubiPackageId(crate::musubi::MusubiPackageId),
         /// Account identifier payload.
@@ -2495,6 +2503,8 @@ impl_singular_queries! {
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
     musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
     musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
+    musubi::prelude::FindMusubiPackageReleases => Vec<crate::musubi::MusubiReleaseSummary>,
+    musubi::prelude::SearchMusubiPackages => Vec<crate::musubi::MusubiPackageSummary>,
     musubi::prelude::FindMusubiShortAliasByName => crate::musubi::MusubiPackageId,
     account::prelude::FindAccountByAlias => crate::account::Account,
     domain::prelude::FindDomainById => crate::domain::Domain,
@@ -3553,7 +3563,7 @@ pub mod sorafs {
     //!
     //! Queries related to `SoraFS` provider metadata.
 
-    use std::fmt;
+    use std::{fmt, string::String};
 
     use hex;
 
@@ -3636,7 +3646,7 @@ pub mod musubi {
     use std::fmt;
 
     use crate::{
-        musubi::{MusubiPackageId, MusubiPackageRef},
+        musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
         name::Name,
     };
 
@@ -3653,6 +3663,28 @@ pub mod musubi {
         pub struct FindMusubiPackageVersions {
             /// Canonical package identifier.
             pub package: MusubiPackageId,
+        }
+
+        /// Fetch release summaries for a Musubi package id.
+        pub struct FindMusubiPackageReleases {
+            /// Canonical package identifier.
+            pub package: MusubiPackageId,
+            /// Include yanked releases in the output.
+            pub include_yanked: bool,
+        }
+
+        /// Search Musubi packages by namespace and text prefix.
+        pub struct SearchMusubiPackages {
+            /// Optional namespace filter.
+            pub namespace: Option<MusubiNamespace>,
+            /// Case-sensitive substring query over `namespace/package`.
+            pub query: String,
+            /// Include packages with only yanked releases.
+            pub include_yanked: bool,
+            /// Deterministic offset into the sorted result set.
+            pub offset: u32,
+            /// Maximum number of package summaries to return.
+            pub limit: u32,
         }
 
         /// Fetch the canonical target for a curated Musubi short alias.
@@ -3675,6 +3707,18 @@ pub mod musubi {
         }
     }
 
+    impl fmt::Display for FindMusubiPackageReleases {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi releases for `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for SearchMusubiPackages {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Search Musubi packages matching `{}`", self.query)
+        }
+    }
+
     impl fmt::Display for FindMusubiShortAliasByName {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "Find Musubi short alias `{}`", self.alias)
@@ -3684,7 +3728,8 @@ pub mod musubi {
     /// Prelude re-exports for Musubi queries.
     pub mod prelude {
         pub use super::{
-            FindMusubiPackageVersions, FindMusubiReleaseByRef, FindMusubiShortAliasByName,
+            FindMusubiPackageReleases, FindMusubiPackageVersions, FindMusubiReleaseByRef,
+            FindMusubiShortAliasByName, SearchMusubiPackages,
         };
     }
 }

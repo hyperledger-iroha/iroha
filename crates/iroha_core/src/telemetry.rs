@@ -6246,6 +6246,33 @@ impl Telemetry {
         }
     }
 
+    /// Record a Torii DA spool batch write outcome.
+    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_torii_da_spool_batch(outcome, write_ms);
+        }
+    }
+
+    /// Record Torii DA spool artifact outcomes.
+    pub fn record_torii_da_spool_artifact(
+        &self,
+        kind: &'static str,
+        outcome: &'static str,
+        count: u64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_torii_da_spool_artifact(kind, outcome, count);
+        }
+    }
+
+    /// Set the current Torii DA spool queue depth.
+    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.set_torii_da_spool_queue_depth(depth);
+        }
+    }
+
     /// Record the result of a DA receipt ingestion attempt.
     pub fn record_da_receipt_outcome(
         &self,
@@ -6790,6 +6817,38 @@ impl Telemetry {
             self.metrics
                 .sumeragi_rbc_requested_chunks_total
                 .inc_by(count);
+        }
+    }
+
+    /// Add initial RBC chunk target counters grouped by encoding/fanout policy.
+    pub fn add_rbc_initial_chunk_targets(
+        &self,
+        encoding: &'static str,
+        fanout: &'static str,
+        planned: u64,
+        posted: u64,
+        skipped: u64,
+    ) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        if planned != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "planned"])
+                .inc_by(planned);
+        }
+        if posted != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "posted"])
+                .inc_by(posted);
+        }
+        if skipped != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "skipped"])
+                .inc_by(skipped);
         }
     }
 
@@ -10099,6 +10158,36 @@ mod tests {
                 .with_label_values(&["receipts", "hit"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn rbc_initial_chunk_target_metrics_record_outcomes() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.add_rbc_initial_chunk_targets("rs16", "data_plus_one", 10, 7, 3);
+
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "planned"])
+                .get(),
+            10
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "posted"])
+                .get(),
+            7
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "skipped"])
+                .get(),
+            3
         );
     }
 

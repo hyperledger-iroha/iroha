@@ -16550,6 +16550,12 @@ pub struct DaIngest {
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     #[config(default = "defaults::torii::da_manifest_store_dir()")]
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of DA spool batches queued for async disk persistence.
+    #[config(default = "defaults::torii::DA_SPOOL_QUEUE_CAPACITY")]
+    pub spool_queue_capacity: NonZeroUsize,
+    /// Maximum number of DA spool batches flushed by one worker write pass.
+    #[config(default = "defaults::torii::DA_SPOOL_BATCH_MAX")]
+    pub spool_batch_max: NonZeroUsize,
     /// Optional hex-encoded ChaCha20Poly1305 key for governance-only metadata encryption.
     pub governance_metadata_key_hex: Option<String>,
     /// Optional label recorded alongside governance metadata ciphertexts.
@@ -16574,6 +16580,8 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: defaults::torii::da_manifest_store_dir(),
+            spool_queue_capacity: defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
+            spool_batch_max: defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key_hex: None,
             governance_metadata_key_label: defaults::torii::da_governance_metadata_key_label(),
             taikai_anchor: None,
@@ -16602,6 +16610,8 @@ impl DaIngest {
             replay_cache_max_sequence_lag: self.replay_cache_max_sequence_lag,
             replay_cache_store_dir: self.replay_cache_store_dir,
             manifest_store_dir: self.manifest_store_dir,
+            spool_queue_capacity: self.spool_queue_capacity,
+            spool_batch_max: self.spool_batch_max,
             governance_metadata_key,
             governance_metadata_key_label: self.governance_metadata_key_label,
             taikai_anchor: self.taikai_anchor.map(DaTaikaiAnchor::parse),

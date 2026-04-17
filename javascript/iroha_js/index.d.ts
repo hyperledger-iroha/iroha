@@ -377,7 +377,14 @@ export interface SoradnsGatewayHosts {
   matchesHost(host: string): boolean;
 }
 
-export function deriveSoradnsGatewayHosts(fqdn: string): SoradnsGatewayHosts;
+export interface SoradnsGatewayHostOptions {
+  prettySuffix?: string;
+}
+
+export function deriveSoradnsGatewayHosts(
+  fqdn: string,
+  options?: SoradnsGatewayHostOptions,
+): SoradnsGatewayHosts;
 export function hostPatternsCoverDerivedHosts(
   patterns: Iterable<string>,
   derived: SoradnsGatewayHosts,
@@ -385,6 +392,7 @@ export function hostPatternsCoverDerivedHosts(
 export function canonicalGatewaySuffix(): string;
 export function canonicalGatewayWildcard(): string;
 export function prettyGatewaySuffix(): string;
+export function tairaMonPrettyGatewaySuffix(): string;
 
 export interface IsoBridgeAgent {
   bic: string;

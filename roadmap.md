@@ -1,6 +1,125 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-16
+Last updated: 2026-04-17
+
+Latest sync (2026-04-17 WSV no-op MV commit gaps closed):
+MV block commits now skip publishing unchanged map/cell data, restore clean
+dirty state after aborted transactions, and avoid marking missing-key map
+removes as data changes. The large-world no-op WSV commit benchmark now has a
+scratch before/after comparison against old MV always-commit behavior.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/storage.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/mv/src/cell.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/benches/blocks/apply_blocks_benchmark.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - targeted `rustfmt --edition 2024` on touched Rust files
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-mv-test cargo test -p mv`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo check -p iroha_telemetry`
+  - `CARGO_TARGET_DIR=/tmp/iroha-wsv-core-test cargo test -p iroha_core --lib state_view_returns_when_view_lock_held -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - 30-sample Criterion comparison for `state_commit/world_commit_noop_large_world`: old MV always-commit scratch baseline 490.40 us point estimate; current MV dirty-skip tree 432.81 us point estimate
+- open work after this slice:
+  - run full workspace test and clippy during a longer validation window
+  - continue WSV profiling around remaining `state.view()` lock windows and any
+    read-only post-commit work still in critical sections
+
+Latest sync (2026-04-17 Norito chain-wire benchmark corpus and layout gaps):
+the Norito chain-wire benchmark now uses deterministic key material and reports
+candidate layout sizes for signed transactions, transaction entrypoints, and
+signed blocks. Canonical decode remains the only supported framed decode path
+for the sampled chain payloads; compact-length and packed candidates show large
+size reductions but currently fail framed decode preflight with `LengthMismatch`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - touched Rust files were formatted with direct `rustfmt --edition 2024`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --test exact_slice`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
+  - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; noncanonical candidate decode benches were skipped after preflight because they returned `LengthMismatch`
+  - `git diff --check` passed for the Norito/data-model/status/roadmap files touched in this slice
+- open work after this slice:
+  - fix compact-length and packed-layout framed decode for representative chain
+    payloads before considering any layout-flag default or wire-size change
+  - run full Criterion before/after samples on a quiet machine once the decode
+    gap is closed
+  - use the deterministic chain corpus to decide whether compact-length alone
+    is worth optimizing further, since it cuts size substantially but currently
+    adds encode cost in the quick smoke
+
+Latest sync (2026-04-16 Mochi local sandbox startup/runtime smoke completed):
+the Mochi helper now behaves like a localton/Ganache-style sandbox launcher for
+the default single-peer profile. The headless flow starts in a detached process
+group, waits for status readiness, validates local MCP, runs a metadata-based
+readiness smoke against the existing `wonderland.universal` domain, confirms
+commit through stream plus HTTP transaction-status fallback, writes app
+bootstrap artifacts, and shuts down cleanly through `scripts/mochi_local_sandbox.sh down`.
+Generated peer configs also enable the local Norito-RPC transport expected by
+SDK smoke clients.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/{genesis.rs,lib.rs,supervisor.rs,torii.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-ui-egui/src/main.rs`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/mochi_local_sandbox.sh`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/fixtures/composer/*`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/tests/fixtures/composer_drafts/*`
+  - `/Users/takemiyamakoto/dev/iroha/skills/mochi-local-sandbox/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/mochi/{quickstart.md,troubleshooting.md}`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n scripts/mochi_local_sandbox.sh`
+  - `git diff --check -- ...` for the touched Mochi/helper/doc/skill files
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core status -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core builder_creates_peer_configs -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-core --test composer_drafts -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_min_initial_amounts_parses_lines -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui parse_account_admission_policy_builds_policy -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo test -p mochi-ui composer_template_prefills -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-run cargo build -p mochi-ui`
+  - fresh temporary-workspace helper run for `up`, `status`, `env`, `mcp-add-command`, config inspection, and `down`
+- open work after this slice:
+  - run the full `cargo test --workspace` window before release signoff
+  - install PyYAML or run the skill validator from an environment that has it, then record the `skills/mochi-local-sandbox` validation result
+  - mirror the English Mochi quickstart/troubleshooting updates into translated docs only if those translated guides are still part of the release surface
+
+Latest sync (2026-04-16 NPoS localnet regressions rerun cleanly):
+the reported
+`sumeragi_npos_liveness::npos_network_produces_blocks`,
+`sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics`, and
+`sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set`
+failures were narrowed to brittle progress-driving behavior in the test
+harnesses rather than a new shared NPoS core failure. Liveness now fans a
+single signed seed transaction out to the ordered candidate peers, the
+stake-activation harness waits for submit connectivity and advances one height
+at a time instead of flooding logs, and the baseline telemetry harness keeps
+only one seed transaction outstanding while it samples metrics.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_liveness.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposlive.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_liveness::npos_network_produces_blocks' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposperf.fixed.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics' -- --exact --nocapture --test-threads=1`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=/home/mtakemiya/dev/iroha/target/debug/iroha3d IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d /tmp/iroha-permit.nposstake.fixed2.XXXXXX)" cargo test -p integration_tests --test consensus_and_da 'sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set' -- --exact --nocapture --test-threads=1`
+  - `cargo test`
+- open work after this slice:
+  - rerun a broader grouped `consensus_and_da` sweep when another long localnet
+    window is available so these NPoS harness fixes are exercised together
+    instead of only as exact reruns
 
 Latest sync (2026-04-16 DA/RBC reduced initial fanout profile):
 DA/RBC planning now removes duplicate hot-path work and adds an opt-in RS16
@@ -30,40 +149,47 @@ sets per validator.
   - `cargo test -p iroha_config --target-dir /tmp/iroha-da-perf-check rbc_rs16_initial_fanout_config_tests -- --nocapture`
   - `cargo check -p iroha_core --lib --target-dir /tmp/iroha-da-perf-check`
   - focused `iroha_core` RBC digest-ingest, RS16 fanout, and allocation tests passed
-  - `iroha_torii` checking is blocked by unrelated dirty-worktree signed-query
-    compile errors in the current Torii files
+  - the dirty-worktree Torii signed-query compile break that blocked
+    `iroha_torii` checking was resolved in the Torii core-latency follow-up
 - open work after this slice:
   - run four- and six-peer 10.5 MiB before/after samples for plain fanout vs
     RS16 `data_plus_one` before considering any default change
-  - finish the Torii DA spool batching or async persistence worker after the
-    current Torii signed-query compile break is resolved
+  - finish the Torii DA spool batching or async persistence worker now that
+    the current Torii signed-query compile break is resolved
   - add DA/RBC fanout metrics if operators need per-session visibility into
     how many RS16 shards were skipped by the reduced initial send plan
 
-Latest sync (2026-04-16 IVM prepared interpreter hot path):
+Latest sync (2026-04-17 IVM prepared interpreter validation closure):
 IVM now keeps prepared instruction metadata in a bounded cache, reuses it
 across repeated `load_program` calls, preserves prefix-relative instruction
 alignment for compiled artifacts, and routes precomputed-op gas charging
 through the same helper as `cost_of_with_params`. Straight-line IVM run
-benchmarks now cover short and longer simple-instruction blocks.
+benchmarks now cover short and longer simple-instruction blocks. The follow-up
+closure preserves ABI pointer-policy errors during TLV decode fallback and
+clears the host, memory, and mock WSV regressions that blocked the broad IVM
+library suite.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/ivm.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/gas.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/benches/bench_vm.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/host.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/memory.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/ivm/src/mock_wsv.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - touched Rust files were formatted with direct `rustfmt --edition 2024`
   - focused gas, prepared-cache, predecode, and runtime-diagnostic tests passed
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-perf-target cargo check -p ivm --tests --message-format short`
   - quick Criterion smoke for `ivm_run_straight_line_simple_{8,64}` passed
+  - focused host, memory, mock WSV, NFT, signatory, and name-decode regressions passed
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo test -p ivm --lib` passed with 262 tests
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-gap-target cargo check -p ivm --tests --message-format short`
+  - non-quick Criterion for `ivm_run_straight_line_simple_{8,64}` passed; this local run measured 122.07-130.53 ms for 8 instructions and 93.933-94.690 ms for 64 instructions
 - open work after this slice:
-  - run non-quick Criterion before/after samples once the dirty workspace has a
-    stable baseline so the ILP small-block cutoff can be tuned with real
-    distributions instead of smoke timings
-  - triage the broad `cargo test -p ivm --lib` host, memory, and mock WSV
-    failures separately from the prepared-interpreter path
+  - no confirmed correctness gap remains from the prepared-interpreter slice;
+    broader before/after Criterion comparisons on a quiet machine are optional
+    tuning work if the small-block ILP cutoff needs another pass
 
 Latest sync (2026-04-16 WSV no-op MV commit optimization):
 WSV commits now avoid republishing unchanged MV storage data when a block write
@@ -113,18 +239,16 @@ entries.
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - formatted touched Rust files with direct `rustfmt --edition 2024`
+  - `cargo metadata --format-version 1 --manifest-path Cargo.toml` refreshed
+    resolver metadata and produced no `Cargo.lock` diff
   - `python3 -m py_compile scripts/check_dependency_budget.py`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+    passed with `total_packages=801`, `registry_packages=704`,
+    `path_packages=97`, and `git_packages=0`
   - `git diff --check`
-  - previously queued `cargo check -p iroha_torii_shared`, `cargo check -p
-    iroha_monitor`, and `cargo check -p mochi-ui` completed; an
-    `iroha_monitor` unused import warning was fixed after that check
-  - locked dependency-budget metadata is blocked until `Cargo.lock` is
-    refreshed outside the agent, per repository policy
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p sorafs_orchestrator --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-feature cargo check -p sorafs_orchestrator --features local-quic-proxy --locked`
 - open work after this slice:
-  - run `scripts/check_dependency_budget.py` after the lockfile refresh and
-    record the new full-workspace package count
-  - run `cargo check -p sorafs_orchestrator` both with and without
-    `--features local-quic-proxy`
   - only feature-split the SoraNet relay/VPN QUIC tool binaries if operators
     agree that default full-workspace tests can skip those executable targets
 
@@ -136,6 +260,7 @@ through direct telemetry helpers, and the API rate limiter uses sharded
 short-held locks instead of one global async mutex.
 
 - shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/limits.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/telemetry.rs`
@@ -143,25 +268,38 @@ short-held locks instead of one global async mutex.
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - touched Rust files were formatted with direct `rustfmt --edition 2024`
-  - `git diff --check` passed for the touched files
-  - focused `cargo test -p iroha_torii --features telemetry --lib
-    signed_query_verification_tests -- --nocapture` was attempted but never
-    reached compilation after waiting more than 30 minutes on unrelated
-    long-running Cargo jobs holding the shared target lock
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target signed_query_verification_tests --
+    --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target lane_admission_latency_tests -- --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_torii --lib --target-dir
+    /tmp/iroha-torii-gap-target limiter_allows_distinct_keys_concurrently --
+    --nocapture`
+  - isolated-target validation passed:
+    `cargo test -p iroha_core --features telemetry --lib --target-dir
+    /tmp/iroha-torii-gap-target direct_torii -- --nocapture`
+  - `git diff --check` passed for the Torii/core/status/roadmap files touched
+    in this slice
 - open work after this slice:
   - run p95/p99 load profiles for `/transaction`, `/query`, and rate-limited
     pre-auth paths to tune shard count and verify the expected latency drop
   - keep `/status` and `/metrics` actor sync behavior intact while moving only
     pure hot-path observations to direct telemetry helpers
 
-Latest sync (2026-04-16 Musubi registry publish/yank flow):
-Musubi now has chain-backed package registry instructions and typed queries on
-top of the existing `namespace/package@version` model. Package publishing
-enforces non-empty source archives, non-empty export sets, namespace authority,
-source-level export existence, dependency existence, and duplicate-release
-rejection. The standalone `musubi` workspace crate can now submit signed
-publish/yank transactions and resolve exact dependencies, package versions,
-and curated short aliases from registry queries.
+Latest sync (2026-04-17 Musubi composable package flow):
+Musubi now resolves Cargo-like dependency requirements into exact active
+registry releases, records those selections in lockfile v2, imports verified
+source trees into a local cache, and links cached Kotodama library functions
+into the program AST before compilation. The registry rejects yanked
+dependencies, requires active SoraFS pin manifests for package archives, checks
+linked dapp contract aliases, and makes global short aliases permission-gated
+instead of namespace-owner fallback curation. `musubi publish` now registers a
+generated SoraFS pin before submitting the Musubi release, so the default
+publish path satisfies the hardened on-chain checks.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/musubi.rs`
@@ -173,27 +311,25 @@ and curated short aliases from registry queries.
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/musubi.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/mod.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/query.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_executor_data_model/src/permission.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/executor.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/sorafs_car/src/lib.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi`
   - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
-  - `cargo fmt --all --check`
-  - `cargo check -p musubi --target-dir /tmp/iroha-musubi-check-target`
-  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-check-target -- --nocapture`
-  - `cargo test -p iroha_data_model --lib --target-dir /tmp/iroha-musubi-check-target musubi -- --nocapture`
-  - `cargo test -p iroha_core --lib --target-dir /tmp/iroha-musubi-check-target musubi -- --nocapture`
+  - `cargo check -p musubi -p sorafs_car --target-dir /tmp/iroha-musubi-impl-check-target`
 - open work after this slice:
-  - wire SoraFS upload/pin registration into `musubi publish` so archive
-    manifests can be created automatically instead of passed by digest
-  - add compiler-level Kotodama source-library import resolution from
-    `Musubi.lock`; publish already verifies that declared exports exist in
-    local `.ko` sources, but the compiler still does not link package imports
-  - replace the temporary short-alias namespace-owner fallback with an
-    explicit governance permission token before allowing third-party curation
+  - add a SoraFS gateway fetch path so `musubi install` can fill the cache
+    directly from active pin providers; today the lockfile records archive
+    commitments and `musubi cache import` verifies source trees that were
+    fetched or checked out separately
   - add integration coverage that drives publish, dependency resolution, yank,
-    and short-alias lookup through a real multi-peer network
+    cache import/build, and short-alias lookup through a real multi-peer
+    network
 
 Latest sync (2026-04-16 Norito exact-slice chain decode performance):
 Norito now has a root exact-slice decode facade for hot in-memory bare payloads,
@@ -257,16 +393,18 @@ shell requires `mochi-ui/gui`, and monitor audio no longer links CPAL.
 - validation status:
   - formatted touched Rust files with direct `rustfmt --edition 2024`
   - `python3 -m py_compile scripts/check_dependency_budget.py`
+  - `python3 scripts/check_dependency_budget.py --watch quinn --watch rcgen`
+    passed with `total_packages=801`, `registry_packages=704`,
+    `path_packages=97`, and `git_packages=0`
   - `git diff --check`
-  - targeted `cargo check` commands are queued behind an unrelated root
-    `cargo test` holding the shared target lock
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-sorafs-default cargo check -p iroha_torii_shared --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-monitor cargo check -p iroha_monitor --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-mochi cargo check -p mochi-ui --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-mochi cargo check -p mochi-ui --features gui --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-cli cargo check -p iroha_cli --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-cli cargo check -p iroha_cli --features offline-visual-codecs --locked`
+  - `CARGO_TARGET_DIR=/tmp/iroha-dep-gap-torii cargo check -p iroha_torii --locked`
 - open work after this slice:
-  - run `scripts/check_dependency_budget.py` and record the new full-workspace
-    resolved count once the lockfile is refreshed
-  - run focused checks for `iroha_cli` with and without
-    `offline-visual-codecs`, `iroha_torii`, `iroha_monitor`, `iroha_torii_shared`,
-    `mochi-ui --features gui`, and `sorafs_orchestrator --features
-    local-quic-proxy`
   - continue the next dependency reductions in the consensus-adjacent order:
     direct `reqwest` replacement, Norito JSON cleanup, and only then PQ/ZK
     primitive replacement under conformance vectors

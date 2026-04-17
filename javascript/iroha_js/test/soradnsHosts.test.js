@@ -6,10 +6,17 @@ import {
   hostPatternsCoverDerivedHosts,
   canonicalGatewaySuffix,
   canonicalGatewayWildcard,
+  tairaMonPrettyGatewaySuffix,
 } from "../src/index.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: "soradnsDeriveGatewayHosts" });
+const customSuffixTest = makeNativeTest(baseTest, {
+  require: [
+    "soradnsDeriveGatewayHosts",
+    "soradnsDeriveGatewayHostsWithPrettySuffix",
+  ],
+});
 
 test("derives deterministic gateway hosts", () => {
   const bindings = deriveSoradnsGatewayHosts("App.Dao.Sora");
@@ -29,6 +36,19 @@ test("derives deterministic gateway hosts", () => {
   assert.ok(bindings.matchesHost(bindings.canonicalHost));
   assert.ok(bindings.matchesHost(bindings.prettyHost.toUpperCase()));
   assert.strictEqual(bindings.matchesHost("example.com"), false);
+  assert.ok(hostPatternsCoverDerivedHosts(bindings.hostPatterns, bindings));
+});
+
+customSuffixTest("derives Taira Mon gateway hosts", () => {
+  const bindings = deriveSoradnsGatewayHosts("solswap-indexer.sora", {
+    prettySuffix: tairaMonPrettyGatewaySuffix(),
+  });
+  assert.equal(
+    bindings.prettyHost,
+    "solswap-indexer.sora.mon.taira.sora.org",
+  );
+  assert.equal(bindings.canonicalWildcard, canonicalGatewayWildcard());
+  assert.ok(bindings.hostPatterns.includes(bindings.prettyHost));
   assert.ok(hostPatternsCoverDerivedHosts(bindings.hostPatterns, bindings));
 });
 

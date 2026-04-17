@@ -397,6 +397,7 @@ enum CommandKind {
     },
     SoradnsHosts {
         names: Vec<String>,
+        pretty_suffix: String,
         json: Option<JsonTarget>,
         verify: Vec<PathBuf>,
     },
@@ -1700,10 +1701,12 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsHosts {
             names,
+            pretty_suffix,
             json,
             verify,
         } => {
-            let summaries = soradns::derive_host_summaries(&names)?;
+            let summaries =
+                soradns::derive_host_summaries_with_pretty_suffix(&names, &pretty_suffix)?;
             if let Some(target) = json {
                 let mut rendered = serde_json::to_string_pretty(&summaries)?;
                 rendered.push('\n');
@@ -6695,6 +6698,7 @@ where
         }
         "soradns-hosts" => {
             let mut names = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut verify_paths: Vec<PathBuf> = Vec::new();
             let mut pending = args.peekable();
@@ -6709,6 +6713,16 @@ where
                             return Err("--name requires a non-empty value".into());
                         }
                         names.push(trimmed.to_string());
+                    }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
                     }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
@@ -6736,6 +6750,7 @@ where
             }
             Ok(CommandKind::SoradnsHosts {
                 names,
+                pretty_suffix,
                 json: json_out,
                 verify: verify_paths,
             })
@@ -6875,6 +6890,7 @@ where
             let mut hsts_template: Option<String> = None;
             let mut permissions_template: Option<String> = None;
             let mut telemetry_labels: Vec<String> = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -6968,6 +6984,16 @@ where
                             telemetry_labels.push(trimmed.to_string());
                         }
                     }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -7046,6 +7072,7 @@ where
             let default_valid_from = unix_timestamp_now()?;
             let options = soradns::GarTemplateOptions {
                 name,
+                pretty_suffix,
                 manifest_cid,
                 manifest_digest: resolved_manifest_digest,
                 csp_template,
@@ -7065,6 +7092,7 @@ where
             let mut directory_url: Option<String> = None;
             let mut include_pretty = true;
             let mut include_canonical_wildcard = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut generated_at: Option<OffsetDateTime> = None;
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -7081,6 +7109,16 @@ where
                             return Err("expected value after --directory-url".into());
                         };
                         directory_url = Some(value);
+                    }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
                     }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
@@ -7119,6 +7157,7 @@ where
                     .unwrap_or_else(|| soradns::DEFAULT_ACME_DIRECTORY_URL.to_string()),
                 include_canonical_wildcard,
                 include_pretty_hosts: include_pretty,
+                pretty_suffix,
                 generated_at: generated_at.unwrap_or_else(OffsetDateTime::now_utc),
             };
             Ok(CommandKind::SoradnsAcmePlan {
@@ -7129,6 +7168,7 @@ where
         "soradns-cache-plan" => {
             let mut names: Vec<String> = Vec::new();
             let mut include_pretty_hosts = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut paths: Vec<String> = Vec::new();
             let mut http_method: Option<String> = None;
             let mut auth_header: Option<String> = None;
@@ -7177,6 +7217,16 @@ where
                         generated_at = Some(parsed);
                     }
                     "--no-pretty" => include_pretty_hosts = false,
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -7198,6 +7248,7 @@ where
             let options = soradns::CacheInvalidationPlanOptions {
                 names,
                 include_pretty_hosts,
+                pretty_suffix,
                 paths,
                 http_method: http_method.unwrap_or_else(|| "PURGE".to_string()),
                 auth_header,
@@ -7212,6 +7263,7 @@ where
         "soradns-route-plan" => {
             let mut names: Vec<String> = Vec::new();
             let mut include_pretty_hosts = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut generated_at: Option<OffsetDateTime> = None;
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -7224,6 +7276,16 @@ where
                         names.push(value);
                     }
                     "--no-pretty" => include_pretty_hosts = false,
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--generated-at" => {
                         let Some(value) = pending.next() else {
                             return Err("expected value after --generated-at".into());
@@ -7253,6 +7315,7 @@ where
             let options = soradns::RoutePlanOptions {
                 names,
                 include_pretty_hosts,
+                pretty_suffix,
                 generated_at: generated_at.unwrap_or_else(OffsetDateTime::now_utc),
             };
             Ok(CommandKind::SoradnsRoutePlan {
@@ -7266,6 +7329,7 @@ where
             let mut manifest_cid: Option<String> = None;
             let mut manifest_digest: Option<String> = None;
             let mut telemetry_labels: Vec<String> = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -7306,6 +7370,16 @@ where
                             telemetry_labels.push(value);
                         }
                     }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -7326,6 +7400,7 @@ where
             let name = name.ok_or("soradns-verify-gar requires --name <fqdn>")?;
             let options = soradns::GarVerifyOptions {
                 name,
+                pretty_suffix,
                 expected_manifest_cid: manifest_cid,
                 expected_manifest_digest: manifest_digest,
                 required_telemetry_labels: telemetry_labels,
@@ -11834,7 +11909,7 @@ fn print_usage() {
         "    Regenerate the provider admission proposal/envelope fixtures. Defaults to fixtures/sorafs_manifest/provider_admission"
     );
     eprintln!(
-        "  cargo xtask soradns-hosts --name <fqdn> [--name <fqdn> ...] [--json-out <path|->] [--verify-host-patterns <path> ...]"
+        "  cargo xtask soradns-hosts --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--json-out <path|->] [--verify-host-patterns <path> ...]"
     );
     eprintln!(
         "    Derive canonical and pretty gateway hosts for SoraDNS names. Use --json-out to write structured output and --verify-host-patterns to compare derived hosts against GAR host_patterns JSON."
@@ -11846,22 +11921,22 @@ fn print_usage() {
         "    Generate a portal.gateway.binding.json replacement plus the matching headers.txt block so DG-3 tickets can diff alias/CID/route metadata without running the Node helper."
     );
     eprintln!(
-        "  cargo xtask soradns-gar-template --name <fqdn> [--manifest <path> | --manifest-cid <cid>] [--manifest-digest <hex>] [--valid-from <secs>] [--valid-until <secs>] [--csp-template <string>] [--hsts-template <string>] [--permissions-template <string>] [--telemetry-label <label> ...] [--json-out <path|->]"
+        "  cargo xtask soradns-gar-template --name <fqdn> [--pretty-suffix <suffix>] [--manifest <path> | --manifest-cid <cid>] [--manifest-digest <hex>] [--valid-from <secs>] [--valid-until <secs>] [--csp-template <string>] [--hsts-template <string>] [--permissions-template <string>] [--telemetry-label <label> ...] [--json-out <path|->]"
     );
     eprintln!(
         "    Scaffold a Gateway Authorization Record payload with canonical host patterns, default CSP/HSTS templates, and optional telemetry labels. Use --json-out - to emit the JSON on stdout."
     );
     eprintln!(
-        "  cargo xtask soradns-acme-plan --name <fqdn> [--name <fqdn> ...] [--directory-url <url>] [--no-pretty] [--no-canonical-wildcard] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-acme-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--directory-url <url>] [--no-pretty] [--no-canonical-wildcard] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
-        "  cargo xtask soradns-cache-plan --name <fqdn> [--name <fqdn> ...] [--path <path> ...] [--http-method <verb>] [--no-pretty] [--auth-header <name>] [--auth-env <env>] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-cache-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--path <path> ...] [--http-method <verb>] [--no-pretty] [--auth-header <name>] [--auth-env <env>] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
         "    Emit deterministic cache invalidation plans (hosts + paths + auth hints) so DG-3 change packets can include purge flows alongside GAR/binding templates."
     );
     eprintln!(
-        "  cargo xtask soradns-route-plan --name <fqdn> [--name <fqdn> ...] [--no-pretty] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-route-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--no-pretty] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
         "    Produce promotion + rollback checklists per alias, including canonical/pretty hosts and staging notes, so DG-3 route changes ship with preflight + revert evidence."
@@ -11870,7 +11945,7 @@ fn print_usage() {
         "    Render the wildcard + pretty-host SAN plan with recommended ACME challenges and DNS-01 labels so TLS automation and GAR reviewers share the same evidence bundle."
     );
     eprintln!(
-        "  cargo xtask soradns-verify-gar --gar <path> --name <fqdn> [--manifest-cid <cid>] [--manifest-digest <hex>] [--telemetry-label <label> ...] [--json-out <path|->]"
+        "  cargo xtask soradns-verify-gar --gar <path> --name <fqdn> [--pretty-suffix <suffix>] [--manifest-cid <cid>] [--manifest-digest <hex>] [--telemetry-label <label> ...] [--json-out <path|->]"
     );
     eprintln!(
         "    Validate a GAR payload against the deterministic host policy before signing or attaching it to DG-3 tickets. Confirms canonical/pretty hosts, manifest metadata, and required telemetry labels."
