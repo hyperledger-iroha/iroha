@@ -515,7 +515,7 @@ pub mod genesis_instructions_json {
     use std::{collections::BTreeMap, str::FromStr};
 
     use iroha_data_model::{
-        account::NewAccount,
+        account::{NewAccount, OpaqueAccountId},
         asset::definition::NewAssetDefinition,
         domain::NewDomain,
         isi::{
@@ -524,7 +524,7 @@ pub mod genesis_instructions_json {
             Transfer, TransferBox, domain_link::SetAccountAliasBinding, register::RegisterBox,
         },
         metadata::Metadata,
-        nexus::LaneId,
+        nexus::{LaneId, UniversalAccountId},
         parameter::Parameter,
         permission::Permission,
         prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
@@ -692,7 +692,37 @@ pub mod genesis_instructions_json {
                 InstructionBox::from(Register::domain(new_domain))
             }
             "Account" => {
-                let new_account: NewAccount = norito::json::value::from_value(payload)?;
+                let mut fields = match payload {
+                    Value::Object(map) => map,
+                    other => {
+                        return Err(json::Error::Message(format!(
+                            "expected object for Register::Account fields, found {other:?}"
+                        )));
+                    }
+                };
+                let id = parse_account_id(&take_string(&mut fields, "id")?, "register account")?;
+                let metadata = match fields.remove("metadata") {
+                    None | Some(Value::Null) => Metadata::default(),
+                    Some(value) => norito::json::value::from_value(value)?,
+                };
+                let label = match fields.remove("label") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(parse_account_alias(value, "Register.Account.label")?),
+                };
+                let uaid: Option<UniversalAccountId> = match fields.remove("uaid") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(norito::json::value::from_value(value)?),
+                };
+                let opaque_ids: Vec<OpaqueAccountId> = match fields.remove("opaque_ids") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(value) => norito::json::value::from_value(value)?,
+                };
+                ensure_no_extra_fields(&fields)?;
+                let new_account = NewAccount::new(id)
+                    .with_metadata(metadata)
+                    .with_label(label)
+                    .with_uaid(uaid)
+                    .with_opaque_ids(opaque_ids);
                 InstructionBox::from(Register::account(new_account))
             }
             "AssetDefinition" => {
@@ -1697,6 +1727,49 @@ pub mod genesis_instructions_json {
                 }
                 other => panic!("unexpected custom instruction: {other:?}"),
             }
+        }
+
+        #[test]
+        fn deserialize_structured_register_account_with_label() {
+            let account_id = ALICE_ID.clone();
+            let account_literal = account_literal(&account_id).expect("account literal");
+            let expected_label = iroha_data_model::account::rekey::AccountAlias::new(
+                "admin1".parse().expect("alias label"),
+                Some("hbl".parse().expect("alias domain")),
+                iroha_data_model::nexus::DataSpaceId::new(10),
+            );
+            let register_json = format!(
+                r#"{{
+                    "Register": {{
+                        "Account": {{
+                            "id": "{account_literal}",
+                            "label": {{
+                                "label": "admin1",
+                                "domain": "hbl",
+                                "dataspace": 10
+                            }},
+                            "metadata": {{}},
+                            "opaque_ids": [],
+                            "uaid": null
+                        }}
+                    }}
+                }}"#
+            );
+            let register_value =
+                norito::json::from_str(&register_json).expect("parse register instruction");
+
+            let instruction =
+                super::value_to_instruction(register_value).expect("structured account decodes");
+            let RegisterBox::Account(account) = instruction
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("RegisterBox variant")
+            else {
+                panic!("expected account registration");
+            };
+
+            assert_eq!(account.object().id(), &account_id);
+            assert_eq!(account.object().label(), Some(&expected_label));
         }
 
         #[test]
