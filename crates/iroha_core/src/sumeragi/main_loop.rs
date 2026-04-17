@@ -3988,10 +3988,11 @@ impl Actor {
             .propose
             .highest_qc_missing_defer_markers
             .iter()
-            .filter(|(height, _, hash)| {
+            .filter(|(height, view, hash)| {
                 *height == frontier_height
                     && !self.missing_hash_is_non_actionable_dependency(
                         *height,
+                        *view,
                         *hash,
                         committed_height,
                         now,
@@ -22802,14 +22803,77 @@ impl Actor {
                 .is_some_and(|committed_hash| committed_hash != block_hash)
     }
 
+    fn missing_hash_is_superseded_by_live_same_height_owner(
+        &self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        let Some(current_view) = self.phase_tracker.current_view(height) else {
+            return false;
+        };
+        if view >= current_view {
+            return false;
+        }
+        if self
+            .frontier_slot_live_local_owner_for_round(height, current_view)
+            .is_some_and(|(owner_hash, _)| owner_hash != block_hash)
+        {
+            return true;
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            *hash != block_hash
+                && !pending.is_consensus_inactive()
+                && pending.validation_status != ValidationStatus::Invalid
+                && pending.height == height
+                && pending.view >= current_view
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+                && self.pending_block_has_consensus_evidence(*hash, pending)
+        }) || self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.block_hash != block_hash
+                    && !inflight.pending.is_consensus_inactive()
+                    && inflight.pending.validation_status != ValidationStatus::Invalid
+                    && inflight.pending.height == height
+                    && inflight.pending.view >= current_view
+                    && pending_extends_tip(
+                        inflight.pending.height,
+                        inflight.pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+                    && self.pending_block_has_consensus_evidence(
+                        inflight.block_hash,
+                        &inflight.pending,
+                    )
+            })
+    }
+
     fn missing_hash_is_non_actionable_dependency(
         &self,
         height: u64,
+        view: u64,
         block_hash: HashOf<BlockHeader>,
         committed_height: u64,
         now: Instant,
     ) -> bool {
         self.missing_hash_is_obsolete_committed_edge_conflict(height, block_hash, committed_height)
+            || self.missing_hash_is_superseded_by_live_same_height_owner(height, view, block_hash)
             || self
                 .lock_rejected_block_sinks
                 .get(&(height, block_hash))
@@ -22834,6 +22898,7 @@ impl Actor {
         &self,
         phase: crate::sumeragi::consensus::Phase,
         height: u64,
+        view: u64,
         block_hash: HashOf<BlockHeader>,
         committed_height: u64,
         now: Instant,
@@ -22841,6 +22906,7 @@ impl Actor {
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         self.missing_hash_is_non_actionable_dependency(
             subject_height,
+            view,
             block_hash,
             committed_height,
             now,
@@ -22856,6 +22922,7 @@ impl Actor {
         self.missing_qc_dependency_is_non_actionable(
             entry.qc.phase,
             entry.qc.height,
+            entry.qc.view,
             entry.qc.subject_block_hash,
             committed_height,
             now,
@@ -22871,6 +22938,7 @@ impl Actor {
         self.missing_qc_dependency_is_non_actionable(
             qc.phase,
             qc.height,
+            qc.view,
             qc.subject_block_hash,
             committed_height,
             now,
@@ -22887,6 +22955,7 @@ impl Actor {
         self.missing_qc_dependency_is_non_actionable(
             request.phase,
             request.height,
+            request.view,
             block_hash,
             committed_height,
             now,
@@ -23414,6 +23483,7 @@ impl Actor {
                         && !self.authoritative_block_payload_available(*hash)
                         && !self.missing_hash_is_non_actionable_dependency(
                             *marker_height,
+                            0,
                             *hash,
                             committed_height,
                             now,
@@ -28694,6 +28764,7 @@ impl Actor {
                     || self.block_known_locally(*hash)
                     || self.missing_hash_is_non_actionable_dependency(
                         *height,
+                        0,
                         *hash,
                         committed_height,
                         now,
@@ -28719,6 +28790,7 @@ impl Actor {
         self.prune_highest_qc_missing_defer_markers(committed_height);
         if self.missing_hash_is_non_actionable_dependency(
             highest_qc.height,
+            highest_qc.view,
             highest_qc.subject_block_hash,
             committed_height,
             now,
