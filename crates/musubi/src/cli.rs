@@ -9,7 +9,9 @@ use std::{
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail, eyre};
 use iroha::{
-    client::{Client, SorafsStorageFileEntry},
+    client::{
+        Client, SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, SorafsStorageFileEntry,
+    },
     config::{Config, LoadPath},
 };
 use iroha_data_model::{
@@ -42,8 +44,15 @@ use ivm::{
         parser::parse as parse_kotodama,
     },
 };
+use sorafs_car::gateway::{
+    GatewayFetchConfig as SorafsGatewayFetchConfig,
+    GatewayProviderInput as SorafsGatewayProviderInput,
+};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
-use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
+use sorafs_car::{CarChunk, FilePlan};
+use sorafs_manifest::{
+    BLAKE3_256_MULTIHASH_CODE, DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder, chunker_registry,
+};
 
 const DEFAULT_MANIFEST: &str = "Musubi.toml";
 const DEFAULT_LOCKFILE: &str = "Musubi.lock";
@@ -299,10 +308,15 @@ struct InstallArgs {
     /// Local provider payload used by --fetch while gateway providers are not configured
     #[arg(long, value_name = "PATH")]
     provider_payload: Vec<PathBuf>,
+    #[command(flatten)]
+    gateway: GatewayFetchArgs,
 }
 
 impl InstallArgs {
     fn run(self) -> Result<()> {
+        if !self.fetch && self.gateway.has_any_args() {
+            bail!("gateway fetch options require --fetch");
+        }
         let manifest = read_manifest(&self.manifest)?;
         validate_dependency_aliases(&manifest)?;
 
@@ -342,7 +356,30 @@ impl InstallArgs {
             lockfile
         };
         if self.fetch {
-            fetch_missing_lockfile_sources(&lockfile, &self.cache_dir, &self.provider_payload)?;
+            validate_source_fetch_inputs(&self.provider_payload, &self.gateway)?;
+            if self.gateway.has_providers() {
+                validate_gateway_scope_for_lockfile(&lockfile, &self.cache_dir, &self.gateway)?;
+                let (client, _) = self.client.load()?;
+                let runner = ClientGatewayFetchRunner { client: &client };
+                fetch_missing_lockfile_sources(
+                    &lockfile,
+                    &self.cache_dir,
+                    SourceFetchMode::Gateway {
+                        runner: &runner,
+                        args: &self.gateway,
+                        allow_unscoped_providers: count_missing_lockfile_sources(
+                            &lockfile,
+                            &self.cache_dir,
+                        ) == 1,
+                    },
+                )?;
+            } else {
+                fetch_missing_lockfile_sources(
+                    &lockfile,
+                    &self.cache_dir,
+                    SourceFetchMode::ProviderPayloads(&self.provider_payload),
+                )?;
+            }
         }
         write_lockfile(&self.lockfile, &lockfile)?;
         println!(
@@ -351,6 +388,62 @@ impl InstallArgs {
             self.lockfile.display()
         );
         Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug, Default)]
+struct GatewayFetchArgs {
+    /// Gateway provider descriptor: name=<alias>,provider-id=<64-hex>,base-url=<url>,stream-token=<base64>[,privacy-url=<url>][,package=<alias-or-ref>][,manifest=<64-hex>]
+    #[arg(long = "gateway-provider", value_name = "SPEC")]
+    gateway_provider: Vec<GatewayProviderSpec>,
+    /// Client label sent to SoraFS gateway providers for audit and rate limiting
+    #[arg(long)]
+    gateway_client_id: Option<String>,
+    /// Maximum retry attempts per chunk during gateway fetch
+    #[arg(long, value_parser = parse_nonzero_usize)]
+    gateway_retry_budget: Option<usize>,
+    /// Hard cap on the number of gateway providers used for one fetch
+    #[arg(long, value_parser = parse_nonzero_usize)]
+    gateway_max_peers: Option<usize>,
+    /// Telemetry region label attached to gateway fetch metrics
+    #[arg(long)]
+    gateway_telemetry_region: Option<String>,
+    /// Persist the gateway fetch scoreboard JSON artifact
+    #[arg(long, value_name = "PATH")]
+    gateway_scoreboard_out: Option<PathBuf>,
+}
+
+impl GatewayFetchArgs {
+    fn has_providers(&self) -> bool {
+        !self.gateway_provider.is_empty()
+    }
+
+    fn has_any_args(&self) -> bool {
+        self.has_providers()
+            || self.gateway_client_id.is_some()
+            || self.gateway_retry_budget.is_some()
+            || self.gateway_max_peers.is_some()
+            || self.gateway_telemetry_region.is_some()
+            || self.gateway_scoreboard_out.is_some()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GatewayProviderSpec {
+    name: String,
+    provider_id_hex: String,
+    base_url: String,
+    stream_token_b64: String,
+    privacy_events_url: Option<String>,
+    package: Option<String>,
+    manifest_id_hex: Option<String>,
+}
+
+impl std::str::FromStr for GatewayProviderSpec {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        parse_gateway_provider_spec(value)
     }
 }
 
@@ -929,6 +1022,8 @@ struct CacheImportArgs {
 
 #[derive(clap::Args, Debug)]
 struct CacheFetchArgs {
+    #[command(flatten)]
+    client: ClientArgs,
     /// Lockfile path to inspect
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
@@ -940,6 +1035,8 @@ struct CacheFetchArgs {
     /// Local provider payload containing the canonical concatenated source payload
     #[arg(long = "provider-payload", value_name = "PATH")]
     provider_payload: Vec<PathBuf>,
+    #[command(flatten)]
+    gateway: GatewayFetchArgs,
     /// Replace an existing cache entry
     #[arg(long)]
     replace: bool,
@@ -951,12 +1048,28 @@ impl CacheFetchArgs {
         let package = lockfile
             .find_package(&self.package)
             .ok_or_else(|| eyre!("lockfile does not contain `{}`", self.package))?;
-        fetch_locked_package_source(
-            package,
-            &self.cache_dir,
-            &self.provider_payload,
-            self.replace,
-        )?;
+        validate_source_fetch_inputs(&self.provider_payload, &self.gateway)?;
+        if self.gateway.has_providers() {
+            let (client, _) = self.client.load()?;
+            let runner = ClientGatewayFetchRunner { client: &client };
+            fetch_locked_package_source_from(
+                package,
+                &self.cache_dir,
+                SourceFetchMode::Gateway {
+                    runner: &runner,
+                    args: &self.gateway,
+                    allow_unscoped_providers: true,
+                },
+                self.replace,
+            )?;
+        } else {
+            fetch_locked_package_source(
+                package,
+                &self.cache_dir,
+                &self.provider_payload,
+                self.replace,
+            )?;
+        }
         println!(
             "fetched {} to {}",
             package.package,
@@ -2492,7 +2605,7 @@ fn verify_cached_package(cache_dir: &Path, package: &LockedPackage) -> Result<()
 fn fetch_missing_lockfile_sources(
     lockfile: &MusubiLockfile,
     cache_dir: &Path,
-    provider_payloads: &[PathBuf],
+    fetch_mode: SourceFetchMode<'_>,
 ) -> Result<()> {
     for package in &lockfile.packages {
         let source_path = cache_source_path(cache_dir, package);
@@ -2500,7 +2613,7 @@ fn fetch_missing_lockfile_sources(
             verify_cached_package(cache_dir, package)?;
             continue;
         }
-        fetch_locked_package_source(package, cache_dir, provider_payloads, false)?;
+        fetch_locked_package_source_from(package, cache_dir, fetch_mode, false)?;
     }
     Ok(())
 }
@@ -2509,6 +2622,62 @@ fn fetch_locked_package_source(
     package: &LockedPackage,
     cache_dir: &Path,
     provider_payloads: &[PathBuf],
+    replace: bool,
+) -> Result<()> {
+    fetch_locked_package_source_from(
+        package,
+        cache_dir,
+        SourceFetchMode::ProviderPayloads(provider_payloads),
+        replace,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum SourceFetchMode<'a> {
+    ProviderPayloads(&'a [PathBuf]),
+    Gateway {
+        runner: &'a dyn GatewayFetchRunner,
+        args: &'a GatewayFetchArgs,
+        allow_unscoped_providers: bool,
+    },
+}
+
+trait GatewayFetchRunner {
+    fn fetch(&self, request: GatewayFetchRequest) -> Result<Vec<u8>>;
+}
+
+struct ClientGatewayFetchRunner<'a> {
+    client: &'a Client,
+}
+
+impl GatewayFetchRunner for ClientGatewayFetchRunner<'_> {
+    fn fetch(&self, request: GatewayFetchRequest) -> Result<Vec<u8>> {
+        let runtime =
+            tokio::runtime::Runtime::new().wrap_err("failed to initialise Tokio runtime")?;
+        let session = runtime
+            .block_on(self.client.sorafs_fetch_via_gateway(
+                &request.plan,
+                request.gateway_config,
+                request.providers,
+                request.options,
+            ))
+            .map_err(|err| eyre!("failed to fetch Musubi source through SoraFS gateway: {err}"))?;
+        Ok(session.outcome.assemble_payload())
+    }
+}
+
+#[derive(Debug)]
+struct GatewayFetchRequest {
+    plan: CarBuildPlan,
+    gateway_config: SorafsGatewayFetchConfig,
+    providers: Vec<SorafsGatewayProviderInput>,
+    options: SorafsGatewayFetchOptions,
+}
+
+fn fetch_locked_package_source_from(
+    package: &LockedPackage,
+    cache_dir: &Path,
+    fetch_mode: SourceFetchMode<'_>,
     replace: bool,
 ) -> Result<()> {
     let destination = cache_source_path(cache_dir, package);
@@ -2527,9 +2696,20 @@ fn fetch_locked_package_source(
         .source_plan
         .as_ref()
         .ok_or_else(|| eyre!("package `{}` has no source archive plan", package.package))?;
-    // TODO: replace the local payload fallback with gateway-provider fetch once
-    // Musubi owns a synchronous SoraFS gateway client surface.
-    let payload = read_matching_provider_payload(provider_payloads, source_plan)?;
+    let payload = match fetch_mode {
+        SourceFetchMode::ProviderPayloads(provider_payloads) => {
+            read_matching_provider_payload(provider_payloads, source_plan)?
+        }
+        SourceFetchMode::Gateway {
+            runner,
+            args,
+            allow_unscoped_providers,
+        } => {
+            let request =
+                build_gateway_fetch_request(package, source_plan, args, allow_unscoped_providers)?;
+            runner.fetch(request)?
+        }
+    };
     verify_source_payload(source_plan, &payload)?;
     write_source_payload(source_plan, &payload, &destination)?;
     verify_cached_package(cache_dir, package)?;
@@ -2567,6 +2747,282 @@ fn read_matching_provider_payload(
         "no provider payload matched source archive plan: {}",
         mismatches.join("; ")
     )
+}
+
+fn validate_source_fetch_inputs(
+    provider_payloads: &[PathBuf],
+    gateway: &GatewayFetchArgs,
+) -> Result<()> {
+    if !provider_payloads.is_empty() && gateway.has_providers() {
+        bail!("--provider-payload cannot be combined with --gateway-provider");
+    }
+    if !gateway.has_providers() && gateway.has_any_args() {
+        bail!("gateway fetch options require at least one --gateway-provider");
+    }
+    Ok(())
+}
+
+fn count_missing_lockfile_sources(lockfile: &MusubiLockfile, cache_dir: &Path) -> usize {
+    lockfile
+        .packages
+        .iter()
+        .filter(|package| !cache_source_path(cache_dir, package).exists())
+        .count()
+}
+
+fn validate_gateway_scope_for_lockfile(
+    lockfile: &MusubiLockfile,
+    cache_dir: &Path,
+    gateway: &GatewayFetchArgs,
+) -> Result<()> {
+    if count_missing_lockfile_sources(lockfile, cache_dir) > 1
+        && gateway
+            .gateway_provider
+            .iter()
+            .any(GatewayProviderSpec::is_unscoped)
+    {
+        bail!(
+            "unscoped --gateway-provider is ambiguous when multiple packages are missing; add package=<alias-or-ref> or manifest=<64-hex>"
+        );
+    }
+    Ok(())
+}
+
+fn parse_nonzero_usize(value: &str) -> std::result::Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid positive integer `{value}`: {err}"))?;
+    if parsed == 0 {
+        Err("value must be at least 1".to_owned())
+    } else {
+        Ok(parsed)
+    }
+}
+
+fn parse_gateway_provider_spec(value: &str) -> std::result::Result<GatewayProviderSpec, String> {
+    let mut name: Option<String> = None;
+    let mut provider_id: Option<String> = None;
+    let mut base_url: Option<String> = None;
+    let mut stream_token: Option<String> = None;
+    let mut privacy_events_url: Option<String> = None;
+    let mut package: Option<String> = None;
+    let mut manifest_id_hex: Option<String> = None;
+
+    for pair in value.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, val) = pair.split_once('=').ok_or_else(|| {
+            "--gateway-provider expects comma-separated key=value pairs".to_owned()
+        })?;
+        let val = val.trim();
+        match key.trim() {
+            "name" => {
+                if val.is_empty() {
+                    return Err("--gateway-provider name must not be empty".into());
+                }
+                name = Some(val.to_owned());
+            }
+            "provider-id" | "provider_id" => {
+                provider_id = Some(validate_hex_32_cli(val, "--gateway-provider provider-id")?);
+            }
+            "base-url" | "base_url" => {
+                if val.is_empty() {
+                    return Err("--gateway-provider base-url must not be empty".into());
+                }
+                base_url = Some(val.to_owned());
+            }
+            "privacy-url" | "privacy_url" => {
+                if val.is_empty() {
+                    return Err("--gateway-provider privacy-url must not be empty".into());
+                }
+                privacy_events_url = Some(val.to_owned());
+            }
+            "stream-token" | "stream_token" => {
+                if val.is_empty() {
+                    return Err("--gateway-provider stream-token must not be empty".into());
+                }
+                stream_token = Some(val.to_owned());
+            }
+            "package" => {
+                if val.is_empty() {
+                    return Err("--gateway-provider package must not be empty".into());
+                }
+                package = Some(val.to_owned());
+            }
+            "manifest" | "manifest-id" | "manifest_id" => {
+                manifest_id_hex = Some(validate_hex_32_cli(val, "--gateway-provider manifest")?);
+            }
+            other => {
+                return Err(format!(
+                    "unknown --gateway-provider key `{other}`. expected name, provider-id, base-url, stream-token, privacy-url, package, manifest"
+                ));
+            }
+        }
+    }
+
+    Ok(GatewayProviderSpec {
+        name: name.ok_or_else(|| "--gateway-provider requires name=<alias>".to_owned())?,
+        provider_id_hex: provider_id
+            .ok_or_else(|| "--gateway-provider requires provider-id=<hex>".to_owned())?,
+        base_url: base_url
+            .ok_or_else(|| "--gateway-provider requires base-url=<https://...>".to_owned())?,
+        stream_token_b64: stream_token
+            .ok_or_else(|| "--gateway-provider requires stream-token=<base64>".to_owned())?,
+        privacy_events_url,
+        package,
+        manifest_id_hex,
+    })
+}
+
+fn validate_hex_32_cli(value: &str, label: &str) -> std::result::Result<String, String> {
+    if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("{label} must be 32-byte hex"));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+impl GatewayProviderSpec {
+    fn is_unscoped(&self) -> bool {
+        self.package.is_none() && self.manifest_id_hex.is_none()
+    }
+
+    fn matches_package(&self, package: &LockedPackage) -> bool {
+        let package_matches = self.package.as_deref().is_none_or(|raw| {
+            package.alias.as_ref() == raw
+                || package.package.to_string() == raw
+                || package.package.package.to_string() == raw
+        });
+        let manifest_matches = self.manifest_id_hex.as_deref().is_none_or(|manifest| {
+            package
+                .archive
+                .is_some_and(|archive| hex::encode(archive.sorafs_manifest.as_bytes()) == manifest)
+        });
+        package_matches && manifest_matches
+    }
+
+    fn to_input(&self) -> SorafsGatewayProviderInput {
+        SorafsGatewayProviderInput {
+            name: self.name.clone(),
+            provider_id_hex: self.provider_id_hex.clone(),
+            base_url: self.base_url.clone(),
+            stream_token_b64: self.stream_token_b64.clone(),
+            privacy_events_url: self.privacy_events_url.clone(),
+        }
+    }
+}
+
+fn build_gateway_fetch_request(
+    package: &LockedPackage,
+    source_plan: &MusubiSourceArchivePlan,
+    args: &GatewayFetchArgs,
+    allow_unscoped_providers: bool,
+) -> Result<GatewayFetchRequest> {
+    let archive = package
+        .archive
+        .ok_or_else(|| eyre!("package `{}` has no archive metadata", package.package))?;
+    let manifest_id_hex = hex::encode(archive.sorafs_manifest.as_bytes());
+    let providers = select_gateway_providers(package, args, allow_unscoped_providers)?;
+    if providers.is_empty() {
+        bail!(
+            "no --gateway-provider matched package `{}` or manifest `{manifest_id_hex}`",
+            package.package
+        );
+    }
+    let descriptor = chunker_registry::default_descriptor();
+    let gateway_config = SorafsGatewayFetchConfig {
+        manifest_id_hex: manifest_id_hex.clone(),
+        chunker_handle: descriptor.aliases[0].to_owned(),
+        manifest_envelope_b64: None,
+        client_id: args.gateway_client_id.clone(),
+        expected_manifest_cid_hex: Some(manifest_id_hex),
+        blinded_cid_b64: None,
+        salt_epoch: None,
+        expected_cache_version: None,
+        moderation_token_key_b64: None,
+    };
+    Ok(GatewayFetchRequest {
+        plan: car_plan_from_source_archive_plan(source_plan)?,
+        gateway_config,
+        providers,
+        options: gateway_fetch_options(args),
+    })
+}
+
+fn select_gateway_providers(
+    package: &LockedPackage,
+    args: &GatewayFetchArgs,
+    allow_unscoped_providers: bool,
+) -> Result<Vec<SorafsGatewayProviderInput>> {
+    args.gateway_provider
+        .iter()
+        .filter_map(|spec| {
+            if spec.is_unscoped() && !allow_unscoped_providers {
+                return Some(Err(eyre!(
+                    "unscoped --gateway-provider is ambiguous for `{}`; add package=<alias-or-ref> or manifest=<64-hex>",
+                    package.package
+                )));
+            }
+            spec.matches_package(package)
+                .then(|| Ok(spec.to_input()))
+        })
+        .collect()
+}
+
+fn gateway_fetch_options(args: &GatewayFetchArgs) -> SorafsGatewayFetchOptions {
+    SorafsGatewayFetchOptions {
+        retry_budget: args.gateway_retry_budget,
+        max_peers: args.gateway_max_peers,
+        telemetry_region: args.gateway_telemetry_region.clone(),
+        scoreboard: args.gateway_scoreboard_out.as_ref().map(|path| {
+            SorafsGatewayScoreboardOptions {
+                persist_path: Some(path.clone()),
+                ..SorafsGatewayScoreboardOptions::default()
+            }
+        }),
+        ..SorafsGatewayFetchOptions::default()
+    }
+}
+
+fn car_plan_from_source_archive_plan(
+    source_plan: &MusubiSourceArchivePlan,
+) -> Result<CarBuildPlan> {
+    if source_plan.chunks.is_empty() || source_plan.files.is_empty() {
+        bail!("source archive plan must contain at least one chunk and one file");
+    }
+    let descriptor = chunker_registry::default_descriptor();
+    let chunks = source_plan
+        .chunks
+        .iter()
+        .map(|chunk| CarChunk {
+            offset: chunk.offset,
+            length: chunk.length,
+            digest: chunk.digest_blake3_256,
+            taikai_segment_hint: None,
+        })
+        .collect();
+    let files = source_plan
+        .files
+        .iter()
+        .map(|file| {
+            Ok(FilePlan {
+                path: file.path.clone(),
+                first_chunk: usize::try_from(file.first_chunk)
+                    .map_err(|_| eyre!("source file first_chunk does not fit usize"))?,
+                chunk_count: usize::try_from(file.chunk_count)
+                    .map_err(|_| eyre!("source file chunk_count does not fit usize"))?,
+                size: file.size,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(CarBuildPlan {
+        chunk_profile: descriptor.profile,
+        payload_digest: blake3::Hash::from(source_plan.payload_hash_blake3_256),
+        content_length: source_plan.content_length,
+        chunks,
+        files,
+    })
 }
 
 fn verify_source_payload(source_plan: &MusubiSourceArchivePlan, payload: &[u8]) -> Result<()> {
@@ -3327,6 +3783,232 @@ mod tests {
                 .expect("read fetched");
         assert_eq!(fetched, "fn add() {}\n");
         verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    #[test]
+    fn gateway_provider_spec_parses_scoped_provider() {
+        let provider_id = "11".repeat(32);
+        let manifest = "22".repeat(32);
+        let spec: GatewayProviderSpec = format!(
+            "name=gw,provider-id={provider_id},base-url=https://gw.example,stream-token=token,privacy-url=https://privacy.example,package=math,manifest={manifest}"
+        )
+        .parse()
+        .expect("parse provider");
+
+        assert_eq!(spec.name, "gw");
+        assert_eq!(spec.provider_id_hex, provider_id);
+        assert_eq!(spec.base_url, "https://gw.example");
+        assert_eq!(spec.stream_token_b64, "token");
+        assert_eq!(
+            spec.privacy_events_url.as_deref(),
+            Some("https://privacy.example")
+        );
+        assert_eq!(spec.package.as_deref(), Some("math"));
+        assert_eq!(spec.manifest_id_hex.as_deref(), Some(manifest.as_str()));
+
+        let err = "name=gw,provider-id=abcd,base-url=https://gw.example,stream-token=token"
+            .parse::<GatewayProviderSpec>()
+            .expect_err("provider id must be full digest");
+        assert!(err.contains("32-byte hex"));
+    }
+
+    #[test]
+    fn source_archive_plan_reconstructs_gateway_car_plan() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        fs::write(
+            source.path().join("Musubi.toml"),
+            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir(source.path().join("src")).expect("src dir");
+        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+
+        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
+        let archive = hash_source_tree(source.path()).expect("archive hash");
+        let sorafs =
+            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive)
+                .expect("sorafs manifest");
+
+        let plan = car_plan_from_source_archive_plan(&sorafs.source_plan).expect("car plan");
+
+        assert_eq!(
+            plan.payload_digest.as_bytes(),
+            &sorafs.source_plan.payload_hash_blake3_256
+        );
+        assert_eq!(plan.content_length, sorafs.source_plan.content_length);
+        assert_eq!(plan.chunks.len(), sorafs.source_plan.chunks.len());
+        assert_eq!(plan.files.len(), sorafs.source_plan.files.len());
+        assert_eq!(plan.chunks[0].offset, sorafs.source_plan.chunks[0].offset);
+        assert_eq!(
+            plan.chunks[0].digest,
+            sorafs.source_plan.chunks[0].digest_blake3_256
+        );
+        assert_eq!(plan.files[0].path, sorafs.source_plan.files[0].path);
+    }
+
+    #[test]
+    fn cache_fetch_reconstructs_source_from_gateway_payload() {
+        struct StaticGatewayRunner {
+            manifest_id_hex: String,
+            payload: Vec<u8>,
+        }
+
+        impl GatewayFetchRunner for StaticGatewayRunner {
+            fn fetch(&self, request: GatewayFetchRequest) -> Result<Vec<u8>> {
+                assert_eq!(request.gateway_config.manifest_id_hex, self.manifest_id_hex);
+                assert_eq!(
+                    request.gateway_config.expected_manifest_cid_hex.as_deref(),
+                    Some(self.manifest_id_hex.as_str())
+                );
+                assert_eq!(request.gateway_config.chunker_handle, "sorafs.sf1@1.0.0");
+                assert_eq!(request.providers.len(), 1);
+                assert_eq!(request.providers[0].name, "gw");
+                assert_eq!(request.options.retry_budget, Some(2));
+                assert_eq!(request.options.max_peers, Some(1));
+                assert_eq!(request.plan.content_length, self.payload.len() as u64);
+                Ok(self.payload.clone())
+            }
+        }
+
+        let source = tempfile::tempdir().expect("source tempdir");
+        fs::write(
+            source.path().join("Musubi.toml"),
+            "[package]\nnamespace = \"std.universal\"\nname = \"math\"\nversion = \"1.2.3\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir(source.path().join("src")).expect("src dir");
+        fs::write(source.path().join("src/lib.ko"), "fn add() {}\n").expect("source");
+
+        let manifest = read_manifest(&source.path().join("Musubi.toml")).expect("manifest");
+        let archive_stats = hash_source_tree(source.path()).expect("archive hash");
+        let sorafs =
+            build_sorafs_source_manifest(&manifest, source.path(), None, None, None, archive_stats)
+                .expect("sorafs manifest");
+        let manifest_id_hex = hex::encode(sorafs.digest.as_bytes());
+        let package = LockedPackage {
+            alias: "math".parse().unwrap(),
+            package: "std.universal/math@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: Some(MusubiArchiveRef::new(
+                sorafs.digest,
+                archive_stats.archive_hash_blake3_256,
+                archive_stats.source_bytes,
+                archive_stats.source_file_count,
+            )),
+            source_plan: Some(sorafs.source_plan),
+            cache_path: None,
+            exports: vec!["add".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "https://gw.example".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: None,
+                package: Some("math".into()),
+                manifest_id_hex: None,
+            }],
+            gateway_client_id: Some("musubi-tests".into()),
+            gateway_retry_budget: Some(2),
+            gateway_max_peers: Some(1),
+            gateway_telemetry_region: Some("test-region".into()),
+            gateway_scoreboard_out: None,
+        };
+        let runner = StaticGatewayRunner {
+            manifest_id_hex,
+            payload: sorafs.payload,
+        };
+        let cache = tempfile::tempdir().expect("cache tempdir");
+
+        fetch_locked_package_source_from(
+            &package,
+            cache.path(),
+            SourceFetchMode::Gateway {
+                runner: &runner,
+                args: &gateway,
+                allow_unscoped_providers: false,
+            },
+            false,
+        )
+        .expect("gateway fetch source");
+
+        let fetched =
+            fs::read_to_string(cache_source_path(cache.path(), &package).join("src/lib.ko"))
+                .expect("read fetched");
+        assert_eq!(fetched, "fn add() {}\n");
+        verify_cached_package(cache.path(), &package).expect("verify cache");
+    }
+
+    #[test]
+    fn provider_payload_and_gateway_provider_cannot_be_mixed() {
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "https://gw.example".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: None,
+                package: None,
+                manifest_id_hex: None,
+            }],
+            ..GatewayFetchArgs::default()
+        };
+        let payloads = vec![PathBuf::from("provider.payload")];
+
+        let err = validate_source_fetch_inputs(&payloads, &gateway).expect_err("mix rejected");
+
+        assert!(err.to_string().contains("cannot be combined"));
+    }
+
+    #[test]
+    fn install_fetch_rejects_unscoped_gateway_for_multiple_missing_packages() {
+        let cache = tempfile::tempdir().expect("cache tempdir");
+        let package_a = LockedPackage {
+            alias: "math".parse().unwrap(),
+            package: "std.universal/math@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: None,
+            source_plan: None,
+            cache_path: None,
+            exports: vec!["add".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+        let package_b = LockedPackage {
+            alias: "util".parse().unwrap(),
+            package: "std.universal/util@1.2.3".parse().unwrap(),
+            version_req: "^1.0.0".parse().unwrap(),
+            archive: None,
+            source_plan: None,
+            cache_path: None,
+            exports: vec!["id".parse().unwrap()],
+            dependencies: Vec::new(),
+            direct: true,
+            resolved: true,
+        };
+        let lockfile = MusubiLockfile::new(vec![package_a, package_b]);
+        let gateway = GatewayFetchArgs {
+            gateway_provider: vec![GatewayProviderSpec {
+                name: "gw".into(),
+                provider_id_hex: "11".repeat(32),
+                base_url: "https://gw.example".into(),
+                stream_token_b64: "token".into(),
+                privacy_events_url: None,
+                package: None,
+                manifest_id_hex: None,
+            }],
+            ..GatewayFetchArgs::default()
+        };
+
+        let err = validate_gateway_scope_for_lockfile(&lockfile, cache.path(), &gateway)
+            .expect_err("ambiguous provider rejected");
+
+        assert!(err.to_string().contains("ambiguous"));
     }
 
     #[test]

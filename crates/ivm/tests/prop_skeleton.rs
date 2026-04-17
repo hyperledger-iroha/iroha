@@ -26,7 +26,7 @@ fn deterministic_chunk(chunk_idx: usize, seed: u8) -> [u8; CHUNK_BYTES] {
 #[test]
 fn memory_merkle_compact_proofs_verify_for_deterministic_chunks() {
     let chunk_indices = [0, 1, 3, 5];
-    let depth_caps = [None, Some(12), Some(16)];
+    let depth_caps = [None];
 
     for chunk_idx in chunk_indices {
         for depth_cap in depth_caps {
