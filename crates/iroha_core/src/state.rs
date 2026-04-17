@@ -22208,6 +22208,29 @@ impl<'state> StateBlock<'state> {
             })
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
+            BTreeSet::new()
+        } else {
+            validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
+        };
+        if !checkpoint_lane_ids.is_empty() {
+            let before = world_peers.len();
+            world_peers.retain(|peer| {
+                checkpoint_topology.contains(peer)
+                    || !validator_lane_ids_for_peer(&self.world, peer)
+                        .is_disjoint(&checkpoint_lane_ids)
+            });
+            let filtered = before.saturating_sub(world_peers.len());
+            if filtered > 0 {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    filtered,
+                    lanes = checkpoint_lane_ids.len(),
+                    "ignoring world peers outside checkpoint topology lanes during block apply reconciliation"
+                );
+            }
+        }
         let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
         // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
         // Status tags can be stale around mode transitions, so we also consult the effective
@@ -23926,7 +23949,12 @@ fn replay_signature_error_recoverable(err: &crate::block::BlockValidationError) 
     )
 }
 
-fn replay_remap_block_signature_indices_to_topology(
+/// Remap block-signature indices to the provided topology when the signatures themselves remain
+/// valid but their embedded signer indices no longer line up with the local roster ordering.
+///
+/// This is used during replay and live catch-up validation to recover certified blocks that were
+/// authored under a compatible roster ordering but arrived with stale signer indices.
+pub(crate) fn remap_block_signature_indices_to_topology(
     block: &mut SignedBlock,
     topology: &crate::sumeragi::network_topology::Topology,
 ) -> Result<(), crate::block::BlockValidationError> {
@@ -24156,7 +24184,7 @@ pub fn replay_blocks_from_kura_range(
                     ) =>
                 {
                     let mut recovered = *failed_block;
-                    match replay_remap_block_signature_indices_to_topology(
+                    match remap_block_signature_indices_to_topology(
                         &mut recovered,
                         &validation_topology,
                     ) {
@@ -24205,7 +24233,7 @@ pub fn replay_blocks_from_kura_range(
                                         unreachable!("needs_remap derived from an error result")
                                     }
                                 };
-                                if replay_remap_block_signature_indices_to_topology(
+                                if remap_block_signature_indices_to_topology(
                                     &mut remapped,
                                     &rotated_topology,
                                 )
@@ -41571,6 +41599,144 @@ mod tests {
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
         expected_topology.block_committed(world_peers, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_world_peer_append_scoped_to_checkpoint_lanes() {
+        use iroha_config::parameters::actual::LaneValidatorMode;
+        use iroha_data_model::nexus::{
+            LaneCatalog, LaneConfig as CatalogLaneConfig, LaneVisibility,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        {
+            let lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    CatalogLaneConfig::default(),
+                    CatalogLaneConfig {
+                        id: LaneId::new(1),
+                        alias: "restricted".to_string(),
+                        visibility: LaneVisibility::Restricted,
+                        ..CatalogLaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let public_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let restricted_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let base_topology: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        {
+            let mut topo = state.commit_topology.block();
+            topo.clear();
+            for peer in &base_topology {
+                topo.push(peer.clone());
+            }
+            topo.commit();
+        }
+
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.extend(
+                    restricted_keypairs
+                        .iter()
+                        .map(|kp| PeerId::new(kp.public_key().clone())),
+                );
+                peers.apply();
+            }
+            for kp in &public_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::SINGLE, validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            for kp in &restricted_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::new(1), validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            world_block.commit();
+        }
+        seed_consensus_keys_with_pops(
+            &state,
+            &public_keypairs
+                .iter()
+                .chain(restricted_keypairs.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(public_keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), prev_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();

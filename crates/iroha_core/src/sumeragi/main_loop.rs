@@ -2663,12 +2663,23 @@ fn validate_block_for_voting_with_timings(
     Result<Option<StateRoots>, BlockValidationError>,
     ValidationTimings,
 ) {
+    fn signature_remap_recoverable(err: &BlockValidationError) -> bool {
+        matches!(
+            err,
+            BlockValidationError::SignatureVerification(
+                crate::block::SignatureVerificationError::UnknownSignature
+                    | crate::block::SignatureVerificationError::UnknownSignatory
+                    | crate::block::SignatureVerificationError::LeaderMissing
+            )
+        )
+    }
+
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let time_source = TimeSource::new_system();
     let mut timings = ValidationTimings::new();
-    let validation = ValidBlock::validate_keep_voting_block_with_timing(
+    let mut validation = ValidBlock::validate_keep_voting_block_with_timing(
         block,
         topology,
         chain_id,
@@ -2680,6 +2691,26 @@ fn validate_block_for_voting_with_timings(
         &mut timings,
     )
     .unpack(|_| {});
+    if let Err((failed_block, err)) = &validation
+        && signature_remap_recoverable(err)
+    {
+        let mut recovered = (**failed_block).clone();
+        if crate::state::remap_block_signature_indices_to_topology(&mut recovered, topology).is_ok()
+        {
+            validation = ValidBlock::validate_keep_voting_block_with_timing(
+                recovered,
+                topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                voting_block,
+                false,
+                &mut timings,
+            )
+            .unpack(|_| {});
+        }
+    }
 
     let result = match validation {
         Ok((_validated, mut state_block)) => {
@@ -3987,16 +4018,21 @@ impl Actor {
         )
     }
 
+    fn frontier_sidecar_hint_can_override_stall_gate(reason: &'static str) -> bool {
+        matches!(reason, "vote_roster_lookup" | "deferred_vote_roster_lookup")
+    }
+
     fn should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
         &self,
         frontier_height: u64,
         local_height: u64,
+        reason: &'static str,
     ) -> bool {
         if self.sidecar_quarantined_for_height(frontier_height) {
             return false;
         }
         if self.frontier_catchup_stall_mode_active_at_frontier(frontier_height, local_height) {
-            return false;
+            return Self::frontier_sidecar_hint_can_override_stall_gate(reason);
         }
         let dependency_progress_now =
             self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
@@ -22817,6 +22853,21 @@ impl Actor {
         )
     }
 
+    fn deferred_roster_qc_is_non_actionable_dependency(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_qc_dependency_is_non_actionable(
+            qc.phase,
+            qc.height,
+            qc.subject_block_hash,
+            committed_height,
+            now,
+        )
+    }
+
     fn missing_block_request_is_non_actionable_dependency(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -28255,6 +28306,7 @@ impl Actor {
                     && self.should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
                         contiguous_frontier_height,
                         committed_height,
+                        reason,
                     );
                 let retargeted_frontier_sidecar = allow_frontier_sidecar_retarget
                     && self.retarget_missing_block_request_to_canonical_hash(

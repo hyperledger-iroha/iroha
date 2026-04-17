@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 Nexus routing composability hardening):
+Nexus write routing now derives dataspace targets for domain and
+asset-definition writes instead of leaving them entirely to authority-based
+rules, mixed-dataspace write batches fail deterministically, transfer matchers
+understand transferred domain / asset-definition scope, and proxied signed
+queries now use the receiver's target-aware route recomputation instead of
+blindly trusting the ingress hint. Regression coverage now pins the remaining
+state-dependent edges for dataspace-labelled account registration, single-scope
+and multi-scope account metadata writes, opaque asset-definition unregister /
+metadata-set / metadata-remove flows, and target-domain / target-alias
+signed-query route resolution, including opaque asset-definition queries that
+need app-state reclassification.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue/router.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router --lib`
+  - `cargo test -p iroha_torii effective_proxy_signed_query_routing_decision --lib`
+  - `cargo test -p iroha_torii resolve_signed_query_routing_for_app_uses_target_ --lib`
+- open work after this slice:
+  - add explicit route-intent handling for multi-dataspace asset transfers and
+    settlement-family writes instead of leaving them on the legacy single-route
+    fallback
+  - replace min-lane canonical dataspace selection with an explicit
+    dataspace-purpose route directory
+  - decide whether merge-ledger synthesis should stay an all-lanes barrier or
+    gain partial merge groups for independent lane progress
+
 Latest sync (2026-04-17 Taira MCP Musubi coverage closure):
 Torii now exposes Musubi package-registry workflows through the native MCP
 surface in a Taira-friendly shape: read tools query packages, releases,
