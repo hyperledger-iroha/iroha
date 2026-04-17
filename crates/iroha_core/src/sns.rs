@@ -733,10 +733,8 @@ fn canonicalize_request_selector(
                 .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
             selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))?
         }
-        SnsNamespace::Dataspace => {
-            NameSelectorV1::new(selector.suffix_id, selector.label)
-                .map_err(|err| SnsError::BadRequest(err.to_string()))?
-        }
+        SnsNamespace::Dataspace => NameSelectorV1::new(selector.suffix_id, selector.label)
+            .map_err(|err| SnsError::BadRequest(err.to_string()))?,
     };
     Ok((namespace, canonical))
 }
