@@ -556,7 +556,7 @@ fn install_governance_manifest(
         LaneManifestStatus {
             lane: LaneId::new(1),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Restricted,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -575,7 +575,7 @@ fn clear_governance_manifest(telemetry: &iroha_core::telemetry::StateTelemetry) 
         LaneManifestStatus {
             lane: LaneId::new(1),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Restricted,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -666,7 +666,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
     .expect("dataspace catalog");
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::SINGLE,
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(1),
             dataspace: Some(DataSpaceId::new(1)),

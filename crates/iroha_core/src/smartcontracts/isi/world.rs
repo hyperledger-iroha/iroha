@@ -12767,7 +12767,7 @@ pub mod isi {
 
         fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
             let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -12864,7 +12864,7 @@ pub mod isi {
             let account_label = AccountAlias::new(
                 "primary".parse().unwrap(),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             );
             let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
             let dataspace = DataSpaceId::new(17);
@@ -12987,7 +12987,7 @@ pub mod isi {
             let primary_label = AccountAlias::new(
                 "globaldesk".parse().unwrap(),
                 Some(AccountAliasDomain::new(global_domain_id.name().clone())),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             );
             let retail_label = AccountAlias::new(
                 "retaildesk".parse().unwrap(),
@@ -13000,7 +13000,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             let dataspace_catalog = DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
-                    id: DataSpaceId::GLOBAL,
+                    id: DataSpaceId::UNIVERSAL,
                     alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
@@ -14178,7 +14178,7 @@ pub mod isi {
             let manifest = iroha_data_model::content::ContentBundleManifest {
                 bundle_id,
                 index_hash: [0x55; 32],
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 lane: LaneId::SINGLE,
                 blob_class: iroha_data_model::da::types::BlobClass::GovernanceArtifact,
                 retention: iroha_data_model::da::types::RetentionPolicy::default(),
@@ -17981,7 +17981,7 @@ pub mod isi {
                 iroha_data_model::account::address::chain_discriminant(),
                 &ALICE_ID,
                 0,
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
 
@@ -18045,7 +18045,7 @@ pub mod isi {
                 iroha_data_model::account::address::chain_discriminant(),
                 &ALICE_ID,
                 1,
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
 

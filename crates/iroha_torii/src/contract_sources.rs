@@ -1367,7 +1367,7 @@ mod tests {
 
         let code = crate::test_utils::minimal_ivm_program(1);
         let contract_address =
-            dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::GLOBAL)
+            dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),

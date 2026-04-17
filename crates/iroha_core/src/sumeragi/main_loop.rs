@@ -6181,51 +6181,34 @@ impl Actor {
     }
 
     fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
-        self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == frontier_height
-                && !matches!(
-                    slot.mode,
-                    FrontierSlotMode::PassiveCatchup | FrontierSlotMode::Finalized
-                )
-                && (slot.body_present
-                    || slot.block_created_seen
-                    || slot.frontier_info.is_some()
-                    || slot.quorum_progress.votes_observed
-                    || slot.quorum_progress.commit_qc_observed
-                    || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
-        }) || self
-            .subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .keys()
-            .any(|(height, _)| *height == frontier_height)
+        let frontier_view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .or_else(|| {
+                self.frontier_slot
+                    .as_ref()
+                    .and_then(|slot| (slot.height == frontier_height).then_some(slot.view))
+            })
+            .unwrap_or(0);
+        let strong_exact_slot_evidence = self
+            .slot_has_authoritative_payload(frontier_height, frontier_view)
+            || self
+                .slot_tracker
+                .proposals_seen
+                .contains(&(frontier_height, frontier_view))
             || self
                 .subsystems
                 .propose
                 .proposal_cache
-                .proposals
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .proposals_seen
-                .iter()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_slots
-                .keys()
-                .any(|(height, _)| *height == frontier_height)
-            || self
-                .slot_tracker
-                .authoritative_block_frontiers
-                .keys()
-                .any(|(height, _, _)| *height == frontier_height)
+                .get_proposal(frontier_height, frontier_view)
+                .is_some();
+        self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+            || strong_exact_slot_evidence
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.validation_status != ValidationStatus::Invalid
                     && pending.height == frontier_height
+                    && pending.view == frontier_view
             })
             || self
                 .subsystems
@@ -6236,6 +6219,7 @@ impl Actor {
                     !inflight.pending.aborted
                         && inflight.pending.validation_status != ValidationStatus::Invalid
                         && inflight.pending.height == frontier_height
+                        && inflight.pending.view == frontier_view
                 })
     }
 
@@ -11421,6 +11405,17 @@ fn selection_from_roster_artifacts(
     }
 }
 
+fn roster_artifact_selection_view(
+    block_view: Option<u64>,
+    commit_qc: Option<&Qc>,
+    checkpoint: Option<&ValidatorSetCheckpoint>,
+) -> Option<u64> {
+    commit_qc
+        .map(|cert| cert.view)
+        .or_else(|| checkpoint.map(|chk| chk.view))
+        .or(block_view)
+}
+
 fn block_sync_history_roster_for_block(
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
@@ -11484,7 +11479,8 @@ fn block_sync_history_roster_for_block(
         BlockSyncRosterSource::ValidatorCheckpointHistory
     };
     let mut roster_height = block_height;
-    let mut roster_view = block_view;
+    let mut roster_view =
+        roster_artifact_selection_view(block_view, cert.as_ref(), checkpoint.as_ref());
     let mut checkpoint = checkpoint.as_ref();
     if let Some(cert) = cert.as_ref() {
         if cert.height != block_height {
@@ -11548,7 +11544,12 @@ fn persisted_roster_for_block(
     };
     let mut selection_cache = selection_cache;
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-        let key_view = block_view.unwrap_or(snapshot.commit_qc.view);
+        let selection_view = roster_artifact_selection_view(
+            block_view,
+            Some(&snapshot.commit_qc),
+            Some(&snapshot.validator_checkpoint),
+        );
+        let key_view = selection_view.unwrap_or(snapshot.commit_qc.view);
         let cache_key = BlockSyncRosterCacheKey::from_hints(
             block_hash,
             block_height,
@@ -11569,7 +11570,7 @@ fn persisted_roster_for_block(
             snapshot.stake_snapshot.as_ref(),
             block_hash,
             block_height,
-            block_view,
+            selection_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
             &state.chain_id,
@@ -11611,14 +11612,17 @@ fn persisted_roster_for_block(
                 );
             }
         } else {
-            let key_view = block_view
-                .or_else(|| sidecar.commit_qc.as_ref().map(|cert| cert.view))
-                .unwrap_or_else(|| {
-                    sidecar
-                        .validator_checkpoint
-                        .as_ref()
-                        .map_or(0, |checkpoint| checkpoint.view)
-                });
+            let selection_view = roster_artifact_selection_view(
+                block_view,
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+            );
+            let key_view = selection_view.unwrap_or_else(|| {
+                sidecar
+                    .validator_checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.view)
+            });
             let cache_key = BlockSyncRosterCacheKey::from_hints(
                 block_hash,
                 block_height,
@@ -11639,7 +11643,7 @@ fn persisted_roster_for_block(
                 sidecar.stake_snapshot.as_ref(),
                 block_hash,
                 block_height,
-                block_view,
+                selection_view,
                 BlockSyncRosterSource::RosterSidecar,
                 consensus_mode,
                 &state.chain_id,
@@ -11698,7 +11702,12 @@ fn persisted_roster_for_block(
                     .stake_snapshot
                     .as_ref()
                     .map(stake_snapshot_from_previous_roster_evidence);
-                let key_view = block_view.unwrap_or(evidence.validator_checkpoint.view);
+                let selection_view = roster_artifact_selection_view(
+                    block_view,
+                    None,
+                    Some(&evidence.validator_checkpoint),
+                );
+                let key_view = selection_view.unwrap_or(evidence.validator_checkpoint.view);
                 let cache_key = BlockSyncRosterCacheKey::from_hints(
                     block_hash,
                     block_height,
@@ -11719,7 +11728,7 @@ fn persisted_roster_for_block(
                     stake_snapshot.as_ref(),
                     block_hash,
                     block_height,
-                    block_view,
+                    selection_view,
                     BlockSyncRosterSource::PreviousBlockEvidence,
                     consensus_mode,
                     &state.chain_id,

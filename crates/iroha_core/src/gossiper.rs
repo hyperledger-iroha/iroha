@@ -102,7 +102,7 @@ fn tx_gossip_frame_payload_cap(
         txs: vec![GossipTransaction::with_encoded(dummy_signed, payload)],
         routes: vec![GossipRoute {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         }],
         plane: GossipPlane::Public,
     };
@@ -1206,7 +1206,7 @@ impl TransactionGossiper {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
             self.record_drop_metric(
                 plane,
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 &[],
                 "missing_routes",
                 false,
@@ -1222,7 +1222,7 @@ impl TransactionGossiper {
         if routes.len() != txs.len() {
             let dataspace = routes
                 .first()
-                .map_or(DataSpaceId::GLOBAL, |route| route.dataspace_id);
+                .map_or(DataSpaceId::UNIVERSAL, |route| route.dataspace_id);
             iroha_logger::warn!(
                 routes = routes.len(),
                 txs = txs.len(),
@@ -1265,7 +1265,7 @@ impl TransactionGossiper {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
                 self.record_drop_metric(
                     plane,
-                    DataSpaceId::GLOBAL,
+                    DataSpaceId::UNIVERSAL,
                     &[],
                     "missing_route_entry",
                     false,
@@ -1334,10 +1334,10 @@ impl TransactionGossiper {
                 );
                 continue;
             };
-            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::GLOBAL {
+            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::UNIVERSAL {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
-                    "restricted plane reported global dataspace; dropping entry"
+                    "restricted plane reported universal dataspace; dropping entry"
                 );
                 self.record_drop_metric(
                     plane,
@@ -1531,7 +1531,7 @@ impl TransactionGossiper {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
             self.record_drop_metric(
                 plane,
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 &[],
                 "missing_routes",
                 false,
@@ -1547,7 +1547,7 @@ impl TransactionGossiper {
         if routes.len() != txs.len() {
             let dataspace = routes
                 .first()
-                .map_or(DataSpaceId::GLOBAL, |route| route.dataspace_id);
+                .map_or(DataSpaceId::UNIVERSAL, |route| route.dataspace_id);
             iroha_logger::warn!(
                 routes = routes.len(),
                 txs = txs.len(),
@@ -1590,7 +1590,7 @@ impl TransactionGossiper {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
                 self.record_drop_metric(
                     plane,
-                    DataSpaceId::GLOBAL,
+                    DataSpaceId::UNIVERSAL,
                     &[],
                     "missing_route_entry",
                     false,
@@ -1659,10 +1659,10 @@ impl TransactionGossiper {
                 );
                 continue;
             };
-            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::GLOBAL {
+            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::UNIVERSAL {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
-                    "restricted plane reported global dataspace; dropping entry"
+                    "restricted plane reported universal dataspace; dropping entry"
                 );
                 self.record_drop_metric(
                     plane,
@@ -2434,7 +2434,7 @@ pub enum GossipPlane {
 fn gossip_route_encoded_len() -> Option<usize> {
     let route = GossipRoute {
         lane_id: LaneId::SINGLE,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
     };
     route
         .encoded_len_exact()
@@ -3162,7 +3162,7 @@ mod tests {
 
         let small_route = GossipRoute {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         };
         let large_route = GossipRoute {
             lane_id: LaneId::new(2),
@@ -3226,7 +3226,7 @@ mod tests {
             )],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -3241,7 +3241,7 @@ mod tests {
         let decoded_payload = decoded.txs[0].encoded.as_ref().expect("cached payload");
         assert_eq!(decoded_payload.as_slice(), payload.as_slice());
         assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
-        assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(decoded.plane, GossipPlane::Public);
         assert_eq!(decoded.txs[0].encode().as_slice(), payload.as_slice());
     }
@@ -3290,7 +3290,7 @@ mod tests {
             )],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -3329,7 +3329,7 @@ mod tests {
                 )],
                 routes: vec![GossipRoute {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 }],
                 plane: GossipPlane::Public,
             };
@@ -3367,7 +3367,7 @@ mod tests {
                 )],
                 routes: vec![GossipRoute {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 }],
                 plane: GossipPlane::Public,
             };
@@ -3381,7 +3381,7 @@ mod tests {
             assert!(decoded_payload.starts_with(&ncore::MAGIC));
             assert_eq!(decoded.routes.len(), 1);
             assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
-            assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+            assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
             assert_eq!(decoded.plane, GossipPlane::Public);
         })
         .join()
@@ -3405,7 +3405,7 @@ mod tests {
             txs: vec![gossip_tx],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -3429,7 +3429,7 @@ mod tests {
             )],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -3447,7 +3447,7 @@ mod tests {
                 let decoded_payload = message.txs[0].encoded.as_ref().expect("cached payload");
                 assert_eq!(decoded_payload.as_slice(), payload.as_slice());
                 assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
-                assert_eq!(message.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                assert_eq!(message.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
                 assert_eq!(message.plane, GossipPlane::Public);
             }
             other => panic!("unexpected network message: {other:?}"),
@@ -3483,7 +3483,7 @@ mod tests {
             routes: vec![
                 GossipRoute {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 },
                 GossipRoute {
                     lane_id: LaneId::new(2),
@@ -3973,7 +3973,7 @@ mod tests {
         };
         let valid_route = GossipRoute {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         };
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![invalid_signed.into(), valid_signed.into()],
@@ -4046,7 +4046,7 @@ mod tests {
             txs: vec![known_signed.into()],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         }));
@@ -4123,7 +4123,7 @@ mod tests {
         let (signed, _) = build_transaction("route-mismatch");
         let route = GossipRoute {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
         };
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
@@ -4198,18 +4198,23 @@ mod tests {
         {
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
+            nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog;
         }
 
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             QueueConfig::default(),
             &TimeSource::new_system(),
             Arc::new(FixedRouter {
                 lane: restricted_lane,
                 dataspace: restricted_dataspace,
             }),
+            &[(restricted_lane, restricted_dataspace)],
         ));
 
         let now = Instant::now();

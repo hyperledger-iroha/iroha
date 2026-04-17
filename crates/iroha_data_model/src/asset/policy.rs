@@ -54,7 +54,9 @@ impl AssetIssuerUsagePolicyV1 {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
 pub struct AssetSubjectBindingV1 {
-    /// Allowed domain contexts for this subject. Empty set means domain-neutral.
+    /// Domain memberships that may authorize this subject. Empty set means domain-neutral.
+    /// Non-empty sets are matched against the subject's dataspace-qualified account aliases;
+    /// at least one matching domain membership is sufficient.
     #[norito(default)]
     pub allowed_domains: BTreeSet<DomainId>,
     /// Allowed dataspace contexts for this subject. Empty set means dataspace-neutral.

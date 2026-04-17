@@ -3231,6 +3231,12 @@ mod serde_tests {
     #[test]
     fn status_json_roundtrip() {
         let status = Status {
+            build: BuildStatus {
+                version: "2.0.0-rc.test".to_owned(),
+                git_commit_sha: "deadbeef".to_owned(),
+                cargo_features: "telemetry,zk-halo2".to_owned(),
+                target_triple: "aarch64-apple-darwin".to_owned(),
+            },
             peers: 3,
             blocks: 42,
             blocks_non_empty: 39,
@@ -5121,10 +5127,52 @@ impl From<StackSettingsSnapshot> for StackStatus {
     Debug,
     Default,
     IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct BuildStatus {
+    /// Semantic version baked into this binary.
+    pub version: String,
+    /// Git commit SHA baked into this binary.
+    pub git_commit_sha: String,
+    /// Enabled Cargo features baked into this binary.
+    pub cargo_features: String,
+    /// Target triple used to compile this binary.
+    pub target_triple: String,
+}
+
+impl BuildStatus {
+    fn current() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            git_commit_sha: option_env!("VERGEN_GIT_SHA")
+                .unwrap_or("unknown")
+                .to_owned(),
+            cargo_features: option_env!("VERGEN_CARGO_FEATURES")
+                .unwrap_or("unknown")
+                .to_owned(),
+            target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")
+                .unwrap_or("unknown")
+                .to_owned(),
+        }
+    }
+}
+
+/// Response body for the Torii GET `/status` endpoint.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
 pub struct Status {
+    /// Build metadata for the currently running node binary.
+    #[norito(default)]
+    pub build: BuildStatus,
     /// Number of currently connected peers excluding the reporting peer
     pub peers: u64,
     /// Number of committed blocks (blockchain height)
@@ -5203,6 +5251,8 @@ impl Status {
 
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct StatusPayload {
+    #[norito(default)]
+    build: BuildStatus,
     peers: u64,
     blocks: u64,
     blocks_non_empty: u64,
@@ -5244,6 +5294,7 @@ struct StatusPayload {
 impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
+            build: status.build.clone(),
             peers: status.peers,
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
@@ -5274,6 +5325,7 @@ impl From<&Status> for StatusPayload {
 impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
+            build: payload.build,
             peers: payload.peers,
             blocks: payload.blocks,
             blocks_non_empty: payload.blocks_non_empty,
@@ -5961,6 +6013,7 @@ impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
         Self {
+            build: BuildStatus::current(),
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
             blocks_non_empty: value.block_height_non_empty.get(),
@@ -18092,6 +18145,12 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn sample_status() -> Status {
         Status {
+            build: BuildStatus {
+                version: "2.0.0-rc.test".to_owned(),
+                git_commit_sha: "deadbeef".to_owned(),
+                cargo_features: "telemetry,zk-halo2".to_owned(),
+                target_triple: "aarch64-apple-darwin".to_owned(),
+            },
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
@@ -18260,6 +18319,12 @@ mod test {
         let actual = json::to_json_pretty(&value).expect("Sample is valid");
         let actual_value: Value = json::from_json(&actual).expect("pretty JSON should parse");
         let expected_value = norito::json!({
+            "build": {
+                "version": "2.0.0-rc.test",
+                "git_commit_sha": "deadbeef",
+                "cargo_features": "telemetry,zk-halo2",
+                "target_triple": "aarch64-apple-darwin"
+            },
             "peers": 4,
             "blocks": 5,
             "blocks_non_empty": 3,
@@ -18420,6 +18485,12 @@ mod test {
         // https://docs.iroha.tech/reference/torii-endpoints.html#status
         let expected = expect_test::expect![[r#"
             {
+              "build": {
+                "version": "2.0.0-rc.test",
+                "git_commit_sha": "deadbeef",
+                "cargo_features": "telemetry,zk-halo2",
+                "target_triple": "aarch64-apple-darwin"
+              },
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,

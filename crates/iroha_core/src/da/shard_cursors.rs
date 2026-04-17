@@ -492,7 +492,7 @@ mod tests {
             lane_count,
             vec![LaneConfig {
                 id: LaneId::new(lane_id),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: format!("lane{lane_id}"),
                 metadata,
                 ..LaneConfig::default()
@@ -570,7 +570,7 @@ mod tests {
             nonzero!(1_u32),
             vec![LaneConfig {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "lane".to_string(),
                 description: None,
                 visibility: LaneVisibility::Public,
@@ -697,7 +697,7 @@ mod tests {
             NonZeroU32::new(1).expect("lane count"),
             vec![LaneConfig {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "lane0".into(),
                 ..LaneConfig::default()
             }],

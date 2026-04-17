@@ -220,9 +220,10 @@ pub mod account {
 
         #[test]
         fn alias_scope_serializes_as_snake_case() {
-            let json =
-                norito::json::to_json(&AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL))
-                    .expect("serialize alias scope");
+            let json = norito::json::to_json(&AccountAliasPermissionScope::Dataspace(
+                DataSpaceId::UNIVERSAL,
+            ))
+            .expect("serialize alias scope");
 
             assert_eq!(json, "{\"scope\":\"dataspace\",\"value\":0}");
         }
@@ -235,7 +236,7 @@ pub mod account {
 
             assert_eq!(
                 scope,
-                AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL)
+                AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL)
             );
         }
 

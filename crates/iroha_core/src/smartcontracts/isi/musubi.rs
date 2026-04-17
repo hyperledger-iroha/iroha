@@ -824,7 +824,7 @@ mod tests {
         let alias: ContractAlias = "router::dex.universal".parse().expect("alias");
         let release = sample_dapp_release("dex.universal/swap-core@1.0.0", alias.clone());
         let contract_address =
-            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL).expect("address");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
         let mut block = state.block(header);

@@ -3192,7 +3192,7 @@ fn enforce_runtime_upgrade_dataspace_policy(
             "runtime upgrade policy requires a governance module".to_string(),
         ));
     };
-    if dataspace_id == NexusDataSpaceId::GLOBAL
+    if dataspace_id == NexusDataSpaceId::UNIVERSAL
         && !matches!(module_kind, RuntimeUpgradeModuleKind::Parliament)
     {
         return Err(reject_lane_policy(
@@ -4191,7 +4191,7 @@ pub mod tests {
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: catalog,
         }
     }
@@ -4835,7 +4835,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: TestLaneId::SINGLE,
                 alias: "centralbank".to_string(),
-                dataspace: TestDataSpaceId::GLOBAL,
+                dataspace: TestDataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -7945,7 +7945,7 @@ pub mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
@@ -8026,7 +8026,7 @@ pub mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -8056,7 +8056,7 @@ pub mod tests {
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: &stx.nexus.dataspace_catalog,
         };
 
@@ -8088,7 +8088,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: TestLaneId::SINGLE,
             alias: "private".to_string(),
-            dataspace: TestDataSpaceId::GLOBAL,
+            dataspace: TestDataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::CommitmentOnly,
             governance: None,

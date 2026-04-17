@@ -24,7 +24,7 @@ fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddr
         iroha_config::parameters::defaults::common::chain_discriminant(),
         &iroha_test_samples::ALICE_ID,
         0,
-        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
     .expect("proposal contract address")
 }

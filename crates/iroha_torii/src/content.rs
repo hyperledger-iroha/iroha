@@ -654,7 +654,7 @@ mod tests {
         ContentBundleManifest {
             bundle_id: Hash::new(b"bundle"),
             index_hash: [0u8; 32],
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             lane: LaneId::SINGLE,
             blob_class: BlobClass::GovernanceArtifact,
             retention: RetentionPolicy::default(),

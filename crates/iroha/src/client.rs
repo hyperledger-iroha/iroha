@@ -3565,8 +3565,10 @@ impl Client {
 mod status_tests {
     use http::Response as HttpResponse;
     use iroha_telemetry::metrics::{
-        CryptoStatus, GovernanceStatus, Halo2Status, StackStatus, SumeragiConsensusStatus,
+        BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
+        SumeragiConsensusStatus,
     };
+    use norito::json::Value as JsonValue;
 
     use super::*;
 
@@ -3585,6 +3587,7 @@ mod status_tests {
     #[test]
     fn decode_status_prefers_norito_bare() {
         let s = Status {
+            build: BuildStatus::default(),
             peers: 1,
             blocks: 2,
             blocks_non_empty: 1,
@@ -3630,6 +3633,7 @@ mod status_tests {
     #[test]
     fn decode_status_falls_back_to_json() {
         let s = Status {
+            build: BuildStatus::default(),
             peers: 5,
             blocks: 6,
             blocks_non_empty: 4,
@@ -3663,6 +3667,54 @@ mod status_tests {
         let got = decode_status_response(&resp).expect("json decode");
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.queue_size, s.queue_size);
+    }
+
+    #[test]
+    fn decode_status_json_defaults_missing_build_metadata() {
+        let mut value = norito::json::to_value(&Status {
+            build: BuildStatus::default(),
+            peers: 2,
+            blocks: 3,
+            blocks_non_empty: 2,
+            commit_time_ms: 40,
+            txs_approved: 8,
+            txs_rejected: 0,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
+            uptime: Uptime(Duration::from_millis(999)),
+            view_changes: 0,
+            queue_size: 1,
+            da_reschedule_total: 0,
+            tx_gossip: TxGossipSnapshot::default(),
+            stack: StackStatus::default(),
+            crypto: CryptoStatus {
+                sm_helpers_available: false,
+                sm_openssl_preview_enabled: false,
+                halo2: Halo2Status::default(),
+            },
+            sumeragi: Some(SumeragiConsensusStatus::default()),
+            governance: GovernanceStatus::default(),
+            teu_lane_commit: Vec::new(),
+            teu_dataspace_backlog: Vec::new(),
+            sorafs_micropayments: Vec::new(),
+            taikai_ingest: Vec::new(),
+            taikai_alias_rotations: Vec::new(),
+            da_receipt_cursors: Vec::new(),
+        })
+        .expect("encode status to json value");
+        let JsonValue::Object(ref mut map) = value else {
+            panic!("status should serialize as a JSON object");
+        };
+        map.remove("build");
+
+        let body = norito::json::to_vec(&value).expect("encode modified json");
+        let resp = mk_response(StatusCode::OK, body, Some("application/json"));
+        let got = decode_status_response(&resp).expect("json decode");
+
+        assert_eq!(got.build.git_commit_sha, "");
+        assert_eq!(got.peers, 2);
+        assert_eq!(got.blocks, 3);
+        assert_eq!(got.queue_size, 1);
     }
 }
 
@@ -12519,7 +12571,7 @@ mod tx_confirmation_stream_tests {
             hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
@@ -12669,7 +12721,7 @@ mod tx_confirmation_stream_tests {
                     hash,
                     block_height: None,
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     status: TransactionStatus::Queued,
                 },
             ))),
@@ -12678,7 +12730,7 @@ mod tx_confirmation_stream_tests {
                     hash,
                     block_height: Some(height),
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     status: TransactionStatus::Approved,
                 },
             ))),
@@ -12841,7 +12893,7 @@ mod tx_confirmation_stream_tests {
             hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
@@ -16451,9 +16503,10 @@ mod tests {
 
     #[test]
     fn decode_status_allows_json_fallback() {
-        use iroha_telemetry::metrics::{CryptoStatus, StackStatus, Status as S};
+        use iroha_telemetry::metrics::{BuildStatus, CryptoStatus, StackStatus, Status as S};
         // Minimal JSON body with required fields
         let body = norito::json::to_vec(&S {
+            build: BuildStatus::default(),
             peers: 0,
             blocks: 0,
             blocks_non_empty: 0,

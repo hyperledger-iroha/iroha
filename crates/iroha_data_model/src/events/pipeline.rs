@@ -486,7 +486,7 @@ mod tests {
             epoch_id: 42,
             lane_snapshots: vec![crate::merge::MergeLaneSnapshot {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 lane_block_height: 9,
                 tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
                 merge_hint_root: Hash::new(b"hint"),
@@ -505,7 +505,7 @@ mod tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -513,7 +513,7 @@ mod tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
             block_height: Some(nonzero!(3_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(Box::new(Validation(ValidationFail::TooComplex))),
         }
         .into();
@@ -521,7 +521,7 @@ mod tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();

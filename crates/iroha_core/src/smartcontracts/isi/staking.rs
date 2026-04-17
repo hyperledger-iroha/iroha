@@ -2001,7 +2001,7 @@ mod tests {
             vec![LaneConfig {
                 id: lane_id,
                 alias: "lane-9".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 ..LaneConfig::default()
             }],
@@ -2340,7 +2340,7 @@ mod tests {
             vec![LaneConfig {
                 id: lane_id,
                 alias: "restricted".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Restricted,
                 ..LaneConfig::default()
             }],
@@ -2395,14 +2395,14 @@ mod tests {
                 LaneConfig {
                     id: stake_lane,
                     alias: "public-stake".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     visibility: LaneVisibility::Public,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
                     id: admin_lane,
                     alias: "restricted-admin".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 },
@@ -2514,7 +2514,7 @@ mod tests {
             vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "restricted".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Restricted,
                 ..LaneConfig::default()
             }],
@@ -3109,7 +3109,7 @@ mod tests {
             vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "rewards-lane".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 ..LaneConfig::default()
             }],
@@ -3731,7 +3731,7 @@ mod tests {
             vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-15".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 ..LaneConfig::default()
             }],
@@ -3811,7 +3811,7 @@ mod tests {
             vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-16".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 ..LaneConfig::default()
             }],
@@ -3894,7 +3894,7 @@ mod tests {
             vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-17".to_string(),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 ..LaneConfig::default()
             }],

@@ -165,13 +165,13 @@ fn nexus_with_lane_catalog(
         .iter()
         .map(|lane| lane.dataspace_id)
         .collect();
-    dataspace_ids.insert(DataSpaceId::GLOBAL);
+    dataspace_ids.insert(DataSpaceId::UNIVERSAL);
     let dataspace_catalog = DataSpaceCatalog::new(
         dataspace_ids
             .into_iter()
             .map(|id| DataSpaceMetadata {
                 id,
-                alias: if id == DataSpaceId::GLOBAL {
+                alias: if id == DataSpaceId::UNIVERSAL {
                     "universal".to_owned()
                 } else {
                     format!("dataspace_{}", id.as_u64())

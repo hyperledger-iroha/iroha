@@ -1031,7 +1031,7 @@ mod prefetch_tests {
         let alias = AccountAlias::new(
             Name::from_str("gas").expect("alias name"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
@@ -9525,8 +9525,10 @@ pub(crate) mod valid {
                 );
             }
             for entry_hash in &time_trg_hashes {
-                fastpq_entry_dataspaces
-                    .insert(iroha_crypto::Hash::from(*entry_hash), DataSpaceId::GLOBAL);
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
             }
             hashes.append(&mut time_trg_hashes);
             ordered_results.append(&mut time_trg_results);
