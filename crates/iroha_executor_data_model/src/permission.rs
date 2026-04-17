@@ -624,6 +624,17 @@ pub mod sorafs {
     }
 }
 
+/// Permission tokens governing `Musubi` package-registry operations.
+pub mod musubi {
+    use super::*;
+
+    permission! {
+        /// Permission to bind or update a curated global `Musubi` short alias.
+        #[derive(Copy)]
+        pub struct CanSetMusubiShortAlias;
+    }
+}
+
 /// Permission tokens governing `SoraNet` privacy ingestion.
 pub mod soranet {
     use super::*;

@@ -34,15 +34,11 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionResult},
     },
 };
+use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::Encode,
     json::{self, Map, Value},
-};
-use qrcode::{
-    EcLevel, QrCode,
-    render::svg,
-    types::{QrError, Version},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -252,28 +248,8 @@ impl ExplorerAccountQrDto {
 
 fn render_account_qr_svg(input: &str) -> Result<(String, u8), QrError> {
     let code = QrCode::with_error_correction_level(input.as_bytes(), ACCOUNT_QR_ERROR_CORRECTION)?;
-    let version = match code.version() {
-        Version::Normal(n) | Version::Micro(n) => {
-            u8::try_from(n).expect("QR versions fit in u8 range")
-        }
-    };
-    let svg = code
-        .render::<svg::Color>()
-        .min_dimensions(ACCOUNT_QR_DIMENSION_PX, ACCOUNT_QR_DIMENSION_PX)
-        .max_dimensions(ACCOUNT_QR_DIMENSION_PX, ACCOUNT_QR_DIMENSION_PX)
-        .build();
-    let svg = {
-        let trimmed = svg.trim_start();
-        if trimmed.starts_with("<?xml") {
-            let after_decl = trimmed
-                .find("?>")
-                .map(|idx| &trimmed[idx + 2..])
-                .unwrap_or(trimmed);
-            after_decl.trim_start().to_owned()
-        } else {
-            trimmed.to_owned()
-        }
-    };
+    let version = code.version();
+    let svg = code.to_svg(ACCOUNT_QR_DIMENSION_PX, "#000000", "#FFFFFF");
     Ok((svg, version))
 }
 

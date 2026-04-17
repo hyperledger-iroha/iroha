@@ -81,7 +81,9 @@ Norito uses explicit header flags for layout selection. Header-framed helpers
 validate the header (major/minor) and apply the header flag byte as the
 authoritative layout selection; unknown bits are rejected. Bare decoders
 (`codec::Decode`) are internal-only for hashing/bench scenarios and always use
-the fixed v1 default flags (`0x00`) with no heuristics.
+the v1 default layout (`COMPACT_LEN`, `0x02`) with no heuristics. Use
+`norito::core::DecodeFlagsGuard::enter(0)` only when encoding or decoding
+legacy fixed-width length-prefix payloads.
 
 Decoding details:
 - `from_compressed_bytes` returns an owning `ArchivedBox<T>` so archived payload
@@ -97,13 +99,14 @@ path while keeping outputs deterministic:
 
 - `to_bytes_auto(&T) -> Vec<u8>`: adaptively selects compression (None/CPU zstd/GPU zstd)
   based on payload size and hardware availability. The on-wire format remains the
-  same; only the `compression` header byte differs. Layout flags remain the v1
-  defaults unless explicitly set and framed by the caller.
+  same; only the `compression` header byte differs. Layout flags remain the
+  compact v1 default (`COMPACT_LEN`, `0x02`) unless explicitly set and framed
+  by the caller.
 - Headerless (bare) codec: `norito::codec::encode_adaptive(&T) -> Vec<u8>` and
-  `norito::codec::decode_adaptive::<T>(&[u8])` use the fixed v1 layout
-  (`flags = 0x00`). Use `encode_with_header_flags` and
-  `norito::core::frame_bare_with_header_flags` when you must preserve explicit layout
-  flags alongside bare payloads.
+  `norito::codec::decode_adaptive::<T>(&[u8])` use the compact sequential v1
+  layout (`flags = 0x02`). Use `encode_with_header_flags` and
+  `norito::core::frame_bare_with_header_flags` when you must preserve explicit
+  layout flags alongside bare payloads.
 - CPU SIMD: CRC64 uses CLMUL (x86_64) or PMULL (aarch64) when available; JSON string escaping uses AVX2/NEON fast paths when supported, with safe scalar fallbacks.
 - GPU CRC64: with `metal-crc64`/`cuda-crc64`, `hardware_crc64` attempts the GPU helper for payloads above the configured cutoff (default 192 KiB via `NORITO_GPU_CRC64_MIN_BYTES`, helper path override via `NORITO_CRC64_GPU_LIB`), then falls back to SIMD/CPU.
 - GPU compression: with the `gpu-compression` feature, zstd is offloaded to Metal (macOS/aarch64) or CUDA (other platforms) when a backend is present and the payload exceeds the GPU cutoff (defaults to 1 MiB); falls back to CPU otherwise. On Apple Silicon builds in this workspace, `gpuzstd_metal` is linked as a target dependency and built automatically while compiling `norito`. On Unix/Windows non-macOS paths, the workspace now ships a dedicated `gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces `libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree; Norito prefers that CUDA-named artifact and still accepts the compatible workspace-built fallback `libgpuzstd_metal.so` / `gpuzstd_metal.dll` if present. On Windows the loader locks DLL resolution down to `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)` and then calls `LoadLibraryExW`. Place a trusted helper DLL alongside the Norito binaries or in `%SystemRoot%\\System32` (or add an explicit directory via `AddDllDirectory`) so it is picked up by the restricted search path. Failures to load a GPU helper emit a warning on stderr and automatically fall back to the CPU backend.
@@ -148,8 +151,9 @@ The trailing header byte encodes feature/layout flags for the payload and is app
 
 Flags are set explicitly by the encoder and recorded in the header. The
 default v1 helpers (`to_bytes`, `to_compressed_bytes`, `to_bytes_auto`) emit
-`flags = 0x00` unless you opt into a layout and frame those bytes with the
-corresponding header flags.
+`flags = 0x02` (`COMPACT_LEN`) unless you opt into another layout and frame
+those bytes with the corresponding header flags. The minor version remains
+`0x00`; the header flag byte advertises compact length prefixes.
 
 Flag scoping:
 - `COMPACT_LEN` affects per-value length prefixes only.
@@ -449,3 +453,16 @@ For faster serialization without reallocations, Norito adds `encoded_len_exact(&
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
 - Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.
 - `to_bytes()` and `to_compressed_bytes()` now prefer `encoded_len_exact()` and fall back to `encoded_len_hint()` when unavailable, improving buffer preallocation and reducing copies.
+
+## Exact Slice Decoding
+
+For hot paths that already hold a complete bare payload in memory, use
+`norito::codec::decode_exact_from_slice::<T>(&bytes)` when `T` implements
+`DecodeFromSlice`.
+
+- It avoids the `Read::read_to_end` copy used by the generic streaming
+  `Decode` facade.
+- It rejects truncated and trailing data through the type's exact
+  `DecodeFromSlice` implementation.
+- It uses the compact v1 default layout flags for headerless payloads, matching
+  `codec::encode_adaptive`/`Encode` (`COMPACT_LEN`, `0x02`).

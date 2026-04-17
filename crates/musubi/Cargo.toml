@@ -1,0 +1,35 @@
+[package]
+name = "musubi"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+description = "Kotodama source package manager for Iroha"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords = ["blockchain", "iroha", "kotodama", "package-manager"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+eyre = { workspace = true }
+hex = { workspace = true }
+iroha = { workspace = true }
+iroha_data_model = { workspace = true }
+ivm = { workspace = true }
+norito = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_manifest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

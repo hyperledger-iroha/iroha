@@ -1,6 +1,32 @@
 use super::*;
 
+#[cfg(feature = "offline-visual-codecs")]
 mod petal;
+#[cfg(not(feature = "offline-visual-codecs"))]
+mod petal {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum PetalCommand {
+        /// Petal visual codec support is available through the offline-visual-codecs feature.
+        #[command(external_subcommand)]
+        Command(Vec<OsString>),
+    }
+
+    impl Run for PetalCommand {
+        fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
+            match self {
+                Self::Command(args) => {
+                    drop(args);
+                    Err(eyre!(
+                        "petal visual codecs are not enabled in this build; rebuild iroha_cli with `--features offline-visual-codecs`"
+                    ))
+                }
+            }
+        }
+    }
+}
 mod qr;
 
 use clap::ValueEnum;
@@ -1449,7 +1475,8 @@ mod bundle_inspect_tests {
         let controller = AccountId::new(controller_key);
         let receiver = AccountId::new(receiver_key);
         let deposit = receiver.clone();
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let asset = AssetId::new(asset_definition, controller.clone());
@@ -1818,8 +1845,10 @@ mod tests {
 
     fn sample_allowance_record() -> OfflineAllowanceRecord {
         let controller = sample_account(0xA1, "wonderland");
-        let definition =
-            AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap());
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {

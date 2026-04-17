@@ -82,6 +82,17 @@ use crate::{
 
 type Result<T, E> = core::result::Result<T, Report<E>>;
 
+/// Initial RS16 shard fanout policy for RBC chunk broadcasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RbcRs16InitialFanout {
+    /// Send every encoded chunk to every selected target.
+    Full,
+    /// Send the minimum number of shards needed to reconstruct each stripe.
+    Data,
+    /// Send one shard above the minimum needed to reconstruct each stripe.
+    DataPlusOne,
+}
+
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
 pub struct Root {
@@ -4572,6 +4583,8 @@ pub struct SumeragiRbc {
     pub parity_shards: u16,
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub chunk_fanout: Option<NonZeroUsize>,
+    /// Initial RS16 shard fanout policy.
+    pub rs16_initial_fanout: RbcRs16InitialFanout,
     /// Maximum pending RBC chunks stashed before INIT.
     pub pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT.
@@ -6204,6 +6217,10 @@ pub struct DaIngest {
     pub replay_cache_store_dir: PathBuf,
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of DA spool batches queued for async disk persistence.
+    pub spool_queue_capacity: NonZeroUsize,
+    /// Maximum number of DA spool batches flushed by one worker write pass.
+    pub spool_batch_max: NonZeroUsize,
     /// Symmetric key used to encrypt governance-only metadata entries.
     pub governance_metadata_key: Option<[u8; 32]>,
     /// Optional label advertised inside encrypted governance metadata envelopes.
@@ -6237,6 +6254,8 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: super::defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: super::defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: super::defaults::torii::da_manifest_store_dir(),
+            spool_queue_capacity: super::defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
+            spool_batch_max: super::defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key: defaults::torii::da_governance_metadata_key(),
             governance_metadata_key_label: defaults::torii::da_governance_metadata_key_label(),
             taikai_anchor: None,

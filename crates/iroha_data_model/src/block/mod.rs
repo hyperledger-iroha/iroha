@@ -82,6 +82,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(decode_from_slice)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
@@ -1192,27 +1193,8 @@ pub fn decode_framed_signed_block(
 type VersionError = iroha_version::error::Error;
 
 fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
-    // `SignedBlock` versioned payloads are canonical bare Norito archives. The archived
-    // `NoritoDeserialize` path is currently more robust than the derive-generated
-    // `DecodeFromSlice` fast path for large genesis-shaped payloads, so decode through the
-    // archived view and then verify exact consumption by roundtripping the canonical payload.
-    //
-    // TODO: Remove the roundtrip check once the remaining `DecodeFromSlice` regression is
-    // fixed at the derive level and the exact slice decoder is trustworthy for these payloads.
-    let block = norito::codec::decode_adaptive::<SignedBlock>(bytes)
-        .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    let canonical_len = encode_signed_block_payload(&block).len();
-    if canonical_len < bytes.len() {
-        return Err(VersionError::ExtraBytesLeft(
-            bytes.len().saturating_sub(canonical_len) as u64,
-        ));
-    }
-    if canonical_len != bytes.len() {
-        return Err(VersionError::NoritoCodec(
-            norito::Error::LengthMismatch.to_string(),
-        ));
-    }
-    Ok(block)
+    norito::codec::decode_exact_from_slice::<SignedBlock>(bytes)
+        .map_err(|err| VersionError::NoritoCodec(err.to_string()))
 }
 
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {

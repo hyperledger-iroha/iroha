@@ -6032,6 +6032,98 @@ impl From<RbcEncodingConfig> for RbcEncoding {
     }
 }
 
+/// User-level initial RS16 shard fanout policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RbcRs16InitialFanoutConfig {
+    /// Send every encoded chunk to every selected target.
+    #[default]
+    Full,
+    /// Send the minimum number of shards needed to reconstruct each stripe.
+    Data,
+    /// Send one shard above the minimum needed to reconstruct each stripe.
+    DataPlusOne,
+}
+
+/// Parse error for user-facing RS16 initial fanout labels.
+#[derive(Debug, Clone, Copy, Error)]
+#[error("expected `full`, `data`, or `data_plus_one`")]
+pub struct ParseRbcRs16InitialFanoutError;
+
+impl FromStr for RbcRs16InitialFanoutConfig {
+    type Err = ParseRbcRs16InitialFanoutError;
+
+    fn from_str(raw: &str) -> core::result::Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "full" => Ok(Self::Full),
+            "data" => Ok(Self::Data),
+            "data_plus_one" | "data-plus-one" | "data+1" => Ok(Self::DataPlusOne),
+            _ => Err(ParseRbcRs16InitialFanoutError),
+        }
+    }
+}
+
+impl json::JsonDeserialize for RbcRs16InitialFanoutConfig {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "sumeragi.advanced.rbc.rs16_initial_fanout".into(),
+            message: format!("{err}; got `{text}`"),
+        })
+    }
+}
+
+impl From<RbcRs16InitialFanoutConfig> for actual::RbcRs16InitialFanout {
+    fn from(value: RbcRs16InitialFanoutConfig) -> Self {
+        match value {
+            RbcRs16InitialFanoutConfig::Full => Self::Full,
+            RbcRs16InitialFanoutConfig::Data => Self::Data,
+            RbcRs16InitialFanoutConfig::DataPlusOne => Self::DataPlusOne,
+        }
+    }
+}
+
+#[cfg(test)]
+mod rbc_rs16_initial_fanout_config_tests {
+    use super::*;
+
+    #[test]
+    fn parses_supported_labels() {
+        assert_eq!(
+            "full"
+                .parse::<RbcRs16InitialFanoutConfig>()
+                .expect("full fanout"),
+            RbcRs16InitialFanoutConfig::Full
+        );
+        assert_eq!(
+            "data"
+                .parse::<RbcRs16InitialFanoutConfig>()
+                .expect("data fanout"),
+            RbcRs16InitialFanoutConfig::Data
+        );
+        assert_eq!(
+            "data_plus_one"
+                .parse::<RbcRs16InitialFanoutConfig>()
+                .expect("data_plus_one fanout"),
+            RbcRs16InitialFanoutConfig::DataPlusOne
+        );
+        assert_eq!(
+            "data-plus-one"
+                .parse::<RbcRs16InitialFanoutConfig>()
+                .expect("data-plus-one fanout"),
+            RbcRs16InitialFanoutConfig::DataPlusOne
+        );
+        assert_eq!(
+            "data+1"
+                .parse::<RbcRs16InitialFanoutConfig>()
+                .expect("data+1 fanout"),
+            RbcRs16InitialFanoutConfig::DataPlusOne
+        );
+        assert!("all".parse::<RbcRs16InitialFanoutConfig>().is_err());
+    }
+}
+
 /// User-level configuration container for reliable-broadcast tuning.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiRbc {
@@ -6059,6 +6151,12 @@ pub struct SumeragiRbc {
     /// Optional fanout cap for RBC chunk broadcasts (null = auto).
     #[config(env = "SUMERAGI_RBC_CHUNK_FANOUT")]
     pub chunk_fanout: Option<NonZeroUsize>,
+    /// Initial RS16 shard fanout policy (`full`, `data`, or `data_plus_one`).
+    #[config(
+        env = "SUMERAGI_RBC_RS16_INITIAL_FANOUT",
+        default = "RbcRs16InitialFanoutConfig::Full"
+    )]
+    pub rs16_initial_fanout: RbcRs16InitialFanoutConfig,
     /// Maximum pending RBC chunks stashed before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_MAX_CHUNKS",
@@ -7432,6 +7530,7 @@ impl Sumeragi {
                 data_shards: rbc.data_shards,
                 parity_shards: rbc.parity_shards,
                 chunk_fanout: rbc.chunk_fanout,
+                rs16_initial_fanout: rbc.rs16_initial_fanout.into(),
                 pending_max_chunks: rbc.pending_max_chunks,
                 pending_max_bytes: rbc.pending_max_bytes,
                 pending_session_limit: rbc.pending_session_limit,
@@ -16451,6 +16550,12 @@ pub struct DaIngest {
     /// Directory where canonical DA manifests are queued for SoraFS orchestration.
     #[config(default = "defaults::torii::da_manifest_store_dir()")]
     pub manifest_store_dir: PathBuf,
+    /// Maximum number of DA spool batches queued for async disk persistence.
+    #[config(default = "defaults::torii::DA_SPOOL_QUEUE_CAPACITY")]
+    pub spool_queue_capacity: NonZeroUsize,
+    /// Maximum number of DA spool batches flushed by one worker write pass.
+    #[config(default = "defaults::torii::DA_SPOOL_BATCH_MAX")]
+    pub spool_batch_max: NonZeroUsize,
     /// Optional hex-encoded ChaCha20Poly1305 key for governance-only metadata encryption.
     pub governance_metadata_key_hex: Option<String>,
     /// Optional label recorded alongside governance metadata ciphertexts.
@@ -16475,6 +16580,8 @@ impl Default for DaIngest {
             replay_cache_max_sequence_lag: defaults::torii::DA_REPLAY_CACHE_MAX_SEQUENCE_LAG,
             replay_cache_store_dir: defaults::torii::da_replay_cache_store_dir(),
             manifest_store_dir: defaults::torii::da_manifest_store_dir(),
+            spool_queue_capacity: defaults::torii::DA_SPOOL_QUEUE_CAPACITY,
+            spool_batch_max: defaults::torii::DA_SPOOL_BATCH_MAX,
             governance_metadata_key_hex: None,
             governance_metadata_key_label: defaults::torii::da_governance_metadata_key_label(),
             taikai_anchor: None,
@@ -16503,6 +16610,8 @@ impl DaIngest {
             replay_cache_max_sequence_lag: self.replay_cache_max_sequence_lag,
             replay_cache_store_dir: self.replay_cache_store_dir,
             manifest_store_dir: self.manifest_store_dir,
+            spool_queue_capacity: self.spool_queue_capacity,
+            spool_batch_max: self.spool_batch_max,
             governance_metadata_key,
             governance_metadata_key_label: self.governance_metadata_key_label,
             taikai_anchor: self.taikai_anchor.map(DaTaikaiAnchor::parse),

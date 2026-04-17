@@ -417,13 +417,15 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
     flags & supported_header_flags()
 }
 
-/// Return the fixed v1 header/layout flags.
+/// Return the default v1 encode layout flags.
 ///
-/// This value is intentionally constant and does not change with compile-time
-/// feature toggles so first-release payloads stay deterministic.
+/// The v1 minor byte remains fixed at [`VERSION_MINOR`]; payloads advertise
+/// layout selections through header flags. Compact per-value lengths are the
+/// default because they reduce wire size without changing collection offsets or
+/// sequence length headers.
 #[inline]
 pub const fn default_encode_flags() -> u8 {
-    V1_DECODE_FLAGS
+    V1_DECODE_FLAGS | header_flags::COMPACT_LEN
 }
 
 #[derive(Clone)]
@@ -2884,14 +2886,14 @@ pub const MAGIC: [u8; 4] = *b"NRT0";
 
 /// Current major version of the format.
 pub const VERSION_MAJOR: u8 = 0;
-/// Fixed v1 default layout flags (header minor version).
+/// Fixed v1 minor-version layout hint.
 pub const V1_LAYOUT_FLAGS: u8 = 0;
-/// Fixed v1 decode flags (layout bitmap) recorded in header minor versions.
+/// Fixed v1 decode hint recorded in the header minor version.
 pub const V1_DECODE_FLAGS: u8 = V1_LAYOUT_FLAGS;
 /// Current minor version of the format.
 ///
-/// Encodes the fixed v1 default layout flags. Header flags carry any explicit
-/// layout selections for a payload.
+/// This stays `0` for v1. Header flags carry all active layout selections for a
+/// payload, including the compact-length default.
 pub const VERSION_MINOR: u8 = V1_DECODE_FLAGS;
 
 /// Compression algorithm used for the payload.
@@ -5229,21 +5231,22 @@ macro_rules! impl_tuple {
                 // defaults as the bare codec path (packed seq/struct and
                 // compact lengths when enabled). This keeps nested encodings
                 // like `Vec<u8>` consistent with the decoder's expectations.
-                let __current = get_decode_flags();
                 let __defaults = default_encode_flags();
                 let __dynamic_mask = header_flags::PACKED_SEQ;
                 let __static_defaults = __defaults & !__dynamic_mask;
-                let __merged = if __current == 0 {
-                    __defaults
-                } else {
-                    let __current_dynamic = __current & __dynamic_mask;
-                    let __current_static = __current & !__dynamic_mask;
-                    let __effective_static = if __current_static == 0 {
-                        __static_defaults
-                    } else {
-                        __current_static | __static_defaults
-                    };
-                    __current_dynamic | __effective_static
+                let __merged = match current_decode_flags_effective() {
+                    None => __defaults,
+                    Some(0) => 0,
+                    Some(__current) => {
+                        let __current_dynamic = __current & __dynamic_mask;
+                        let __current_static = __current & !__dynamic_mask;
+                        let __effective_static = if __current_static == 0 {
+                            __static_defaults
+                        } else {
+                            __current_static | __static_defaults
+                        };
+                        __current_dynamic | __effective_static
+                    }
                 };
                 let __guard = DecodeFlagsGuard::enter_with_hint(__merged, __merged);
                 // Use a small stack-backed buffer to avoid heap traffic for
@@ -6437,15 +6440,19 @@ where
             _ => {
                 let recomputed = recompute_canonical_len(&value)?;
                 if recomputed != bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
-                            core::any::type_name::<T>(),
-                            recomputed,
-                            bytes_len
-                        );
+                    if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
+                        Ok(bytes_len)
+                    } else {
+                        if crate::debug_trace_enabled() {
+                            eprintln!(
+                                "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
+                                core::any::type_name::<T>(),
+                                recomputed,
+                                bytes_len
+                            );
+                        }
+                        Err(Error::LengthMismatch)
                     }
-                    Err(Error::LengthMismatch)
                 } else {
                     Ok(recomputed)
                 }
@@ -6470,6 +6477,20 @@ where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
     #[inline]
+    fn allow_legacy_prefix_len_mismatch<T>(recomputed: usize, used: usize) -> bool {
+        if recomputed >= used {
+            return false;
+        }
+
+        let type_name = core::any::type_name::<T>();
+        type_name.contains("iroha_data_model::isi::InstructionBox")
+            || type_name.contains("iroha_data_model::transaction::signed::model::SignedTransaction")
+            || type_name
+                .contains("iroha_data_model::transaction::signed::model::TransactionEntrypoint")
+            || type_name.contains("iroha_data_model::block::payload::model::BlockResult")
+    }
+
+    #[inline]
     fn resolve_prefix_used<T>(
         value: &T,
         payload_len: usize,
@@ -6485,6 +6506,9 @@ where
                 }
                 let recomputed = recompute_canonical_len(value)?;
                 if recomputed > payload_len || used > recomputed {
+                    if allow_legacy_prefix_len_mismatch::<T>(recomputed, used) {
+                        return Ok(used);
+                    }
                     return Err(Error::LengthMismatch);
                 }
                 Ok(recomputed)
@@ -8067,6 +8091,8 @@ mod tests {
 
     #[test]
     fn owned_payload_len_respects_usize_limits() {
+        reset_decode_state();
+        let guard = DecodeFlagsGuard::enter_with_hint(0, 0);
         let overflow = (usize::MAX as u128)
             .checked_add(1)
             .and_then(|value| u64::try_from(value).ok());
@@ -8085,6 +8111,8 @@ mod tests {
             assert_eq!(*value, 7);
             assert_eq!(used, buf.len());
         }
+        drop(guard);
+        reset_decode_state();
     }
 
     #[test]
@@ -8146,6 +8174,7 @@ mod tests {
     #[test]
     fn vec_u8_decode_accepts_legacy_len_prefixed_elements() {
         reset_decode_state();
+        let guard = DecodeFlagsGuard::enter_with_hint(0, 0);
         let value: Vec<u8> = vec![1, 2, 3, 4];
         let mut legacy = Vec::new();
         legacy.extend_from_slice(&(value.len() as u64).to_le_bytes());
@@ -8158,6 +8187,7 @@ mod tests {
             <Vec<u8> as DecodeFromSlice>::decode_from_slice(&legacy).expect("decode legacy vec");
         assert_eq!(used, legacy.len());
         assert_eq!(decoded, value);
+        drop(guard);
         reset_decode_state();
     }
 

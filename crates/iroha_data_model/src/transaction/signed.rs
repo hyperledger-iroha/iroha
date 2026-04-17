@@ -20,7 +20,7 @@ use iroha_data_model_derive::model;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
-use norito::codec::{Decode, DecodeAll, Encode};
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 pub use self::model::*;
@@ -140,6 +140,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(decode_from_slice)]
     #[display("{}", self.hash())]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct SignedTransaction {
@@ -181,6 +182,7 @@ mod model {
         IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[norito(decode_from_slice)]
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
@@ -232,18 +234,8 @@ mod model {
     )]
     #[display("ExecutionStep")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[norito(decode_from_slice)]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
-}
-
-// Provide Norito slice decoding by delegating to `Decode`.
-impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((v, used))
-    }
 }
 
 /// Error returned when verifying a transaction signature.
@@ -599,17 +591,7 @@ impl iroha_version::codec::DecodeVersioned for SignedTransaction {
             )));
         }
 
-        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
-        let mut cursor = payload;
-        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
-        drop(payload_guard);
-        if cursor.is_empty() {
-            Ok(decoded)
-        } else {
-            Err(Error::NoritoCodec(
-                "SignedTransaction payload contains trailing bytes".into(),
-            ))
-        }
+        norito::codec::decode_exact_from_slice::<Self>(payload).map_err(Error::from)
     }
 }
 
@@ -649,28 +631,7 @@ impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
             )));
         }
 
-        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
-        let mut cursor = payload;
-        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
-        drop(payload_guard);
-        if cursor.is_empty() {
-            Ok(decoded)
-        } else {
-            Err(Error::NoritoCodec(
-                "TransactionEntrypoint payload contains trailing bytes".into(),
-            ))
-        }
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for SignedTransaction {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: SignedTransaction = norito::codec::Decode::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+        norito::codec::decode_exact_from_slice::<Self>(payload).map_err(Error::from)
     }
 }
 
@@ -1022,6 +983,7 @@ impl TransactionBuilder {
 
 #[cfg(test)]
 mod tests {
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -1032,6 +994,23 @@ mod tests {
         transaction::signed::{MultisigSignature, MultisigSignatures},
         trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
+
+    fn sample_signed_transaction() -> SignedTransaction {
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(public_key);
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+
+        TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "exact slice".into())])
+            .sign(&private_key)
+    }
 
     #[test]
     fn with_instructions_accepts_instruction_box() {
@@ -1103,6 +1082,57 @@ mod tests {
         let decoded_inner: iroha_crypto::SignatureOf<TransactionPayload> =
             norito::core::decode_from_bytes(&inner_encoded).expect("decode inner signature");
         assert_eq!(decoded_inner, inner);
+    }
+
+    #[test]
+    fn signed_transaction_decode_from_slice_rejects_trailing_bytes() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = norito::codec::encode_adaptive(&signed_tx);
+        bytes.push(0);
+
+        let err = SignedTransaction::decode_from_slice(&bytes)
+            .expect_err("signed transaction slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn execution_step_decode_from_slice_rejects_trailing_bytes() {
+        let step = ExecutionStep(ConstVec::from(vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "exact execution step".into(),
+        ))]));
+        let mut bytes = norito::codec::encode_adaptive(&step);
+        bytes.push(0);
+
+        let err = ExecutionStep::decode_from_slice(&bytes)
+            .expect_err("execution step slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_trailing_bytes() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = signed_tx.encode_versioned();
+        bytes.push(0);
+
+        let err = SignedTransaction::decode_all_versioned(&bytes)
+            .expect_err("versioned signed transaction decoder must reject trailing bytes");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn transaction_entrypoint_versioned_decode_rejects_trailing_bytes() {
+        let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
+        let mut bytes = entrypoint.encode_versioned();
+        bytes.push(0);
+
+        let err = TransactionEntrypoint::decode_all_versioned(&bytes)
+            .expect_err("versioned transaction entrypoint decoder must reject trailing bytes");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
 
     #[test]

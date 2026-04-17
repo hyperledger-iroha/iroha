@@ -838,14 +838,7 @@ impl CoreHost {
         if tlv.type_id != ty {
             return Err(VMError::NoritoInvalid);
         }
-        // Enforce ABI-based pointer-ABI schema policy
-        let policy = vm.syscall_policy();
-        if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: tlv.type_id as u16,
-            });
-        }
+        Self::enforce_pointer_policy(vm, tlv)?;
         Ok(())
     }
 
@@ -873,17 +866,10 @@ impl CoreHost {
             if tlv.type_id != expected {
                 return Err(VMError::NoritoInvalid);
             }
-            tlv
+            Self::enforce_pointer_policy(vm, tlv)?
         } else {
             self.decode_tlv_from_code(vm, addr, expected)?
         };
-        let policy = vm.syscall_policy();
-        if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: tlv.type_id as u16,
-            });
-        }
         Ok(tlv)
     }
 
@@ -895,15 +881,9 @@ impl CoreHost {
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
         let tlv = match self.decode_tlv_from_memory(vm, addr, expected) {
             Ok(tlv) => tlv,
+            Err(err @ VMError::AbiTypeNotAllowed { .. }) => return Err(err),
             Err(_) => self.decode_tlv_from_code(vm, addr, expected)?,
         };
-        let policy = vm.syscall_policy();
-        if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: tlv.type_id as u16,
-            });
-        }
         Ok(tlv)
     }
 
@@ -930,7 +910,8 @@ impl CoreHost {
             .memory
             .load_region(addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
-        pointer_abi::validate_tlv_bytes(envelope).map_err(|_| VMError::NoritoInvalid)
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
     }
 
     fn decode_tlv_from_code<'a>(
@@ -968,7 +949,23 @@ impl CoreHost {
             .memory
             .load_region(resolved_addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
-        pointer_abi::validate_tlv_bytes(envelope)
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
+    }
+
+    fn enforce_pointer_policy<'a>(
+        vm: &IVM,
+        tlv: pointer_abi::Tlv<'a>,
+    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let (policy, abi_version) = pointer_abi::current_policy()
+            .unwrap_or_else(|| (vm.syscall_policy(), vm.abi_version()));
+        if abi_version != 1 || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: abi_version,
+                type_id: tlv.type_id as u16,
+            });
+        }
+        Ok(tlv)
     }
 
     fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
@@ -2528,6 +2525,48 @@ mod tests {
     fn make_numeric_tlv(value: Numeric) -> Vec<u8> {
         let payload = norito::to_bytes(&value).expect("encode numeric");
         make_pointer_tlv(PointerType::NoritoBytes, &payload)
+    }
+
+    #[test]
+    fn core_host_expect_tlv_enforces_pointer_policy() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&assemble_program(&[encoding::wide::encode_halt()]))
+            .expect("load program");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(b"payload"))
+            .expect("alloc payload tlv");
+        vm.set_register(10, ptr);
+
+        let _guard =
+            crate::pointer_abi::PointerPolicyGuard::install(crate::SyscallPolicy::AbiV1, 2);
+        let err = CoreHost::expect_tlv(&vm, 10, PointerType::NoritoBytes).unwrap_err();
+        assert!(matches!(
+            err,
+            VMError::AbiTypeNotAllowed { abi: 2, type_id }
+                if type_id == PointerType::NoritoBytes as u16
+        ));
+    }
+
+    #[test]
+    fn core_host_decode_any_region_enforces_pointer_policy() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&assemble_program(&[encoding::wide::encode_halt()]))
+            .expect("load program");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(b"payload"))
+            .expect("alloc payload tlv");
+        let host = CoreHost::new();
+
+        let _guard =
+            crate::pointer_abi::PointerPolicyGuard::install(crate::SyscallPolicy::AbiV1, 2);
+        let err = host
+            .decode_tlv_any_region(&vm, ptr, PointerType::NoritoBytes)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            VMError::AbiTypeNotAllowed { abi: 2, type_id }
+                if type_id == PointerType::NoritoBytes as u16
+        ));
     }
 
     #[test]

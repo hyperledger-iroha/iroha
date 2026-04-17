@@ -202,65 +202,89 @@ fn sm4_ccm_rejects_bad_tag() {
     );
 }
 
-#[cfg(feature = "sm_proptest")]
-mod property_tests {
-    use proptest::{
-        array::{uniform12, uniform16},
-        collection::vec,
-        prelude::*,
-    };
-
+mod deterministic_tamper_tests {
     use super::*;
 
-    fn bounded_bytes(min: usize, max: usize) -> impl Strategy<Value = Vec<u8>> {
-        vec(any::<u8>(), min..=max)
+    fn array16(seed: u8) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        for (idx, byte) in out.iter_mut().enumerate() {
+            *byte = seed.wrapping_add((idx as u8).wrapping_mul(17));
+        }
+        out
     }
 
-    proptest! {
-        #[test]
-        fn sm4_gcm_rejects_tampered_ciphertext(
-            key_bytes in uniform16(any::<u8>()),
-            nonce_bytes in uniform12(any::<u8>()),
-            aad in vec(any::<u8>(), 0..32),
-            plaintext in bounded_bytes(1, 64),
-            flip in any::<u8>(),
-        ) {
+    fn array12(seed: u8) -> [u8; 12] {
+        let mut out = [0u8; 12];
+        for (idx, byte) in out.iter_mut().enumerate() {
+            *byte = seed.wrapping_add((idx as u8).wrapping_mul(23));
+        }
+        out
+    }
+
+    fn bytes(seed: u8, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|idx| seed.wrapping_mul(31).wrapping_add(idx as u8))
+            .collect()
+    }
+
+    #[test]
+    fn sm4_gcm_rejects_tampered_ciphertext() {
+        for seed in [0_u8, 1, 7, 31, 127, 255] {
+            let key_bytes = array16(seed);
+            let nonce_bytes = array12(seed);
+            let aad = bytes(seed.wrapping_add(1), seed as usize % 32);
+            let plaintext = bytes(seed.wrapping_add(2), (seed as usize % 64) + 1);
             let key = Sm4Key::new(key_bytes);
-            let (ciphertext, tag) = key.encrypt_gcm(&nonce_bytes, &aad, &plaintext).expect("SM4-GCM encrypt");
+            let (ciphertext, tag) = key
+                .encrypt_gcm(&nonce_bytes, &aad, &plaintext)
+                .expect("SM4-GCM encrypt");
             let mut tampered = ciphertext.clone();
-            let idx = (flip as usize) % tampered.len();
+            let idx = seed as usize % tampered.len();
             tampered[idx] ^= 0x01;
-            prop_assert!(key.decrypt_gcm(&nonce_bytes, &aad, &tampered, &tag).is_err());
+            assert!(
+                key.decrypt_gcm(&nonce_bytes, &aad, &tampered, &tag)
+                    .is_err()
+            );
         }
+    }
 
-        #[test]
-        fn sm4_gcm_rejects_tampered_tag(
-            key_bytes in uniform16(any::<u8>()),
-            nonce_bytes in uniform12(any::<u8>()),
-            aad in vec(any::<u8>(), 0..32),
-            plaintext in bounded_bytes(1, 64),
-            flip in any::<u8>(),
-        ) {
+    #[test]
+    fn sm4_gcm_rejects_tampered_tag() {
+        for seed in [0_u8, 1, 7, 31, 127, 255] {
+            let key_bytes = array16(seed);
+            let nonce_bytes = array12(seed);
+            let aad = bytes(seed.wrapping_add(1), seed as usize % 32);
+            let plaintext = bytes(seed.wrapping_add(2), (seed as usize % 64) + 1);
             let key = Sm4Key::new(key_bytes);
-            let (ciphertext, mut tag) = key.encrypt_gcm(&nonce_bytes, &aad, &plaintext).expect("SM4-GCM encrypt");
-            let idx = (flip as usize) % tag.len();
+            let (ciphertext, mut tag) = key
+                .encrypt_gcm(&nonce_bytes, &aad, &plaintext)
+                .expect("SM4-GCM encrypt");
+            let idx = seed as usize % tag.len();
             tag[idx] ^= 0x80;
-            prop_assert!(key.decrypt_gcm(&nonce_bytes, &aad, &ciphertext, &tag).is_err());
+            assert!(
+                key.decrypt_gcm(&nonce_bytes, &aad, &ciphertext, &tag)
+                    .is_err()
+            );
         }
+    }
 
-        #[test]
-        fn sm4_ccm_rejects_tampered_tag(
-            key_bytes in uniform16(any::<u8>()),
-            nonce_bytes in uniform12(any::<u8>()),
-            aad in vec(any::<u8>(), 0..32),
-            plaintext in bounded_bytes(1, 48),
-            flip in any::<u8>(),
-        ) {
+    #[test]
+    fn sm4_ccm_rejects_tampered_tag() {
+        for seed in [0_u8, 1, 7, 31, 127, 255] {
+            let key_bytes = array16(seed);
+            let nonce_bytes = array12(seed);
+            let aad = bytes(seed.wrapping_add(1), seed as usize % 32);
+            let plaintext = bytes(seed.wrapping_add(2), (seed as usize % 48) + 1);
             let key = Sm4Key::new(key_bytes);
-            let (ciphertext, mut tag) = key.encrypt_ccm(&nonce_bytes, &aad, &plaintext, 10).expect("SM4-CCM encrypt");
-            let idx = (flip as usize) % tag.len();
+            let (ciphertext, mut tag) = key
+                .encrypt_ccm(&nonce_bytes, &aad, &plaintext, 10)
+                .expect("SM4-CCM encrypt");
+            let idx = seed as usize % tag.len();
             tag[idx] ^= 0x01;
-            prop_assert!(key.decrypt_ccm(&nonce_bytes, &aad, &ciphertext, &tag).is_err());
+            assert!(
+                key.decrypt_ccm(&nonce_bytes, &aad, &ciphertext, &tag)
+                    .is_err()
+            );
         }
     }
 }

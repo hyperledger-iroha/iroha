@@ -6246,6 +6246,33 @@ impl Telemetry {
         }
     }
 
+    /// Record a Torii DA spool batch write outcome.
+    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_torii_da_spool_batch(outcome, write_ms);
+        }
+    }
+
+    /// Record Torii DA spool artifact outcomes.
+    pub fn record_torii_da_spool_artifact(
+        &self,
+        kind: &'static str,
+        outcome: &'static str,
+        count: u64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_torii_da_spool_artifact(kind, outcome, count);
+        }
+    }
+
+    /// Set the current Torii DA spool queue depth.
+    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.set_torii_da_spool_queue_depth(depth);
+        }
+    }
+
     /// Record the result of a DA receipt ingestion attempt.
     pub fn record_da_receipt_outcome(
         &self,
@@ -6790,6 +6817,38 @@ impl Telemetry {
             self.metrics
                 .sumeragi_rbc_requested_chunks_total
                 .inc_by(count);
+        }
+    }
+
+    /// Add initial RBC chunk target counters grouped by encoding/fanout policy.
+    pub fn add_rbc_initial_chunk_targets(
+        &self,
+        encoding: &'static str,
+        fanout: &'static str,
+        planned: u64,
+        posted: u64,
+        skipped: u64,
+    ) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        if planned != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "planned"])
+                .inc_by(planned);
+        }
+        if posted != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "posted"])
+                .inc_by(posted);
+        }
+        if skipped != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "skipped"])
+                .inc_by(skipped);
         }
     }
 
@@ -7409,6 +7468,65 @@ impl Telemetry {
                     .torii_http_response_bytes_total
                     .with_label_values(&[content_label.as_str(), method, status_label.as_str()])
                     .inc_by(bytes);
+            }
+        }
+    }
+
+    /// Record Torii transaction lane-admission latency without synchronizing the telemetry actor.
+    pub fn observe_torii_lane_admission_latency(
+        &self,
+        endpoint: &str,
+        lane_id: LaneId,
+        elapsed_seconds: f64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let lane_label = lane_id.as_u32().to_string();
+            self.metrics
+                .torii_lane_admission_latency_seconds
+                .with_label_values(&[lane_label.as_str(), endpoint])
+                .observe(elapsed_seconds);
+        }
+    }
+
+    /// Record Torii route-stage latency without synchronizing the telemetry actor.
+    pub fn observe_torii_route_stage_latency(
+        &self,
+        route_kind: &str,
+        stage: &str,
+        outcome: &str,
+        duration: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_route_stage_latency_seconds
+                .with_label_values(&[route_kind, stage, outcome])
+                .observe(duration.as_secs_f64());
+        }
+    }
+
+    /// Record Torii snapshot query metrics without synchronizing the telemetry actor.
+    pub fn observe_torii_query_snapshot(
+        &self,
+        mode: &str,
+        first_batch_latency_ms: Option<f64>,
+        gas_units: &[u64],
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&[mode])
+                .inc();
+            if let Some(ms) = first_batch_latency_ms {
+                self.metrics
+                    .torii_query_snapshot_first_batch_ms
+                    .with_label_values(&[mode])
+                    .observe(ms);
+            }
+            for units in gas_units {
+                self.metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode])
+                    .inc_by(*units);
             }
         }
     }
@@ -9243,6 +9361,69 @@ mod tests {
             .expect("metrics() should not hang when the actor channel is closed");
     }
 
+    #[test]
+    fn direct_torii_lane_admission_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_lane_admission_latency_seconds
+            .with_label_values(&["0", "transaction"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_lane_admission_latency("transaction", LaneId::SINGLE, 0.25);
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_route_stage_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_route_stage_latency_seconds
+            .with_label_values(&["query", "verify", "ok"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_route_stage_latency(
+            "query",
+            "verify",
+            "ok",
+            Duration::from_micros(25),
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_query_snapshot_metric_records_request_latency_and_gas() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.observe_torii_query_snapshot("stored", Some(7.5), &[11, 13]);
+
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&["stored"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_first_batch_ms
+                .with_label_values(&["stored"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_gas_consumed_units_total
+                .with_label_values(&["stored"])
+                .get(),
+            24
+        );
+    }
+
     #[tokio::test]
     async fn commit_time_clamps_when_block_created_in_future() {
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
@@ -10012,6 +10193,36 @@ mod tests {
                 .with_label_values(&["receipts", "hit"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn rbc_initial_chunk_target_metrics_record_outcomes() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.add_rbc_initial_chunk_targets("rs16", "data_plus_one", 10, 7, 3);
+
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "planned"])
+                .get(),
+            10
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "posted"])
+                .get(),
+            7
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "skipped"])
+                .get(),
+            3
         );
     }
 

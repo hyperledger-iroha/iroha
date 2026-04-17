@@ -135,9 +135,7 @@ impl_decode_from_slice_via_archived! {
     crate::trigger::action::Action,
     crate::trigger::data::DataTriggerStep,
     // Transactions, blocks and query outputs
-    crate::transaction::signed::TransactionEntrypoint,
     crate::transaction::signed::TransactionResult,
-    crate::block::SignedBlock,
     crate::query::CommittedTransaction,
     crate::query::QueryOutputBatchBox,
     // Taikai metadata and envelopes

@@ -5,11 +5,11 @@ use iroha_data_model::qr_stream::{
     QrPayloadKind, QrStreamAssembler, QrStreamDecodeResult, QrStreamEncoder, QrStreamEnvelope,
     QrStreamFrame, QrStreamFrameKind, QrStreamOptions,
 };
+use iroha_torii_shared::qr::{EcLevel, QrCode};
 use norito::json::{Map, Value};
-use qrcode::{EcLevel, QrCode, render::svg};
 use std::{
     fs,
-    io::BufWriter,
+    io::{BufWriter, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -160,7 +160,7 @@ impl QrEncodeArgs {
                         );
                         write_png_rgba(&path, &image)?;
                     } else {
-                        let image = render_image(&frame.code, self.dimension)?;
+                        let image = render_image(&frame.code, self.dimension);
                         write_png(&path, &image, self.style, frame.index, total_frames)?;
                     }
                 }
@@ -434,6 +434,58 @@ struct GrayImage {
     data: Vec<u8>,
 }
 
+#[derive(Clone)]
+struct RgbaImage {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+}
+
+impl RgbaImage {
+    fn from_raw(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
+        if data.len()
+            == (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4)
+        {
+            Some(Self {
+                width,
+                height,
+                data,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    fn as_raw(&self) -> &[u8] {
+        &self.data
+    }
+
+    #[cfg(test)]
+    fn get_pixel(&self, x: u32, y: u32) -> RgbaPixel {
+        let idx = ((y * self.width + x) * 4) as usize;
+        RgbaPixel([
+            self.data[idx],
+            self.data[idx + 1],
+            self.data[idx + 2],
+            self.data[idx + 3],
+        ])
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct RgbaPixel([u8; 4]);
+
 const SAKURA_BG_START: [f64; 3] = [0.98, 0.94, 0.96];
 const SAKURA_BG_END: [f64; 3] = [1.0, 0.98, 0.99];
 const SAKURA_PETAL: [f64; 3] = [0.98, 0.80, 0.86];
@@ -500,49 +552,24 @@ const SAKURA_STORM_GLYPHS: [[u8; 8]; 16] = [
 ];
 
 fn render_svg(code: &QrCode, dimension: u32, style: QrRenderStyle) -> Result<String> {
-    let mut renderer = code.render::<svg::Color>();
-    match style {
-        QrRenderStyle::Sakura | QrRenderStyle::SakuraWind => {
-            renderer.dark_color(svg::Color(SAKURA_SVG_INK));
-            renderer.light_color(svg::Color(SAKURA_SVG_BG));
-        }
-        QrRenderStyle::SakuraStorm => {
-            renderer.dark_color(svg::Color(SAKURA_STORM_SVG_ON));
-            renderer.light_color(svg::Color(SAKURA_STORM_SVG_OFF));
-        }
-        QrRenderStyle::Mono => {}
-    }
-    let svg = renderer
-        .min_dimensions(dimension, dimension)
-        .max_dimensions(dimension, dimension)
-        .build();
-    let trimmed = svg.trim_start();
-    let svg = if trimmed.starts_with("<?xml") {
-        trimmed
-            .find("?>")
-            .map(|idx| trimmed[idx + 2..].trim_start().to_owned())
-            .unwrap_or_else(|| trimmed.to_owned())
-    } else {
-        trimmed.to_owned()
+    let (dark, light) = match style {
+        QrRenderStyle::Sakura | QrRenderStyle::SakuraWind => (SAKURA_SVG_INK, SAKURA_SVG_BG),
+        QrRenderStyle::SakuraStorm => (SAKURA_STORM_SVG_ON, SAKURA_STORM_SVG_OFF),
+        QrRenderStyle::Mono => ("#000000", "#FFFFFF"),
     };
-    Ok(svg)
+    Ok(code.to_svg(dimension, dark, light))
 }
 
-fn render_image(code: &QrCode, dimension: u32) -> Result<GrayImage> {
-    let image = code
-        .render::<image::Luma<u8>>()
-        .min_dimensions(dimension, dimension)
-        .max_dimensions(dimension, dimension)
-        .build();
-    let (width, height) = image.dimensions();
-    Ok(GrayImage {
+fn render_image(code: &QrCode, dimension: u32) -> GrayImage {
+    let (width, height, data) = code.to_luma8(dimension);
+    GrayImage {
         width,
         height,
-        data: image.into_raw(),
-    })
+        data,
+    }
 }
 
-fn render_sakura_rgba(frame: &GrayImage, frame_index: u32, frame_count: u32) -> image::RgbaImage {
+fn render_sakura_rgba(frame: &GrayImage, frame_index: u32, frame_count: u32) -> RgbaImage {
     let frame_count = frame_count.max(1);
     let phase = (frame_index % frame_count) as f64 / frame_count as f64;
     let angle = phase * std::f64::consts::TAU;
@@ -607,7 +634,7 @@ fn render_sakura_rgba(frame: &GrayImage, frame_index: u32, frame_count: u32) -> 
         }
     }
 
-    image::RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
+    RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
 }
 
 fn render_sakura_wind_rgba(
@@ -615,22 +642,21 @@ fn render_sakura_wind_rgba(
     dimension: u32,
     frame_index: u32,
     frame_count: u32,
-) -> image::RgbaImage {
+) -> RgbaImage {
     // Keep functional modules solid while stylizing data modules as petals.
     let modules = code.width() as u32;
-    let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+    let quiet_zone = code.quiet_zone();
     let total_modules = modules + quiet_zone * 2;
     let module_size = (dimension / total_modules).max(1);
     let width = total_modules * module_size;
     let height = width;
     let module_size_f = module_size as f64;
-    let colors = code.to_colors();
     let mut module_dark = vec![false; (modules * modules) as usize];
     let mut module_functional = vec![false; (modules * modules) as usize];
     for y in 0..modules {
         for x in 0..modules {
             let idx = (y * modules + x) as usize;
-            module_dark[idx] = colors[idx] != qrcode::types::Color::Light;
+            module_dark[idx] = code.is_dark(x as usize, y as usize);
             module_functional[idx] = code.is_functional(x as usize, y as usize);
         }
     }
@@ -759,7 +785,7 @@ fn render_sakura_wind_rgba(
         }
     }
 
-    image::RgbaImage::from_raw(width, height, rgba).expect("rgba buffer size")
+    RgbaImage::from_raw(width, height, rgba).expect("rgba buffer size")
 }
 
 fn sakura_storm_logo_hole(mx: u32, my: u32, modules: u32) -> bool {
@@ -823,9 +849,9 @@ fn render_sakura_storm_rgba(
     dimension: u32,
     frame_index: u32,
     frame_count: u32,
-) -> image::RgbaImage {
+) -> RgbaImage {
     let modules = code.width() as u32;
-    let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+    let quiet_zone = code.quiet_zone();
     let total_modules = modules + quiet_zone * 2;
     let target_qr = ((dimension as f64) * SAKURA_STORM_QR_SCALE).round() as u32;
     let module_size = (target_qr / total_modules).max(1);
@@ -837,13 +863,12 @@ fn render_sakura_storm_rgba(
     let phase = (frame_index % frame_count) as f64 / frame_count as f64;
     let tau = std::f64::consts::TAU;
     let core_radius_sq = SAKURA_STORM_CORE_RADIUS * SAKURA_STORM_CORE_RADIUS;
-    let colors = code.to_colors();
     let mut module_dark = vec![false; (modules * modules) as usize];
     let mut module_functional = vec![false; (modules * modules) as usize];
     for y in 0..modules {
         for x in 0..modules {
             let idx = (y * modules + x) as usize;
-            module_dark[idx] = colors[idx] != qrcode::types::Color::Light;
+            module_dark[idx] = code.is_dark(x as usize, y as usize);
             module_functional[idx] = code.is_functional(x as usize, y as usize);
         }
     }
@@ -972,7 +997,7 @@ fn render_sakura_storm_rgba(
         }
     }
 
-    image::RgbaImage::from_raw(side, side, rgba).expect("rgba buffer size")
+    RgbaImage::from_raw(side, side, rgba).expect("rgba buffer size")
 }
 
 fn render_stylized_rgba(
@@ -981,7 +1006,7 @@ fn render_stylized_rgba(
     frame_index: u32,
     frame_count: u32,
     style: QrRenderStyle,
-) -> image::RgbaImage {
+) -> RgbaImage {
     match style {
         QrRenderStyle::SakuraWind => {
             render_sakura_wind_rgba(code, dimension, frame_index, frame_count)
@@ -999,7 +1024,7 @@ fn render_stylized_animation(
     frames: &[RenderedFrame],
     dimension: u32,
     style: QrRenderStyle,
-) -> Vec<image::RgbaImage> {
+) -> Vec<RgbaImage> {
     let frame_count = frames.len().max(1) as u32;
     let mut out = Vec::with_capacity(frames.len());
     for frame in frames {
@@ -1017,7 +1042,7 @@ fn render_stylized_animation(
 fn render_animation(frames: &[RenderedFrame], dimension: u32) -> Result<Vec<GrayImage>> {
     let mut out = Vec::with_capacity(frames.len());
     for frame in frames {
-        out.push(render_image(&frame.code, dimension)?);
+        out.push(render_image(&frame.code, dimension));
     }
     Ok(out)
 }
@@ -1117,12 +1142,8 @@ fn write_gif(path: &Path, frames: &[GrayImage], fps: u16, style: QrRenderStyle) 
             "sakura-wind/sakura-storm render requires the RGBA pipeline"
         ));
     }
-    let file = fs::File::create(path)?;
-    let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    let delay_ms = frame_delay_ms(fps) as u32;
-    let delay = image::Delay::from_numer_denom_ms(delay_ms.max(1), 1);
     let frame_count = frames.len() as u32;
-    let mut gif_frames = Vec::with_capacity(frames.len());
+    let mut rgba_frames = Vec::with_capacity(frames.len());
     for (idx, frame) in frames.iter().enumerate() {
         let rgba = match style {
             QrRenderStyle::Mono => grayscale_to_rgba(frame),
@@ -1131,13 +1152,12 @@ fn write_gif(path: &Path, frames: &[GrayImage], fps: u16, style: QrRenderStyle) 
                 unreachable!("RGBA-only guard should have returned")
             }
         };
-        gif_frames.push(image::Frame::from_parts(rgba, 0, 0, delay));
+        rgba_frames.push(rgba);
     }
-    encoder.encode_frames(gif_frames.into_iter())?;
-    Ok(())
+    write_gif_rgba_frames(path, &rgba_frames, fps)
 }
 
-fn write_png_rgba(path: &Path, image: &image::RgbaImage) -> Result<()> {
+fn write_png_rgba(path: &Path, image: &RgbaImage) -> Result<()> {
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, image.width(), image.height());
@@ -1148,7 +1168,7 @@ fn write_png_rgba(path: &Path, image: &image::RgbaImage) -> Result<()> {
     Ok(())
 }
 
-fn write_apng_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result<()> {
+fn write_apng_rgba(path: &Path, frames: &[RgbaImage], fps: u16) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
@@ -1169,28 +1189,138 @@ fn write_apng_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result
     Ok(())
 }
 
-fn write_gif_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result<()> {
+fn write_gif_rgba(path: &Path, frames: &[RgbaImage], fps: u16) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
-    let file = fs::File::create(path)?;
-    let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    let delay_ms = frame_delay_ms(fps) as u32;
-    let delay = image::Delay::from_numer_denom_ms(delay_ms.max(1), 1);
-    let mut gif_frames = Vec::with_capacity(frames.len());
-    for frame in frames {
-        gif_frames.push(image::Frame::from_parts(frame.clone(), 0, 0, delay));
-    }
-    encoder.encode_frames(gif_frames.into_iter())?;
-    Ok(())
+    write_gif_rgba_frames(path, frames, fps)
 }
 
-fn grayscale_to_rgba(frame: &GrayImage) -> image::RgbaImage {
+fn grayscale_to_rgba(frame: &GrayImage) -> RgbaImage {
     let mut rgba = Vec::with_capacity((frame.width * frame.height * 4) as usize);
     for gray in &frame.data {
         rgba.extend_from_slice(&[*gray, *gray, *gray, 0xFF]);
     }
-    image::RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
+    RgbaImage::from_raw(frame.width, frame.height, rgba).expect("rgba buffer size")
+}
+
+fn write_gif_rgba_frames(path: &Path, frames: &[RgbaImage], fps: u16) -> Result<()> {
+    if frames.is_empty() {
+        return Err(eyre!("no frames to encode"));
+    }
+    let width = frames[0].width();
+    let height = frames[0].height();
+    if width > u16::MAX as u32 || height > u16::MAX as u32 {
+        return Err(eyre!("GIF dimensions exceed u16 limits"));
+    }
+    if frames
+        .iter()
+        .any(|frame| frame.width() != width || frame.height() != height)
+    {
+        return Err(eyre!("all GIF frames must have identical dimensions"));
+    }
+
+    let file = fs::File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(b"GIF89a")?;
+    write_gif_u16(&mut writer, width as u16)?;
+    write_gif_u16(&mut writer, height as u16)?;
+    writer.write_all(&[0xF7, 0x00, 0x00])?;
+    write_rgb332_palette(&mut writer)?;
+    writer.write_all(b"\x21\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00")?;
+
+    let delay_cs = ((u32::from(frame_delay_ms(fps)) + 5) / 10)
+        .max(1)
+        .min(u16::MAX as u32) as u16;
+    for frame in frames {
+        writer.write_all(&[0x21, 0xF9, 0x04, 0x00])?;
+        write_gif_u16(&mut writer, delay_cs)?;
+        writer.write_all(&[0x00, 0x00])?;
+        writer.write_all(&[0x2C])?;
+        write_gif_u16(&mut writer, 0)?;
+        write_gif_u16(&mut writer, 0)?;
+        write_gif_u16(&mut writer, width as u16)?;
+        write_gif_u16(&mut writer, height as u16)?;
+        writer.write_all(&[0x00])?;
+        let indices = rgba_to_rgb332_indices(frame);
+        write_gif_lzw_data(&mut writer, &indices)?;
+    }
+    writer.write_all(&[0x3B])?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_gif_u16(writer: &mut impl std::io::Write, value: u16) -> Result<()> {
+    writer.write_all(&value.to_le_bytes())?;
+    Ok(())
+}
+
+fn write_rgb332_palette(writer: &mut impl std::io::Write) -> Result<()> {
+    for index in 0u16..=255 {
+        let r = (((index >> 5) & 0x07) * 255 / 7) as u8;
+        let g = (((index >> 2) & 0x07) * 255 / 7) as u8;
+        let b = ((index & 0x03) * 255 / 3) as u8;
+        writer.write_all(&[r, g, b])?;
+    }
+    Ok(())
+}
+
+fn rgba_to_rgb332_indices(frame: &RgbaImage) -> Vec<u8> {
+    frame
+        .as_raw()
+        .chunks_exact(4)
+        .map(|pixel| {
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+            (r & 0xE0) | ((g & 0xE0) >> 3) | (b >> 6)
+        })
+        .collect()
+}
+
+fn write_gif_lzw_data(writer: &mut impl std::io::Write, indices: &[u8]) -> Result<()> {
+    const MIN_CODE_SIZE: u8 = 8;
+    const CLEAR_CODE: u16 = 256;
+    const END_CODE: u16 = 257;
+    const CHUNK_PIXELS: usize = 250;
+
+    let mut compressed = Vec::with_capacity(indices.len() + indices.len() / CHUNK_PIXELS + 8);
+    let mut bit_buffer = 0u32;
+    let mut bit_len = 0u8;
+
+    for chunk in indices.chunks(CHUNK_PIXELS) {
+        write_gif_lzw_code(CLEAR_CODE, &mut bit_buffer, &mut bit_len, &mut compressed);
+        for &index in chunk {
+            write_gif_lzw_code(
+                u16::from(index),
+                &mut bit_buffer,
+                &mut bit_len,
+                &mut compressed,
+            );
+        }
+    }
+    write_gif_lzw_code(END_CODE, &mut bit_buffer, &mut bit_len, &mut compressed);
+    if bit_len > 0 {
+        compressed.push(bit_buffer as u8);
+    }
+
+    writer.write_all(&[MIN_CODE_SIZE])?;
+    for chunk in compressed.chunks(255) {
+        writer.write_all(&[chunk.len() as u8])?;
+        writer.write_all(chunk)?;
+    }
+    writer.write_all(&[0x00])?;
+    Ok(())
+}
+
+fn write_gif_lzw_code(code: u16, bit_buffer: &mut u32, bit_len: &mut u8, out: &mut Vec<u8>) {
+    *bit_buffer |= u32::from(code) << *bit_len;
+    *bit_len += 9;
+    while *bit_len >= 8 {
+        out.push(*bit_buffer as u8);
+        *bit_buffer >>= 8;
+        *bit_len -= 8;
+    }
 }
 
 fn frame_delay_ms(fps: u16) -> u16 {
@@ -1361,7 +1491,7 @@ mod tests {
         let code = QrCode::new(b"sakura-wind").expect("qr code");
         let dimension = 128;
         let image = render_sakura_wind_rgba(&code, dimension, 0, 1);
-        let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+        let quiet_zone = code.quiet_zone();
         let modules = code.width() as u32;
         let total_modules = modules + quiet_zone * 2;
         let module_size = (dimension / total_modules).max(1);
@@ -1464,7 +1594,7 @@ mod tests {
         let code = QrCode::new(b"sakura-storm").expect("qr code");
         let dimension = 256;
         let image = render_sakura_storm_rgba(&code, dimension, 0, 1);
-        let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+        let quiet_zone = code.quiet_zone();
         let modules = code.width() as u32;
         let total_modules = modules + quiet_zone * 2;
         let target_qr = ((dimension as f64) * SAKURA_STORM_QR_SCALE).round() as u32;

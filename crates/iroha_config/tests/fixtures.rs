@@ -20,7 +20,7 @@ use iroha_config::parameters::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
         LaneProfile, NexusStorage, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
         OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
-        OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
+        OracleTwitterBinding, Queue, RbcRs16InitialFanout, Root as Config, SoranetVpn, Streaming,
         StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
         TransactionGossiper,
     },
@@ -1180,6 +1180,7 @@ fn minimal_config_snapshot() {
                 rbc: SumeragiRbc {
                     chunk_max_bytes: 262144,
                     chunk_fanout: None,
+                    rs16_initial_fanout: RbcRs16InitialFanout::Full,
                     pending_max_chunks: 1024,
                     pending_max_bytes: 16777216,
                     pending_session_limit: 256,

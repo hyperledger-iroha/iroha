@@ -1,6 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
-mod common;
+pub(crate) mod common;
 
 use std::sync::Arc;
 

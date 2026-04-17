@@ -5,8 +5,8 @@ use norito::to_bytes;
 
 mod common;
 
-const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland";
-const ALT_NFT_ID: &[u8] = b"lily$wonderland";
+const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland.universal";
+const ALT_NFT_ID: &[u8] = b"lily$wonderland.universal";
 
 fn account_id_literal(public_key: &str) -> Vec<u8> {
     let public_key: PublicKey = public_key.parse().expect("valid public key");

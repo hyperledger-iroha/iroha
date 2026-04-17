@@ -22,7 +22,8 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
-    LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig, SumeragiNposTimeouts,
+    LaneConfig as LaneConfigSnapshot, NodeRole, RbcRs16InitialFanout, Sumeragi as SumeragiConfig,
+    SumeragiNposTimeouts,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -10172,13 +10173,70 @@ struct RbcState {
 struct RbcOutboundChunks {
     chunks: Vec<OutboundRbcChunk>,
     cursor: usize,
-    targets: Vec<(usize, PeerId)>,
+    targets: Vec<RbcOutboundTarget>,
+    encoding_label: &'static str,
+    fanout_label: &'static str,
+    record_target_metrics: bool,
+}
+
+pub(super) struct RbcOutboundSeed<'a> {
+    pub(super) chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
+    pub(super) roster: &'a [PeerId],
+    pub(super) rs16_layout: Option<RbcPayloadLayout>,
+    pub(super) rs16_fanout: RbcRs16InitialFanout,
+    pub(super) record_target_metrics: bool,
+}
+
+impl<'a> RbcOutboundSeed<'a> {
+    fn full(chunks: Vec<crate::sumeragi::consensus::RbcChunk>, roster: &'a [PeerId]) -> Self {
+        Self {
+            chunks,
+            roster,
+            rs16_layout: None,
+            rs16_fanout: RbcRs16InitialFanout::Full,
+            record_target_metrics: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RbcOutboundTarget {
+    validator_index: usize,
+    peer: PeerId,
+    chunk_indices: Option<Arc<[u32]>>,
+}
+
+impl RbcOutboundTarget {
+    fn full(validator_index: usize, peer: PeerId) -> Self {
+        Self {
+            validator_index,
+            peer,
+            chunk_indices: None,
+        }
+    }
+
+    fn with_chunk_indices(validator_index: usize, peer: PeerId, chunk_indices: Vec<u32>) -> Self {
+        Self {
+            validator_index,
+            peer,
+            chunk_indices: Some(Arc::from(chunk_indices.into_boxed_slice())),
+        }
+    }
+
+    fn allows_chunk(&self, idx: u32) -> bool {
+        self.chunk_indices
+            .as_ref()
+            .is_none_or(|indices| indices.binary_search(&idx).is_ok())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 struct RbcOutboundChunkDispatch {
     stored: bool,
     sent: usize,
+    target_candidates: usize,
+    target_posts: usize,
+    target_skipped: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -19958,9 +20016,9 @@ impl Actor {
                 );
                 return Ok(None);
             }
-            let total_chunks = session.total_chunks();
-            let received_chunks = session.received_chunks();
-            let ready_count = session.ready_signatures.len();
+            let mut total_chunks = session.total_chunks();
+            let mut received_chunks = session.received_chunks();
+            let mut ready_count = session.ready_signatures.len();
 
             let allow_unverified = self.allow_unverified_rbc_roster(key);
             if commit_topology.is_empty() {
@@ -19998,6 +20056,11 @@ impl Actor {
                 roster_source,
                 commit_topology.as_slice(),
             );
+            authoritative_known_payload =
+                self.rbc_session_has_authoritative_payload_for_progress(key, &session);
+            total_chunks = session.total_chunks();
+            received_chunks = session.received_chunks();
+            ready_count = session.ready_signatures.len();
             if !roster_source.is_authoritative() && !allow_unverified {
                 if self.should_emit_rbc_ready_deferral(
                     key,
@@ -20480,22 +20543,61 @@ impl Actor {
         &mut self,
         key: super::rbc_store::SessionKey,
         requested: usize,
-        seed: Option<(Vec<crate::sumeragi::consensus::RbcChunk>, &[PeerId])>,
+        seed: Option<RbcOutboundSeed<'_>>,
     ) -> RbcOutboundChunkDispatch {
         let mut dispatch = RbcOutboundChunkDispatch::default();
 
-        if let Some((chunks, roster)) = seed {
-            if chunks.is_empty() || roster.is_empty() {
+        if let Some(seed) = seed {
+            let encoding_label = seed
+                .rs16_layout
+                .map_or(RbcEncoding::Plain.as_str(), |layout| {
+                    layout.encoding.as_str()
+                });
+            let fanout_label = if seed.rs16_layout.is_some() {
+                match seed.rs16_fanout {
+                    RbcRs16InitialFanout::Full => "full",
+                    RbcRs16InitialFanout::Data => "data",
+                    RbcRs16InitialFanout::DataPlusOne => "data_plus_one",
+                }
+            } else {
+                "full"
+            };
+            let record_target_metrics = seed.record_target_metrics;
+            let chunks = seed.chunks;
+            if chunks.is_empty() || seed.roster.is_empty() {
                 return dispatch;
             }
             let target_count =
-                rbc::rbc_chunk_target_count(roster.len(), self.config.rbc.chunk_fanout);
+                rbc::rbc_chunk_target_count(seed.roster.len(), self.config.rbc.chunk_fanout);
             if target_count == 0 {
                 return dispatch;
             }
-            let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+            let session_seed = rbc::shuffle_seed(&key.0, key.1, key.2);
             let local_peer_id = self.common_config.peer.id().clone();
-            let targets = rbc::select_rbc_chunk_targets(roster, &local_peer_id, seed, target_count);
+            let targets = rbc::select_rbc_chunk_targets(
+                seed.roster,
+                &local_peer_id,
+                session_seed,
+                target_count,
+            )
+            .into_iter()
+            .map(|(validator_index, peer)| {
+                let chunk_indices = seed.rs16_layout.and_then(|layout| {
+                    rbc::rs16_initial_chunk_indices_for_target(
+                        layout,
+                        validator_index,
+                        session_seed,
+                        seed.rs16_fanout,
+                    )
+                });
+                match chunk_indices {
+                    Some(indices) => {
+                        RbcOutboundTarget::with_chunk_indices(validator_index, peer, indices)
+                    }
+                    None => RbcOutboundTarget::full(validator_index, peer),
+                }
+            })
+            .collect::<Vec<_>>();
             if targets.is_empty() {
                 return dispatch;
             }
@@ -20521,6 +20623,9 @@ impl Actor {
                     chunks: outbound_chunks,
                     cursor: 0,
                     targets,
+                    encoding_label,
+                    fanout_label,
+                    record_target_metrics,
                 },
             );
             dispatch.stored = true;
@@ -20530,13 +20635,27 @@ impl Actor {
             return dispatch;
         }
 
-        let (targets, chunks_to_send, exhausted) = {
+        let (
+            targets,
+            chunks_to_send,
+            exhausted,
+            encoding_label,
+            fanout_label,
+            record_target_metrics,
+        ) = {
             let Some(entry) = self.subsystems.da_rbc.rbc.outbound_chunks.get_mut(&key) else {
                 return dispatch;
             };
             let available = entry.chunks.len().saturating_sub(entry.cursor);
             if available == 0 {
-                (Vec::new(), Vec::new(), true)
+                (
+                    Vec::new(),
+                    Vec::new(),
+                    true,
+                    entry.encoding_label,
+                    entry.fanout_label,
+                    entry.record_target_metrics,
+                )
             } else {
                 let to_send = available.min(requested);
                 let end = entry.cursor.saturating_add(to_send);
@@ -20544,7 +20663,14 @@ impl Actor {
                 let chunks_to_send = entry.chunks[entry.cursor..end].to_vec();
                 entry.cursor = end;
                 let exhausted = entry.cursor >= entry.chunks.len();
-                (targets, chunks_to_send, exhausted)
+                (
+                    targets,
+                    chunks_to_send,
+                    exhausted,
+                    entry.encoding_label,
+                    entry.fanout_label,
+                    entry.record_target_metrics,
+                )
             }
         };
 
@@ -20554,10 +20680,27 @@ impl Actor {
         if chunks_to_send.is_empty() {
             return dispatch;
         }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = (encoding_label, fanout_label, record_target_metrics);
 
         dispatch.sent = chunks_to_send.len();
         for chunk in &chunks_to_send {
-            self.schedule_rbc_chunk_posts(chunk, &targets);
+            dispatch.target_candidates = dispatch.target_candidates.saturating_add(targets.len());
+            let posted = self.schedule_rbc_chunk_posts(chunk, &targets);
+            dispatch.target_posts = dispatch.target_posts.saturating_add(posted);
+        }
+        dispatch.target_skipped = dispatch
+            .target_candidates
+            .saturating_sub(dispatch.target_posts);
+        #[cfg(feature = "telemetry")]
+        if record_target_metrics && dispatch.target_candidates != 0 {
+            self.telemetry.add_rbc_initial_chunk_targets(
+                encoding_label,
+                fanout_label,
+                u64::try_from(dispatch.target_candidates).unwrap_or(u64::MAX),
+                u64::try_from(dispatch.target_posts).unwrap_or(u64::MAX),
+                u64::try_from(dispatch.target_skipped).unwrap_or(u64::MAX),
+            );
         }
 
         dispatch
@@ -20588,7 +20731,11 @@ impl Actor {
             return;
         }
         let chunk_count = chunks.len();
-        let dispatch = self.dispatch_rbc_outbound_chunks(key, 0, Some((chunks, &topology_peers)));
+        let dispatch = self.dispatch_rbc_outbound_chunks(
+            key,
+            0,
+            Some(RbcOutboundSeed::full(chunks, &topology_peers)),
+        );
         let queued = dispatch.stored;
         info!(
             height = key.1,
@@ -34788,6 +34935,13 @@ impl RbcSession {
         if self.total_chunks == 0 {
             return self.expected_chunk_root;
         }
+        if self.received_chunks == self.total_chunks
+            && self.expected_chunk_digests.is_some()
+            && self.expected_chunk_root.is_some()
+            && !self.invalid
+        {
+            return self.expected_chunk_root;
+        }
         let digests = self.all_chunk_digests()?;
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
         tree.root().map(Hash::from)
@@ -35169,8 +35323,19 @@ impl RbcSession {
         self.recovered_from_disk
     }
 
-    pub(crate) fn ingest_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) {
+    #[cfg(test)]
+    pub(super) fn ingest_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) {
         let _ = self.note_chunk(idx, bytes, sender);
+    }
+
+    pub(super) fn ingest_prehashed_chunk(
+        &mut self,
+        idx: u32,
+        bytes: Vec<u8>,
+        digest: [u8; 32],
+        sender: Option<u32>,
+    ) -> ChunkIngestOutcome {
+        self.note_chunk_with_digest(idx, bytes, digest, sender)
     }
 
     pub(super) fn ingest_chunk_with_outcome(
@@ -35284,14 +35449,24 @@ impl RbcSession {
         dropped
     }
 
-    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, _sender: Option<u32>) -> ChunkIngestOutcome {
-        if idx >= self.total_chunks {
-            return ChunkIngestOutcome::OutOfBounds;
-        }
+    fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, sender: Option<u32>) -> ChunkIngestOutcome {
         let mut hasher = Sha256::new();
         sha2::digest::Update::update(&mut hasher, &bytes);
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&hasher.finalize());
+        self.note_chunk_with_digest(idx, bytes, digest, sender)
+    }
+
+    fn note_chunk_with_digest(
+        &mut self,
+        idx: u32,
+        bytes: Vec<u8>,
+        digest: [u8; 32],
+        _sender: Option<u32>,
+    ) -> ChunkIngestOutcome {
+        if idx >= self.total_chunks {
+            return ChunkIngestOutcome::OutOfBounds;
+        }
 
         if let Some(expected) = self.expected_chunk_digests.as_ref() {
             let Some(expected_digest) = expected.get(idx as usize) else {
