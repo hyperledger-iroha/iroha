@@ -71,7 +71,7 @@ impl Convert {
         let output = encode_address_literal(&input, self.network_prefix, self.format)
             .wrap_err("failed to encode address output")?;
 
-        context.println(output)
+        context.println_data(output)
     }
 }
 
@@ -165,7 +165,7 @@ impl Audit {
     fn print_csv<C: RunContext>(report: &AddressAuditReport, context: &mut C) -> Result<()> {
         const HEADER: &str =
             "input,status,format,domain_kind,i105,canonical_hex,error_code,error_message";
-        context.println(HEADER.to_owned())?;
+        context.println_data(HEADER.to_owned())?;
         for entry in &report.entries {
             let summary = entry.summary.as_ref();
             let error = entry.error.as_ref();
@@ -184,7 +184,7 @@ impl Audit {
                 .map(|field| csv_escape(field))
                 .collect::<Vec<_>>()
                 .join(",");
-            context.println(row)?;
+            context.println_data(row)?;
         }
         Ok(())
     }
@@ -239,14 +239,14 @@ impl Normalize {
         if let Some(path) = self.output.as_ref() {
             if path == Path::new("-") {
                 for line in outputs {
-                    context.println(line)?;
+                    context.println_data(line)?;
                 }
             } else {
                 write_lines_to_file(path, &outputs)?;
             }
         } else {
             for line in outputs {
-                context.println(line)?;
+                context.println_data(line)?;
             }
         }
 

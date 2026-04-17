@@ -119,7 +119,7 @@ pub struct GenVrfArgs {
     /// Seed prefix used when deriving deterministic candidate account keys.
     #[arg(long, default_value = "node")]
     pub account_prefix: String,
-    /// Fully qualified domain literal used in generated account aliases.
+    /// Alias suffix used in generated account labels (`dataspace` or `domain.dataspace`).
     #[arg(long, default_value = "wonderland.universal")]
     pub domain: String,
     /// Output path; if omitted, prints JSON to stdout
@@ -215,9 +215,7 @@ impl GenVrfArgs {
 
     fn generate_candidates(&self, seed: &[u8; 64]) -> Result<Vec<norito::json::Value>> {
         let chain_bytes = self.chain_id.as_bytes();
-        let domain_literal = DomainId::parse_fully_qualified(&self.domain)
-            .map_err(|err| eyre!("invalid --domain value: {err}"))?
-            .to_string();
+        let domain_literal = normalize_candidate_alias_suffix(&self.domain)?;
         (0..self.count)
             .map(|index| self.build_candidate(seed, chain_bytes, index, &domain_literal))
             .collect()
@@ -688,6 +686,26 @@ fn canonicalize_candidate_accounts(value: &mut norito::json::Value, label: &str)
     Ok(())
 }
 
+fn normalize_candidate_alias_suffix(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("invalid --domain value: alias suffix must not be empty"));
+    }
+    if trimmed.contains('@') {
+        return Err(eyre!(
+            "invalid --domain value: pass only the alias suffix, without an account label"
+        ));
+    }
+    if trimmed.contains('.') {
+        return DomainId::parse_fully_qualified(trimmed)
+            .map(|domain| domain.to_string())
+            .map_err(|err| eyre!("invalid --domain value: {err}"));
+    }
+    DomainId::try_new(trimmed, "universal")
+        .map_err(|err| eyre!("invalid --domain value: {err}"))?;
+    Ok(trimmed.to_owned())
+}
+
 fn parse_candidate_flag(s: &str) -> Result<VrfCandidateArg, String> {
     // Format: account_id,variant,pk_b64,proof_b64
     let parts: Vec<&str> = s.split(',').collect();
@@ -914,6 +932,29 @@ mod tests {
         assert!(
             err.contains("invalid account_id"),
             "expected account_id error, got {err}"
+        );
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_accepts_dataspace_root() {
+        let suffix = normalize_candidate_alias_suffix("wonderland").expect("dataspace root suffix");
+        assert_eq!(suffix, "wonderland");
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_accepts_fully_qualified_domain() {
+        let suffix =
+            normalize_candidate_alias_suffix("wonderland.universal").expect("domain suffix");
+        assert_eq!(suffix, "wonderland.universal");
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_rejects_account_label() {
+        let err = normalize_candidate_alias_suffix("node0@wonderland")
+            .expect_err("account label should be rejected");
+        assert!(
+            err.to_string().contains("without an account label"),
+            "expected account label error, got {err}"
         );
     }
 }
