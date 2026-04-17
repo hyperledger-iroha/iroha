@@ -2181,6 +2181,46 @@ impl BlockSynchronizer {
             .is_some_and(|last| now.saturating_duration_since(last) < self.gossip_backoff)
     }
 
+    fn block_sync_gossip_world_scope(
+        &self,
+        block_height: u64,
+    ) -> (
+        BTreeSet<PeerId>,
+        bool,
+        BTreeSet<iroha_data_model::nexus::LaneId>,
+    ) {
+        let (world_peers, consensus_mode, local_lane_ids) = {
+            let world = self.state.world_view();
+            let world_peers = world.peers().iter().cloned().collect::<BTreeSet<_>>();
+            let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                &world,
+                block_height,
+                self.fallback_consensus_mode,
+            );
+            let local_lane_ids: BTreeSet<iroha_data_model::nexus::LaneId> =
+                if matches!(consensus_mode, ConsensusMode::Npos) {
+                    crate::state::validator_lane_ids_for_peer(&world, self.peer.id())
+                } else {
+                    BTreeSet::new()
+                };
+            (world_peers, consensus_mode, local_lane_ids)
+        };
+
+        if !matches!(consensus_mode, ConsensusMode::Npos) || local_lane_ids.is_empty() {
+            return (world_peers, false, local_lane_ids);
+        }
+
+        let mut scoped_world_peers = BTreeSet::new();
+        for lane_id in &local_lane_ids {
+            scoped_world_peers.extend(self.state.authoritative_lane_peer_ids(*lane_id));
+        }
+        if scoped_world_peers.is_empty() {
+            return (world_peers, false, local_lane_ids);
+        }
+
+        (scoped_world_peers, true, local_lane_ids)
+    }
+
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
         let now = std::time::Instant::now();
@@ -2249,12 +2289,22 @@ impl BlockSynchronizer {
         }
 
         let (targets, stray_targets, gossip_size, world_known) = {
-            let world_peers: BTreeSet<_> =
-                self.state.world_view().peers().iter().cloned().collect();
+            let (world_peers, lane_scoped, local_lane_ids) =
+                self.block_sync_gossip_world_scope(now_height.saturating_add(1));
+            let candidate_peers = filter_block_sync_gossip_candidates(&peers, &world_peers);
             let mut rng = rand::rng();
             let gossip_size = usize::try_from(self.gossip_size.get()).unwrap_or(usize::MAX);
             let (targets, stray_targets) =
-                select_block_sync_targets(&peers, &world_peers, gossip_size, &mut rng);
+                select_block_sync_targets(&candidate_peers, &world_peers, gossip_size, &mut rng);
+            if lane_scoped {
+                debug!(
+                    height = now_height,
+                    lane_ids = ?local_lane_ids,
+                    scoped_online = candidate_peers.len(),
+                    scoped_world = world_peers.len(),
+                    "block sync gossip scoped to local authoritative lanes"
+                );
+            }
             (targets, stray_targets, gossip_size, world_peers.len())
         };
         if targets.is_empty() {
@@ -2720,6 +2770,26 @@ fn sample_block_sync_targets(
     shuffled
 }
 
+fn filter_block_sync_gossip_candidates(
+    peers: &[PeerId],
+    scoped_world_peers: &BTreeSet<PeerId>,
+) -> Vec<PeerId> {
+    if peers.is_empty() || scoped_world_peers.is_empty() {
+        return peers.to_vec();
+    }
+
+    let filtered: Vec<_> = peers
+        .iter()
+        .filter(|peer| scoped_world_peers.contains(*peer))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        peers.to_vec()
+    } else {
+        filtered
+    }
+}
+
 fn select_block_sync_targets(
     peers: &[PeerId],
     world_peers: &BTreeSet<PeerId>,
@@ -2841,6 +2911,27 @@ mod selection_tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn filters_candidates_to_scoped_world_peers_when_available() {
+        let all_peers = peers(5);
+        let scoped: BTreeSet<_> = all_peers.iter().skip(1).take(2).cloned().collect();
+
+        let filtered = filter_block_sync_gossip_candidates(&all_peers, &scoped);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|peer| scoped.contains(peer)));
+    }
+
+    #[test]
+    fn filter_candidates_falls_back_when_scope_has_no_online_peers() {
+        let all_peers = peers(4);
+        let scoped = peers(2).into_iter().collect::<BTreeSet<_>>();
+
+        let filtered = filter_block_sync_gossip_candidates(&all_peers, &scoped);
+
+        assert_eq!(filtered, all_peers);
     }
 }
 

@@ -54,6 +54,37 @@ test also performs feature-gated smoke requests (e.g., `/v1/domains` under
 `app_api`, `/v1/connect/status` under `connect`) to verify the staged builder
 covers every route group.
 
+## Routed Request Diagnostics
+
+Cross-dataspace Torii proxy failures return structured headers in addition to
+the normal reject-code body. A `503` with `x-iroha-reject-code:
+route_unavailable` should be triaged from these headers before treating the
+request payload as invalid:
+
+- `x-iroha-route-lane-id` and `x-iroha-route-dataspace-id` identify the
+  resolved target lane/dataspace.
+- `x-iroha-route-unavailable-reason` is one of
+  `missing_authoritative_binding`, `authoritative_peers_offline`, or
+  `loop_prevention_exhausted`.
+- `x-iroha-route-authoritative-total`,
+  `x-iroha-route-authoritative-offline`, and
+  `x-iroha-route-loop-prevention-drops` distinguish catalog drift, offline
+  authoritative peers, and proxy-hop loop prevention.
+
+Read/query fanout starts candidate dataspace routes concurrently and returns a
+merged response from the routes that answer successfully. Responses include
+aggregate fanout headers:
+
+- `x-iroha-fanout-routes-attempted`
+- `x-iroha-fanout-routes-succeeded`
+- `x-iroha-fanout-routes-failed`
+- `x-iroha-fanout-routes-unavailable`
+- `x-iroha-fanout-routes-not-found`
+- `x-iroha-fanout-first-failure`
+
+Successful fanout responses keep these counters so operators can see partial
+route degradation even when another dataspace supplied the requested result.
+
 ## Migration Notes
 
 Projects embedding Torii should migrate any direct `Router` manipulations to

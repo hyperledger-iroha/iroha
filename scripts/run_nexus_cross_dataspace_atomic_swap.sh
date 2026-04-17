@@ -154,7 +154,11 @@ for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
 
-CMD=("${cargo_runner[@]}" -- test -p integration_tests)
+if [[ "$USE_CARGO_FAST" == true ]]; then
+  CMD=("${cargo_runner[@]}" -- test -p integration_tests)
+else
+  CMD=("${cargo_runner[@]}" test -p integration_tests)
+fi
 if [[ "$PROFILE" == "release" ]]; then
   CMD+=("--release")
 fi

@@ -308,6 +308,58 @@ Last updated: 2026-04-17
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- --sample-size 10 --measurement-time 1 --warm-up-time 1` (quick smoke; `gnuplot` unavailable, plotters backend used)
   - `git diff --check -- crates/iroha_data_model/src/transaction/signed.rs crates/iroha_data_model/src/transaction/private_kaigi.rs crates/iroha_data_model/src/da/commitment.rs crates/iroha_data_model/benches/chain_wire.rs crates/iroha_data_model/Cargo.toml crates/norito/src/lib.rs crates/norito/tests/exact_slice.rs crates/norito/README.md status.md roadmap.md`
+
+## 2026-04-17 Follow-up: Nexus routed Torii fanout now fails less opaquely
+- `crates/iroha_core/src/queue/router.rs` now resolves state-aware lane and
+  dataspace routing against the same `StateView` catalogs used for matching,
+  preventing stale in-memory router catalogs from sending transactions or
+  queries to the wrong fallback route.
+- `crates/iroha_torii/src/lib.rs` now treats non-authoritative private ingress
+  reads as proxy/fanout work instead of silently executing them locally, and
+  read/query fanout skips per-route `not_found` / `route_unavailable` failures
+  until all candidate routes are exhausted or a healthy route supplies the
+  result.
+- Incoming proxied signed queries now preserve the ingress-selected route hint
+  when the receiver's authority-only recomputation differs. This keeps
+  target-scoped queries such as `FindAssetById` from being forwarded away from
+  the intended dataspace while still logging the mismatch for operators.
+- Routed query fanout now starts dataspace route reads concurrently before
+  merging results, so one degraded route no longer multiplies the wait time by
+  the number of configured dataspaces.
+- Torii now annotates `route_unavailable` responses with
+  `x-iroha-route-unavailable-reason`,
+  `x-iroha-route-authoritative-total`,
+  `x-iroha-route-authoritative-offline`, and
+  `x-iroha-route-loop-prevention-drops`; fanout responses now expose
+  `x-iroha-fanout-*` counters for attempted, successful, unavailable,
+  not-found, and first-failure classifications.
+- The Rust client `ResponseReport` now includes those route/fanout headers in
+  HTTP error text so operators see the authoritative-peer diagnosis directly
+  from SDK failures.
+- `docs/source/torii/router.md` and `configs/soranexus/taira/README.md` now
+  document the routed/fanout diagnostics and Taira triage expectations.
+- `scripts/run_nexus_cross_dataspace_atomic_swap.sh` now invokes plain Cargo as
+  `cargo test ...`; the previous `cargo -- test ...` wrapper form only worked
+  for `scripts/cargo_fast.sh` and is rejected by current Cargo.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router::tests --lib`
+  - `cargo test -p iroha_torii collect_torii_ --lib`
+  - `cargo test -p iroha_torii effective_proxy_ --lib`
+  - `cargo test -p iroha_torii nexus_fanout --lib`
+  - `cargo test -p iroha_torii route_unavailable --lib`
+  - `cargo test -p iroha with_msg_reports_route_diagnostics_headers --lib`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1`
+  - `git diff --check`
+- Remaining localnet gap: repeated runs of
+  `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
+  still fail intermittently after the route probes have passed, most recently
+  while waiting for grant visibility. A kept-dir run also showed Sumeragi
+  `ValidatorSetMismatch`, RBC roster-hash mismatch, and late `VerifiedQuery`
+  proxy responses after the 60s route timeout, so the remaining failure appears
+  tied to multi-lane consensus/roster convergence rather than the original
+  wrong-ingress route resolution.
+
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
   `0x`-prefixed canonical EIP-55 addresses instead of accepting arbitrary
@@ -24147,3 +24199,20 @@ Last updated: 2026-04-17
   - `cargo fmt --all`
   - `cargo test -p iroha_core committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists -- --nocapture`
   - `cargo test -p integration_tests sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+
+## 2026-04-17 SCCP Runtime Proof Envelope For SORA Pallet
+- Added SORA-runtime SCCP proof envelope export support in [`crates/iroha_sccp/src/lib.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs), including the `runtime-scale-v1` proof family, `sora-nexus-runtime-v1` verifier backend, SORA asset-id codec normalization, finality anchor hashes, parliament roster anchor hashes, and manual SCALE encoding for pallet submission bundles.
+- Exposed relay-operator SCALE endpoints in [`crates/iroha_torii/src/routing.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs) and [`crates/iroha_torii/src/lib.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs):
+  - `/v1/sccp/proofs/governance/{message_id}/runtime-scale`
+  - `/v1/sccp/proofs/message/{message_id}/runtime-scale`
+- Extended SCCP capabilities and CLI output in [`crates/iroha/src/client.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs) and [`crates/iroha_cli/src/bridge.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/bridge.rs) so bridge UIs and human relay operators can discover the runtime proof family, verifier backend, runtime SCALE paths, and the `sora_asset_id` codec.
+- Documented the production relay model in [`docs/source/bridge_proofs.md`](/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md): SCCP relay to SORA2 is a manual web-interface and wallet-signing flow, not an off-chain worker, daemon, or automated relayer service. The human operator is only the courier and fee payer; authorization remains with Sora Parliament, Nexus finality, and SORA2 pallet verification.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo test -p iroha_torii sccp_capabilities_snapshot_lists_remote_domains_and_codecs --lib -- --nocapture`
+  - `cargo test -p iroha_torii sccp_capabilities_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `cargo test -p iroha_torii sccp_governance_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+  - `cargo test -p iroha_torii sccp_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge --bin iroha sccp_capabilities_text_command_prints_summary -- --nocapture`
+  - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload --lib -- --nocapture`

@@ -540,7 +540,20 @@ Interpret the common public failures as follows:
   ingress or rollout health degradation. Treat this as deployment health first.
 - `route_unavailable` from a live write:
   the public Torii ingress is up, but the write path still cannot reach an
-  authoritative peer for the target lane.
+  authoritative peer for the target lane. Capture the response headers
+  `x-iroha-route-lane-id`, `x-iroha-route-dataspace-id`,
+  `x-iroha-route-unavailable-reason`,
+  `x-iroha-route-authoritative-total`,
+  `x-iroha-route-authoritative-offline`, and
+  `x-iroha-route-loop-prevention-drops`; they identify whether the failure is
+  a missing authoritative binding, offline authoritative peers, or proxy-hop
+  loop prevention.
+- successful read/query fanout with non-zero
+  `x-iroha-fanout-routes-failed`, `x-iroha-fanout-routes-unavailable`, or
+  `x-iroha-fanout-routes-not-found`:
+  the public read was recovered from another dataspace, but some authoritative
+  routes are degraded. Capture all `x-iroha-fanout-*` headers with the status
+  samples before deciding the request is fully healthy.
 - `Transaction expired`:
   likely chain-health, consensus-latency, or queue-saturation trouble first.
   Report the current `blocks`, `commit_qc_height`, `queue_size`,

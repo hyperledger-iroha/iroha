@@ -237,10 +237,11 @@ use iroha_core::{
     },
     sumeragi::rbc_store::SoftwareManifest,
     torii_proxy::{
-        TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+        TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
         ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
         ToriiProxyRequestV2, ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
-        ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
+        ToriiRouteHintV1,
     },
 };
 use iroha_crypto::{
@@ -3312,16 +3313,29 @@ async fn handler_account_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
+    let use_target_account_routes = trusted_internal || visibility.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        visibility.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         visibility.caller(),
-        trusted_internal || visibility.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
     };
-    Ok(execute_torii_account_read_for_routes(&app, routes, canonical_account_id, format).await)
+    Ok(execute_torii_account_read_for_routes_scoped(
+        &app,
+        routes,
+        route_scope,
+        canonical_account_id,
+        format,
+    )
+    .await)
 }
 
 #[cfg(feature = "app_api")]
@@ -3375,11 +3389,17 @@ async fn handler_account_transactions_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         caller.caller(),
-        trusted_internal || caller.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -3390,6 +3410,7 @@ async fn handler_account_transactions_query(
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::AccountTransactionsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3437,11 +3458,17 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         caller.caller(),
-        trusted_internal || caller.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -3453,6 +3480,7 @@ async fn handler_account_assets(
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::AccountAssetsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3494,11 +3522,17 @@ async fn handler_account_permissions(
         &[],
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let routes = match torii_account_read_routes(
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_permissions_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
+    let routes = match torii_account_permissions_read_routes(
         app.as_ref(),
         &parsed_account_id,
         caller.caller(),
-        trusted_internal || caller.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -3510,6 +3544,7 @@ async fn handler_account_permissions(
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::AccountPermissionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3561,11 +3596,17 @@ async fn handler_account_assets_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         caller.caller(),
-        trusted_internal || caller.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -3581,6 +3622,7 @@ async fn handler_account_assets_query(
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3629,11 +3671,17 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
+    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        caller.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         caller.caller(),
-        trusted_internal || caller.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -3646,6 +3694,7 @@ async fn handler_account_transactions_get(
     Ok(execute_torii_list_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::AccountTransactionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -4053,18 +4102,6 @@ async fn handler_accounts_list(
     }
 
     let query_string = encode_torii_proxy_query(&p)?;
-    let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
-    if !preferred_routes.is_empty() {
-        return Ok(execute_torii_list_read_for_routes(
-            &app,
-            preferred_routes,
-            ToriiReadEndpointV1::AccountsList,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountsList,
@@ -4104,18 +4141,6 @@ async fn handler_accounts_query(
             "failed to encode routed accounts query: {error}"
         )))
     })?;
-    let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
-    if !preferred_routes.is_empty() {
-        return Ok(execute_torii_list_read_for_routes(
-            &app,
-            preferred_routes,
-            ToriiReadEndpointV1::AccountsQuery,
-            Vec::new(),
-            None,
-            body,
-        )
-        .await);
-    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountsQuery,
@@ -6717,11 +6742,17 @@ async fn handler_explorer_account_detail(
         &[],
         CONTEXT_EXPLORER_ACCOUNT_DETAIL,
     )?;
+    let use_target_account_routes = trusted_internal || visibility.is_signed();
+    let route_scope = torii_account_read_route_scope(
+        &parsed_account_id,
+        visibility.caller(),
+        use_target_account_routes,
+    );
     let routes = match torii_account_read_routes(
         app.as_ref(),
         &parsed_account_id,
         visibility.caller(),
-        trusted_internal || visibility.is_signed(),
+        use_target_account_routes,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -6729,6 +6760,7 @@ async fn handler_explorer_account_detail(
     Ok(execute_torii_singleton_read_for_routes(
         &app,
         routes,
+        route_scope,
         ToriiReadEndpointV1::ExplorerAccountDetail,
         vec![canonical_account_id],
         None,
@@ -11212,6 +11244,14 @@ enum ToriiProxyUnavailableReason {
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl ToriiProxyUnavailableReason {
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::MissingAuthoritativeBinding => "missing_authoritative_binding",
+            Self::AuthoritativePeersOffline => "authoritative_peers_offline",
+            Self::LoopPreventionExhausted => "loop_prevention_exhausted",
+        }
+    }
+
     fn ingress_message(self, routing_decision: RoutingDecision) -> String {
         match self {
             Self::MissingAuthoritativeBinding => format!(
@@ -11254,6 +11294,98 @@ struct ToriiProxyCandidatePeers {
     offline_authoritative_count: usize,
     loop_prevention_drops: usize,
     unavailable_reason: Option<ToriiProxyUnavailableReason>,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn insert_route_unavailable_diagnostics(
+    response: &mut Response,
+    routing_decision: RoutingDecision,
+    reason: ToriiProxyUnavailableReason,
+    authoritative_total_count: usize,
+    offline_authoritative_count: usize,
+    loop_prevention_drops: usize,
+) {
+    insert_routing_headers(response, routing_decision, "proxy");
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-route-unavailable-reason"),
+        HeaderValue::from_static(reason.as_label()),
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-route-authoritative-total",
+        authoritative_total_count,
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-route-authoritative-offline",
+        offline_authoritative_count,
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-route-loop-prevention-drops",
+        loop_prevention_drops,
+    );
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_route_unavailable_response(
+    routing_decision: RoutingDecision,
+    reason: ToriiProxyUnavailableReason,
+    message: impl Into<String>,
+    authoritative_total_count: usize,
+    offline_authoritative_count: usize,
+    loop_prevention_drops: usize,
+) -> Response {
+    let mut response = torii_proxy_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "route_unavailable",
+        message,
+    );
+    insert_route_unavailable_diagnostics(
+        &mut response,
+        routing_decision,
+        reason,
+        authoritative_total_count,
+        offline_authoritative_count,
+        loop_prevention_drops,
+    );
+    response
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn effective_proxy_routing_decision(
+    request_kind: &'static str,
+    resolved_route: RoutingDecision,
+    ingress_hint: RoutingDecision,
+) -> RoutingDecision {
+    if resolved_route != ingress_hint {
+        iroha_logger::warn!(
+            request_kind,
+            resolved_lane = resolved_route.lane_id.as_u32(),
+            resolved_dataspace = resolved_route.dataspace_id.as_u64(),
+            ingress_lane = ingress_hint.lane_id.as_u32(),
+            ingress_dataspace = ingress_hint.dataspace_id.as_u64(),
+            "Torii proxy receiver recomputed a different route than the ingress hint"
+        );
+    }
+    resolved_route
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn effective_proxy_signed_query_routing_decision(
+    resolved_route: RoutingDecision,
+    ingress_hint: RoutingDecision,
+) -> RoutingDecision {
+    if resolved_route != ingress_hint {
+        iroha_logger::warn!(
+            resolved_lane = resolved_route.lane_id.as_u32(),
+            resolved_dataspace = resolved_route.dataspace_id.as_u64(),
+            ingress_lane = ingress_hint.lane_id.as_u32(),
+            ingress_dataspace = ingress_hint.dataspace_id.as_u64(),
+            "Torii proxy signed-query receiver using ingress route hint over locally recomputed authority route"
+        );
+    }
+    ingress_hint
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -11374,6 +11506,29 @@ fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecisio
             .state
             .authoritative_lane_peer_ids(routing_decision.lane_id)
             .is_empty()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn should_execute_incoming_torii_proxy_request_locally(
+    app: &AppState,
+    request_kind: &ToriiProxyRequestKindV1,
+    routing_decision: RoutingDecision,
+) -> bool {
+    match request_kind {
+        // Read-only requests should execute on the first ingress-selected peer. Re-running the
+        // authoritative-peer selection on every receiver can create multi-hop proxy cascades when
+        // lane-roster views are briefly inconsistent, which turns healthy reads into 60s+ timeouts
+        // and late responses.
+        ToriiProxyRequestKindV1::VerifiedQuery { .. }
+        | ToriiProxyRequestKindV1::VerifiedQueryFanout { .. }
+        | ToriiProxyRequestKindV1::Read(_)
+        | ToriiProxyRequestKindV1::ReadFanout(_) => true,
+        ToriiProxyRequestKindV1::SubmitTransaction { .. }
+        | ToriiProxyRequestKindV1::SignedQuery { .. }
+        | ToriiProxyRequestKindV1::HostedHttp(_) => {
+            should_execute_route_locally(app, routing_decision)
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -11583,6 +11738,100 @@ fn torii_account_read_routes(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn torii_account_permissions_read_routes(
+    app: &AppState,
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    use_target_account_routes: bool,
+) -> Result<Vec<RoutingDecision>, Response> {
+    if use_target_account_routes {
+        torii_target_account_routes(app, target_account)
+    } else {
+        Ok(torii_visible_account_read_routes(app, caller))
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_permissions_route_scope(
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    use_target_account_routes: bool,
+) -> ToriiFanoutRouteScopeV1 {
+    if use_target_account_routes {
+        ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: target_account.to_string(),
+        }
+    } else {
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        }
+    }
+}
+
+fn torii_nexus_route(app: &AppState) -> Result<RoutingDecision, Response> {
+    resolve_torii_route_for_dataspace_id(app, DataSpaceId::GLOBAL).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve Nexus fanout route: {error}"),
+        )
+    })
+}
+
+fn parse_internal_fanout_account_id(
+    account_id: &str,
+    context: &'static str,
+) -> Result<AccountId, Response> {
+    AccountId::parse_encoded(account_id.trim())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_proxy_request",
+                format!("invalid {context} account id `{account_id}`: {error}"),
+            )
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_fanout_scope_routes(
+    app: &AppState,
+    scope: &ToriiFanoutRouteScopeV1,
+) -> Result<Vec<RoutingDecision>, Response> {
+    match scope {
+        ToriiFanoutRouteScopeV1::AllDataspaces => Ok(torii_all_dataspace_routes(app)),
+        ToriiFanoutRouteScopeV1::TargetAccount { account_id } => {
+            let account_id = parse_internal_fanout_account_id(account_id, "target")?;
+            torii_target_account_routes(app, &account_id)
+        }
+        ToriiFanoutRouteScopeV1::VisibleAccount { caller_account_id } => {
+            let caller = match caller_account_id {
+                Some(account_id) => Some(parse_internal_fanout_account_id(account_id, "caller")?),
+                None => None,
+            };
+            Ok(torii_visible_account_read_routes(app, caller.as_ref()))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_read_route_scope(
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    use_target_account_routes: bool,
+) -> ToriiFanoutRouteScopeV1 {
+    if use_target_account_routes {
+        ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: target_account.to_string(),
+        }
+    } else {
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: caller.map(ToString::to_string),
+        }
+    }
+}
+
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -11604,7 +11853,7 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
         .collect()
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_response_format(format: ResponseFormat) -> ToriiProxyResponseFormatV1 {
     match format {
         ResponseFormat::Norito => ToriiProxyResponseFormatV1::Norito,
@@ -11612,7 +11861,7 @@ fn torii_proxy_response_format(format: ResponseFormat) -> ToriiProxyResponseForm
     }
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> ResponseFormat {
     match format {
         ToriiProxyResponseFormatV1::Norito => ResponseFormat::Norito,
@@ -11737,6 +11986,14 @@ fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
         HeaderName::from_static("x-iroha-routed-by"),
         HeaderValue::from_static(routed_by),
     );
+}
+
+fn insert_usize_header(response: &mut Response, name: &'static str, value: usize) {
+    if let Ok(header) = HeaderValue::from_str(&value.to_string()) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static(name), header);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11890,6 +12147,26 @@ fn target_account_iterable_query(
         })
 }
 
+fn is_account_permissions_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
+    use iroha_data_model::{
+        prelude::FindPermissionsByAccountId,
+        query::{QueryItemKind, iter_query_inner},
+    };
+
+    if let Some(query_box) = query.query_box() {
+        return iter_query_inner::<Permission>(query_box).is_some_and(|erased| {
+            decode_query_payload::<FindPermissionsByAccountId>(erased.payload()).is_some()
+        });
+    }
+
+    query
+        .fast_dsl_parts()
+        .is_some_and(|(item_kind, _, _, payload)| {
+            matches!(item_kind, QueryItemKind::Permission)
+                && decode_query_payload::<FindPermissionsByAccountId>(payload).is_some()
+        })
+}
+
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::query::{
         QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions,
@@ -11993,6 +12270,96 @@ fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
         == Some(code)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ToriiFanoutDiagnostics {
+    attempted_routes: usize,
+    succeeded_routes: usize,
+    not_found_routes: usize,
+    unavailable_routes: usize,
+    first_failure_class: Option<&'static str>,
+}
+
+impl ToriiFanoutDiagnostics {
+    fn record_attempt(&mut self) {
+        self.attempted_routes = self.attempted_routes.saturating_add(1);
+    }
+
+    fn record_success(&mut self) {
+        self.succeeded_routes = self.succeeded_routes.saturating_add(1);
+    }
+
+    fn record_failure_class(&mut self, class: &'static str) {
+        if self.first_failure_class.is_none() {
+            self.first_failure_class = Some(class);
+        }
+    }
+
+    fn record_skipped_response(&mut self, response: &Response) {
+        if torii_response_has_reject_code(response, "route_unavailable") {
+            self.unavailable_routes = self.unavailable_routes.saturating_add(1);
+            self.record_failure_class("route_unavailable");
+        } else if response.status() == StatusCode::NOT_FOUND {
+            self.not_found_routes = self.not_found_routes.saturating_add(1);
+            self.record_failure_class("not_found");
+        } else {
+            self.record_failure_class("error");
+        }
+    }
+
+    fn failed_routes(self) -> usize {
+        self.attempted_routes.saturating_sub(self.succeeded_routes)
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct ToriiFanoutJsonPayloads {
+    payloads: Vec<Value>,
+    diagnostics: ToriiFanoutDiagnostics,
+}
+
+fn insert_torii_fanout_headers(response: &mut Response, diagnostics: ToriiFanoutDiagnostics) {
+    insert_usize_header(
+        response,
+        "x-iroha-fanout-routes-attempted",
+        diagnostics.attempted_routes,
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-fanout-routes-succeeded",
+        diagnostics.succeeded_routes,
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-fanout-routes-failed",
+        diagnostics.failed_routes(),
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-fanout-routes-unavailable",
+        diagnostics.unavailable_routes,
+    );
+    insert_usize_header(
+        response,
+        "x-iroha-fanout-routes-not-found",
+        diagnostics.not_found_routes,
+    );
+    if let Some(class) = diagnostics.first_failure_class {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-fanout-first-failure"),
+            HeaderValue::from_static(class),
+        );
+    }
+}
+
+fn with_torii_fanout_headers(
+    mut response: Response,
+    diagnostics: ToriiFanoutDiagnostics,
+) -> Response {
+    insert_torii_fanout_headers(&mut response, diagnostics);
+    response
+}
+
 fn should_skip_singleton_routed_query_route_error(response: &Response) -> bool {
     response.status() == StatusCode::NOT_FOUND
         || torii_response_has_reject_code(response, "route_unavailable")
@@ -12038,33 +12405,46 @@ fn collect_routed_singular_query_outputs<T>(
 async fn collect_torii_singleton_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     mut fetch: F,
-) -> Result<Vec<Value>, Response>
+) -> Result<ToriiFanoutJsonPayloads, Response>
 where
     F: FnMut(RoutingDecision) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
 
-    for route in routes {
-        let response = fetch(*route).await;
+    for _ in routes {
+        diagnostics.record_attempt();
+    }
+    let responses = futures_util::future::join_all(routes.iter().map(|route| fetch(*route))).await;
+
+    for response in responses {
         if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
             last_not_found = Some(response);
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
             last_route_unavailable = Some(response);
             continue;
         }
         match torii_json_body_value(response).await {
-            Ok(payload) => payloads.push(payload),
-            Err(response) => return Err(response),
+            Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push(payload);
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
         }
     }
 
     if payloads.is_empty() {
-        return Err(last_not_found.unwrap_or_else(|| {
+        let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
                 torii_proxy_error_response(
                     StatusCode::NOT_FOUND,
@@ -12072,43 +12452,60 @@ where
                     "no dataspace returned a matching result",
                 )
             })
-        }));
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
     }
 
-    Ok(payloads)
+    Ok(ToriiFanoutJsonPayloads {
+        payloads,
+        diagnostics,
+    })
 }
 
 #[cfg(feature = "app_api")]
 async fn collect_torii_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     mut fetch: F,
-) -> Result<Vec<Value>, Response>
+) -> Result<ToriiFanoutJsonPayloads, Response>
 where
     F: FnMut(RoutingDecision) -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
     let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
 
-    for route in routes {
-        let response = fetch(*route).await;
+    for _ in routes {
+        diagnostics.record_attempt();
+    }
+    let responses = futures_util::future::join_all(routes.iter().map(|route| fetch(*route))).await;
+
+    for response in responses {
         if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
             last_not_found = Some(response);
             continue;
         }
         if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
             last_route_unavailable = Some(response);
             continue;
         }
         match torii_json_body_value(response).await {
-            Ok(payload) => payloads.push(payload),
-            Err(response) => return Err(response),
+            Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push(payload);
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
         }
     }
 
     if payloads.is_empty() {
-        return Err(last_not_found.unwrap_or_else(|| {
+        let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
                 torii_proxy_error_response(
                     StatusCode::NOT_FOUND,
@@ -12116,10 +12513,14 @@ where
                     "no dataspace returned a matching result",
                 )
             })
-        }));
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
     }
 
-    Ok(payloads)
+    Ok(ToriiFanoutJsonPayloads {
+        payloads,
+        diagnostics,
+    })
 }
 
 fn merge_query_batch_boxes(
@@ -12520,39 +12921,57 @@ async fn execute_torii_query_via_fanout_for_routes(
     format: ResponseFormat,
 ) -> Response {
     if routes.is_empty() {
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "no Nexus dataspace routes are configured",
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
         );
     }
 
     let routed_by = routed_by_for_routes(app, &routes);
     match &verified_query.request {
         iroha_data_model::query::QueryRequest::Singular(_) => {
-            let mut results = Vec::new();
+            let mut diagnostics = ToriiFanoutDiagnostics::default();
+            let mut inflight = FuturesUnordered::new();
             for route in routes {
-                let result = match execute_torii_verified_query_exhaustive_for_route(
-                    app,
-                    clone_verified_query_request(&verified_query),
-                    route,
-                )
-                .await
-                {
-                    Ok(iroha_data_model::query::QueryResponse::Singular(output)) => Ok(output),
-                    Ok(other) => Err(torii_proxy_error_response(
-                        StatusCode::CONFLICT,
-                        "query_conflict",
-                        format!("routed singular query returned incompatible response {other:?}"),
-                    )),
-                    Err(response) => Err(response),
+                diagnostics.record_attempt();
+                let request = clone_verified_query_request(&verified_query);
+                inflight.push(async move {
+                    execute_torii_verified_query_exhaustive_for_route(app, request, route).await
+                });
+            }
+
+            let mut results = Vec::new();
+            while let Some(outcome) = inflight.next().await {
+                let result = match outcome {
+                    Ok(iroha_data_model::query::QueryResponse::Singular(output)) => {
+                        diagnostics.record_success();
+                        Ok(output)
+                    }
+                    Ok(other) => {
+                        diagnostics.record_failure_class("query_conflict");
+                        Err(torii_proxy_error_response(
+                            StatusCode::CONFLICT,
+                            "query_conflict",
+                            format!(
+                                "routed singular query returned incompatible response {other:?}"
+                            ),
+                        ))
+                    }
+                    Err(response) => {
+                        diagnostics.record_skipped_response(&response);
+                        Err(response)
+                    }
                 };
                 results.push(result);
             }
 
             let successes = match collect_routed_singular_query_outputs(results) {
                 Ok(successes) => successes,
-                Err(response) => return response,
+                Err(response) => return with_torii_fanout_headers(response, diagnostics),
             };
 
             let first = successes
@@ -12560,10 +12979,14 @@ async fn execute_torii_query_via_fanout_for_routes(
                 .cloned()
                 .expect("singular routed query outputs should contain at least one success");
             if successes.iter().skip(1).any(|output| output != &first) {
-                return torii_proxy_error_response(
-                    StatusCode::CONFLICT,
-                    "query_conflict",
-                    "routed singular query returned conflicting dataspace results",
+                diagnostics.record_failure_class("query_conflict");
+                return with_torii_fanout_headers(
+                    torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "query_conflict",
+                        "routed singular query returned conflicting dataspace results",
+                    ),
+                    diagnostics,
                 );
             }
 
@@ -12572,27 +12995,37 @@ async fn execute_torii_query_via_fanout_for_routes(
                 format,
             );
             insert_routed_by_header(&mut response, routed_by);
+            insert_torii_fanout_headers(&mut response, diagnostics);
             response
         }
         iroha_data_model::query::QueryRequest::Start(start) => {
             let fanout_request = fanout_verified_query_request(&verified_query);
             let mut merged_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
+            let mut diagnostics = ToriiFanoutDiagnostics::default();
             let mut last_not_found = None;
             let mut last_route_unavailable = None;
+            let mut first_terminal_error = None;
+            let mut inflight = FuturesUnordered::new();
             for route in routes {
-                match execute_torii_verified_query_exhaustive_for_route(
-                    app,
-                    clone_verified_query_request(&fanout_request),
-                    route,
-                )
-                .await
-                {
+                diagnostics.record_attempt();
+                let request = clone_verified_query_request(&fanout_request);
+                inflight.push(async move {
+                    execute_torii_verified_query_exhaustive_for_route(app, request, route).await
+                });
+            }
+
+            while let Some(outcome) = inflight.next().await {
+                match outcome {
                     Ok(iroha_data_model::query::QueryResponse::Iterable(output)) => {
                         let mut tuple = output.batch.tuple;
                         if tuple.len() != 1 {
-                            return unsupported_routed_query_response(
-                                "routed iterable queries currently support only a single projected batch",
-                            );
+                            diagnostics.record_failure_class("query_conflict");
+                            if first_terminal_error.is_none() {
+                                first_terminal_error = Some(unsupported_routed_query_response(
+                                    "routed iterable queries currently support only a single projected batch",
+                                ));
+                            }
+                            continue;
                         }
                         let route_batch = tuple
                             .pop()
@@ -12601,34 +13034,54 @@ async fn execute_torii_query_via_fanout_for_routes(
                             Some(existing) => {
                                 match merge_query_batch_boxes(existing, route_batch) {
                                     Ok(batch) => batch,
-                                    Err(response) => return response,
+                                    Err(response) => {
+                                        diagnostics.record_failure_class("query_conflict");
+                                        if first_terminal_error.is_none() {
+                                            first_terminal_error = Some(response);
+                                        }
+                                        continue;
+                                    }
                                 }
                             }
                             None => route_batch,
                         });
+                        diagnostics.record_success();
                     }
                     Ok(other) => {
-                        return torii_proxy_error_response(
-                            StatusCode::CONFLICT,
-                            "query_conflict",
-                            format!(
-                                "routed iterable query returned incompatible response {other:?}"
-                            ),
-                        );
+                        diagnostics.record_failure_class("query_conflict");
+                        if first_terminal_error.is_none() {
+                            first_terminal_error = Some(torii_proxy_error_response(
+                                StatusCode::CONFLICT,
+                                "query_conflict",
+                                format!(
+                                    "routed iterable query returned incompatible response {other:?}"
+                                ),
+                            ));
+                        }
                     }
                     Err(response) if should_skip_iterable_routed_query_route_error(&response) => {
+                        diagnostics.record_skipped_response(&response);
                         if torii_response_has_reject_code(&response, "route_unavailable") {
                             last_route_unavailable = Some(response);
                         } else {
                             last_not_found = Some(response);
                         }
                     }
-                    Err(response) => return response,
+                    Err(response) => {
+                        diagnostics.record_skipped_response(&response);
+                        if first_terminal_error.is_none() {
+                            first_terminal_error = Some(response);
+                        }
+                    }
                 }
             }
 
+            if let Some(response) = first_terminal_error {
+                return with_torii_fanout_headers(response, diagnostics);
+            }
+
             let Some(batch) = merged_batch else {
-                return last_not_found.unwrap_or_else(|| {
+                let response = last_not_found.unwrap_or_else(|| {
                     last_route_unavailable.unwrap_or_else(|| {
                         torii_proxy_error_response(
                             StatusCode::NOT_FOUND,
@@ -12637,6 +13090,7 @@ async fn execute_torii_query_via_fanout_for_routes(
                         )
                     })
                 });
+                return with_torii_fanout_headers(response, diagnostics);
             };
             let batch = canonicalize_query_batch_box(batch, start.params.pagination);
             let mut response = crate::utils::respond_with_format(
@@ -12650,6 +13104,7 @@ async fn execute_torii_query_via_fanout_for_routes(
                 format,
             );
             insert_routed_by_header(&mut response, routed_by);
+            insert_torii_fanout_headers(&mut response, diagnostics);
             response
         }
         iroha_data_model::query::QueryRequest::Continue(_) => torii_proxy_error_response(
@@ -12671,6 +13126,98 @@ async fn execute_torii_query_via_fanout(
         verified_query,
         torii_all_dataspace_routes(app.as_ref()),
         format,
+    )
+    .await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_signed_query_fanout_routes(
+    app: &AppState,
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> Result<Vec<RoutingDecision>, Response> {
+    match signed_query_scope(request) {
+        SignedQueryScope::CrossDataspaceFanout => Ok(torii_all_dataspace_routes(app)),
+        SignedQueryScope::TargetAccount(account_id) => {
+            torii_target_account_routes(app, &account_id)
+        }
+        SignedQueryScope::TargetAlias(alias) => torii_target_alias_routes(app, &alias),
+        SignedQueryScope::TargetDomain(domain_id) => torii_target_domain_routes(app, &domain_id),
+        SignedQueryScope::LocalReplicated | SignedQueryScope::AuthorityRouted => {
+            Err(unsupported_routed_query_response(
+                "Nexus fanout coordinator received a single-route query",
+            ))
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_verified_query_fanout_proxy_request(
+    app: &SharedAppState,
+    request_bytes: Vec<u8>,
+    response_format: ToriiProxyResponseFormatV1,
+) -> Response {
+    let request = match norito::decode_from_bytes::<
+        iroha_data_model::query::QueryRequestWithAuthority,
+    >(&request_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_proxy_request",
+                format!("failed to decode Nexus fanout verified query: {error}"),
+            );
+        }
+    };
+    let routes = match torii_signed_query_fanout_routes(app.as_ref(), &request) {
+        Ok(routes) => routes,
+        Err(response) => return response,
+    };
+    execute_torii_query_via_fanout_for_routes(
+        app,
+        request,
+        routes,
+        response_format_from_torii_proxy(response_format),
+    )
+    .await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_query_via_nexus_fanout(
+    app: &SharedAppState,
+    verified_query: iroha_data_model::query::QueryRequestWithAuthority,
+    format: ResponseFormat,
+) -> Response {
+    let request_bytes = match norito::to_bytes(&verified_query) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialization_failure",
+                format!("failed to encode Nexus fanout verified query: {error}"),
+            );
+        }
+    };
+    let response_format = torii_proxy_response_format(format);
+    let nexus_route = match torii_nexus_route(app.as_ref()) {
+        Ok(route) => route,
+        Err(response) => return response,
+    };
+    if should_execute_route_locally(app.as_ref(), nexus_route) {
+        return execute_torii_verified_query_fanout_proxy_request(
+            app,
+            request_bytes,
+            response_format,
+        )
+        .await;
+    }
+    execute_torii_proxy_request_with_fallback(
+        app,
+        nexus_route,
+        ToriiProxyRequestKindV1::VerifiedQueryFanout {
+            request_bytes,
+            response_format,
+        },
     )
     .await
 }
@@ -13652,7 +14199,7 @@ mod torii_routed_read_tests {
         let expected = norito::json!({"status": {"kind": "Committed"}});
         let expected_for_closure = expected.clone();
 
-        let payloads = collect_torii_singleton_json_payloads(
+        let collected = collect_torii_singleton_json_payloads(
             &[unavailable_route, healthy_route],
             move |route| {
                 let expected = expected_for_closure.clone();
@@ -13672,7 +14219,10 @@ mod torii_routed_read_tests {
         .await
         .expect("healthy singleton payload should survive route_unavailable on another route");
 
-        assert_eq!(payloads, vec![expected]);
+        assert_eq!(collected.payloads, vec![expected]);
+        assert_eq!(collected.diagnostics.attempted_routes, 2);
+        assert_eq!(collected.diagnostics.succeeded_routes, 1);
+        assert_eq!(collected.diagnostics.unavailable_routes, 1);
     }
 
     #[cfg(feature = "app_api")]
@@ -13705,6 +14255,20 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("not_found")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-attempted")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-first-failure")
+                .and_then(|value| value.to_str().ok()),
+            Some("not_found")
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -13734,6 +14298,49 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("route_unavailable")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-unavailable")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_singleton_json_payloads_starts_all_routes_concurrently() {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+        let route_count = routes.len();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let task_barrier = std::sync::Arc::clone(&barrier);
+
+        let handle = tokio::spawn(async move {
+            collect_torii_singleton_json_payloads(&routes, move |route| {
+                let barrier = std::sync::Arc::clone(&task_barrier);
+                async move {
+                    barrier.wait().await;
+                    let payload =
+                        crate::json_object(vec![crate::json_entry("route", route.dataspace_id)]);
+                    crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
+                }
+            })
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), barrier.wait())
+            .await
+            .expect("all singleton routes should begin before the collector awaits completion");
+
+        let collected = handle
+            .await
+            .expect("collector task should join")
+            .expect("all singleton routes should succeed");
+        assert_eq!(collected.payloads.len(), route_count);
+        assert_eq!(collected.diagnostics.succeeded_routes, route_count);
     }
 
     #[cfg(feature = "app_api")]
@@ -13744,7 +14351,7 @@ mod torii_routed_read_tests {
         let expected = norito::json!({"items": [{"id": "asset"}], "total": 1});
         let expected_for_closure = expected.clone();
 
-        let payloads =
+        let collected =
             collect_torii_list_json_payloads(&[unavailable_route, healthy_route], move |route| {
                 let expected = expected_for_closure.clone();
                 async move {
@@ -13762,7 +14369,10 @@ mod torii_routed_read_tests {
             .await
             .expect("healthy list payload should survive route_unavailable on another route");
 
-        assert_eq!(payloads, vec![expected]);
+        assert_eq!(collected.payloads, vec![expected]);
+        assert_eq!(collected.diagnostics.attempted_routes, 2);
+        assert_eq!(collected.diagnostics.succeeded_routes, 1);
+        assert_eq!(collected.diagnostics.unavailable_routes, 1);
     }
 
     #[cfg(feature = "app_api")]
@@ -13795,6 +14405,13 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("not_found")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-failed")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -13823,6 +14440,53 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("route_unavailable")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-unavailable")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_list_json_payloads_starts_all_routes_concurrently() {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+        let route_count = routes.len();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let task_barrier = std::sync::Arc::clone(&barrier);
+
+        let handle = tokio::spawn(async move {
+            collect_torii_list_json_payloads(&routes, move |route| {
+                let barrier = std::sync::Arc::clone(&task_barrier);
+                async move {
+                    barrier.wait().await;
+                    let item =
+                        crate::json_object(vec![crate::json_entry("route", route.dataspace_id)]);
+                    let payload = crate::json_object(vec![
+                        crate::json_entry("items", vec![item]),
+                        crate::json_entry("total", 1_u64),
+                    ]);
+                    crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
+                }
+            })
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), barrier.wait())
+            .await
+            .expect("all list routes should begin before the collector awaits completion");
+
+        let collected = handle
+            .await
+            .expect("collector task should join")
+            .expect("all list routes should succeed");
+        assert_eq!(collected.payloads.len(), route_count);
+        assert_eq!(collected.diagnostics.succeeded_routes, route_count);
     }
 
     #[tokio::test]
@@ -14222,9 +14886,9 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV1) -> &'static 
         ToriiProxyRequestKindV1::SubmitTransaction { .. } => "submit_transaction",
         ToriiProxyRequestKindV1::SignedQuery { .. } => "signed_query",
         ToriiProxyRequestKindV1::VerifiedQuery { .. } => "verified_query",
-        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::VerifiedQueryFanout { .. } => "verified_query_fanout",
         ToriiProxyRequestKindV1::Read(_) => "read",
-        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::ReadFanout(_) => "read_fanout",
         ToriiProxyRequestKindV1::HostedHttp(_) => "hosted_http",
     }
 }
@@ -14234,11 +14898,11 @@ fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
     match request {
         ToriiProxyRequestKindV1::SubmitTransaction { .. } => Duration::from_secs(10),
         ToriiProxyRequestKindV1::SignedQuery { .. }
-        | ToriiProxyRequestKindV1::VerifiedQuery { .. } => DEFAULT_ROUTE_TIMEOUT,
-        #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV1::Read(_) | ToriiProxyRequestKindV1::HostedHttp(_) => {
-            DEFAULT_ROUTE_TIMEOUT
-        }
+        | ToriiProxyRequestKindV1::VerifiedQuery { .. }
+        | ToriiProxyRequestKindV1::Read(_)
+        | ToriiProxyRequestKindV1::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
+        ToriiProxyRequestKindV1::VerifiedQueryFanout { .. }
+        | ToriiProxyRequestKindV1::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
 
@@ -14336,14 +15000,16 @@ async fn execute_torii_proxy_request_with_fallback(
         "Torii ingress proxy prepared candidate peers"
     );
     if candidates.peers.is_empty() {
-        let message = candidates
+        let reason = candidates
             .unavailable_reason
-            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
-            .ingress_message(routing_decision);
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            message,
+            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding);
+        return torii_route_unavailable_response(
+            routing_decision,
+            reason,
+            reason.ingress_message(routing_decision),
+            candidates.authoritative_total_count,
+            candidates.offline_authoritative_count,
+            candidates.loop_prevention_drops,
         );
     }
 
@@ -14437,10 +15103,10 @@ async fn forward_incoming_torii_proxy_request(
         "Torii proxy receiver prepared re-forward candidates"
     );
     if candidates.peers.is_empty() {
-        let message = candidates
+        let reason = candidates
             .unavailable_reason
-            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
-            .forwarded_message(routing_decision, forwarded_request.hop_count);
+            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding);
+        let message = reason.forwarded_message(routing_decision, forwarded_request.hop_count);
         iroha_logger::warn!(
             request_id = %forwarded_request.request_id,
             hop_count = forwarded_request.hop_count,
@@ -14452,10 +15118,13 @@ async fn forward_incoming_torii_proxy_request(
             loop_prevention_drops = candidates.loop_prevention_drops,
             "Torii proxy receiver ran out of re-forward candidates"
         );
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
+        return torii_route_unavailable_response(
+            routing_decision,
+            reason,
             message,
+            candidates.authoritative_total_count,
+            candidates.offline_authoritative_count,
+            candidates.loop_prevention_drops,
         );
     }
 
@@ -15243,15 +15912,7 @@ async fn execute_torii_read_for_route(
     routing_decision: RoutingDecision,
     request: ToriiReadProxyRequestV1,
 ) -> Response {
-    #[cfg(feature = "app_api")]
-    let private_ingress_local = {
-        let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
-        preferred_routes.len() == 1 && preferred_routes[0] == routing_decision
-    };
-    #[cfg(not(feature = "app_api"))]
-    let private_ingress_local = false;
-
-    if should_execute_route_locally(app.as_ref(), routing_decision) || private_ingress_local {
+    if should_execute_route_locally(app.as_ref(), routing_decision) {
         execute_torii_read_request_locally(app, request, routing_decision, "local").await
     } else {
         execute_torii_read_via_proxy(app, routing_decision, request).await
@@ -15271,23 +15932,26 @@ fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'s
 }
 
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_json_payloads(
+async fn execute_torii_fanout_json_payloads_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
-) -> Result<(Vec<RoutingDecision>, Vec<Value>), Response> {
+) -> Result<(Vec<RoutingDecision>, Vec<Value>, ToriiFanoutDiagnostics), Response> {
     if routes.is_empty() {
-        return Err(torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "no Nexus dataspace routes are configured",
+        return Err(with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
         ));
     }
 
-    let payloads = collect_torii_list_json_payloads(&routes, |route| {
+    let collected = collect_torii_list_json_payloads(&routes, |route| {
         execute_torii_read_for_route(
             app,
             route,
@@ -15302,24 +15966,358 @@ async fn execute_torii_fanout_json_payloads(
     })
     .await?;
 
-    Ok((routes, payloads))
+    Ok((routes, collected.payloads, collected.diagnostics))
 }
 
 #[cfg(feature = "app_api")]
-async fn execute_torii_fanout_json_payloads_all_routes(
+fn merge_with_torii_fanout_headers<F>(diagnostics: ToriiFanoutDiagnostics, merge: F) -> Response
+where
+    F: FnOnce() -> Result<Response, Response>,
+{
+    match merge() {
+        Ok(response) | Err(response) => with_torii_fanout_headers(response, diagnostics),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_read_fanout_request(
+    endpoint: ToriiReadEndpointV1,
+    route_scope: ToriiFanoutRouteScopeV1,
+    merge: ToriiReadFanoutMergeV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+    response_format: ToriiProxyResponseFormatV1,
+) -> ToriiReadFanoutProxyRequestV1 {
+    ToriiReadFanoutProxyRequestV1 {
+        endpoint,
+        route_scope,
+        merge,
+        path_args,
+        query_string,
+        body,
+        response_format,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_read_for_resolved_routes(
     app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    canonical_account_id: String,
+    format: ResponseFormat,
+) -> Response {
+    if routes.is_empty() {
+        return with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        );
+    }
+
+    let mut payloads = Vec::new();
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+    for route in &routes {
+        diagnostics.record_attempt();
+        let response = execute_torii_single_route_read(
+            app,
+            *route,
+            ToriiReadEndpointV1::AccountGet,
+            vec![canonical_account_id.clone()],
+            None,
+            Vec::new(),
+        )
+        .await;
+        if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_json_body::<AccountReadResponse>(response, "account get response").await {
+            Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push(payload);
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return with_torii_fanout_headers(response, diagnostics);
+            }
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return with_torii_fanout_headers(response, diagnostics);
+    }
+
+    merge_with_torii_fanout_headers(diagnostics, || {
+        merged_account_read_response(payloads, format, routed_by_for_routes(app, &routes))
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_read_fanout_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    merge: ToriiReadFanoutMergeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
-) -> Result<(Vec<RoutingDecision>, Vec<Value>), Response> {
-    execute_torii_fanout_json_payloads(
+    response_format: ToriiProxyResponseFormatV1,
+) -> Response {
+    match merge {
+        ToriiReadFanoutMergeV1::List => {
+            match execute_torii_fanout_json_payloads_resolved_routes(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+            )
+            .await
+            {
+                Ok((routes, payloads, diagnostics)) => {
+                    merge_with_torii_fanout_headers(diagnostics, || {
+                        merged_list_response(payloads, routed_by_for_routes(app, &routes))
+                    })
+                }
+                Err(response) => response,
+            }
+        }
+        ToriiReadFanoutMergeV1::Singleton => {
+            if routes.is_empty() {
+                return with_torii_fanout_headers(
+                    torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        "no Nexus dataspace routes are configured",
+                    ),
+                    ToriiFanoutDiagnostics::default(),
+                );
+            }
+            let collected = match collect_torii_singleton_json_payloads(&routes, |route| {
+                execute_torii_read_for_route(
+                    app,
+                    route,
+                    torii_read_request(
+                        endpoint,
+                        route,
+                        path_args.clone(),
+                        query_string.clone(),
+                        body.clone(),
+                    ),
+                )
+            })
+            .await
+            {
+                Ok(payloads) => payloads,
+                Err(response) => return response,
+            };
+            merge_with_torii_fanout_headers(collected.diagnostics, || {
+                merged_singleton_response(collected.payloads, routed_by_for_routes(app, &routes))
+            })
+        }
+        ToriiReadFanoutMergeV1::Account => {
+            let Some(canonical_account_id) = path_args.get(0).cloned() else {
+                return torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    "missing proxied path argument `account_id`",
+                );
+            };
+            execute_torii_account_read_for_resolved_routes(
+                app,
+                routes,
+                canonical_account_id,
+                response_format_from_torii_proxy(response_format),
+            )
+            .await
+        }
+        ToriiReadFanoutMergeV1::Portfolio => {
+            match execute_torii_fanout_json_payloads_resolved_routes(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+            )
+            .await
+            {
+                Ok((routes, payloads, diagnostics)) => {
+                    merge_with_torii_fanout_headers(diagnostics, || {
+                        merged_portfolio_response(payloads, routed_by_for_routes(app, &routes))
+                    })
+                }
+                Err(response) => response,
+            }
+        }
+        ToriiReadFanoutMergeV1::DataspaceSummary => {
+            match execute_torii_fanout_json_payloads_resolved_routes(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+            )
+            .await
+            {
+                Ok((routes, payloads, diagnostics)) => {
+                    merge_with_torii_fanout_headers(diagnostics, || {
+                        merged_dataspace_summary_response(
+                            payloads,
+                            routed_by_for_routes(app, &routes),
+                        )
+                    })
+                }
+                Err(response) => response,
+            }
+        }
+        ToriiReadFanoutMergeV1::SpaceDirectoryBindings => {
+            match execute_torii_fanout_json_payloads_resolved_routes(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+            )
+            .await
+            {
+                Ok((routes, payloads, diagnostics)) => {
+                    merge_with_torii_fanout_headers(diagnostics, || {
+                        merged_space_directory_bindings_response(
+                            payloads,
+                            routed_by_for_routes(app, &routes),
+                        )
+                    })
+                }
+                Err(response) => response,
+            }
+        }
+        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
+            page_offset,
+            page_limit,
+        } => {
+            match execute_torii_fanout_json_payloads_resolved_routes(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+            )
+            .await
+            {
+                Ok((routes, payloads, diagnostics)) => {
+                    merge_with_torii_fanout_headers(diagnostics, || {
+                        merged_space_directory_manifests_response(
+                            payloads,
+                            page_offset,
+                            page_limit,
+                            routed_by_for_routes(app, &routes),
+                        )
+                    })
+                }
+                Err(response) => response,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_read_fanout_proxy_request(
+    app: &SharedAppState,
+    request: ToriiReadFanoutProxyRequestV1,
+) -> Response {
+    let routes = match torii_fanout_scope_routes(app.as_ref(), &request.route_scope) {
+        Ok(routes) => routes,
+        Err(response) => return response,
+    };
+    execute_torii_read_fanout_for_resolved_routes(
         app,
-        torii_all_dataspace_routes(app.as_ref()),
+        routes,
+        request.merge,
+        request.endpoint,
+        request.path_args,
+        request.query_string,
+        request.body,
+        request.response_format,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_read_fanout_via_nexus(
+    app: &SharedAppState,
+    route_scope: ToriiFanoutRouteScopeV1,
+    merge: ToriiReadFanoutMergeV1,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+    response_format: ToriiProxyResponseFormatV1,
+) -> Response {
+    let routes = match torii_fanout_scope_routes(app.as_ref(), &route_scope) {
+        Ok(routes) => routes,
+        Err(response) => return response,
+    };
+    if routes.len() <= 1 {
+        return execute_torii_read_fanout_for_resolved_routes(
+            app,
+            routes,
+            merge,
+            endpoint,
+            path_args,
+            query_string,
+            body,
+            response_format,
+        )
+        .await;
+    }
+
+    let request = torii_read_fanout_request(
         endpoint,
+        route_scope,
+        merge,
         path_args,
         query_string,
         body,
+        response_format,
+    );
+    let nexus_route = match torii_nexus_route(app.as_ref()) {
+        Ok(route) => route,
+        Err(response) => return response,
+    };
+    if should_execute_route_locally(app.as_ref(), nexus_route) {
+        return execute_torii_read_fanout_proxy_request(app, request).await;
+    }
+
+    execute_torii_proxy_request_with_fallback(
+        app,
+        nexus_route,
+        ToriiProxyRequestKindV1::ReadFanout(request),
     )
     .await
 }
@@ -15332,40 +16330,53 @@ async fn execute_torii_fanout_list_read(
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads_all_routes(
+    execute_torii_read_fanout_via_nexus(
         app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::List,
         endpoint,
         path_args,
         query_string,
         body,
+        ToriiProxyResponseFormatV1::Json,
     )
     .await
-    {
-        Ok((routes, payloads)) => {
-            merged_list_response(payloads, routed_by_for_routes(app, &routes))
-                .unwrap_or_else(|response| response)
-        }
-        Err(response) => response,
-    }
 }
 
 #[cfg(feature = "app_api")]
 async fn execute_torii_list_read_for_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads(app, routes, endpoint, path_args, query_string, body)
+    if routes.len() > 1 {
+        execute_torii_read_fanout_via_nexus(
+            app,
+            route_scope,
+            ToriiReadFanoutMergeV1::List,
+            endpoint,
+            path_args,
+            query_string,
+            body,
+            ToriiProxyResponseFormatV1::Json,
+        )
         .await
-    {
-        Ok((routes, payloads)) => {
-            merged_list_response(payloads, routed_by_for_routes(app, &routes))
-                .unwrap_or_else(|response| response)
-        }
-        Err(response) => response,
+    } else {
+        execute_torii_read_fanout_for_resolved_routes(
+            app,
+            routes,
+            ToriiReadFanoutMergeV1::List,
+            endpoint,
+            path_args,
+            query_string,
+            body,
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
     }
 }
 
@@ -15377,76 +16388,54 @@ async fn execute_torii_fanout_singleton_read(
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    let routes = torii_all_dataspace_routes(app.as_ref());
-    if routes.is_empty() {
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "no Nexus dataspace routes are configured",
-        );
-    }
-
-    let payloads = match collect_torii_singleton_json_payloads(&routes, |route| {
-        execute_torii_read_for_route(
-            app,
-            route,
-            torii_read_request(
-                endpoint,
-                route,
-                path_args.clone(),
-                query_string.clone(),
-                body.clone(),
-            ),
-        )
-    })
+    execute_torii_read_fanout_via_nexus(
+        app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::Singleton,
+        endpoint,
+        path_args,
+        query_string,
+        body,
+        ToriiProxyResponseFormatV1::Json,
+    )
     .await
-    {
-        Ok(payloads) => payloads,
-        Err(response) => return response,
-    };
-
-    merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
-        .unwrap_or_else(|response| response)
 }
 
 #[cfg(feature = "app_api")]
 async fn execute_torii_singleton_read_for_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    if routes.is_empty() {
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "no Nexus dataspace routes are configured",
-        );
-    }
-
-    let payloads = match collect_torii_singleton_json_payloads(&routes, |route| {
-        execute_torii_read_for_route(
+    if routes.len() > 1 {
+        execute_torii_read_fanout_via_nexus(
             app,
-            route,
-            torii_read_request(
-                endpoint,
-                route,
-                path_args.clone(),
-                query_string.clone(),
-                body.clone(),
-            ),
+            route_scope,
+            ToriiReadFanoutMergeV1::Singleton,
+            endpoint,
+            path_args,
+            query_string,
+            body,
+            ToriiProxyResponseFormatV1::Json,
         )
-    })
-    .await
-    {
-        Ok(payloads) => payloads,
-        Err(response) => return response,
-    };
-
-    merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
-        .unwrap_or_else(|response| response)
+        .await
+    } else {
+        execute_torii_read_fanout_for_resolved_routes(
+            app,
+            routes,
+            ToriiReadFanoutMergeV1::Singleton,
+            endpoint,
+            path_args,
+            query_string,
+            body,
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15456,55 +16445,33 @@ async fn execute_torii_account_read_for_routes(
     canonical_account_id: String,
     format: ResponseFormat,
 ) -> Response {
-    if routes.is_empty() {
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "no Nexus dataspace routes are configured",
-        );
-    }
+    execute_torii_account_read_for_resolved_routes(app, routes, canonical_account_id, format).await
+}
 
-    let mut payloads = Vec::new();
-    let mut last_not_found = None;
-    let mut last_route_unavailable = None;
-    for route in &routes {
-        let response = execute_torii_single_route_read(
+#[cfg(feature = "app_api")]
+async fn execute_torii_account_read_for_routes_scoped(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
+    canonical_account_id: String,
+    format: ResponseFormat,
+) -> Response {
+    if routes.len() > 1 {
+        execute_torii_read_fanout_via_nexus(
             app,
-            *route,
+            route_scope,
+            ToriiReadFanoutMergeV1::Account,
             ToriiReadEndpointV1::AccountGet,
-            vec![canonical_account_id.clone()],
+            vec![canonical_account_id],
             None,
             Vec::new(),
+            torii_proxy_response_format(format),
         )
-        .await;
-        if response.status() == StatusCode::NOT_FOUND {
-            last_not_found = Some(response);
-            continue;
-        }
-        if torii_response_has_reject_code(&response, "route_unavailable") {
-            last_route_unavailable = Some(response);
-            continue;
-        }
-        match torii_json_body::<AccountReadResponse>(response, "account get response").await {
-            Ok(payload) => payloads.push(payload),
-            Err(response) => return response,
-        }
+        .await
+    } else {
+        execute_torii_account_read_for_resolved_routes(app, routes, canonical_account_id, format)
+            .await
     }
-
-    if payloads.is_empty() {
-        return last_not_found.unwrap_or_else(|| {
-            last_route_unavailable.unwrap_or_else(|| {
-                torii_proxy_error_response(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "no dataspace returned a matching result",
-                )
-            })
-        });
-    }
-
-    merged_account_read_response(payloads, format, routed_by_for_routes(app, &routes))
-        .unwrap_or_else(|response| response)
 }
 
 #[cfg(feature = "app_api")]
@@ -15513,21 +16480,17 @@ async fn execute_torii_fanout_portfolio_read(
     uaid_literal: String,
     query_string: Option<String>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads_all_routes(
+    execute_torii_read_fanout_via_nexus(
         app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::Portfolio,
         ToriiReadEndpointV1::AccountsPortfolio,
         vec![uaid_literal],
         query_string,
         Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
     )
     .await
-    {
-        Ok((routes, payloads)) => {
-            merged_portfolio_response(payloads, routed_by_for_routes(app, &routes))
-                .unwrap_or_else(|response| response)
-        }
-        Err(response) => response,
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15536,21 +16499,17 @@ async fn execute_torii_fanout_dataspace_summary_read(
     account_literal: String,
     query_string: Option<String>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads_all_routes(
+    execute_torii_read_fanout_via_nexus(
         app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::DataspaceSummary,
         ToriiReadEndpointV1::NexusDataspacesAccountSummary,
         vec![account_literal],
         query_string,
         Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
     )
     .await
-    {
-        Ok((routes, payloads)) => {
-            merged_dataspace_summary_response(payloads, routed_by_for_routes(app, &routes))
-                .unwrap_or_else(|response| response)
-        }
-        Err(response) => response,
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15559,21 +16518,17 @@ async fn execute_torii_fanout_space_directory_bindings_read(
     uaid_literal: String,
     query_string: Option<String>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads_all_routes(
+    execute_torii_read_fanout_via_nexus(
         app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::SpaceDirectoryBindings,
         ToriiReadEndpointV1::SpaceDirectoryBindingsGet,
         vec![uaid_literal],
         query_string,
         Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
     )
     .await
-    {
-        Ok((routes, payloads)) => {
-            merged_space_directory_bindings_response(payloads, routed_by_for_routes(app, &routes))
-                .unwrap_or_else(|response| response)
-        }
-        Err(response) => response,
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15584,24 +16539,20 @@ async fn execute_torii_fanout_space_directory_manifests_read(
     offset: u64,
     limit: Option<u64>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads_all_routes(
+    execute_torii_read_fanout_via_nexus(
         app,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
+            page_offset: offset,
+            page_limit: limit,
+        },
         ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
         vec![uaid_literal],
         query_string,
         Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
     )
     .await
-    {
-        Ok((routes, payloads)) => merged_space_directory_manifests_response(
-            payloads,
-            offset,
-            limit,
-            routed_by_for_routes(app, &routes),
-        )
-        .unwrap_or_else(|response| response),
-        Err(response) => response,
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15678,19 +16629,12 @@ async fn process_incoming_torii_proxy_request(
                     Ok(accepted_tx) => {
                         match app.queue.route_with_state(&accepted_tx, app.state.as_ref()) {
                             Ok(routing_decision) => {
-                                if routing_decision != expected_route.into() {
-                                    torii_proxy_error_response(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        "route_unavailable",
-                                        format!(
-                                            "authoritative peer resolved lane {} dataspace {} but ingress expected lane {} dataspace {}",
-                                            routing_decision.lane_id.as_u32(),
-                                            routing_decision.dataspace_id.as_u64(),
-                                            expected_route.lane_id.as_u32(),
-                                            expected_route.dataspace_id.as_u64()
-                                        ),
-                                    )
-                                } else if !should_execute_route_locally(&app, routing_decision) {
+                                let routing_decision = effective_proxy_routing_decision(
+                                    "submit_transaction",
+                                    routing_decision,
+                                    expected_route.into(),
+                                );
+                                if !should_execute_route_locally(&app, routing_decision) {
                                     forward_incoming_torii_proxy_request(
                                         &app,
                                         &sender_peer_id,
@@ -15729,19 +16673,15 @@ async fn process_incoming_torii_proxy_request(
             } => match norito::decode_from_bytes::<SignedQuery>(&query_bytes) {
                 Ok(query) => match resolve_signed_query_routing(app.as_ref(), &query) {
                     Ok(routing_decision) => {
-                        if routing_decision != expected_route.into() {
-                            torii_proxy_error_response(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "route_unavailable",
-                                format!(
-                                    "authoritative peer resolved lane {} dataspace {} but ingress expected lane {} dataspace {}",
-                                    routing_decision.lane_id.as_u32(),
-                                    routing_decision.dataspace_id.as_u64(),
-                                    expected_route.lane_id.as_u32(),
-                                    expected_route.dataspace_id.as_u64()
-                                ),
-                            )
-                        } else if !should_execute_route_locally(&app, routing_decision) {
+                        let routing_decision = effective_proxy_signed_query_routing_decision(
+                            routing_decision,
+                            expected_route.into(),
+                        );
+                        if !should_execute_incoming_torii_proxy_request_locally(
+                            &app,
+                            &proxy_request_context.request,
+                            routing_decision,
+                        ) {
                             forward_incoming_torii_proxy_request(
                                 &app,
                                 &sender_peer_id,
@@ -15795,7 +16735,11 @@ async fn process_incoming_torii_proxy_request(
                 ) {
                     Ok(request) => {
                         let routing_decision: RoutingDecision = expected_route.into();
-                        if !should_execute_route_locally(&app, routing_decision) {
+                        if !should_execute_incoming_torii_proxy_request_locally(
+                            &app,
+                            &proxy_request_context.request,
+                            routing_decision,
+                        ) {
                             forward_incoming_torii_proxy_request(
                                 &app,
                                 &sender_peer_id,
@@ -15835,10 +16779,42 @@ async fn process_incoming_torii_proxy_request(
                     ),
                 }
             }
+            ToriiProxyRequestKindV1::VerifiedQueryFanout {
+                request_bytes,
+                response_format,
+            } => match torii_nexus_route(app.as_ref()) {
+                Ok(nexus_route) => {
+                    if !should_execute_incoming_torii_proxy_request_locally(
+                        &app,
+                        &proxy_request_context.request,
+                        nexus_route,
+                    ) {
+                        forward_incoming_torii_proxy_request(
+                            &app,
+                            &sender_peer_id,
+                            nexus_route,
+                            &proxy_request_context,
+                        )
+                        .await
+                    } else {
+                        execute_torii_verified_query_fanout_proxy_request(
+                            &app,
+                            request_bytes,
+                            response_format,
+                        )
+                        .await
+                    }
+                }
+                Err(response) => response,
+            },
             #[cfg(feature = "app_api")]
             ToriiProxyRequestKindV1::Read(read_request) => {
                 let routing_decision: RoutingDecision = read_request.expected_route.into();
-                if !should_execute_route_locally(&app, routing_decision) {
+                if !should_execute_incoming_torii_proxy_request_locally(
+                    &app,
+                    &proxy_request_context.request,
+                    routing_decision,
+                ) {
                     forward_incoming_torii_proxy_request(
                         &app,
                         &sender_peer_id,
@@ -15854,6 +16830,29 @@ async fn process_incoming_torii_proxy_request(
                         "proxy",
                     )
                     .await
+                }
+            }
+            #[cfg(feature = "app_api")]
+            ToriiProxyRequestKindV1::ReadFanout(read_request) => {
+                match torii_nexus_route(app.as_ref()) {
+                    Ok(nexus_route) => {
+                        if !should_execute_incoming_torii_proxy_request_locally(
+                            &app,
+                            &proxy_request_context.request,
+                            nexus_route,
+                        ) {
+                            forward_incoming_torii_proxy_request(
+                                &app,
+                                &sender_peer_id,
+                                nexus_route,
+                                &proxy_request_context,
+                            )
+                            .await
+                        } else {
+                            execute_torii_read_fanout_proxy_request(&app, read_request).await
+                        }
+                    }
+                    Err(response) => response,
                 }
             }
             #[cfg(feature = "app_api")]
@@ -15941,6 +16940,12 @@ async fn process_incoming_torii_proxy_request(
                 StatusCode::NOT_IMPLEMENTED,
                 "route_unavailable",
                 "Torii read proxying requires the `app_api` feature",
+            ),
+            #[cfg(not(feature = "app_api"))]
+            ToriiProxyRequestKindV1::ReadFanout(_) => torii_proxy_error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "route_unavailable",
+                "Torii read fanout proxying requires the `app_api` feature",
             ),
             #[cfg(not(feature = "app_api"))]
             ToriiProxyRequestKindV1::HostedHttp(_) => torii_proxy_error_response(
@@ -19959,6 +20964,49 @@ async fn handler_sccp_governance_proof(
     )
 }
 
+async fn handler_sccp_governance_runtime_envelope(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/governance/{message_id}/runtime-scale",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/proofs/governance/runtime-scale",
+        );
+    }
+    Ok(
+        routing::handle_v1_sccp_governance_runtime_envelope(message_id)
+            .await?
+            .into_response(),
+    )
+}
+
 async fn handler_sccp_message_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -19998,6 +21046,49 @@ async fn handler_sccp_message_proof(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
         routing::handle_v1_sccp_message_bundle(app.state.as_ref(), message_id, accept)
+            .await?
+            .into_response(),
+    )
+}
+
+async fn handler_sccp_message_runtime_envelope(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/message/{message_id}/runtime-scale",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/proofs/message/runtime-scale",
+        );
+    }
+    Ok(
+        routing::handle_v1_sccp_message_runtime_envelope(app.state.as_ref(), message_id)
             .await?
             .into_response(),
     )
@@ -24052,66 +25143,40 @@ async fn handler_signed_query(
     let query_scope = signed_query_scope(&query_request.payload);
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    enum SignedQueryFanoutTarget {
-        AllDataspaces,
-        Routes(Vec<RoutingDecision>),
-    }
-
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    let fanout_target = match &query_scope {
+    let should_nexus_fanout = match &query_scope {
         SignedQueryScope::CrossDataspaceFanout
             if torii_all_dataspace_routes(app.as_ref()).len() > 1 =>
         {
-            Some(SignedQueryFanoutTarget::AllDataspaces)
+            true
         }
         SignedQueryScope::TargetAccount(account_id) => {
             let routes = match torii_target_account_routes(app.as_ref(), account_id) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                Some(SignedQueryFanoutTarget::Routes(routes))
-            } else {
-                None
-            }
+            routes.len() > 1
         }
         SignedQueryScope::TargetAlias(alias) => {
             let routes = match torii_target_alias_routes(app.as_ref(), alias) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                Some(SignedQueryFanoutTarget::Routes(routes))
-            } else {
-                None
-            }
+            routes.len() > 1
         }
         SignedQueryScope::TargetDomain(domain_id) => {
             let routes = match torii_target_domain_routes(app.as_ref(), domain_id) {
                 Ok(routes) => routes,
                 Err(response) => return Ok(response),
             };
-            if routes.len() > 1 {
-                Some(SignedQueryFanoutTarget::Routes(routes))
-            } else {
-                None
-            }
+            routes.len() > 1
         }
-        _ => None,
+        _ => false,
     };
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    if let Some(fanout_target) = fanout_target {
+    if should_nexus_fanout {
         let verified_query = routing::verify_signed_query_request(query_request)?;
-        return Ok(match fanout_target {
-            SignedQueryFanoutTarget::AllDataspaces => {
-                execute_torii_query_via_fanout(&app, verified_query, format).await
-            }
-            SignedQueryFanoutTarget::Routes(routes) => {
-                execute_torii_query_via_fanout_for_routes(&app, verified_query, routes, format)
-                    .await
-            }
-        });
+        return Ok(execute_torii_query_via_nexus_fanout(&app, verified_query, format).await);
     }
 
     let routing_decision = match &query_scope {
@@ -26507,8 +27572,16 @@ impl Torii {
                     get(handler_sccp_governance_proof),
                 )
                 .route(
+                    "/v1/sccp/proofs/governance/{message_id}/runtime-scale",
+                    get(handler_sccp_governance_runtime_envelope),
+                )
+                .route(
                     "/v1/sccp/proofs/message/{message_id}",
                     get(handler_sccp_message_proof),
+                )
+                .route(
+                    "/v1/sccp/proofs/message/{message_id}/runtime-scale",
+                    get(handler_sccp_message_runtime_envelope),
                 )
                 .route(
                     "/v1/sccp/artifacts/message/{message_id}",
@@ -33461,15 +34534,6 @@ pub(crate) mod tests_runtime_handlers {
             super::signed_query_scope(&request_for_test(
                 &authority,
                 iroha_data_model::query::QueryRequest::Start(
-                    build_find_permissions_by_account_query_for_test(account_id.clone()),
-                ),
-            )),
-            super::SignedQueryScope::TargetAccount(account_id.clone())
-        );
-        assert_eq!(
-            super::signed_query_scope(&request_for_test(
-                &authority,
-                iroha_data_model::query::QueryRequest::Start(
                     build_find_roles_by_account_query_for_test(account_id.clone()),
                 ),
             )),
@@ -33513,6 +34577,22 @@ pub(crate) mod tests_runtime_handlers {
                 ),
             )),
             super::SignedQueryScope::TargetDomain(domain_id)
+        );
+    }
+
+    #[test]
+    fn signed_query_scope_classifies_account_permissions_queries_as_target_account() {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+
+        assert_eq!(
+            super::signed_query_scope(&request_for_test(
+                &authority,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_find_permissions_by_account_query_for_test(account_id.clone()),
+                ),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id)
         );
     }
 
@@ -33625,6 +34705,94 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn torii_account_permissions_read_routes_use_target_account_scope_for_signed_and_internal_reads()
+     {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_account_permissions_read_routes(
+            app.as_ref(),
+            &authority,
+            Some(&authority),
+            true,
+        )
+        .expect("target-account permissions routes should resolve");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, restricted_dataspace]),
+            "signed/internal permissions reads should stay within the target account scope",
+        );
+        assert!(
+            !dataspaces.contains(&governance_dataspace),
+            "unrelated public dataspaces must be excluded from target-account permission routing",
+        );
+        assert_eq!(
+            super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
+            ToriiFanoutRouteScopeV1::TargetAccount {
+                account_id: authority.to_string(),
+            }
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visible() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid =
+            UniversalAccountId::from_hash(Hash::new(b"torii::permissions-public-account-routes"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes =
+            super::torii_account_permissions_read_routes(app.as_ref(), &authority, None, false)
+                .expect("public visibility routes should resolve");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, governance_dataspace]),
+            "unsigned permissions reads should stay on caller/public visibility routes",
+        );
+        assert!(
+            !dataspaces.contains(&restricted_dataspace),
+            "unsigned permissions reads must not automatically gain private dataspace visibility",
+        );
+        assert_eq!(
+            super::torii_account_permissions_route_scope(&authority, None, false),
+            ToriiFanoutRouteScopeV1::VisibleAccount {
+                caller_account_id: None
+            }
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let governance_dataspace = DataSpaceId::new(1);
@@ -33649,6 +34817,75 @@ pub(crate) mod tests_runtime_handlers {
                 restricted_dataspace,
             ]),
             "target-account queries with unknown local scope should fan out across all configured dataspace routes",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let mut app = mk_app_state_for_tests();
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_fanout_scope_routes(
+            app.as_ref(),
+            &ToriiFanoutRouteScopeV1::TargetAccount {
+                account_id: authority.to_string(),
+            },
+        )
+        .expect("Nexus fanout target-account routes should resolve");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([
+                DataSpaceId::GLOBAL,
+                governance_dataspace,
+                restricted_dataspace,
+            ]),
+            "Nexus must recompute unknown target-account fanout from its own dataspace catalog",
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[test]
+    fn nexus_fanout_proxy_variants_use_route_budget() {
+        let query_request = ToriiProxyRequestKindV1::VerifiedQueryFanout {
+            request_bytes: Vec::new(),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        };
+        assert_eq!(
+            super::torii_proxy_attempt_timeout(&query_request),
+            DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5)
+        );
+        assert_eq!(
+            super::torii_proxy_request_kind_name(&query_request),
+            "verified_query_fanout"
+        );
+
+        let read_request = ToriiProxyRequestKindV1::ReadFanout(super::torii_read_fanout_request(
+            ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            ToriiReadFanoutMergeV1::Account,
+            vec![AccountId::new(KeyPair::random().public_key().clone()).to_string()],
+            None,
+            Vec::new(),
+            ToriiProxyResponseFormatV1::Json,
+        ));
+        assert_eq!(
+            super::torii_proxy_attempt_timeout(&read_request),
+            DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5)
+        );
+        assert_eq!(
+            super::torii_proxy_request_kind_name(&read_request),
+            "read_fanout"
         );
     }
 
@@ -33959,6 +35196,34 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             super::torii_proxy_request_kind_name(&submit_request),
             "submit_transaction"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn effective_proxy_routing_decision_prefers_receiver_recomputed_route() {
+        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+
+        assert_eq!(
+            super::effective_proxy_routing_decision(
+                "submit_transaction",
+                resolved_route,
+                ingress_hint
+            ),
+            resolved_route
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn effective_proxy_signed_query_routing_decision_prefers_ingress_route_hint() {
+        let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+
+        assert_eq!(
+            super::effective_proxy_signed_query_routing_decision(resolved_route, ingress_hint),
+            ingress_hint
         );
     }
 
@@ -36391,6 +37656,28 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
+        let runtime_response = routing::handle_v1_sccp_governance_runtime_envelope(hex::encode(
+            bundle.commitment.message_id,
+        ))
+        .await
+        .expect("runtime response");
+        assert_eq!(
+            runtime_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/octet-stream".as_slice())
+        );
+        let runtime_bytes = axum::body::to_bytes(runtime_response.into_body(), usize::MAX)
+            .await
+            .expect("runtime body");
+        assert_eq!(
+            runtime_bytes.as_ref(),
+            iroha_sccp::sccp_runtime_envelope_bytes_from_governance_bundle(&bundle)
+                .expect("runtime envelope")
+                .as_slice()
+        );
+
         routing::clear_sccp_bundles_for_tests();
     }
 
@@ -36437,6 +37724,29 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded.payload, payload);
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        let runtime_response = routing::handle_v1_sccp_message_runtime_envelope(
+            app.state.as_ref(),
+            hex::encode(message_id),
+        )
+        .await
+        .expect("runtime response");
+        assert_eq!(
+            runtime_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/octet-stream".as_slice())
+        );
+        let runtime_bytes = axum::body::to_bytes(runtime_response.into_body(), usize::MAX)
+            .await
+            .expect("runtime body");
+        assert_eq!(
+            runtime_bytes.as_ref(),
+            iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&decoded)
+                .expect("runtime envelope")
+                .as_slice()
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -36638,6 +37948,22 @@ pub(crate) mod tests_runtime_handlers {
             "/v1/sccp/artifacts/message/{message_id}"
         );
         assert_eq!(
+            decoded_json.runtime_proof_family.as_deref(),
+            Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1)
+        );
+        assert_eq!(
+            decoded_json.runtime_verifier_backend.as_deref(),
+            Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1)
+        );
+        assert_eq!(
+            decoded_json.message_runtime_bundle_path.as_deref(),
+            Some("/v1/sccp/proofs/message/{message_id}/runtime-scale")
+        );
+        assert_eq!(
+            decoded_json.governance_runtime_bundle_path.as_deref(),
+            Some("/v1/sccp/proofs/governance/{message_id}/runtime-scale")
+        );
+        assert_eq!(
             decoded_json.message_job_path,
             "/v1/sccp/jobs/message/{message_id}"
         );
@@ -36687,6 +38013,22 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             decoded_norito.message_proof_path,
             decoded_json.message_proof_path
+        );
+        assert_eq!(
+            decoded_norito.runtime_proof_family,
+            decoded_json.runtime_proof_family
+        );
+        assert_eq!(
+            decoded_norito.runtime_verifier_backend,
+            decoded_json.runtime_verifier_backend
+        );
+        assert_eq!(
+            decoded_norito.message_runtime_bundle_path,
+            decoded_json.message_runtime_bundle_path
+        );
+        assert_eq!(
+            decoded_norito.governance_runtime_bundle_path,
+            decoded_json.governance_runtime_bundle_path
         );
         assert_eq!(
             decoded_norito.message_job_path,
@@ -41392,6 +42734,146 @@ pub(crate) mod tests_runtime_handlers {
             candidates.peers,
             vec![remote_peer_id],
             "Torii proxy candidate discovery should route to the manifest-backed remote authority"
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_proxy_reads_execute_locally_even_when_local_authority_is_stale() {
+        let local_validator_keypair = KeyPair::random();
+        let remote_validator_keypair = KeyPair::random();
+        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+        let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
+        let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_peer_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_peer_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002".parse().expect("valid remote address"),
+                        remote_peer_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    iroha_data_model::nexus::LaneConfig {
+                        id: lane_id,
+                        dataspace_id,
+                        alias: format!("lane-{}", lane_id.as_u32()),
+                        visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                        ..iroha_data_model::nexus::LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias: "restricted".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                dataspace_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            state.set_nexus(nexus.clone()).expect("apply nexus config");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &local_validator,
+                &local_peer_keypair,
+                "local",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &remote_validator,
+                &remote_peer_keypair,
+                "remote",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![(remote_validator.clone(), remote_peer_id.clone())],
+                )],
+            );
+            let state_view = app_mut.state.view();
+            app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        assert!(
+            !super::should_execute_route_locally(app.as_ref(), route),
+            "test requires a route the receiver would otherwise re-forward"
+        );
+
+        let verified_query = ToriiProxyRequestKindV1::VerifiedQuery {
+            request_bytes: Vec::new(),
+            expected_route: ToriiRouteHintV1::from(route),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        };
+        let read_request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
+            ToriiReadEndpointV1::AccountGet,
+            route,
+            vec![AccountId::new(KeyPair::random().public_key().clone()).to_string()],
+            None,
+            Vec::new(),
+        ));
+        let signed_query = ToriiProxyRequestKindV1::SignedQuery {
+            query_bytes: Vec::new(),
+            expected_route: ToriiRouteHintV1::from(route),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        };
+
+        assert!(
+            super::should_execute_incoming_torii_proxy_request_locally(
+                app.as_ref(),
+                &verified_query,
+                route,
+            ),
+            "proxied verified queries should execute on the ingress-selected receiver"
+        );
+        assert!(
+            super::should_execute_incoming_torii_proxy_request_locally(
+                app.as_ref(),
+                &read_request,
+                route,
+            ),
+            "proxied app-api reads should execute on the ingress-selected receiver"
+        );
+        assert!(
+            !super::should_execute_incoming_torii_proxy_request_locally(
+                app.as_ref(),
+                &signed_query,
+                route,
+            ),
+            "write-path signed queries must still honor local authority checks"
         );
     }
 

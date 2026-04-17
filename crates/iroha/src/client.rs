@@ -203,6 +203,18 @@ pub struct SccpCapabilities {
     pub governance_bundle_path: String,
     /// Generic SCCP message-bundle fetch path.
     pub message_bundle_path: String,
+    /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
+    #[norito(default)]
+    pub runtime_proof_family: Option<String>,
+    /// Runtime verifier backend label accepted by the SORA SCCP pallet.
+    #[norito(default)]
+    pub runtime_verifier_backend: Option<String>,
+    /// Optional runtime SCALE governance-envelope fetch path.
+    #[norito(default)]
+    pub governance_runtime_bundle_path: Option<String>,
+    /// Optional runtime SCALE message-envelope fetch path.
+    #[norito(default)]
+    pub message_runtime_bundle_path: Option<String>,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
     /// Generic SCCP normalized proof-job fetch path.
@@ -5693,6 +5705,51 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
 }
 
 impl ResponseReport {
+    fn route_diagnostics_suffix(response: &Response<Vec<u8>>) -> String {
+        const DIAGNOSTIC_HEADERS: &[(&str, &str)] = &[
+            ("x-iroha-routed-by", "routed by"),
+            ("x-iroha-route-lane-id", "route lane"),
+            ("x-iroha-route-dataspace-id", "route dataspace"),
+            (
+                "x-iroha-route-unavailable-reason",
+                "route unavailable reason",
+            ),
+            ("x-iroha-route-authoritative-total", "authoritative peers"),
+            (
+                "x-iroha-route-authoritative-offline",
+                "offline authoritative peers",
+            ),
+            (
+                "x-iroha-route-loop-prevention-drops",
+                "loop prevention drops",
+            ),
+            ("x-iroha-fanout-routes-attempted", "fanout attempted"),
+            ("x-iroha-fanout-routes-succeeded", "fanout succeeded"),
+            ("x-iroha-fanout-routes-failed", "fanout failed"),
+            ("x-iroha-fanout-routes-unavailable", "fanout unavailable"),
+            ("x-iroha-fanout-routes-not-found", "fanout not found"),
+            ("x-iroha-fanout-first-failure", "fanout first failure"),
+        ];
+
+        let diagnostics = DIAGNOSTIC_HEADERS
+            .iter()
+            .filter_map(|(header, label)| {
+                response
+                    .headers()
+                    .get(*header)
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("{label}: {value}"))
+            })
+            .collect::<Vec<_>>();
+
+        if diagnostics.is_empty() {
+            String::new()
+        } else {
+            format!("; route diagnostics: {}", diagnostics.join(", "))
+        }
+    }
+
     /// Constructs report with provided message
     ///
     /// # Errors
@@ -5708,22 +5765,23 @@ impl ResponseReport {
             .and_then(|value| value.to_str().ok())
             .filter(|value| !value.is_empty())
             .map_or_else(String::new, |code| format!("; reject code: {code}"));
+        let route_suffix = Self::route_diagnostics_suffix(response);
         let msg = msg.as_ref();
 
         if let Ok(body) = std::str::from_utf8(response.body()) {
             return Ok(Self(eyre!(
-                "{msg}; status: {status}{reject_suffix}; response body: {body}"
+                "{msg}; status: {status}{reject_suffix}{route_suffix}; response body: {body}"
             )));
         }
 
         if let Some(body) = decode_norito_error_body(response) {
             return Ok(Self(eyre!(
-                "{msg}; status: {status}{reject_suffix}; response body: {body}"
+                "{msg}; status: {status}{reject_suffix}{route_suffix}; response body: {body}"
             )));
         }
 
         Err(Self(eyre!(
-            "{msg}; status: {status}{reject_suffix}; body isn't a valid utf-8 string"
+            "{msg}; status: {status}{reject_suffix}{route_suffix}; body isn't a valid utf-8 string"
         )))
     }
 }
@@ -18664,6 +18722,14 @@ mod tests {
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
             governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
+            runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
+            runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
+            governance_runtime_bundle_path: Some(
+                "/v1/sccp/proofs/governance/{message_id}/runtime-scale".to_owned(),
+            ),
+            message_runtime_bundle_path: Some(
+                "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
+            ),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
@@ -19171,5 +19237,35 @@ mod response_report {
         assert!(text.contains("PRTRY:QUEUE_FULL"));
         assert!(text.contains("queue_full"));
         assert!(text.contains("transaction queue is at capacity"));
+    }
+
+    #[test]
+    fn with_msg_reports_route_diagnostics_headers() {
+        let response = Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("x-iroha-reject-code", "route_unavailable")
+            .header("x-iroha-route-lane-id", "2")
+            .header("x-iroha-route-dataspace-id", "10")
+            .header(
+                "x-iroha-route-unavailable-reason",
+                "authoritative_peers_offline",
+            )
+            .header("x-iroha-fanout-routes-attempted", "3")
+            .header("x-iroha-fanout-routes-succeeded", "1")
+            .body(b"route unavailable".to_vec())
+            .unwrap();
+
+        let report = match ResponseReport::with_msg("Unexpected transaction response", &response) {
+            Ok(report) => report,
+            Err(err) => panic!("expected utf-8 response report, got error: {}", err.0),
+        };
+        let text = report.0.to_string();
+
+        assert!(text.contains("reject code: route_unavailable"));
+        assert!(text.contains("route lane: 2"));
+        assert!(text.contains("route dataspace: 10"));
+        assert!(text.contains("route unavailable reason: authoritative_peers_offline"));
+        assert!(text.contains("fanout attempted: 3"));
+        assert!(text.contains("fanout succeeded: 1"));
     }
 }
