@@ -603,20 +603,20 @@ mod contract_address_tests {
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             7,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         let second = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             7,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         assert_eq!(first, second);
         assert_eq!(
             first.dataspace_id().expect("dataspace"),
-            DataSpaceId::GLOBAL
+            DataSpaceId::UNIVERSAL
         );
         assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP_MAINNET));
     }
@@ -628,18 +628,18 @@ mod contract_address_tests {
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("mainnet address");
         let next_nonce = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             1,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("nonce+1 address");
         let taira =
-            ContractAddress::derive(CHAIN_DISCRIMINANT_TAIRA, &authority, 0, DataSpaceId::GLOBAL)
+            ContractAddress::derive(CHAIN_DISCRIMINANT_TAIRA, &authority, 0, DataSpaceId::UNIVERSAL)
                 .expect("taira address");
 
         assert_ne!(mainnet, next_nonce);
@@ -654,14 +654,14 @@ mod contract_address_tests {
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("first contract address");
         let second = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
             1,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("second contract address");
 

@@ -900,7 +900,7 @@ pub mod isi {
             let permission = Permission::from(
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
                     ),
                 },
             );
@@ -1818,7 +1818,7 @@ pub mod query {
         fn root_alias(label: &str) -> AccountAlias {
             AccountAlias::domainless(
                 label.parse().expect("account alias label"),
-                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )
         }
 

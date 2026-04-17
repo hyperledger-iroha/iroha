@@ -5528,7 +5528,7 @@ mod tests {
             iroha_config::parameters::defaults::common::chain_discriminant(),
             &alice_id,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
@@ -5603,7 +5603,7 @@ mod tests {
             iroha_config::parameters::defaults::common::chain_discriminant(),
             &alice_id,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {

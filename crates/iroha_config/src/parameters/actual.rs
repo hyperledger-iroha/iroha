@@ -405,12 +405,12 @@ impl Root {
             && matches!(catalog.lanes(), [lane] if lane.id == LaneId::SINGLE && lane.alias == "default");
         let dataspace = &self.nexus.dataspace_catalog;
         let is_default_dataspace = matches!(dataspace.entries(), [entry]
-            if entry.id == DataSpaceId::GLOBAL
+            if entry.id == DataSpaceId::UNIVERSAL
                 && entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS
         );
         let policy = &self.nexus.routing_policy;
         let is_default_policy = policy.default_lane == LaneId::SINGLE
-            && policy.default_dataspace == DataSpaceId::GLOBAL
+            && policy.default_dataspace == DataSpaceId::UNIVERSAL
             && policy.rules.is_empty();
 
         if is_default_catalog && is_default_dataspace && is_default_policy {
@@ -655,7 +655,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     let lanes = vec![
         LaneConfigMetadata {
             id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "core".to_string(),
             description: Some("Primary execution lane".to_string()),
             visibility: LaneVisibility::Public,
@@ -699,7 +699,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
 pub(crate) fn sora_dataspace_catalog() -> DataSpaceCatalog {
     let entries = vec![
         DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
             description: Some("Single-lane data space".to_string()),
             fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
@@ -723,7 +723,7 @@ pub(crate) fn sora_dataspace_catalog() -> DataSpaceCatalog {
 pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
     LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
@@ -2903,12 +2903,12 @@ impl Nexus {
         let policy = &self.routing_policy;
         let policy_is_default = policy.rules.is_empty()
             && policy.default_lane == LaneId::SINGLE
-            && policy.default_dataspace == DataSpaceId::GLOBAL;
+            && policy.default_dataspace == DataSpaceId::UNIVERSAL;
         let catalog_is_default = self.lane_catalog.lane_count().get() == 1
             && matches!(self.lane_catalog.lanes(), [lane] if lane.id == LaneId::SINGLE);
         let dataspace_is_default = matches!(
             self.dataspace_catalog.entries(),
-            [entry] if entry.id == DataSpaceId::GLOBAL
+            [entry] if entry.id == DataSpaceId::UNIVERSAL
         );
 
         !(policy_is_default && catalog_is_default && dataspace_is_default)
@@ -8501,7 +8501,7 @@ mod tests_npos_timeouts {
             default_entry.key_prefix,
             LaneId::SINGLE.as_u32().to_be_bytes()
         );
-        assert_eq!(default_entry.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(default_entry.dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(default_entry.visibility, LaneVisibility::Public);
         assert_eq!(
             default_entry.storage_profile,
@@ -8521,7 +8521,7 @@ mod tests_npos_timeouts {
             public_entry.key_prefix,
             LaneId::new(1).as_u32().to_be_bytes()
         );
-        assert_eq!(public_entry.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(public_entry.dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(public_entry.visibility, LaneVisibility::Public);
         assert_eq!(
             public_entry.storage_profile,

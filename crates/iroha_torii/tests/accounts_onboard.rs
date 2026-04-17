@@ -93,13 +93,13 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         stx.world_mut_for_testing().add_account_permission(
             &authority_id,
             Permission::from(CanPublishSpaceDirectoryManifest {
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
             }),
         );
         stx.world_mut_for_testing().add_account_permission(
             &authority_id,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
         stx.apply();
@@ -223,7 +223,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .get(&uaid)
         .expect("UAID bindings present");
     assert!(
-        bindings.is_bound_to(DataSpaceId::GLOBAL, &user_id),
+        bindings.is_bound_to(DataSpaceId::UNIVERSAL, &user_id),
         "UAID should be bound to the global dataspace"
     );
     let manifest_set = view
@@ -232,7 +232,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .get(&uaid)
         .expect("manifest registry present");
     let record = manifest_set
-        .get(&DataSpaceId::GLOBAL)
+        .get(&DataSpaceId::UNIVERSAL)
         .expect("global manifest present");
     assert!(record.is_active(), "global manifest should be active");
 }
@@ -271,7 +271,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         stx.world_mut_for_testing().add_account_permission(
             &authority_id,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
         stx.apply();

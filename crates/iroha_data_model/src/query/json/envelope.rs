@@ -1246,7 +1246,7 @@ mod tests {
 
         let alias = crate::account::AccountAlias::domainless(
             "alice".parse().expect("alias label"),
-            crate::nexus::DataSpaceId::GLOBAL,
+            crate::nexus::DataSpaceId::UNIVERSAL,
         );
         let singular = SingularQueryJson::FindAccountByAlias {
             alias: alias.clone(),

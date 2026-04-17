@@ -229,11 +229,11 @@ fn append_bootstrap_authority_overlay(
 ) -> RawGenesisTransaction {
     let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
     let manage_alias: Permission = CanManageAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
     .into();
     let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
-        dataspace: DataSpaceId::GLOBAL,
+        dataspace: DataSpaceId::UNIVERSAL,
     }
     .into();
     let authority_account = Account::new(authority.account_id.clone());

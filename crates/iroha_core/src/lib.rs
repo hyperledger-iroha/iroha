@@ -689,7 +689,7 @@ mod tests {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 },
                 path_args: Vec::new(),
                 query_string: None,
@@ -889,7 +889,7 @@ mod tests {
             )],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -908,7 +908,7 @@ mod tests {
                 assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
                 assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
-                assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
             }
             other => panic!("expected transaction gossip, got {other:?}"),
         }
@@ -938,7 +938,7 @@ mod tests {
                 )],
                 routes: vec![GossipRoute {
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                 }],
                 plane: GossipPlane::Public,
             };
@@ -957,7 +957,7 @@ mod tests {
                     assert!(wire.starts_with(&ncore::MAGIC));
                     assert_eq!(gossip.routes.len(), 1);
                     assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
-                    assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                    assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
                 }
                 other => panic!("expected transaction gossip, got {other:?}"),
             }

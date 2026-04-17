@@ -14441,7 +14441,7 @@ mod multisig_contract_call_tests {
             0,
             &multisig,
             0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let asset_definition =
@@ -14492,7 +14492,7 @@ mod multisig_contract_call_tests {
             0,
             &multisig,
             0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let manifest = manifest::ContractManifest {
@@ -14799,7 +14799,7 @@ mod contract_payload_normalization_tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             7,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         let mut expected = std::collections::BTreeMap::new();
@@ -14977,7 +14977,7 @@ mod multisig_selector_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.clone().name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -15232,7 +15232,7 @@ mod multisig_selector_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.clone().name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id).build(&authority);
@@ -15444,7 +15444,7 @@ mod multisig_selector_tests {
                 Some(account::rekey::AccountAliasDomain::new(
                     domain_id.name().clone(),
                 )),
-                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )))
             .build(&authority);
         let state = build_state(World::with([domain], [account], []));
@@ -15632,7 +15632,7 @@ mod multisig_selector_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.clone().name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -23496,7 +23496,7 @@ mod contract_bundle_tests {
             CHAIN_DISCRIMINANT_MAINNET,
             &sample_authority(),
             nonce,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address")
     }
@@ -31896,7 +31896,7 @@ mod stateful_account_path_parser_tests {
             Some(account::rekey::AccountAliasDomain::new(
                 domain_id.name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
@@ -32773,7 +32773,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(h0),
             block_height: Some(nonzero!(1_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -32781,7 +32781,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(h1),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -32808,7 +32808,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -32816,7 +32816,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(Box::new(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::InternalError("filtered".into()),
@@ -32828,7 +32828,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([4_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -32969,7 +32969,7 @@ mod sse_filter_tests {
             hash: h_match,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -32977,7 +32977,7 @@ mod sse_filter_tests {
             hash: h_other,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33026,7 +33026,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
             block_height: Some(nonzero!(777_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33034,7 +33034,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH])),
             block_height: Some(nonzero!(778_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33042,7 +33042,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH])),
             block_height: Some(nonzero!(777_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -33075,7 +33075,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33084,7 +33084,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -33126,7 +33126,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH])),
             block_height: Some(nonzero!(9_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33134,7 +33134,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH])),
             block_height: Some(nonzero!(9_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(Box::new(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::InternalError("filtered".into()),
@@ -33146,7 +33146,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x88; Hash::LENGTH])),
             block_height: Some(nonzero!(10_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33191,7 +33191,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x99; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33213,7 +33213,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([5_u8; Hash::LENGTH])),
             block_height: Some(nonzero!(123_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33221,7 +33221,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([6_u8; Hash::LENGTH])),
             block_height: Some(nonzero!(124_u64)),
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Approved,
         }
         .into();
@@ -33236,7 +33236,7 @@ mod sse_filter_tests {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([7_u8; Hash::LENGTH])),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -43039,7 +43039,7 @@ mod status_tests {
             lane_settlement_commitments: vec![LaneBlockCommitment {
                 block_height: 1,
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 tx_count: 1,
                 total_local_micro: 1u128,
                 total_xor_due_micro: 1u128,
@@ -43052,7 +43052,7 @@ mod status_tests {
                 let settlement = LaneBlockCommitment {
                     block_height: 1,
                     lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     tx_count: 1,
                     total_local_micro: 1,
                     total_xor_due_micro: 1,
@@ -55042,7 +55042,7 @@ mod accounts_query_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let state = Arc::new(State::new_for_testing(
             World::with(
@@ -55226,7 +55226,7 @@ mod accounts_query_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let state = Arc::new(State::new_for_testing(
             World::with(

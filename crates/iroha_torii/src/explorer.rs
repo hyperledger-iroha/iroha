@@ -2010,7 +2010,7 @@ mod tests {
     #[test]
     fn transaction_detail_includes_contract_call_payload() {
         let chain: ChainId = "test-chain".parse().expect("valid chain id");
-        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::GLOBAL)
+        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
             .expect("contract address");
         let mut payload = Map::new();
         payload.insert("amount".to_string(), Value::Number(5_u64.into()));

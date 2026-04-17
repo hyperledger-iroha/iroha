@@ -307,7 +307,7 @@ impl Default for LaneMetadataSnapshot {
     fn default() -> Self {
         Self {
             alias: String::new(),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             dataspace_alias: None,
             visibility: LaneVisibility::Public,
             storage_profile: LaneStorageProfile::FullReplica,
@@ -1631,7 +1631,7 @@ impl StateTelemetry {
         push_nexus_diff(
             &mut diffs,
             "nexus.routing.default_dataspace",
-            json_value(&DataSpaceId::GLOBAL.as_u64()),
+            json_value(&DataSpaceId::UNIVERSAL.as_u64()),
             json_value(&nexus.routing_policy.default_dataspace.as_u64()),
         );
         let routing_rules: Vec<norito::json::Value> = nexus
@@ -2455,7 +2455,7 @@ impl StateTelemetry {
     }
 
     fn record_lane_placeholders(&self, lane_id: LaneId) {
-        self.record_lane_with_dataspace(lane_id, DataSpaceId::GLOBAL);
+        self.record_lane_with_dataspace(lane_id, DataSpaceId::UNIVERSAL);
     }
 
     fn record_lane_with_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) {
@@ -2474,7 +2474,7 @@ impl StateTelemetry {
             .read()
             .ok()
             .and_then(|guard| guard.get(&lane_id.as_u32()).map(|entry| entry.dataspace_id))
-            .unwrap_or(DataSpaceId::GLOBAL)
+            .unwrap_or(DataSpaceId::UNIVERSAL)
             .as_u64()
             .to_string();
         (lane_label, dataspace_label)
@@ -10621,7 +10621,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10649,7 +10649,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10709,7 +10709,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
 
@@ -10729,7 +10729,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
         telemetry.set_nexus_enabled(false);
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
@@ -11876,7 +11876,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_must_serve_truncations(LaneId::SINGLE, 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 5,
                 age_slots: 3,
@@ -11935,7 +11935,7 @@ mod tests {
         assert_eq!(snapshot.deferrals.cap_exceeded, 3);
         assert_eq!(snapshot.must_serve_truncations, 2);
 
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_dataspace_teu_backlog
@@ -11948,7 +11948,7 @@ mod tests {
             .read()
             .expect("dataspace TEU cache poisoned");
         let ds_snapshot = ds_snapshots
-            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::GLOBAL.as_u64()))
+            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::UNIVERSAL.as_u64()))
             .expect("dataspace snapshot missing");
         assert_eq!(ds_snapshot.backlog, 5);
         assert_eq!(ds_snapshot.age_slots, 3);
@@ -11960,7 +11960,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_dataspace_pipeline_summary(
             lane_id,
@@ -12007,7 +12007,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_lane_teu_deferral(LaneId::SINGLE, "cap_exceeded", 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 9,
                 age_slots: 3,
@@ -12017,7 +12017,7 @@ mod tests {
         telemetry.set_pipeline_layer_count(LaneId::SINGLE, 7);
 
         let lane_label = LaneId::SINGLE.as_u32().to_string();
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_lane_teu_capacity
