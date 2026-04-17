@@ -11421,6 +11421,17 @@ fn selection_from_roster_artifacts(
     }
 }
 
+fn roster_artifact_selection_view(
+    block_view: Option<u64>,
+    commit_qc: Option<&Qc>,
+    checkpoint: Option<&ValidatorSetCheckpoint>,
+) -> Option<u64> {
+    commit_qc
+        .map(|cert| cert.view)
+        .or_else(|| checkpoint.map(|chk| chk.view))
+        .or(block_view)
+}
+
 fn block_sync_history_roster_for_block(
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
@@ -11484,7 +11495,8 @@ fn block_sync_history_roster_for_block(
         BlockSyncRosterSource::ValidatorCheckpointHistory
     };
     let mut roster_height = block_height;
-    let mut roster_view = block_view;
+    let mut roster_view =
+        roster_artifact_selection_view(block_view, cert.as_ref(), checkpoint.as_ref());
     let mut checkpoint = checkpoint.as_ref();
     if let Some(cert) = cert.as_ref() {
         if cert.height != block_height {
@@ -11548,7 +11560,12 @@ fn persisted_roster_for_block(
     };
     let mut selection_cache = selection_cache;
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-        let key_view = block_view.unwrap_or(snapshot.commit_qc.view);
+        let selection_view = roster_artifact_selection_view(
+            block_view,
+            Some(&snapshot.commit_qc),
+            Some(&snapshot.validator_checkpoint),
+        );
+        let key_view = selection_view.unwrap_or(snapshot.commit_qc.view);
         let cache_key = BlockSyncRosterCacheKey::from_hints(
             block_hash,
             block_height,
@@ -11569,7 +11586,7 @@ fn persisted_roster_for_block(
             snapshot.stake_snapshot.as_ref(),
             block_hash,
             block_height,
-            block_view,
+            selection_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
             &state.chain_id,
@@ -11611,14 +11628,17 @@ fn persisted_roster_for_block(
                 );
             }
         } else {
-            let key_view = block_view
-                .or_else(|| sidecar.commit_qc.as_ref().map(|cert| cert.view))
-                .unwrap_or_else(|| {
-                    sidecar
-                        .validator_checkpoint
-                        .as_ref()
-                        .map_or(0, |checkpoint| checkpoint.view)
-                });
+            let selection_view = roster_artifact_selection_view(
+                block_view,
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+            );
+            let key_view = selection_view.unwrap_or_else(|| {
+                sidecar
+                    .validator_checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.view)
+            });
             let cache_key = BlockSyncRosterCacheKey::from_hints(
                 block_hash,
                 block_height,
@@ -11639,7 +11659,7 @@ fn persisted_roster_for_block(
                 sidecar.stake_snapshot.as_ref(),
                 block_hash,
                 block_height,
-                block_view,
+                selection_view,
                 BlockSyncRosterSource::RosterSidecar,
                 consensus_mode,
                 &state.chain_id,
@@ -11698,7 +11718,12 @@ fn persisted_roster_for_block(
                     .stake_snapshot
                     .as_ref()
                     .map(stake_snapshot_from_previous_roster_evidence);
-                let key_view = block_view.unwrap_or(evidence.validator_checkpoint.view);
+                let selection_view = roster_artifact_selection_view(
+                    block_view,
+                    None,
+                    Some(&evidence.validator_checkpoint),
+                );
+                let key_view = selection_view.unwrap_or(evidence.validator_checkpoint.view);
                 let cache_key = BlockSyncRosterCacheKey::from_hints(
                     block_hash,
                     block_height,
@@ -11719,7 +11744,7 @@ fn persisted_roster_for_block(
                     stake_snapshot.as_ref(),
                     block_hash,
                     block_height,
-                    block_view,
+                    selection_view,
                     BlockSyncRosterSource::PreviousBlockEvidence,
                     consensus_mode,
                     &state.chain_id,

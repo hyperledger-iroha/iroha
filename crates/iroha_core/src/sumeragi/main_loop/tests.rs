@@ -42288,6 +42288,119 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
 }
 
 #[test]
+fn persisted_roster_sidecar_uses_artifact_view_when_requested_view_drifts() {
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let query = LiveQueryStore::start_test();
+
+    let height = 4u64;
+    let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let block_hash = header.hash();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let roster = vec![peer];
+    let keypairs = vec![kp];
+    let world = World::default();
+    {
+        let mut block = world.block();
+        let vec = block.peers.get_mut();
+        for peer in &roster {
+            let _ = vec.push(peer.clone());
+        }
+        insert_consensus_keys_for_peers(&mut block, &roster, &keypairs);
+        block.commit();
+    }
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
+    let mut signers = BTreeSet::new();
+    signers.insert(ValidatorIndex::from(0u16));
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature,
+        },
+    };
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        commit_qc.view,
+        block_hash,
+        commit_qc.parent_state_root,
+        commit_qc.post_state_root,
+        roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+        height,
+        block_hash,
+        Some(commit_qc.clone()),
+        Some(checkpoint.clone()),
+        None,
+    ));
+
+    let roster_cache = roster_cache_for_state(&state, EPOCH_LENGTH_BLOCKS);
+    let selection = super::persisted_roster_for_block(
+        &state,
+        kura.as_ref(),
+        ConsensusMode::Permissioned,
+        height,
+        block_hash,
+        Some(3),
+        &roster_cache,
+        None,
+        true,
+    )
+    .expect("sidecar should still validate against its certified view");
+
+    assert_eq!(
+        selection.source,
+        super::BlockSyncRosterSource::RosterSidecar
+    );
+    assert_eq!(selection.roster, roster);
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
+    assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
+}
+
+#[test]
 fn sidecar_quarantine_disables_sidecar_roster_usage() {
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
@@ -45957,7 +46070,15 @@ async fn frontier_sidecar_hint_does_not_retarget_uncommitted_tracked_missing_req
 #[tokio::test(flavor = "current_thread")]
 async fn frontier_sidecar_hint_does_not_retarget_uncommitted_tracked_missing_request_while_frontier_stall_active()
  {
-    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        test_sumeragi_config(),
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
     let actor = &mut harness.actor;
     let _ = seed_genesis_block_for_state(&actor.state);
     let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
@@ -46071,7 +46192,15 @@ async fn frontier_sidecar_hint_does_not_retarget_uncommitted_tracked_missing_req
 #[tokio::test(flavor = "current_thread")]
 async fn frontier_sidecar_hint_retargets_uncommitted_tracked_missing_request_during_frontier_stall_for_vote_roster_lookup()
  {
-    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        test_sumeragi_config(),
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
     let actor = &mut harness.actor;
     let _ = seed_genesis_block_for_state(&actor.state);
     let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
