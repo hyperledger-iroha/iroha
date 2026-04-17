@@ -194,7 +194,6 @@ impl Actor {
             || (self.should_fast_path_commit_vote(vote)
                 && signature_topology.as_ref().len() <= VOTE_VERIFY_INLINE_ROSTER_MAX
                 && (self.block_known_locally(vote.block_hash)
-                    || self.runtime_da_enabled()
                     || self
                         .pending
                         .missing_block_requests
@@ -643,7 +642,7 @@ impl Actor {
             );
             return;
         }
-        if self.should_fast_path_new_view_vote(&vote) || self.should_fast_path_commit_vote(&vote) {
+        if self.should_fast_path_new_view_vote(&vote) {
             self.handle_vote(vote);
             return;
         }

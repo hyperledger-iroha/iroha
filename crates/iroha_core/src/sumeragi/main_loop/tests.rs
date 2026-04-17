@@ -17103,6 +17103,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    let signature_topology = commit_topology.clone();
     let lock = QcHeaderRef {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -17116,7 +17117,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         block_hash,
         pending,
         commit_topology: commit_topology.clone(),
-        signature_topology: commit_topology.clone(),
+        signature_topology: signature_topology.clone(),
         qc_signers: None,
         commit_qc: None,
         allow_quorum_bypass: false,
@@ -17231,7 +17232,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         block: block.clone(),
         validated_commit_artifact: None,
         commit_topology: commit_topology.clone(),
-        signature_topology: commit_topology.clone(),
+        signature_topology,
         consensus_mode: actor.consensus_context_for_height(height).0,
         qc_signers: None,
         commit_qc: None,
@@ -17374,12 +17375,27 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
     pending.post_state_root = Some(zero_state_root());
 
     let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        PERMISSIONED_TAG,
+        Some(prf_seed_for_chain(&actor.common_config.chain)),
+    );
+    let signature_roster = signature_topology.as_ref().to_vec();
     let required = topology.min_votes_for_commit().max(1);
-    let mut signers = BTreeSet::new();
+    let mut view_signers = BTreeSet::new();
     for idx in 0..required {
-        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+        view_signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
     }
-    for signer in &signers {
+    let signers =
+        super::normalize_signer_indices_to_canonical(&view_signers, &signature_topology, &topology);
+    assert_eq!(
+        signers.len(),
+        view_signers.len(),
+        "view signers should map to canonical signers"
+    );
+    for signer in &view_signers {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
@@ -17402,6 +17418,27 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
             .vote_log
             .insert((Phase::Commit, height, view, 0, *signer), vote);
     }
+    let accepted_votes = actor.accepted_votes_for_qc_slot(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        0,
+        &signature_topology,
+    );
+    eprintln!(
+        "debug signers={signers:?} view_signers={view_signers:?} accepted={:?} aggregate={:?}",
+        accepted_votes.keys().collect::<Vec<_>>(),
+        super::aggregate_vote_signatures(
+            &accepted_votes,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            &view_signers
+        )
+    );
 
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
@@ -17435,7 +17472,7 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         block_hash,
         pending,
         commit_topology: commit_topology.clone(),
-        signature_topology: commit_topology.clone(),
+        signature_topology: signature_roster.clone(),
         qc_signers: Some(signers.clone()),
         commit_qc: None,
         allow_quorum_bypass: false,
@@ -17452,7 +17489,7 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         block: block.clone(),
         validated_commit_artifact: None,
         commit_topology: commit_topology.clone(),
-        signature_topology: commit_topology.clone(),
+        signature_topology: signature_roster,
         consensus_mode: actor.consensus_context_for_height(height).0,
         qc_signers: Some(signers),
         commit_qc: None,
@@ -17479,6 +17516,15 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
     assert!(
         actor.poll_commit_results(),
         "commit outcome should be applied"
+    );
+    eprintln!(
+        "debug after poll precommit_history={:?} commit_history_len={} sidecar={}",
+        status::precommit_signer_history()
+            .iter()
+            .map(|record| (record.height, record.view, record.block_hash, record.signers.clone()))
+            .collect::<Vec<_>>(),
+        status::commit_qc_history().len(),
+        actor.kura.read_roster_metadata(height).is_some()
     );
     let snapshot = actor
         .state

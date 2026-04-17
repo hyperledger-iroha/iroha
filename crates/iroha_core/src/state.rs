@@ -16080,6 +16080,7 @@ impl State {
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
         update_status: bool,
+        write_sidecar: bool,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -16169,18 +16170,20 @@ impl State {
         }
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
-        let sidecar = crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(commit_qc.clone()),
-            Some(checkpoint.clone()),
-            sidecar_snapshot,
-        );
-        self.kura.write_roster_metadata(&sidecar);
+        if write_sidecar {
+            let sidecar = crate::kura::RosterSidecar::new(
+                commit_qc.height,
+                commit_qc.subject_block_hash,
+                Some(commit_qc.clone()),
+                Some(checkpoint.clone()),
+                sidecar_snapshot,
+            );
+            self.kura.write_roster_metadata(&sidecar);
+        }
         true
     }
 
-    /// Record commit-roster artifacts in status caches, world storage, journal, and sidecar.
+    /// Record commit-roster artifacts in status caches, world storage, and the journal.
     ///
     /// Returns `true` when the roster entry is accepted or `false` when skipped.
     pub(crate) fn record_commit_roster(
@@ -16189,7 +16192,16 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, false)
+    }
+
+    pub(crate) fn record_commit_roster_with_sidecar(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
     }
 
     fn record_commit_roster_without_world(
@@ -16198,7 +16210,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true, true)
     }
 
     fn record_commit_roster_without_world_or_status(
@@ -16207,7 +16219,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, false, true)
     }
 
     fn restore_commit_roster_history(&self) {
