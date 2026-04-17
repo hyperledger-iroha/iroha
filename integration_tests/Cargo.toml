@@ -35,6 +35,10 @@ path = "tests/consensus_and_da.rs"
 name = "nexus_and_streaming"
 path = "tests/nexus_and_streaming.rs"
 
+[[test]]
+name = "torii_load_profile"
+path = "tests/torii_load_profile.rs"
+
 [features]
 default = ["telemetry"]
 fault_injection = []

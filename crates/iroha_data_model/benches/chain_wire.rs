@@ -43,6 +43,8 @@ const LAYOUT_CANDIDATES: &[LayoutCandidate] = &[
     },
 ];
 
+const MIXED_BLOCK_INSTRUCTION_COUNTS: &[usize] = &[0, 1, 4, 8, 16, 32];
+
 fn fixed_public_key() -> PublicKey {
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
         .parse()
@@ -77,6 +79,16 @@ fn sample_block(transaction_count: usize, instruction_count: usize) -> SignedBlo
     let private_key = fixed_private_key();
     let transactions = (0..transaction_count)
         .map(|_| sample_transaction(instruction_count))
+        .collect::<Vec<_>>();
+
+    SignedBlock::genesis(transactions, &private_key, None, None)
+}
+
+fn sample_mixed_block() -> SignedBlock {
+    let private_key = fixed_private_key();
+    let transactions = MIXED_BLOCK_INSTRUCTION_COUNTS
+        .iter()
+        .map(|&instruction_count| sample_transaction(instruction_count))
         .collect::<Vec<_>>();
 
     SignedBlock::genesis(transactions, &private_key, None, None)
@@ -168,6 +180,35 @@ fn bench_signed_transaction(c: &mut Criterion) {
     bench_layout_candidates(c, "signed_transaction", &tx);
 }
 
+fn bench_signed_transaction_large(c: &mut Criterion) {
+    let tx = sample_transaction(32);
+    let bare = norito::codec::encode_adaptive(&tx);
+    let versioned = tx.encode_versioned();
+    report_size("signed_transaction_32/bare", &bare);
+    report_size("signed_transaction_32/versioned", &versioned);
+
+    c.bench_function("chain_wire/signed_transaction_32/bare_encode", |b| {
+        b.iter(|| black_box(norito::codec::encode_adaptive(black_box(&tx))))
+    });
+    c.bench_function("chain_wire/signed_transaction_32/bare_decode_exact", |b| {
+        b.iter(|| {
+            black_box(
+                norito::codec::decode_exact_from_slice::<SignedTransaction>(black_box(&bare))
+                    .expect("decode signed transaction"),
+            )
+        })
+    });
+    c.bench_function("chain_wire/signed_transaction_32/versioned_decode", |b| {
+        b.iter(|| {
+            black_box(
+                SignedTransaction::decode_all_versioned(black_box(&versioned))
+                    .expect("decode versioned signed transaction"),
+            )
+        })
+    });
+    bench_layout_candidates(c, "signed_transaction_32", &tx);
+}
+
 fn bench_transaction_entrypoint(c: &mut Criterion) {
     let entrypoint = TransactionEntrypoint::from(sample_transaction(8));
     let bare = norito::codec::encode_adaptive(&entrypoint);
@@ -235,6 +276,44 @@ fn bench_signed_block(c: &mut Criterion) {
     bench_layout_candidates(c, "signed_block", &block);
 }
 
+fn bench_signed_block_mixed(c: &mut Criterion) {
+    let block = sample_mixed_block();
+    let bare = norito::codec::encode_adaptive(&block);
+    let versioned = block.encode_versioned();
+    let wire = block.encode_wire().expect("encode signed block wire");
+    report_size("signed_block_mixed/bare", &bare);
+    report_size("signed_block_mixed/versioned", &versioned);
+    report_size("signed_block_mixed/wire", &wire);
+
+    c.bench_function("chain_wire/signed_block_mixed/bare_encode", |b| {
+        b.iter(|| black_box(norito::codec::encode_adaptive(black_box(&block))))
+    });
+    c.bench_function("chain_wire/signed_block_mixed/bare_decode_exact", |b| {
+        b.iter(|| {
+            black_box(
+                norito::codec::decode_exact_from_slice::<SignedBlock>(black_box(&bare))
+                    .expect("decode signed block"),
+            )
+        })
+    });
+    c.bench_function("chain_wire/signed_block_mixed/versioned_decode", |b| {
+        b.iter(|| {
+            black_box(
+                SignedBlock::decode_all_versioned(black_box(&versioned))
+                    .expect("decode versioned signed block"),
+            )
+        })
+    });
+    c.bench_function("chain_wire/signed_block_mixed/wire_decode", |b| {
+        b.iter(|| {
+            black_box(
+                decode_framed_signed_block(black_box(&wire)).expect("decode signed block wire"),
+            )
+        })
+    });
+    bench_layout_candidates(c, "signed_block_mixed", &block);
+}
+
 fn bench_empty_block_header(c: &mut Criterion) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let bare = norito::codec::encode_adaptive(&header);
@@ -256,8 +335,10 @@ fn bench_empty_block_header(c: &mut Criterion) {
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_signed_transaction(&mut c);
+    bench_signed_transaction_large(&mut c);
     bench_transaction_entrypoint(&mut c);
     bench_signed_block(&mut c);
+    bench_signed_block_mixed(&mut c);
     bench_empty_block_header(&mut c);
     c.final_summary();
 }

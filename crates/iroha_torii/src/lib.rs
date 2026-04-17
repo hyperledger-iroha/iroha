@@ -65,6 +65,8 @@ mod identifier_resolution;
 mod offline_lineage;
 mod operator_auth;
 mod operator_signatures;
+#[doc(hidden)]
+pub mod profile_stats;
 #[cfg(feature = "push")]
 mod push;
 mod vpn;
@@ -382,6 +384,8 @@ pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_c
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
+#[cfg(feature = "bench")]
+pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
@@ -417,6 +421,12 @@ pub use routing::{
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+};
+#[cfg(feature = "bench")]
+pub use routing::{
+    accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
+    handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
+    verify_signed_query_request as verify_signed_query_request_for_bench,
 };
 #[cfg(feature = "telemetry")]
 pub use routing::{

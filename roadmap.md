@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 Musubi live gateway fetch and registry integration):
+Musubi now hydrates lockfile sources from live SoraFS gateway providers as well
+as local provider payloads. Gateway provider specs are runtime-only inputs,
+package/manifest scoped for multi-package fetches, and cannot be mixed with
+`--provider-payload`. A 4-peer integration smoke now covers the on-chain
+registry path for publish, dependency recording, search/list queries, short
+aliases, and yanking from another peer.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/core_api.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/musubi_registry.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/musubi.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p musubi -p iroha -p iroha_data_model -p iroha_core --target-dir /tmp/iroha-musubi-impl-target`
+  - `cargo test -p musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo test -p iroha_data_model --lib musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-impl-target -- --nocapture`
+  - `cargo check -p integration_tests --test core_api --target-dir /tmp/iroha-musubi-integration-target`
+  - `cargo test -p integration_tests --test core_api musubi_registry --target-dir /tmp/iroha-musubi-integration-target -- --nocapture --test-threads=1`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 dependency budget and no-gate proptest removal):
 The dependency-reduction pass is now implemented without adding feature gates.
 Plain root `cargo test` uses an explicit default-member set for the main Iroha
@@ -51,7 +79,12 @@ the `chain_wire` benchmark registers decode benches for each candidate after
 mandatory preflight. The chain-layout regression suite now also pins default
 framing to the compact-length layout, checks the compact size reduction on
 signed transactions, transaction entrypoints, and signed blocks, rejects packed
-payloads whose headers omit packed flags, and rejects truncated frames.
+payloads whose headers omit packed flags, rejects truncated frames, enforces
+compact size budgets, and verifies that the public `SignedBlock` wire path
+accepts only default layout flags. The follow-up mixed corpus now covers
+transactions with 0, 1, 4, 8, 16, and 32 instructions, verifies canonical block
+wire rejects tampered header flags/length/checksum, and adds larger Criterion
+groups for `signed_transaction_32` and `signed_block_mixed`.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/src/core.rs`
@@ -60,6 +93,7 @@ payloads whose headers omit packed flags, and rejects truncated frames.
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/benches/chain_wire.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/norito_chain_layout.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/signed_block_roundtrip.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/norito.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/norito/README.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
@@ -69,17 +103,33 @@ payloads whose headers omit packed flags, and rejects truncated frames.
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-target cargo test -p norito --tests`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_primitives reencode_and_verify_respects_packed_seq`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test norito_chain_layout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model --test signed_block_roundtrip -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model rejects_trailing_bytes --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model decode_versioned_signed_block_handles_genesis_like_payload --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire --no-run`
   - quick Criterion smoke for `chain_wire` passed with `--sample-size 10 --measurement-time 1 --warm-up-time 1`; the reduced sample is noisy, but it confirms all candidate decode paths run
-  - bounded 30-sample Criterion filters passed for signed transactions and
-    signed blocks with `--measurement-time 3 --warm-up-time 1`
+  - bounded 30-sample Criterion filters passed for signed transactions,
+    transaction entrypoints, and signed blocks with `--measurement-time 3
+    --warm-up-time 1`
   - measured compact framed transaction size: 1023 bytes vs 1809 canonical
-    framed bytes; compact encode/decode point estimates: 8.3260 us / 30.705 us
-  - measured compact framed signed-block size: 8374 bytes vs 17051 canonical
-    framed bytes; compact encode/decode point estimates: 79.146 us / 295.25 us
-  - `rustfmt --edition 2024 --check crates/iroha_data_model/tests/norito_chain_layout.rs`
+    framed bytes; compact encode/decode point estimates: 8.2071 us / 30.190 us
+  - measured compact framed transaction-entrypoint size: 1029 bytes vs 1821
+    canonical framed bytes; compact encode/decode point estimates: 8.6052 us /
+    31.929 us
+  - measured compact framed signed-block size: 8374 bytes, or 8375 bytes on
+    the versioned block wire, vs 17051 canonical framed bytes; compact
+    encode/decode point estimates: 84.448 us / 324.64 us and public wire
+    decode point estimate: 307.09 us
+  - measured compact framed 32-instruction transaction size: 3133 bytes vs
+    4591 canonical framed bytes; compact encode/decode point estimates:
+    23.330 us / 71.953 us vs canonical 41.346 us / 117.85 us
+  - measured compact framed mixed-block size: 22126 bytes, or 22127 bytes on
+    the versioned block wire, vs 38104 canonical framed bytes; compact
+    encode/decode point estimates: 209.77 us / 736.16 us and public wire
+    decode point estimate: 756.23 us
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_transaction_32 --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo bench -p iroha_data_model --features bench --bench chain_wire -- signed_block_mixed --sample-size 30 --measurement-time 3 --warm-up-time 1`
+  - `cargo fmt -p iroha_data_model -- --check`
   - `git diff --check --`
   - `bash scripts/check_no_scale.sh`
 - open work after this slice:
@@ -105,6 +155,8 @@ async batching worker while still awaiting acknowledgement before returning.
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_telemetry/src/metrics.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/da/{ingest.rs,mod.rs,spool.rs,tests.rs}`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/torii_load_profile.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
@@ -113,9 +165,28 @@ async batching worker while still awaiting acknowledgement before returning.
   - `cargo test -p iroha_torii da_spooler_executes_batch_before_ack -- --nocapture`
   - `cargo test -p iroha_core --features telemetry --lib rbc_initial_chunk_target_metrics_record_outcomes -- --nocapture`
   - `cargo test -p iroha_core --lib rs16_initial_chunk_indices_are_reconstructable_and_deterministic -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::rbc::tests:: -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::commit::tests::payload_available_for_da -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::status::tests::rbc -- --nocapture`
+  - `cargo test -p iroha_core --lib model_rbc -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::ingest::tests:: -- --nocapture`
+  - `cargo test -p iroha_torii --lib signed_query -- --nocapture`
+  - `cargo test -p iroha_torii --lib torii_routed_read_tests -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_telemetry_endpoints -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_rbc_delivered_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_tel_subrouter_smoke -- --nocapture`
+  - `cargo test -p iroha_config da -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da npos_happy_path_enforces_da_and_metrics_bounds -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+  - `cargo test -p integration_tests --test torii_load_profile torii_http_hot_path_load_profile -- --ignored --nocapture`
+  - measured 4-peer hot-path profile: 64 `FindParameters` samples averaged
+    11.34 ms with p95 14.21 ms and p99 14.23 ms; 32 transaction submissions
+    averaged 13.00 ms with p95 15.01 ms and p99 15.37 ms
 - open work after this slice:
   - run four- and six-peer 10.5 MiB before/after samples for plain fanout vs
-    RS16 `data_plus_one` on a quiet host before considering any default change
+    RS16 `data_plus_one` on a quiet host before considering any default change;
+    the 4-peer 1 MiB multi-chunk RBC regression now passes in 49.35s of test
+    body time on this machine
   - capture live Torii DA ingest latency/queue-depth samples under socket load
     to tune the default spool queue and batch sizes
   - run full workspace test and clippy during a longer validation window
@@ -142,11 +213,8 @@ storage-pin endpoint before registering the pin.
   - `cargo test -p iroha_data_model --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture`
   - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-gap-check-target -- --nocapture`
 - open work after this slice:
-  - wire `cache fetch` to live gateway-provider specs once Musubi has a
-    synchronous SoraFS gateway fetch client; the implemented path already
-    verifies and reconstructs from canonical provider payload bytes
-  - add 4-peer integration coverage for publish, lock, fetch/import, build,
-    yank, search, and short-alias flows
+  - superseded by the later Musubi live gateway fetch and registry integration
+    sync above
   - run full workspace test and clippy during a longer validation window
 
 Latest sync (2026-04-17 WSV no-op MV commit gaps closed):

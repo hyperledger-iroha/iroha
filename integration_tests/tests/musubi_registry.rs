@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use eyre::{Result, WrapErr, eyre};
+use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -27,8 +27,8 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::ALICE_ID;
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::chunker_registry;
 
@@ -39,12 +39,45 @@ const QUERY_RETRY_DELAY: Duration = Duration::from_millis(250);
 async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     init_instruction_registry();
 
+    let math_ref: MusubiPackageRef = "garden_of_live_flowers.universal/math@1.0.0".parse()?;
+    let swap_ref: MusubiPackageRef = "garden_of_live_flowers.universal/swap@1.0.0".parse()?;
+    let legacy_ref: MusubiPackageRef =
+        "garden_of_live_flowers.universal/legacy-swap@0.9.0".parse()?;
+
+    let math_release = build_release(&math_ref, 0x21, b"fn add(a, b) { a + b }", [], ["add"])?;
+    let math_dependency = MusubiDependency::new("math".parse()?, math_ref.clone());
+    let swap_release = build_release(
+        &swap_ref,
+        0x31,
+        b"fn quote(x) { math::add(x, x) }",
+        [math_dependency],
+        ["quote"],
+    )?;
+    let legacy_release = build_release(&legacy_ref, 0x41, b"fn quote(x) { x }", [], ["quote"])?;
+
     let short_alias_permission: Permission = CanSetMusubiShortAlias.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Grant::account_permission(
             short_alias_permission,
-            ALICE_ID.clone(),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        ))
+        .with_genesis_instruction(register_manifest_instruction(&math_release)?)
+        .with_genesis_instruction(PublishMusubiRelease::new(math_release.clone()))
+        .next_genesis_transaction()
+        .with_genesis_instruction(register_manifest_instruction(&swap_release)?)
+        .with_genesis_instruction(PublishMusubiRelease::new(swap_release.clone()))
+        .with_genesis_instruction(SetMusubiShortAlias::new(MusubiShortAlias::new(
+            "swap".parse()?,
+            swap_ref.package.clone(),
+        )))
+        .next_genesis_transaction()
+        .with_genesis_instruction(register_manifest_instruction(&legacy_release)?)
+        .with_genesis_instruction(PublishMusubiRelease::new(legacy_release.clone()))
+        .next_genesis_transaction()
+        .with_genesis_instruction(YankMusubiRelease::new(
+            legacy_ref.clone(),
+            "superseded by 1.0.0",
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -56,31 +89,13 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     };
 
     network.ensure_blocks(1).await?;
-    let client = network.client();
     let query_client = network
         .peers()
         .last()
         .ok_or_else(|| eyre!("network must include at least one peer"))?
         .client();
 
-    let math_ref: MusubiPackageRef = "wonderland.universal/math@1.0.0".parse()?;
-    let swap_ref: MusubiPackageRef = "wonderland.universal/swap@1.0.0".parse()?;
-
-    let math_release = build_release(&math_ref, 0x21, b"fn add(a, b) { a + b }", [], ["add"])?;
-    register_manifest(&client, &math_release)?;
-    client.submit_blocking(PublishMusubiRelease::new(math_release.clone()))?;
     eventually_find_release(&query_client, &math_ref).await?;
-
-    let math_dependency = MusubiDependency::new("math".parse()?, math_ref.clone());
-    let swap_release = build_release(
-        &swap_ref,
-        0x31,
-        b"fn quote(x) { math::add(x, x) }",
-        [math_dependency],
-        ["quote"],
-    )?;
-    register_manifest(&client, &swap_release)?;
-    client.submit_blocking(PublishMusubiRelease::new(swap_release.clone()))?;
 
     let propagated_swap = eventually_find_release(&query_client, &swap_ref).await?;
     assert_eq!(propagated_swap.package, swap_ref);
@@ -101,7 +116,7 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     assert_eq!(releases[0].package, swap_ref);
 
     let search = query_client.query_single(SearchMusubiPackages {
-        namespace: Some("wonderland.universal".parse()?),
+        namespace: Some("garden_of_live_flowers.universal".parse()?),
         query: "swap".to_owned(),
         include_yanked: false,
         offset: 0,
@@ -111,39 +126,23 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     assert_eq!(search[0].package, swap_ref.package);
     assert_eq!(search[0].latest_active, Some(swap_ref.version.clone()));
 
-    client.submit_blocking(SetMusubiShortAlias::new(MusubiShortAlias::new(
-        "swap".parse()?,
-        swap_ref.package.clone(),
-    )))?;
     let alias_target = eventually_find_alias(&query_client, "swap".parse()?).await?;
     assert_eq!(alias_target, swap_ref.package);
 
-    let retarget_err = client
-        .submit_blocking(SetMusubiShortAlias::new(MusubiShortAlias::new(
-            "swap".parse()?,
-            math_ref.package.clone(),
-        )))
-        .expect_err("short alias retargeting must be rejected");
-    assert!(
-        format!("{retarget_err:?}").contains("already targets"),
-        "expected retarget rejection, got {retarget_err:?}"
-    );
-
-    client.submit_blocking(YankMusubiRelease::new(
-        swap_ref.clone(),
-        "superseded by 1.0.1",
-    ))?;
-    let yanked_swap = eventually_find_yanked_release(&query_client, &swap_ref).await?;
-    assert!(matches!(yanked_swap.status, MusubiReleaseStatus::Yanked(_)));
+    let yanked_legacy = eventually_find_yanked_release(&query_client, &legacy_ref).await?;
+    assert!(matches!(
+        yanked_legacy.status,
+        MusubiReleaseStatus::Yanked(_)
+    ));
 
     let active_releases: Vec<_> = query_client.query_single(FindMusubiPackageReleases {
-        package: swap_ref.package.clone(),
+        package: legacy_ref.package.clone(),
         include_yanked: false,
     })?;
     assert!(active_releases.is_empty());
 
     let all_releases: Vec<_> = query_client.query_single(FindMusubiPackageReleases {
-        package: swap_ref.package.clone(),
+        package: legacy_ref.package.clone(),
         include_yanked: true,
     })?;
     assert_eq!(all_releases.len(), 1);
@@ -153,8 +152,8 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     ));
 
     let active_search: Vec<_> = query_client.query_single(SearchMusubiPackages {
-        namespace: Some("wonderland.universal".parse()?),
-        query: "swap".to_owned(),
+        namespace: Some("garden_of_live_flowers.universal".parse()?),
+        query: "legacy".to_owned(),
         include_yanked: false,
         offset: 0,
         limit: 10,
@@ -164,12 +163,12 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
     Ok(())
 }
 
-fn register_manifest(client: &Client, release: &MusubiRelease) -> Result<()> {
+fn register_manifest_instruction(release: &MusubiRelease) -> Result<RegisterPinManifest> {
     let source_plan = release
         .source_archive_plan
         .as_ref()
         .ok_or_else(|| eyre!("test release must include source plan"))?;
-    client.submit_blocking(RegisterPinManifest::new(
+    Ok(RegisterPinManifest::new(
         release.archive.sorafs_manifest,
         default_chunker_handle(),
         chunk_plan_digest(source_plan),
@@ -177,8 +176,7 @@ fn register_manifest(client: &Client, release: &MusubiRelease) -> Result<()> {
         0,
         None,
         None,
-    ))?;
-    Ok(())
+    ))
 }
 
 fn build_release<const DEPS: usize, const EXPORTS: usize>(

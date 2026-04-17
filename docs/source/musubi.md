@@ -77,8 +77,10 @@ cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
 cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias math
 cargo run -p musubi -- install --config client.toml
 cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
+cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64,package=math'
 cargo run -p musubi -- cache import math --source-root ../math
 cargo run -p musubi -- cache fetch math --provider-payload math.payload
+cargo run -p musubi -- cache fetch math --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,base-url=https://gw.example,stream-token=BASE64'
 cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
 cargo run -p musubi -- search swap --config client.toml
@@ -103,9 +105,24 @@ Use `install --locked` in CI to reject stale lockfiles.
 `cache import` copies a fetched or checked-out source tree into the local
 Musubi cache and verifies it against the archive commitment in `Musubi.lock`.
 `cache fetch` and `install --fetch` reconstruct a source tree from a verified
-provider payload using the lockfile source archive plan. This local payload path
-is the current CLI-safe fetch surface; gateway-provider fetch can be layered onto
-the same archive plan without changing the lockfile format.
+provider payload or live SoraFS gateway providers using the lockfile source
+archive plan. Local payload files use `--provider-payload <path>`. Live gateway
+fetch uses one or more `--gateway-provider` specs:
+
+```text
+name=<alias>,provider-id=<64-hex>,base-url=<url>,stream-token=<base64>[,privacy-url=<url>][,package=<alias-or-ref-or-id>][,manifest=<64-hex>]
+```
+
+`--provider-payload` and `--gateway-provider` are mutually exclusive for one
+fetch operation. If exactly one locked package is missing from the cache, an
+unscoped gateway provider can be used. If more than one package is missing,
+scope each gateway provider with `package=<dependency-alias>`,
+`package=<namespace/package@version>`, `package=<namespace/package>`, or
+`manifest=<64-hex SoraFS manifest digest>` so Musubi cannot fetch the wrong
+archive for a lockfile node. Runtime gateway options include
+`--gateway-client-id`, `--gateway-retry-budget`, `--gateway-max-peers`,
+`--gateway-telemetry-region`, and `--gateway-scoreboard-out`.
+Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
 `build` links cached dependency sources by rewriting calls such as
 `math::add()` to deterministic internal Kotodama function names, and rejects
 calls to functions that the dependency did not export. Musubi v1 libraries are

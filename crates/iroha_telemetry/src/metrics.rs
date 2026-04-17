@@ -7174,6 +7174,8 @@ pub struct Metrics {
     pub torii_stream_rows: HistogramVec,
     /// Torii: transaction admission latency (seconds) by lane and endpoint
     pub torii_lane_admission_latency_seconds: HistogramVec,
+    /// Torii: route-stage latency (seconds) by route kind, stage, and outcome
+    pub torii_route_stage_latency_seconds: HistogramVec,
     /// Torii: attachment rejects grouped by reason.
     pub torii_attachment_reject_total: IntCounterVec,
     /// Torii: attachment sanitization latency (milliseconds).
@@ -11545,6 +11547,17 @@ impl Default for Metrics {
             &["lane_id", "endpoint"],
         )
         .expect("Infallible");
+        let torii_route_stage_latency_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "torii_route_stage_latency_seconds",
+                "Torii route-stage latency (seconds) by route kind, stage, and outcome",
+            )
+            .buckets(
+                prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
+            ),
+            &["route_kind", "stage", "outcome"],
+        )
+        .expect("Infallible");
         let torii_attachment_reject_total = IntCounterVec::new(
             Opts::new(
                 "torii_attachment_reject_total",
@@ -14025,6 +14038,7 @@ impl Default for Metrics {
             torii_scan_ms,
             torii_stream_rows,
             torii_lane_admission_latency_seconds,
+            torii_route_stage_latency_seconds,
             torii_attachment_reject_total,
             torii_attachment_sanitize_ms
         );
@@ -14630,6 +14644,7 @@ impl Default for Metrics {
             torii_scan_ms,
             torii_stream_rows,
             torii_lane_admission_latency_seconds,
+            torii_route_stage_latency_seconds,
             torii_attachment_reject_total,
             torii_attachment_sanitize_ms,
             torii_zk_prover_attachment_bytes,

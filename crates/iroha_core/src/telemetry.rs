@@ -7488,6 +7488,22 @@ impl Telemetry {
         }
     }
 
+    /// Record Torii route-stage latency without synchronizing the telemetry actor.
+    pub fn observe_torii_route_stage_latency(
+        &self,
+        route_kind: &str,
+        stage: &str,
+        outcome: &str,
+        duration: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_route_stage_latency_seconds
+                .with_label_values(&[route_kind, stage, outcome])
+                .observe(duration.as_secs_f64());
+        }
+    }
+
     /// Record Torii snapshot query metrics without synchronizing the telemetry actor.
     pub fn observe_torii_query_snapshot(
         &self,
@@ -9355,6 +9371,25 @@ mod tests {
         let before = histogram.get_sample_count();
 
         telemetry.observe_torii_lane_admission_latency("transaction", LaneId::SINGLE, 0.25);
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_route_stage_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_route_stage_latency_seconds
+            .with_label_values(&["query", "verify", "ok"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_route_stage_latency(
+            "query",
+            "verify",
+            "ok",
+            Duration::from_micros(25),
+        );
 
         assert_eq!(histogram.get_sample_count(), before + 1);
     }
