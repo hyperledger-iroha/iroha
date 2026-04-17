@@ -11471,12 +11471,23 @@ fn vote_rx_drain_budget(
     max_budget: Duration,
     budget_cap: Duration,
 ) -> Duration {
-    let quorum_timeout = crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
-        block_time,
-        commit_time,
-        da_enabled,
-        da_quorum_timeout_multiplier,
-    );
+    let quorum_timeout = if da_enabled {
+        let da_window = block_time.saturating_add(
+            crate::sumeragi::main_loop::saturating_mul_duration(commit_time, 4),
+        );
+        crate::sumeragi::main_loop::saturating_mul_duration(
+            da_window,
+            da_quorum_timeout_multiplier.max(1),
+        )
+        .max(Duration::from_millis(1))
+    } else {
+        crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            da_quorum_timeout_multiplier,
+        )
+    };
     let budget = quorum_timeout.min(max_budget);
     // Cap vote draining so long queues don't stall RBC/DA progress in a single iteration.
     let cap = Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS).min(budget_cap);
