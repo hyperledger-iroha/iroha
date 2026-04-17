@@ -3138,7 +3138,7 @@ fn routing_policy_dataspace_resolution() {
     assert_eq!(parsed.routing_policy.default_dataspace, DataSpaceId::new(1));
     assert_eq!(
         parsed.routing_policy.rules[0].dataspace,
-        Some(DataSpaceId::GLOBAL)
+        Some(DataSpaceId::UNIVERSAL)
     );
 }
 

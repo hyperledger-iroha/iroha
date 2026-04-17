@@ -1101,6 +1101,21 @@ pub struct LaneRelayStore {
 }
 
 impl LaneRelayStore {
+    fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
+        let lane = envelope.lane_id;
+        let height = envelope.block_height;
+        let key = (lane, envelope.dataspace_id, height);
+        self.entries.get(&key).and_then(|existing| {
+            if existing.settlement_hash != envelope.settlement_hash
+                || existing.block_header.hash() != envelope.block_header.hash()
+            {
+                Some(LaneRelayError::ConflictingRelay { lane, height })
+            } else {
+                None
+            }
+        })
+    }
+
     /// Insert or replace a lane relay envelope.
     ///
     /// # Errors
@@ -7330,7 +7345,22 @@ where
         let ids: Vec<PeerId> = c
             .members
             .into_iter()
-            .filter_map(|acct| validator_peer_ids_by_account.get(&acct).cloned())
+            .filter_map(|acct| {
+                if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
+                    return Some(peer_id.clone());
+                }
+                let peer_id = PeerId::from(acct.signatory().clone());
+                if !present_peers.contains(&peer_id) {
+                    return None;
+                }
+                if enforce_topology_membership && !topology_peers.contains(&peer_id) {
+                    return None;
+                }
+                if !peer_has_live_consensus_key(world, &peer_id, block_height) {
+                    return None;
+                }
+                Some(peer_id)
+            })
             .collect();
         if !ids.is_empty() {
             return Some(ids);
@@ -8319,7 +8349,7 @@ mod storage_migration_tests {
         AccountAlias::new(
             label,
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
     }
 
@@ -8461,7 +8491,7 @@ mod storage_migration_tests {
             scopes,
             BTreeMap::from([
                 (
-                    DataSpaceId::GLOBAL,
+                    DataSpaceId::UNIVERSAL,
                     BTreeSet::from([AccountAliasDomain::new(
                         "treasury".parse::<Name>().expect("global domain name"),
                     )]),
@@ -11893,8 +11923,8 @@ fn derive_account_scope_directory_entry(
         }
     }
 
-    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::GLOBAL) {
-        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::UNIVERSAL) {
+        entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
     }
 
     Ok(Some(entry))
@@ -12488,7 +12518,7 @@ pub trait WorldReadOnly {
     /// Collect the account's dataspace -> domain hierarchy from primary label
     /// materialization, Space Directory bindings, and bound aliases.
     ///
-    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// Accounts materialized with a non-universal primary label inherit that label's dataspace/domain
     /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
     /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
     /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
@@ -12511,7 +12541,7 @@ pub trait WorldReadOnly {
     ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
         match self.account_scope_entry(account_id)? {
             Some(entry) => entry.hierarchy(self.dataspace_catalog()),
-            None => Ok(BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())])),
+            None => Ok(BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())])),
         }
     }
 
@@ -13831,6 +13861,7 @@ impl<'world> WorldBlock<'world> {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -14098,6 +14129,7 @@ impl<'world> WorldBlock<'world> {
         account_permissions.commit();
         tx_sequences.commit();
         roles.commit();
+        rwas.commit();
         nfts.commit();
         assets.commit();
         identifier_claims.commit();
@@ -14998,6 +15030,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -15241,6 +15274,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         space_directory_manifests.apply();
         account_permissions.apply();
         roles.apply();
+        rwas.apply();
         nfts.apply();
         identifier_claims.apply();
         identifier_policies.apply();
@@ -18888,10 +18922,8 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
-            let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
             bindings.retain(|binding| {
-                present_peers.contains(&binding.peer_id)
-                    && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                peer_has_live_consensus_key(world, &binding.peer_id, block_height)
             });
             bindings.sort_by(|lhs, rhs| {
                 lhs.validator
@@ -19208,6 +19240,9 @@ impl State {
         )?;
         envelope.verify_with_quorum(quorum)?;
         self.verify_lane_relay_qc(envelope, &committee)?;
+        if let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
+            return Err(error);
+        }
         envelope.verify_fastpq_proof_material()?;
 
         let inserted = {
@@ -22208,6 +22243,29 @@ impl<'state> StateBlock<'state> {
             })
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
+            BTreeSet::new()
+        } else {
+            validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
+        };
+        if !checkpoint_lane_ids.is_empty() {
+            let before = world_peers.len();
+            world_peers.retain(|peer| {
+                checkpoint_topology.contains(peer)
+                    || !validator_lane_ids_for_peer(&self.world, peer)
+                        .is_disjoint(&checkpoint_lane_ids)
+            });
+            let filtered = before.saturating_sub(world_peers.len());
+            if filtered > 0 {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    filtered,
+                    lanes = checkpoint_lane_ids.len(),
+                    "ignoring world peers outside checkpoint topology lanes during block apply reconciliation"
+                );
+            }
+        }
         let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
         // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
         // Status tags can be stale around mode transitions, so we also consult the effective
@@ -22459,7 +22517,7 @@ impl<'state> StateBlock<'state> {
             };
             let mut lane = iroha_data_model::nexus::LaneConfig {
                 id: next_lane_id,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: format!("elastic-lane-{}", next_lane_id.as_u32()),
                 description: Some("Consensus-managed elastic lane".to_owned()),
                 visibility: iroha_data_model::nexus::LaneVisibility::Public,
@@ -23924,7 +23982,12 @@ fn replay_signature_error_recoverable(err: &crate::block::BlockValidationError) 
     )
 }
 
-fn replay_remap_block_signature_indices_to_topology(
+/// Remap block-signature indices to the provided topology when the signatures themselves remain
+/// valid but their embedded signer indices no longer line up with the local roster ordering.
+///
+/// This is used during replay and live catch-up validation to recover certified blocks that were
+/// authored under a compatible roster ordering but arrived with stale signer indices.
+pub(crate) fn remap_block_signature_indices_to_topology(
     block: &mut SignedBlock,
     topology: &crate::sumeragi::network_topology::Topology,
 ) -> Result<(), crate::block::BlockValidationError> {
@@ -24154,7 +24217,7 @@ pub fn replay_blocks_from_kura_range(
                     ) =>
                 {
                     let mut recovered = *failed_block;
-                    match replay_remap_block_signature_indices_to_topology(
+                    match remap_block_signature_indices_to_topology(
                         &mut recovered,
                         &validation_topology,
                     ) {
@@ -24203,7 +24266,7 @@ pub fn replay_blocks_from_kura_range(
                                         unreachable!("needs_remap derived from an error result")
                                     }
                                 };
-                                if replay_remap_block_signature_indices_to_topology(
+                                if remap_block_signature_indices_to_topology(
                                     &mut remapped,
                                     &rotated_topology,
                                 )
@@ -24301,6 +24364,7 @@ mod replay_validation_tests {
         ChainId,
         block::SignedBlock,
         isi::Log,
+        peer::PeerId,
         prelude::{Account, Domain, DomainId},
         transaction::TransactionBuilder,
     };
@@ -24312,6 +24376,34 @@ mod replay_validation_tests {
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
+    }
+
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
     }
 
     #[test]
@@ -24401,6 +24493,10 @@ mod replay_validation_tests {
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
         let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
             .chain(0, Some(&signed_block2))
+            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
+                &signed_block2,
+                topology.as_ref(),
+            )))
             .sign(leader.private_key())
             .unpack(|_| {});
         let signed_block3: SignedBlock = block3.into();
@@ -25047,7 +25143,7 @@ mod permission_cache_tests {
         )
         .expect("deserialize permission");
         let target = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         });
 
         let permissions = BTreeSet::from([stored]);
@@ -25317,9 +25413,65 @@ mod permission_cache_tests {
         exec_path.to_string_lossy().to_string()
     }
 
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
+    }
+
+    fn build_test_block(
+        accepted: AcceptedTransaction<'static>,
+        parent: Option<&SignedBlock>,
+        topology: &crate::sumeragi::network_topology::Topology,
+        signer: &iroha_crypto::PrivateKey,
+    ) -> crate::block::NewBlock {
+        let mut builder = crate::block::BlockBuilder::new(vec![accepted]).chain(0, parent);
+        if let Some(parent) = parent.filter(|block| block.header().height().get() >= 2) {
+            builder = builder.with_previous_roster_evidence(Some(
+                previous_roster_evidence_for_parent(parent, topology.as_ref()),
+            ));
+        }
+        builder.sign(signer).unpack(|_| {})
+    }
+
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn permission_cache_rebuilds_after_restart() {
+        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
+        // platform-default worker stack for this integration-heavy scenario.
+        let handle = std::thread::Builder::new()
+            .name("permission_cache_rebuilds_after_restart".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(permission_cache_rebuilds_after_restart_impl)
+            .expect("spawn permission cache replay test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn permission_cache_rebuilds_after_restart_impl() {
         use std::{
             borrow::Cow,
             num::{NonZeroU64, NonZeroUsize},
@@ -25513,10 +25665,13 @@ mod permission_cache_tests {
             .sign(owner_keypair.private_key());
         let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
 
-        let unverified_grant = crate::block::BlockBuilder::new(vec![accepted_grant])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_grant = build_test_block(
+            accepted_grant,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_grant.header());
             let committed_grant = unverified_grant
@@ -25657,10 +25812,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
-        let unverified_revoke = crate::block::BlockBuilder::new(vec![accepted_revoke])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke = build_test_block(
+            accepted_revoke,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke.header());
             let committed_revoke = unverified_revoke
@@ -25776,10 +25934,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
-        let unverified_role = crate::block::BlockBuilder::new(vec![accepted_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_role = build_test_block(
+            accepted_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_role.header());
             let committed_role = unverified_role
@@ -25880,10 +26041,13 @@ mod permission_cache_tests {
             ))])
             .sign(owner_keypair.private_key());
         let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
-        let unverified_revoke_role = crate::block::BlockBuilder::new(vec![accepted_revoke_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke_role = build_test_block(
+            accepted_revoke_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke_role.header());
             let committed_revoke_role = unverified_revoke_role
@@ -26818,22 +26982,34 @@ impl StateTransaction<'_, '_> {
                 .world
                 .bound_account_aliases(asset_id.account())
                 .into_iter()
-                .filter_map(|alias| alias.domain.map(|domain| domain.to_string()))
+                .filter_map(|alias| {
+                    alias
+                        .domain_id(&self.nexus.dataspace_catalog)
+                        .ok()
+                        .flatten()
+                        .map(|domain| domain.to_string())
+                })
                 .collect();
             let account_domain = self
                 .world
                 .accounts
                 .get(asset_id.account())
                 .and_then(|value| {
-                    value
-                        .as_ref()
-                        .label()
-                        .and_then(|label| label.domain.as_ref().map(ToString::to_string))
+                    value.as_ref().label().and_then(|label| {
+                        label
+                            .domain_id(&self.nexus.dataspace_catalog)
+                            .ok()
+                            .flatten()
+                            .map(|domain| domain.to_string())
+                    })
                 })
                 .or_else(|| {
                     alias_domains
                         .iter()
-                        .find(|domain| matches!(domain.as_str(), "banka" | "bankb" | "sbp"))
+                        .find(|domain| {
+                            let (name, _) = domain.split_once('.').unwrap_or((domain.as_str(), ""));
+                            matches!(name, "banka" | "bankb" | "sbp")
+                        })
                         .cloned()
                 })
                 .or_else(|| alias_domains.first().cloned())
@@ -28954,8 +29130,34 @@ mod tests {
         AccountAlias::new(
             label,
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
+    }
+
+    fn seed_account_alias_lease(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     }
 
     #[test]
@@ -29385,7 +29587,7 @@ mod tests {
         let retail_dataspace = DataSpaceId::new(17);
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -29418,7 +29620,7 @@ mod tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 universal_domain.name().clone(),
             )),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
         let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
             "retaildesk".parse().expect("label"),
@@ -29442,7 +29644,7 @@ mod tests {
             .account_scope_hierarchy(&account_id)
             .expect("account hierarchy");
         assert_eq!(
-            hierarchy.get(&DataSpaceId::GLOBAL),
+            hierarchy.get(&DataSpaceId::UNIVERSAL),
             Some(&BTreeSet::from([universal_domain.clone()])),
             "universal dataspace should expose the bound universal domain",
         );
@@ -29455,7 +29657,7 @@ mod tests {
             stx.world
                 .account_dataspaces(&account_id)
                 .expect("account dataspaces"),
-            BTreeSet::from([DataSpaceId::GLOBAL, retail_dataspace]),
+            BTreeSet::from([DataSpaceId::UNIVERSAL, retail_dataspace]),
             "accounts should expose the universal dataspace plus extra bindings",
         );
         assert_eq!(
@@ -29517,7 +29719,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
             initial_scopes,
-            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "materialized accounts should start in the universal dataspace only",
         );
 
@@ -29534,7 +29736,7 @@ mod tests {
         assert_eq!(
             bound_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (
                     retail_dataspace,
                     BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -29556,7 +29758,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
             unbound_scopes,
-            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
             "alias unbinds should remove the extra dataspace from the account scope directory",
         );
     }
@@ -29707,7 +29909,7 @@ mod tests {
         assert_eq!(
             retail_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (retail_dataspace, BTreeSet::new()),
             ]),
             "UAID bindings should surface the manifest dataspace in the account scope directory",
@@ -29731,7 +29933,7 @@ mod tests {
         assert_eq!(
             treasury_scopes,
             BTreeMap::from([
-                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
                 (treasury_dataspace, BTreeSet::new()),
             ]),
             "manifest-driven UAID binding changes should refresh the account scope directory",
@@ -29763,7 +29965,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_args_from_asset_event_use_destination_account_domain() {
+    fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alias() {
         let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
         let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("centralbank");
@@ -29797,7 +29999,7 @@ mod tests {
 
         assert_eq!(
             obj.get("account_domain"),
-            Some(&norito::json!("centralbank"))
+            Some(&norito::json!("cbuae.universal"))
         );
         assert_eq!(
             obj.get("account_id"),
@@ -29852,7 +30054,7 @@ mod tests {
 
         assert_eq!(
             obj.get("account_domain"),
-            Some(&norito::json!("centralbank"))
+            Some(&norito::json!("centralbank.universal"))
         );
         assert_eq!(
             obj.get("account_id"),
@@ -30181,7 +30383,7 @@ mod tests {
             .iter()
             .map(|lane| lane.dataspace_id)
             .collect();
-        ids.insert(DataSpaceId::GLOBAL);
+        ids.insert(DataSpaceId::UNIVERSAL);
         let entries = ids
             .into_iter()
             .map(|id| DataSpaceMetadata {
@@ -31000,8 +31202,8 @@ mod tests {
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31012,7 +31214,7 @@ mod tests {
                     LaneConfig::default(),
                     LaneConfig {
                         id: LaneId::new(1),
-                        dataspace_id: DataSpaceId::GLOBAL,
+                        dataspace_id: DataSpaceId::UNIVERSAL,
                         alias: "historical".to_string(),
                         ..LaneConfig::default()
                     },
@@ -31048,8 +31250,8 @@ mod tests {
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31079,7 +31281,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding"));
 
@@ -31088,7 +31290,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31118,7 +31320,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31147,7 +31349,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding-only"));
 
@@ -31156,7 +31358,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31185,7 +31387,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31208,7 +31410,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31216,7 +31418,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31261,7 +31463,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31289,7 +31491,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31297,7 +31499,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31340,7 +31542,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31368,7 +31570,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -31376,7 +31578,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31432,7 +31634,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31485,7 +31687,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid_mixed = UniversalAccountId::from_hash(Hash::new(b"uaid::mixed-manifests"));
         let uaid_stale_only =
@@ -31496,7 +31698,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31546,7 +31748,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31581,7 +31783,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
         let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
@@ -31591,7 +31793,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31626,7 +31828,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -31660,7 +31862,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(9);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -31669,7 +31871,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31770,7 +31972,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -31825,7 +32027,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(11);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -31834,7 +32036,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -32389,7 +32591,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -32434,7 +32636,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32467,7 +32673,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32492,7 +32702,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32517,7 +32731,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32560,7 +32778,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32584,7 +32806,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32627,7 +32853,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32669,7 +32899,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32681,7 +32915,7 @@ mod tests {
         assert!(matches!(
             err,
             LaneRelayError::DataspaceMismatch { expected, actual }
-                if expected == DataSpaceId::GLOBAL && actual == DataSpaceId::new(1)
+                if expected == DataSpaceId::UNIVERSAL && actual == DataSpaceId::new(1)
         ));
     }
 
@@ -32697,7 +32931,11 @@ mod tests {
         let signers_bitmap = signer_bitmap(&[0], validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32720,7 +32958,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -32744,7 +32986,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -32757,7 +32999,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![ALICE_ID.clone(), BOB_ID.clone()],
             )],
         );
@@ -32809,7 +33051,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -32822,7 +33064,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -32877,7 +33119,7 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
         let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
         let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
         let fillers =
@@ -32909,7 +33151,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -32964,7 +33206,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -32977,7 +33219,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33013,7 +33255,7 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
         let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
         let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
         let fillers =
@@ -33045,7 +33287,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -33083,7 +33325,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33099,7 +33341,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33134,7 +33376,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33150,7 +33392,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33189,7 +33431,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33205,7 +33447,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33242,7 +33484,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -33258,7 +33500,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -33290,12 +33532,12 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
-        let same = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
+        let same = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
         assert_eq!(seed, same);
 
         let different_lane =
-            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(1), 1);
+            state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(1), 1);
         assert_ne!(seed, different_lane);
         let different_ds = state.lane_relay_committee_seed(DataSpaceId::new(1), LaneId::new(0), 1);
         assert_ne!(seed, different_ds);
@@ -33447,7 +33689,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         let keypairs = configure_commit_topology(&state, 1);
 
@@ -33493,7 +33739,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33511,8 +33757,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -33572,7 +33826,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33590,8 +33844,12 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
         configure_commit_topology(&state, 1);
@@ -33631,7 +33889,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -33649,8 +33907,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -38574,7 +38840,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_owner$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_owner$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -38595,7 +38863,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -38641,9 +38911,12 @@ mod tests {
     #[test]
     fn detached_can_modify_account_metadata_allows_domain_owner() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
+        let bob_alias = alias_in_domain(&domain_id, "bob".parse().expect("alias"));
+        let bob_account = new_sample_account(&BOB_ID)
+            .with_label(Some(bob_alias))
+            .build(&BOB_ID);
 
         let world = World::with([domain], [alice_account, bob_account], []);
         let view = world.view();
@@ -38670,7 +38943,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -38704,7 +38982,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -38860,7 +39143,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -38894,7 +39177,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -38990,7 +39273,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor".parse().expect("role id");
         let perm: Permission = CanModifyNftMetadata {
@@ -39050,7 +39335,9 @@ mod tests {
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_perm$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_perm$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor_perm".parse().expect("role id");
         let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
@@ -40280,6 +40567,14 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            },
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -40510,8 +40805,7 @@ mod tests {
                 MintRequestCanceledAt[sequence] = canceled_at_ms;
               }
 
-              #[access(read="*", write="*")]
-              kotoage fn run() {
+              fn main() {
                 let ev = trigger_event();
                 let action_key = name("action");
                 let request_id_key = name("request_id");
@@ -40522,19 +40816,19 @@ mod tests {
                 let created_at_ms_key = name("created_at_ms");
                 let expires_at_ms_key = name("expires_at_ms");
 
-                let action = json_get_name(ev, action_key);
+                let action = ev.get_name(action_key);
 
                 if (action == name("create")) {
-                  let request_id = json_get_name(ev, request_id_key);
-                  assert(!contains(MintRequestSequenceById, request_id), "mint request already exists");
+                  let request_id = ev.get_name(request_id_key);
+                  assert(!MintRequestSequenceById.contains(request_id), "mint request already exists");
 
                   let sequence = MintRequestNextSequence + 1;
-                  let fi_id = json_get_name(ev, fi_id_key);
-                  let to_account_id = json_get_account_id(ev, to_account_id_key);
-                  let amount_i64 = json_get_int(ev, amount_i64_key);
-                  let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
-                  let created_at_ms = json_get_int(ev, created_at_ms_key);
-                  let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+                  let fi_id = ev.get_name(fi_id_key);
+                  let to_account_id = ev.get_account_id(to_account_id_key);
+                  let amount_i64 = ev.get_int(amount_i64_key);
+                  let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+                  let created_at_ms = ev.get_int(created_at_ms_key);
+                  let expires_at_ms = ev.get_int(expires_at_ms_key);
 
                   MintRequestNextSequence = sequence;
                   MintRequestSequenceById[request_id] = sequence;
@@ -40676,29 +40970,28 @@ mod tests {
         let banking_label = AccountAlias::new(
             "banking".parse().expect("banking label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         );
 
         let src = r#"
             seiyaku AliasTransfer {
-              #[access(read="*", write="*")]
-              kotoage fn run() permission(alias_transfer_run) {
+              fn main() {
                 let ev = trigger_event();
-                if (json_get_name(ev, name("kind")) != name("asset_change")) {
+                if (ev.get_name(name("kind")) != name("asset_change")) {
                   return;
                 }
-                if (json_get_name(ev, name("op")) != name("added")) {
+                if (ev.get_name(name("op")) != name("added")) {
                   return;
                 }
-                let dst_domain = json_get_name(ev, name("account_domain"));
-                let dst = json_get_account_id(ev, name("account_id"));
-                let amount = json_get_int(ev, name("amount_i64"));
+                let dst_domain = ev.get_name(name("account_domain"));
+                let dst = ev.get_account_id(name("account_id"));
+                let amount = ev.get_int(name("amount_i64"));
                 if (amount <= 0) {
                   return;
                 }
                 let src = resolve_account_alias("banking@wonderland.universal");
                 let payout = amount * 76;
-                if (dst_domain != name("wonderland")) {
+                if (dst_domain != name("wonderland.universal")) {
                   return;
                 }
                 transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
@@ -40757,7 +41050,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
                         ),
                     },
                 ),
@@ -40781,7 +41074,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
                         ),
                     },
                 ),
@@ -40801,6 +41094,17 @@ mod tests {
             )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: rose_def_id.clone(),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &banking_label);
             iroha_data_model::isi::domain_link::SetPrimaryAccountAlias {
                 account: ALICE_ID.clone(),
                 alias: Some(banking_label.clone()),
@@ -41492,6 +41796,144 @@ mod tests {
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
         expected_topology.block_committed(world_peers, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_world_peer_append_scoped_to_checkpoint_lanes() {
+        use iroha_config::parameters::actual::LaneValidatorMode;
+        use iroha_data_model::nexus::{
+            LaneCatalog, LaneConfig as CatalogLaneConfig, LaneVisibility,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        {
+            let lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    CatalogLaneConfig::default(),
+                    CatalogLaneConfig {
+                        id: LaneId::new(1),
+                        alias: "restricted".to_string(),
+                        visibility: LaneVisibility::Restricted,
+                        ..CatalogLaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let public_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let restricted_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let base_topology: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        {
+            let mut topo = state.commit_topology.block();
+            topo.clear();
+            for peer in &base_topology {
+                topo.push(peer.clone());
+            }
+            topo.commit();
+        }
+
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.extend(
+                    restricted_keypairs
+                        .iter()
+                        .map(|kp| PeerId::new(kp.public_key().clone())),
+                );
+                peers.apply();
+            }
+            for kp in &public_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::SINGLE, validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            for kp in &restricted_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::new(1), validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            world_block.commit();
+        }
+        seed_consensus_keys_with_pops(
+            &state,
+            &public_keypairs
+                .iter()
+                .chain(restricted_keypairs.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(public_keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), prev_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();
@@ -43863,7 +44305,7 @@ mod tests {
         let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
         let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
         let holder_id = AccountId::new(KeyPair::random().into_parts().0);
-        let nft_id: NftId = "ticket$nfts".parse().unwrap();
+        let nft_id: NftId = "ticket$nfts.universal".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),

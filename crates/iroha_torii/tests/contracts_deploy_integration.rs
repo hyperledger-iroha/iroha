@@ -437,7 +437,7 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
         0,
         &creds.account,
         999,
-        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
     .expect("stale contract address");
 

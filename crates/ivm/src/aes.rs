@@ -533,9 +533,13 @@ unsafe fn aesdec_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     use core::arch::aarch64::*;
     let s = unsafe { vld1q_u8(state.as_ptr()) };
     let k = unsafe { vld1q_u8(rk.as_ptr()) };
-    // Inverse AES round using AESD + AESIMC.
-    let r = vaesdq_u8(s, k);
+    // `aesdec` takes the raw round key and must match:
+    // AddRoundKey -> InvMixColumns -> InvShiftRows -> InvSubBytes.
+    // ARM's AESD round does not accept that contract directly, so we apply the
+    // XOR and InvMixColumns first, then finish with an inverse "last" round.
+    let r = veorq_u8(s, k);
     let r = vaesimcq_u8(r);
+    let r = vaesdq_u8(r, vdupq_n_u8(0));
     let mut out = [0u8; 16];
     unsafe { vst1q_u8(out.as_mut_ptr(), r) };
     out
@@ -570,7 +574,13 @@ unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     unsafe {
         let s = _mm_loadu_si128(state.as_ptr() as *const __m128i);
         let k = _mm_loadu_si128(rk.as_ptr() as *const __m128i);
-        let r = _mm_aesdec_si128(s, k);
+        // `_mm_aesdec_si128` expects the equivalent-inverse-cipher key
+        // schedule, but the public `aesdec` API takes the raw round key. Match
+        // the scalar inverse round by applying AddRoundKey and InvMixColumns
+        // explicitly, then finish with an inverse "last" round.
+        let r = _mm_xor_si128(s, k);
+        let r = _mm_aesimc_si128(r);
+        let r = _mm_aesdeclast_si128(r, _mm_setzero_si128());
         let mut out = core::mem::MaybeUninit::<[u8; 16]>::uninit();
         _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, r);
         out.assume_init()
@@ -610,5 +620,19 @@ mod tests_accel {
         let scalar = aesdec_impl(state, rk);
         let got = aesdec(state, rk);
         assert_eq!(got, scalar);
+    }
+
+    #[test]
+    fn aesdec_inverts_public_aesenc_round() {
+        let state = [
+            0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba,
+            0xdc, 0xfe,
+        ];
+        let rk = [
+            0x13, 0x57, 0x9b, 0xdf, 0x24, 0x68, 0xac, 0xe0, 0x55, 0xaa, 0x11, 0x22, 0x33, 0x44,
+            0x77, 0x88,
+        ];
+        let enc = aesenc(state, rk);
+        assert_eq!(aesdec(enc, rk), state);
     }
 }

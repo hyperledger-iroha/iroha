@@ -120,7 +120,7 @@ mod tests {
             nonzero_ext::nonzero!(1_u32),
             vec![ModelLaneConfig {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "lane0".into(),
                 storage: LaneStorageProfile::SplitReplica,
                 metadata,

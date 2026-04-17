@@ -57,7 +57,7 @@ use crate::{
         LaneIdentityMetadataError,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog,
+    queue::evaluate_policy_with_catalog_and_world,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -2243,11 +2243,12 @@ impl StateBlock<'_> {
             }
         }
 
-        let routing_decision = evaluate_policy_with_catalog(
+        let routing_decision = evaluate_policy_with_catalog_and_world(
             &state_transaction.nexus.routing_policy,
             &state_transaction.nexus.lane_catalog,
             &state_transaction.nexus.dataspace_catalog,
             &tx,
+            &state_transaction.world,
         )
         .map_err(|err| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
@@ -3191,7 +3192,7 @@ fn enforce_runtime_upgrade_dataspace_policy(
             "runtime upgrade policy requires a governance module".to_string(),
         ));
     };
-    if dataspace_id == NexusDataSpaceId::GLOBAL
+    if dataspace_id == NexusDataSpaceId::UNIVERSAL
         && !matches!(module_kind, RuntimeUpgradeModuleKind::Parliament)
     {
         return Err(reject_lane_policy(
@@ -4190,7 +4191,7 @@ pub mod tests {
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: catalog,
         }
     }
@@ -4834,7 +4835,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: TestLaneId::SINGLE,
                 alias: "centralbank".to_string(),
-                dataspace: TestDataSpaceId::GLOBAL,
+                dataspace: TestDataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -7944,7 +7945,7 @@ pub mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
@@ -8025,7 +8026,7 @@ pub mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -8055,7 +8056,7 @@ pub mod tests {
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: &stx.nexus.dataspace_catalog,
         };
 
@@ -8087,7 +8088,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: TestLaneId::SINGLE,
             alias: "private".to_string(),
-            dataspace: TestDataSpaceId::GLOBAL,
+            dataspace: TestDataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::CommitmentOnly,
             governance: None,

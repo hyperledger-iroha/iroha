@@ -623,11 +623,6 @@ pub(crate) fn parse_contract_call_execution_context(
     if entrypoint.is_none() && payload.is_none() {
         return Ok(None);
     }
-    if contract_address.is_none() {
-        return Err(ValidationFail::NotPermitted(
-            "contract call metadata requires contract_address".to_owned(),
-        ));
-    }
 
     let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
         let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
@@ -5056,7 +5051,7 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(bob_id.clone()).build(&bob_id);
-        let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_detached$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -5528,7 +5523,7 @@ mod tests {
             iroha_config::parameters::defaults::common::chain_discriminant(),
             &alice_id,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
@@ -5603,7 +5598,7 @@ mod tests {
             iroha_config::parameters::defaults::common::chain_discriminant(),
             &alice_id,
             0,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
@@ -5787,7 +5782,7 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -5848,7 +5843,7 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -5892,7 +5887,9 @@ mod tests {
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(bob_id.clone()).build(&bob_id);
-        let nft_id: NftId = "nft_owner_modify$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_owner_modify$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);

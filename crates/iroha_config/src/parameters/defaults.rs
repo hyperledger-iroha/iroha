@@ -1144,7 +1144,7 @@ pub mod sorafs {
         pub const ADVERT_MAX_LATENCY_MS: u32 = 500;
         /// Default rendezvous topics advertised when none are provided.
         pub fn advert_topics() -> Vec<String> {
-            vec!["sorafs.sf1.primary:global".to_string()]
+            vec!["sorafs.sf1.primary:universal".to_string()]
         }
         /// Default filesystem directory for governance artefacts.
         pub fn governance_dir() -> Option<PathBuf> {
@@ -2100,7 +2100,7 @@ pub mod nexus {
     pub const LANE_COUNT: NonZeroU32 = nonzero!(1u32);
     /// Default alias assigned to the primary lane when no catalog entries are provided.
     pub const DEFAULT_LANE_ALIAS: &str = "default";
-    /// Default alias assigned to the global data space when no catalog entries are provided.
+    /// Default alias assigned to the universal dataspace when no catalog entries are provided.
     pub const DEFAULT_DATASPACE_ALIAS: &str = "universal";
     /// Default lane index used when routing policy omits an explicit value.
     pub const DEFAULT_ROUTING_LANE_INDEX: u32 = 0;

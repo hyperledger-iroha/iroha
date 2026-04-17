@@ -434,7 +434,7 @@ impl SignedBlock {
         let proof_policies = da_proof_policies.unwrap_or_else(|| {
             DaProofPolicyBundle::new(vec![DaProofPolicy {
                 lane_id: crate::nexus::LaneId::SINGLE,
-                dataspace_id: crate::nexus::DataSpaceId::GLOBAL,
+                dataspace_id: crate::nexus::DataSpaceId::UNIVERSAL,
                 alias: "default".to_string(),
                 proof_scheme: DaProofScheme::MerkleSha256,
             }])
@@ -2123,7 +2123,7 @@ mod tests {
             .sign(keypair.private_key());
         let bundle = DaProofPolicyBundle::new(vec![DaProofPolicy {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "custom".to_string(),
             proof_scheme: DaProofScheme::KzgBls12_381,
         }]);

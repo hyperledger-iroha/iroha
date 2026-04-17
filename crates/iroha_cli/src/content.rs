@@ -280,7 +280,7 @@ fn build_manifest(
     Ok(ContentBundleManifest {
         bundle_id: Hash::new(tarball),
         index_hash,
-        dataspace: dataspace.map_or(DataSpaceId::GLOBAL, DataSpaceId::new),
+        dataspace: dataspace.map_or(DataSpaceId::UNIVERSAL, DataSpaceId::new),
         lane: lane.map_or(LaneId::SINGLE, LaneId::new),
         blob_class: BlobClass::GovernanceArtifact,
         retention: RetentionPolicy::default(),

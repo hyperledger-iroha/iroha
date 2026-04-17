@@ -363,7 +363,7 @@ mod tests {
                 Some(AccountAliasDomain::new(
                     "wonderland".parse::<Name>().expect("valid alias domain"),
                 )),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
             )),
             uaid: None,
             opaque_ids: Vec::new(),

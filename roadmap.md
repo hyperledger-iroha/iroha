@@ -2,6 +2,128 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 IVM AES raw-key decryption parity fix):
+IVM's accelerated AES decryption round now matches the scalar raw-key inverse
+round contract instead of relying on the platform AES decryption-round
+instruction directly. The CPU paths first apply `AddRoundKey` and
+`InvMixColumns`, then finish with an inverse final round, which restores
+parity with `aesdec_impl` and keeps `aesdec(aesenc(state, rk), rk)` stable for
+the same round key bytes.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/aes.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib aes::tests_accel:: -- --nocapture`
+  - `cargo test -p ivm --test crypto_vectors aes_rounds_match_scalar_impl -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
+Latest sync (2026-04-17 Norito schema doctest compact-layout sync):
+The documented `SamplePayload` wire example now matches Norito's current v1
+default compact-length framing instead of the legacy fixed-width layout, and
+the crate-level compatibility docs no longer describe `flags = 0x00` as the
+default. A focused regression now pins the sample body's bytes so future layout
+changes surface through both doctests and unit tests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/schema/mod.rs`
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/norito/tests/schema_sample_payload.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p norito --test schema_sample_payload`
+  - `cargo test -p norito --doc`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
+Latest sync (2026-04-17 Norito stage-1 tail parity fix):
+Norito's JSON stage-1 tail handling no longer restarts scalar scanning from a
+blank state after the AVX2 or NEON loop. Tail continuation now preserves
+whether the vector pass ended inside a string and how many trailing
+backslashes were still active, so accelerated structural indexing matches the
+scalar reference when a SIMD block boundary lands in the middle of a string or
+closing escape run.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-lib-target cargo test -p norito --lib accel_tape_validation_tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito random_adversarial_parity -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-norito-stage1-target cargo test -p norito --test struct_index_random_x86 -- --nocapture`
+- open work after this slice:
+  - run the full `cargo test --workspace` and strict clippy pass during a longer
+    clean validation window
+  - audit the optional parallel JSON stage-1 path separately because chunk
+    splitting still deserves its own cross-boundary parity review
+
+Latest sync (2026-04-17 Nexus routing composability hardening):
+Nexus write routing now derives dataspace targets for domain and
+asset-definition writes instead of leaving them entirely to authority-based
+rules, mixed-dataspace write batches fail deterministically, transfer matchers
+understand transferred domain / asset-definition scope, and proxied signed
+queries now use the receiver's target-aware route recomputation instead of
+blindly trusting the ingress hint. Regression coverage now pins the remaining
+state-dependent edges for dataspace-labelled account registration, single-scope
+and multi-scope account metadata writes, opaque asset-definition unregister /
+metadata-set / metadata-remove flows, and target-domain / target-alias
+signed-query route resolution, including opaque asset-definition queries that
+need app-state reclassification.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue/router.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router --lib`
+  - `cargo test -p iroha_torii effective_proxy_signed_query_routing_decision --lib`
+  - `cargo test -p iroha_torii resolve_signed_query_routing_for_app_uses_target_ --lib`
+- open work after this slice:
+  - add explicit route-intent handling for multi-dataspace asset transfers and
+    settlement-family writes instead of leaving them on the legacy single-route
+    fallback
+  - replace min-lane canonical dataspace selection with an explicit
+    dataspace-purpose route directory
+  - decide whether merge-ledger synthesis should stay an all-lanes barrier or
+    gain partial merge groups for independent lane progress
+
+Latest sync (2026-04-17 Taira MCP Musubi coverage closure):
+Torii now exposes Musubi package-registry workflows through the native MCP
+surface in a Taira-friendly shape: read tools query packages, releases,
+versions, and aliases, while pre-signing instruction builders produce unsigned
+instruction envelopes for local signing. The final read-only policy gap is
+closed by allowing only the four exact Musubi instruction-builder tools under
+the read-only profile; transaction submission and other mutating POST tools
+remain blocked.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/mcp.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/musubi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii -p iroha_core --target-dir /tmp/iroha-musubi-torii-target`
+  - `cargo test -p iroha_core --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --lib mcp::tests:: --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints musubi --target-dir /tmp/iroha-musubi-torii-target -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+  - run `configs/soranexus/taira/check_mcp_rollout.sh` against the live public
+    Taira MCP endpoint with a runtime-only canary client config before public
+    cutover claims
+
 Latest sync (2026-04-17 Musubi live gateway fetch and registry integration):
 Musubi now hydrates lockfile sources from live SoraFS gateway providers as well
 as local provider payloads. Gateway provider specs are runtime-only inputs,
@@ -19186,3 +19308,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 1. Completed: committed-block RBC cleanup now refreshes retained summaries from the local payload before finalizing them, so restart-recovery snapshots stay readable as fully delivered sessions even after the live RBC runtime has already retired.
 2. Completed: the focused regression suite now includes `committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists`, and the previously failing `integration_tests` case `sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits` is green on the patched tree.
 3. No additional roadmap item was opened from this fix; the change closes a concrete persisted-summary drift in the existing NPoS/RBC recovery path.
+
+## 2026-04-17 Permission Cache Replay Follow-up
+1. Completed: `state::permission_cache_tests::permission_cache_rebuilds_after_restart` now builds replay-valid post-height-2 blocks with embedded previous-roster evidence and no longer depends on libtest's default worker stack.
+2. No additional roadmap item was opened from this fix; the focused `iroha_core` permission-cache replay regression is green.

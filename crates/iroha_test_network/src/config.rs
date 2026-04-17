@@ -1926,7 +1926,7 @@ mod tests {
                 .with_label(Some(AccountAlias::new(
                     gas_label,
                     Some(AccountAliasDomain::new(ivm_domain.name().clone())),
-                    DataSpaceId::GLOBAL,
+                    DataSpaceId::UNIVERSAL,
                 )));
         let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
             .with_instructions([
@@ -1988,7 +1988,7 @@ mod tests {
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
         let policy0 = DaProofPolicy {
             lane_id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "alpha".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         };

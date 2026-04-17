@@ -307,7 +307,7 @@ impl Default for LaneMetadataSnapshot {
     fn default() -> Self {
         Self {
             alias: String::new(),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             dataspace_alias: None,
             visibility: LaneVisibility::Public,
             storage_profile: LaneStorageProfile::FullReplica,
@@ -1631,7 +1631,7 @@ impl StateTelemetry {
         push_nexus_diff(
             &mut diffs,
             "nexus.routing.default_dataspace",
-            json_value(&DataSpaceId::GLOBAL.as_u64()),
+            json_value(&DataSpaceId::UNIVERSAL.as_u64()),
             json_value(&nexus.routing_policy.default_dataspace.as_u64()),
         );
         let routing_rules: Vec<norito::json::Value> = nexus
@@ -2455,7 +2455,7 @@ impl StateTelemetry {
     }
 
     fn record_lane_placeholders(&self, lane_id: LaneId) {
-        self.record_lane_with_dataspace(lane_id, DataSpaceId::GLOBAL);
+        self.record_lane_with_dataspace(lane_id, DataSpaceId::UNIVERSAL);
     }
 
     fn record_lane_with_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) {
@@ -2474,7 +2474,7 @@ impl StateTelemetry {
             .read()
             .ok()
             .and_then(|guard| guard.get(&lane_id.as_u32()).map(|entry| entry.dataspace_id))
-            .unwrap_or(DataSpaceId::GLOBAL)
+            .unwrap_or(DataSpaceId::UNIVERSAL)
             .as_u64()
             .to_string();
         (lane_label, dataspace_label)
@@ -9301,8 +9301,8 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_data_model::social::ViralEscrowRecord;
     use iroha_data_model::{
-        ChainId, Level,
-        account::AccountId,
+        ChainId, Level, Registrable,
+        account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
@@ -9826,14 +9826,14 @@ mod tests {
             nonzero!(2_u32),
             vec![
                 LaneConfig {
-                    id: LaneId::new(1),
+                    id: LaneId::new(0),
                     dataspace_id: DataSpaceId::new(7),
                     alias: "restricted-alpha".to_owned(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
-                    id: LaneId::new(2),
+                    id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(9),
                     alias: "restricted-beta".to_owned(),
                     visibility: LaneVisibility::Restricted,
@@ -9863,7 +9863,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(7),
-            &[LaneId::new(1)],
+            &[LaneId::new(0)],
             &[peer],
             Some(nonzero!(3usize)),
             true,
@@ -9876,7 +9876,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(9),
-            &[LaneId::new(2)],
+            &[LaneId::new(1)],
             &[],
             Some(nonzero!(2usize)),
             false,
@@ -9896,7 +9896,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 7)
             .expect("alpha dataspace entry");
         assert_eq!(alpha.dataspace_alias.as_deref(), Some("alpha"));
-        assert_eq!(alpha.lane_ids, vec![1]);
+        assert_eq!(alpha.lane_ids, vec![0]);
         assert_eq!(alpha.targets, 1);
         assert_eq!(alpha.target_peers.len(), 1);
         assert_eq!(alpha.outcome, "sent");
@@ -9910,7 +9910,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 9)
             .expect("beta dataspace entry");
         assert_eq!(beta.dataspace_alias.as_deref(), Some("beta"));
-        assert_eq!(beta.lane_ids, vec![2]);
+        assert_eq!(beta.lane_ids, vec![1]);
         assert_eq!(beta.targets, 0);
         assert_eq!(beta.outcome, "dropped");
         assert_eq!(beta.reason.as_deref(), Some("no_restricted_targets"));
@@ -10621,7 +10621,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10649,7 +10649,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10709,7 +10709,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
 
@@ -10729,7 +10729,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
         telemetry.set_nexus_enabled(false);
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
@@ -11876,7 +11876,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_must_serve_truncations(LaneId::SINGLE, 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 5,
                 age_slots: 3,
@@ -11935,7 +11935,7 @@ mod tests {
         assert_eq!(snapshot.deferrals.cap_exceeded, 3);
         assert_eq!(snapshot.must_serve_truncations, 2);
 
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_dataspace_teu_backlog
@@ -11948,7 +11948,7 @@ mod tests {
             .read()
             .expect("dataspace TEU cache poisoned");
         let ds_snapshot = ds_snapshots
-            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::GLOBAL.as_u64()))
+            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::UNIVERSAL.as_u64()))
             .expect("dataspace snapshot missing");
         assert_eq!(ds_snapshot.backlog, 5);
         assert_eq!(ds_snapshot.age_slots, 3);
@@ -11960,7 +11960,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_dataspace_pipeline_summary(
             lane_id,
@@ -12007,7 +12007,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_lane_teu_deferral(LaneId::SINGLE, "cap_exceeded", 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 9,
                 age_slots: 3,
@@ -12017,7 +12017,7 @@ mod tests {
         telemetry.set_pipeline_layer_count(LaneId::SINGLE, 7);
 
         let lane_label = LaneId::SINGLE.as_u32().to_string();
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_lane_teu_capacity
@@ -12581,7 +12581,9 @@ mod tests {
             let (leader_public_key, leader_private_key) =
                 KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
-            let world = World::default();
+            let (account_id, account_keypair) = gen_account_in("wonderland");
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let world = World::with([], [account], []);
             {
                 let mut peers_block = world.peers.block();
                 let _ = peers_block.get_mut().push(local_peer_id.clone());
@@ -12618,7 +12620,6 @@ mod tests {
 
             let chain_id = state.chain_id.clone();
             let topology = Topology::new(vec![local_peer_id.clone()]);
-            let (account_id, account_keypair) = gen_account_in("wonderland");
 
             Self {
                 telemetry,

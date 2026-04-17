@@ -213,10 +213,12 @@ pub mod isi {
         let mut new_trigger = trigger;
 
         if !skip_permission_check {
-            // Enforce minimal permission: only genesis block, domain owner of the trigger owner,
-            // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
+            // Enforce minimal permission: only genesis block, the trigger owner,
+            // domain owner of the trigger owner, or an account with
+            // CanRegisterTrigger{authority: <owner>} may register the trigger.
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
+            let is_owner = authority == &owner;
             let mut is_domain_owner = false;
             for alias in state_transaction.world.bound_account_aliases(&owner) {
                 let Some(domain_id) = alias
@@ -237,7 +239,7 @@ pub mod isi {
             }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
-            if !(is_genesis || is_domain_owner || has_permission) {
+            if !(is_genesis || is_owner || is_domain_owner || has_permission) {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"

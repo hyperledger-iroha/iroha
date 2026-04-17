@@ -6797,7 +6797,7 @@ mod tests {
             .expect("test epoch offset 3 must fit in a u8");
         let lane_snapshots = vec![iroha_data_model::merge::MergeLaneSnapshot {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             lane_block_height: epoch,
             tip_hash: HashOf::from_untyped_unchecked(Hash::new([epoch_u8])),
             merge_hint_root: Hash::new([epoch_plus_one]),

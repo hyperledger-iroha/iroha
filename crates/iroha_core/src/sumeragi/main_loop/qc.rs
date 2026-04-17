@@ -91,6 +91,128 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn certified_embedded_qc_roster(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+        consensus_mode: ConsensusMode,
+        mode_tag: &str,
+    ) -> Option<(
+        super::network_topology::Topology,
+        Option<CommitStakeSnapshot>,
+    )> {
+        if qc.mode_tag != mode_tag
+            || qc.validator_set.is_empty()
+            || qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+            || HashOf::new(&qc.validator_set) != qc.validator_set_hash
+        {
+            return None;
+        }
+
+        let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+        let roster_len = topology.as_ref().len();
+        let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => self
+                .roster_validation_cache
+                .stake_snapshot_for_roster(topology.as_ref()),
+        };
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let required = topology.min_votes_for_commit().max(1);
+                if parsed_signers.voting.len() < required {
+                    return None;
+                }
+            }
+            ConsensusMode::Npos => {
+                let snapshot = stake_snapshot.as_ref()?;
+                let signer_peers =
+                    signer_peers_for_topology(&parsed_signers.voting, &topology).ok()?;
+                if !matches!(
+                    stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers),
+                    Ok(true)
+                ) {
+                    return None;
+                }
+            }
+        }
+        if !qc_aggregate_consistent(
+            qc,
+            &topology,
+            &self.roster_validation_cache.pops,
+            &self.common_config.chain,
+            mode_tag,
+        ) {
+            return None;
+        }
+
+        Some((topology, stake_snapshot))
+    }
+
+    fn try_bootstrap_qc_validation_from_embedded_roster(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        consensus_mode: ConsensusMode,
+        mode_tag: &str,
+        prf_seed: Option<[u8; 32]>,
+        aggregate_ok: Option<bool>,
+    ) -> Option<(
+        super::network_topology::Topology,
+        Option<CommitStakeSnapshot>,
+        QcValidationOutcome,
+    )> {
+        let (topology, stake_snapshot) =
+            self.certified_embedded_qc_roster(qc, consensus_mode, mode_tag)?;
+
+        let (validation, evidence) = {
+            let world = self.state.world_view();
+            validate_qc_with_evidence(
+                &self.vote_log,
+                qc,
+                &topology,
+                &world,
+                &self.roster_validation_cache.pops,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+                aggregate_ok.or(Some(true)),
+            )
+        };
+        let outcome = match validation {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                if let Some(outcome) = self.recover_qc_from_aggregate(
+                    qc,
+                    &topology,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
+                    aggregate_ok,
+                    &err,
+                ) {
+                    outcome
+                } else {
+                    record_qc_validation_error(self.telemetry_handle(), &err);
+                    if let Some(evidence) = evidence {
+                        let _ = self.handle_evidence(evidence);
+                    }
+                    warn!(
+                        ?err,
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        "embedded roster fallback could not validate QC"
+                    );
+                    return None;
+                }
+            }
+        };
+
+        Some((topology, stake_snapshot, outcome))
+    }
+
     pub(super) fn qc_conflicts_with_vote_history(
         &self,
         phase: crate::sumeragi::consensus::Phase,
@@ -502,6 +624,7 @@ impl Actor {
         if height != frontier_height {
             return;
         }
+        let payload_present = self.frontier_block_materialized_locally(block_hash);
         let resolved_view = self
             .local_block_height_view(block_hash)
             .filter(|(local_height, _)| *local_height == height)
@@ -510,14 +633,13 @@ impl Actor {
             .frontier_slot
             .as_ref()
             .is_some_and(|slot| slot.height == height && slot.block_hash != block_hash);
-        let conflicting_authoritative_owner = self
-            .authoritative_slot_owner_hash(height, resolved_view)
-            .is_some_and(|owner_hash| owner_hash != block_hash);
-        if self
-            .local_block_height_view(block_hash)
-            .is_some_and(|(local_height, _)| local_height == height)
-            && (conflicting_owner || conflicting_authoritative_owner)
-        {
+        let conflicting_authoritative_owner =
+            self.slot_tracker.authoritative_block_slots.iter().any(
+                |(&(entry_height, _), &owner_hash)| {
+                    entry_height == height && owner_hash != block_hash
+                },
+            );
+        if conflicting_owner || conflicting_authoritative_owner {
             debug!(
                 height,
                 qc_view = view,
@@ -525,6 +647,7 @@ impl Actor {
                 block = %block_hash,
                 conflicting_owner,
                 conflicting_authoritative_owner,
+                payload_present,
                 "routing same-height frontier commit QC through authoritative supersede"
             );
             self.clear_superseded_frontier_owner_proposal_state(height, block_hash);
@@ -540,15 +663,17 @@ impl Actor {
                     frontier_info,
                     leader: None,
                     voters: BTreeSet::new(),
-                    body_present: true,
+                    body_present: payload_present,
                     requester: None,
                 },
             );
-            self.clear_missing_block_request(
-                &block_hash,
-                MissingBlockClearReason::PayloadAvailable,
-            );
-            self.clear_missing_block_view_change(&block_hash);
+            if payload_present {
+                self.clear_missing_block_request(
+                    &block_hash,
+                    MissingBlockClearReason::PayloadAvailable,
+                );
+                self.clear_missing_block_view_change(&block_hash);
+            }
             return;
         }
         let _ = self.handle_frontier_slot_event(
@@ -849,8 +974,14 @@ impl Actor {
             return false;
         }
         let now = Instant::now();
+        let committed_height = self.committed_height_snapshot();
 
         enum ReplayAction {
+            Obsolete {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+            },
             Replay {
                 key: QcVoteKey,
                 block_hash: HashOf<BlockHeader>,
@@ -884,6 +1015,15 @@ impl Actor {
         for (key, qc) in deferred_entries {
             if actions.len() >= DEFERRED_MISSING_PAYLOAD_QC_PER_TICK {
                 break;
+            }
+            let reason = self
+                .deferred_qc_roster_state
+                .get(&key)
+                .map(|state| state.reason)
+                .unwrap_or("commit topology missing");
+            if self.deferred_roster_qc_is_non_actionable_dependency(&qc, committed_height, now) {
+                actions.push(ReplayAction::Obsolete { key, qc, reason });
+                continue;
             }
             if !self.frontier_catchup_far_ahead_replay_allowed(qc.height, now) {
                 continue;
@@ -949,6 +1089,32 @@ impl Actor {
         let mut progress = false;
         for action in actions {
             match action {
+                ReplayAction::Obsolete { key, qc, reason } => {
+                    self.deferred_qc_roster_state.remove(&key);
+                    self.deferred_qcs.remove(&key);
+                    if self.missing_hash_is_obsolete_committed_edge_conflict(
+                        Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height),
+                        qc.subject_block_hash,
+                        committed_height,
+                    ) {
+                        super::status::inc_committed_edge_conflict_obsolete();
+                    }
+                    self.clear_missing_block_request(
+                        &qc.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.clear_missing_block_view_change(&qc.subject_block_hash);
+                    debug!(
+                        phase = ?qc.phase,
+                        height = qc.height,
+                        view = qc.view,
+                        committed_height,
+                        block = %qc.subject_block_hash,
+                        reason,
+                        "discarding deferred roster QC as obsolete/non-actionable"
+                    );
+                    progress = true;
+                }
                 ReplayAction::Replay {
                     key,
                     block_hash,
@@ -1664,6 +1830,7 @@ impl Actor {
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         if self.missing_hash_is_non_actionable_dependency(
             subject_height,
+            view,
             block_hash,
             committed_height,
             now,
@@ -4886,6 +5053,7 @@ impl Actor {
                 }
             }
         }
+        let qc_key = Self::qc_tally_key(&qc);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -4904,10 +5072,37 @@ impl Actor {
             )
         };
         if commit_topology.is_empty() {
+            let now = Instant::now();
+            let committed_height = self.committed_height_snapshot();
+            if self.deferred_roster_qc_is_non_actionable_dependency(&qc, committed_height, now) {
+                if self.missing_hash_is_obsolete_committed_edge_conflict(
+                    Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height),
+                    qc.subject_block_hash,
+                    committed_height,
+                ) {
+                    super::status::inc_committed_edge_conflict_obsolete();
+                }
+                self.deferred_qc_roster_state.remove(&qc_key);
+                self.deferred_qcs.remove(&qc_key);
+                self.clear_missing_block_request(
+                    &qc.subject_block_hash,
+                    MissingBlockClearReason::Obsolete,
+                );
+                self.clear_missing_block_view_change(&qc.subject_block_hash);
+                debug!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    committed_height,
+                    block = %qc.subject_block_hash,
+                    "dropping non-actionable QC roster dependency at committed edge"
+                );
+                return Ok(());
+            }
             self.defer_qc_for_roster(qc, "commit topology missing");
             return Ok(());
         }
-        let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let mut topology = super::network_topology::Topology::new(commit_topology.clone());
         let topology_len = topology.as_ref().len();
         if aggregate_ok.is_none()
             && self
@@ -5032,7 +5227,7 @@ impl Actor {
                 "verifying QC aggregate inline for small commit roster"
             );
         }
-        let (stake_snapshot, validation, evidence) = {
+        let (mut stake_snapshot, validation, evidence) = {
             let world = self.state.world_view();
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
@@ -5053,6 +5248,7 @@ impl Actor {
             );
             (stake_snapshot, validation, evidence)
         };
+        let mut validated_from_embedded_roster = false;
         let validation = match validation {
             Ok(outcome) => {
                 if aggregate_ok != Some(false) {
@@ -5064,7 +5260,49 @@ impl Actor {
                 outcome
             }
             Err(err) => {
-                if let Some(outcome) = self.recover_qc_from_aggregate(
+                if matches!(err, QcValidationError::ValidatorSetMismatch) {
+                    if let Some((fallback_topology, fallback_stake_snapshot, outcome)) = self
+                        .try_bootstrap_qc_validation_from_embedded_roster(
+                            &qc,
+                            consensus_mode,
+                            mode_tag,
+                            prf_seed,
+                            aggregate_ok,
+                        )
+                    {
+                        topology = fallback_topology;
+                        stake_snapshot = fallback_stake_snapshot;
+                        validated_from_embedded_roster = true;
+                        info!(
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = %qc.subject_block_hash,
+                            roster_len = topology.as_ref().len(),
+                            "validated incoming QC using embedded validator set during catch-up"
+                        );
+                        outcome
+                    } else {
+                        record_qc_validation_error(self.telemetry_handle(), &err);
+                        if let Some(evidence) = evidence {
+                            let _ = self.handle_evidence(evidence);
+                        }
+                        warn!(
+                            ?err,
+                            height = qc.height,
+                            view = qc.view,
+                            phase = ?qc.phase,
+                            block = %qc.subject_block_hash,
+                            "rejecting QC without valid signatures"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::Qc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::RosterHashMismatch,
+                        );
+                        return Ok(());
+                    }
+                } else if let Some(outcome) = self.recover_qc_from_aggregate(
                     &qc,
                     &topology,
                     consensus_mode,
@@ -5116,6 +5354,15 @@ impl Actor {
                 }
             }
         };
+        if validated_from_embedded_roster {
+            self.vote_roster_cache.remove(&qc.subject_block_hash);
+            self.cache_vote_roster(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                topology.as_ref().to_vec(),
+            );
+        }
         let QcValidationOutcome {
             signers: signer_indices,
             missing_votes,
@@ -5277,7 +5524,6 @@ impl Actor {
         }
 
         let mut block_known_locally = self.block_known_locally(qc.subject_block_hash);
-        let qc_key = Self::qc_tally_key(&qc);
 
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             // Persist roster artifacts on QC arrival so block sync can validate missing payloads.
@@ -5327,6 +5573,7 @@ impl Actor {
                 Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
             if self.missing_hash_is_non_actionable_dependency(
                 subject_height,
+                qc.view,
                 qc.subject_block_hash,
                 committed_height,
                 now,
@@ -5680,9 +5927,10 @@ impl Actor {
         aggregate_ok: Option<bool>,
         err: &QcValidationError,
     ) -> Option<QcValidationOutcome> {
-        let QcValidationError::MissingVotes { .. } = err else {
-            return None;
-        };
+        match err {
+            QcValidationError::MissingVotes { .. } | QcValidationError::SubjectMismatch { .. } => {}
+            _ => return None,
+        }
         if qc.phase == crate::sumeragi::consensus::Phase::NewView {
             let highest = super::validate_new_view_qc_highest(qc).ok()?;
             let expected_highest_epoch = self.epoch_for_height(highest.height);
@@ -5724,7 +5972,7 @@ impl Actor {
             voting_signers = parsed_signers.voting.len(),
             present_signers = parsed_signers.present.len(),
             roster_len,
-            "accepting QC validated from aggregate signature despite missing local votes"
+            "accepting QC validated from aggregate signature despite missing or conflicting local votes"
         );
         Some(QcValidationOutcome {
             signers: parsed_signers.voting.into_iter().collect(),

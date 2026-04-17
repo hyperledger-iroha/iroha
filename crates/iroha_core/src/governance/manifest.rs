@@ -1316,7 +1316,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(1),
                 alias: "private".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Restricted,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: Some("council".to_string()),
@@ -1347,7 +1347,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(2),
                 alias: "private".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Restricted,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: Some("council".to_string()),

@@ -1064,6 +1064,14 @@ snapshot includes the scheduler graph counters (`tx_vertices`, `tx_edges`,
 `overlay_count`, `overlay_instr_total`, `overlay_bytes_total`, `rbc_chunks`,
 `rbc_bytes_total`) plus:
 
+The root `/status` payload also exposes a `build` object so operators can
+verify what binary is actually serving traffic. The object includes:
+
+- `version` — Cargo package version baked into the node binary.
+- `git_commit_sha` — source revision baked into the node binary.
+- `cargo_features` — enabled Cargo feature set used for the build.
+- `target_triple` — compilation target triple for the running binary.
+
 - `peak_layer_width`, `layer_count` — outer bounds of the scheduler layering
   that executed for the lane in the latest block.
 - `avg_layer_width`, `median_layer_width`,

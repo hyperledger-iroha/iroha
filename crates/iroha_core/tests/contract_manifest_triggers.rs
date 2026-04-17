@@ -78,7 +78,7 @@ fn contract_address(
         iroha_config::parameters::defaults::common::chain_discriminant(),
         authority,
         deploy_nonce,
-        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address")
 }
