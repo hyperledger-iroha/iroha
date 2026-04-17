@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Norito schema doctest compact-layout sync
+- `/home/mtakemiya/dev/iroha/crates/norito/src/schema/mod.rs` now pins the
+  `SamplePayload` doctest to Norito's current v1 default header flags
+  (`COMPACT_LEN`, `0x02`) and the compact body bytes emitted by `to_bytes`, so
+  the executable docs match the actual wire format again.
+- `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs` crate docs no longer
+  claim the legacy `flags = 0x00` default and now describe compact-length
+  framing as the v1 default.
+- `/home/mtakemiya/dev/iroha/crates/norito/tests/schema_sample_payload.rs`
+  adds a focused regression that locks the documented sample payload's default
+  flags and body bytes to the same compact layout used by the doctest.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p norito --test schema_sample_payload`
+  - `cargo test -p norito --doc`
+
 ## 2026-04-17 Follow-up: Norito stage-1 tail parity fix
 - `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs` now resumes the scalar
   JSON structural-index scan from arbitrary byte boundaries with preserved

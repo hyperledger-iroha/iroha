@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 Norito schema doctest compact-layout sync):
+The documented `SamplePayload` wire example now matches Norito's current v1
+default compact-length framing instead of the legacy fixed-width layout, and
+the crate-level compatibility docs no longer describe `flags = 0x00` as the
+default. A focused regression now pins the sample body's bytes so future layout
+changes surface through both doctests and unit tests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/schema/mod.rs`
+  - `/home/mtakemiya/dev/iroha/crates/norito/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/norito/tests/schema_sample_payload.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p norito --test schema_sample_payload`
+  - `cargo test -p norito --doc`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 Norito stage-1 tail parity fix):
 Norito's JSON stage-1 tail handling no longer restarts scalar scanning from a
 blank state after the AVX2 or NEON loop. Tail continuation now preserves

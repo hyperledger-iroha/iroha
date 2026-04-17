@@ -25,10 +25,11 @@
 //!   authoritative layout selection (unknown bits are rejected). Bare,
 //!   headerless decoders (`codec::Decode`) are internal-only for hashing/bench
 //!   scenarios and use the fixed v1 default flags.
-//! - Packed-seq/packed-struct and compact-length layouts are opt-in via header
-//!   flags; v1 defaults to `flags = 0x00`. `COMPACT_LEN` governs per-value
-//!   length prefixes; sequence length headers and packed-seq offsets are fixed
-//!   `u64` in v1, and reserved layout bits are rejected when decoding headers.
+//! - Packed-seq and packed-struct remain opt-in via header flags. The v1
+//!   default header layout advertises `COMPACT_LEN` (`flags = 0x02`) for
+//!   per-value length prefixes; sequence length headers and packed-seq offsets
+//!   stay fixed `u64` in v1, and reserved layout bits are rejected when
+//!   decoding headers.
 
 //!
 //! Helpers
