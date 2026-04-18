@@ -28,3 +28,23 @@ fn artifact_predecode_uses_header_version() {
         .expect("decode artifact again");
     assert!(std::sync::Arc::ptr_eq(&d1, &d2));
 }
+
+#[test]
+fn artifact_predecode_rejects_legacy_minor_zero() {
+    let mut cache = IvmCache::new(2);
+    let mut artifact = ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    }
+    .encode();
+    artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+
+    let err = cache
+        .get_or_predecode_artifact(&artifact)
+        .expect_err("legacy artifact minor must reject");
+    assert_eq!(err, ivm::VMError::InvalidMetadata);
+}
