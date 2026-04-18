@@ -225,11 +225,12 @@ OpenVerify envelope bytes from backend-native proof bytes, the synthetic STARK
 helper is test-only, high-level STARK verification now requires a
 verifier-reconstructed AIR public digest, offline recursive STARK readiness uses
 that AIR-bound path, and curve labels are exact canonical strings. FASTPQ
-verification now authenticates sampled LDE query chunks, sampled AIR trace and
-composition openings, the exact V1 AIR challenge count, and per-round FRI query
-chains without trace rebuild, LDE derivation, or full recursive folding. FASTPQ
-proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for
-the in-place V1 wire shape. Follow-up gap closure keeps the mixed-case STARK VK
+verification now applies transition-count and payload caps, authenticates
+sampled LDE query chunks, sampled AIR trace and composition openings, the exact
+V1 AIR challenge count, and per-round FRI query chains without trace rebuild,
+LDE derivation, or full recursive folding. FASTPQ proof fixtures, ordering
+hashes, and trace-commitment goldens were refreshed for the in-place V1 wire
+shape. Follow-up gap closure keeps the mixed-case STARK VK
 update regression on a valid encoded V1 STARK verifying key and removes unused
 single-client Nexus helper wrappers from the compile-only integration target.
 Additional coverage now pins extra AIR challenge rejection, AIR opening-count
@@ -242,7 +243,10 @@ coverage pass also pins AIR Merkle-path limits, FRI round-value limits, final
 FRI Merkle-path tampering, outer schema tampering, and inner AIR circuit-id
 tampering. The newest tests also pin query-count and query-chunk limits, zero
 LDE domain rejection, folded/final FRI value tampering, VK-hash tampering,
-missing STARK VK rejection, and inner STARK parameter tampering.
+missing STARK VK rejection, and inner STARK parameter tampering. The latest
+FASTPQ coverage adds transition-count, batch-byte, FRI layer-count, extra
+AIR/FRI query-vector, query-path, final-FRI-value, final-FRI-path, and
+round-FRI-path guardrail tests.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -273,6 +277,7 @@ missing STARK VK rejection, and inner STARK parameter tampering.
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`

@@ -1,5 +1,6 @@
 use core::{fmt, str::FromStr};
 
+use rand_core::RngCore;
 use pqcrypto_mlkem::{mlkem512 as kyber512, mlkem768 as kyber768, mlkem1024 as kyber1024};
 use pqcrypto_traits::{
     Error as PqError,
@@ -10,6 +11,10 @@ use pqcrypto_traits::{
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+use crate::{
+    HedgedChaCha20Rng, HedgedRngSeed, RngError, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
+};
 
 /// Supported ML-KEM parameter sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,6 +408,9 @@ pub enum MlKemError {
         #[source]
         source: PqError,
     },
+    /// Hedged RNG seed construction failed.
+    #[error(transparent)]
+    Rng(#[from] RngError),
 }
 
 impl MlKemError {
@@ -412,7 +420,39 @@ impl MlKemError {
 }
 
 /// Generate an ML-KEM keypair for the given parameter set.
-pub fn generate_mlkem_keypair(suite: MlKemSuite) -> MlKemKeyPair {
+#[must_use]
+pub fn generate_mlkem_keypair(suite: MlKemSuite, rng: &mut HedgedChaCha20Rng) -> MlKemKeyPair {
+    let mut coins = Zeroizing::new([0u8; 64]);
+    rng.fill_bytes(coins.as_mut());
+    generate_mlkem_keypair_from_coins(suite, &coins)
+}
+
+/// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails.
+pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair, MlKemError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:keypair")?;
+    Ok(generate_mlkem_keypair(suite, &mut rng))
+}
+
+/// Deterministically generate an ML-KEM keypair from explicit seed material.
+#[must_use]
+pub fn generate_mlkem_keypair_from_seed(
+    suite: MlKemSuite,
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> MlKemKeyPair {
+    let mut rng = hedged_chacha20_rng(seed, personalization);
+    generate_mlkem_keypair(suite, &mut rng)
+}
+
+#[must_use]
+fn generate_mlkem_keypair_from_coins(suite: MlKemSuite, _coins: &[u8; 64]) -> MlKemKeyPair {
+    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-KEM
+    // scalar backend. The public API now requires explicit hedged randomness, but
+    // pqcrypto 0.1.x does not expose the FIPS derand entry points needed to inject
+    // these coins without adding another unsafe FFI boundary.
     match suite {
         MlKemSuite::MlKem512 => {
             let (pk, sk) = kyber512::keypair();
@@ -445,7 +485,49 @@ pub fn generate_mlkem_keypair(suite: MlKemSuite) -> MlKemKeyPair {
 pub fn encapsulate_mlkem(
     suite: MlKemSuite,
     public_key: &[u8],
+    rng: &mut HedgedChaCha20Rng,
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut coins = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(coins.as_mut());
+    encapsulate_mlkem_from_coins(suite, public_key, &coins)
+}
+
+/// Encapsulate using seed material plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or
+/// [`MlKemError::BadEncoding`] when the public key encoding is invalid.
+pub fn encapsulate_mlkem_from_os(
+    suite: MlKemSuite,
+    public_key: &[u8],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:encapsulate")?;
+    encapsulate_mlkem(suite, public_key, &mut rng)
+}
+
+/// Deterministically encapsulate from explicit seed material.
+///
+/// # Errors
+/// Returns an error when the public key encoding is invalid.
+pub fn encapsulate_mlkem_from_seed(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut rng = hedged_chacha20_rng(seed, personalization);
+    encapsulate_mlkem(suite, public_key, &mut rng)
+}
+
+fn encapsulate_mlkem_from_coins(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    _coins: &[u8; 32],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-KEM
+    // scalar backend. The public API now requires explicit hedged randomness, but
+    // pqcrypto 0.1.x does not expose the FIPS derand entry points needed to inject
+    // these coins without adding another unsafe FFI boundary.
     match suite {
         MlKemSuite::MlKem512 => {
             let pk = kyber512::PublicKey::from_bytes(public_key)
@@ -585,8 +667,16 @@ mod tests {
     use super::*;
 
     fn roundtrip(suite: MlKemSuite) {
-        let keys = generate_mlkem_keypair(suite);
-        let (shared_a, ct) = encapsulate_mlkem(suite, keys.public_key()).unwrap();
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id(); 32]),
+            b"mlkem-test-keypair",
+        );
+        let mut enc_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(1); 32]),
+            b"mlkem-test-encap",
+        );
+        let keys = generate_mlkem_keypair(suite, &mut rng);
+        let (shared_a, ct) = encapsulate_mlkem(suite, keys.public_key(), &mut enc_rng).unwrap();
         let shared_b = decapsulate_mlkem(suite, keys.secret_key(), ct.as_bytes()).unwrap();
         assert_eq!(shared_a.as_bytes(), shared_b.as_bytes());
     }
@@ -608,9 +698,14 @@ mod tests {
 
     #[test]
     fn invalid_public_key_length() {
-        let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8]).unwrap_err();
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xFE; 32]),
+            b"mlkem-invalid-public-key",
+        );
+        let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8], &mut rng).unwrap_err();
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
 

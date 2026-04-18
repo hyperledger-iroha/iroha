@@ -44,8 +44,9 @@ execution model).
    chunks against Merkle paths rooted at `lookup_root`, and uses the proof's
    `lde_domain_size` when deriving query indices. It no longer rebuilds the LDE
    or folds the full evaluation vector. Keep node-facing proof batches within
-   those caps. V1 proofs now carry exactly two AIR composition challenges,
-   sampled AIR trace rows, sampled AIR composition openings, and per-round FRI
+   the transition-count, payload, query, and path caps. V1 proofs now carry
+   exactly two AIR composition challenges, sampled AIR trace rows, sampled AIR
+   composition openings, and per-round FRI
    openings; the verifier recomputes the sampled AIR composition value from
    opened adjacent rows and requires that value to match the FRI base-layer
    opening.
