@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: developer portal Norito snippet fixture refresh
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/norito_portal_snippets_compile.rs` now seeds a linked caller subject before permission checks and uses the same canonical account and asset literals as the portal examples, so the mock WSV harness no longer fails with `register domain` or `DecodeError` before the snippets execute.
+- The portal snippet sources now match current literal rules and fixtures: `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/08_call_transfer_asset.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/12_nft_flow.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`, and `/home/mtakemiya/dev/iroha/examples/transfer/transfer.ko` use the canonical asset-definition address, valid I105 accounts, and the fully qualified `n0$wonderland.universal` NFT literal.
+- `/home/mtakemiya/dev/iroha/docs/portal/docs/norito/examples/*.md` and `/home/mtakemiya/dev/iroha/docs/portal/static/norito-snippets/*.ko` were regenerated via `npm run sync-norito-snippets` so the downloadable portal snippets and rendered docs stay aligned with the checked-in example sources.
+- This restores `/home/mtakemiya/dev/iroha/crates/ivm/tests/norito_portal_snippets_compile.rs`, which compiles and runs every developer-portal Norito snippet.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test norito_portal_snippets_compile -- --nocapture`
+  - `npm run sync-norito-snippets` from `docs/portal`
+  - `npm run test:norito-snippets` from `docs/portal`
+  - `git diff --check`
+
 ## 2026-04-18 Follow-up: mock WSV unregister/relink permission retention
 - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs` now keeps detached subject permissions and role assignments when `unregister_account_subject` removes the active account row. `has_permission` still returns `false` while the subject is unregistered because link state is gone, but re-registering the same subject restores its direct and role-derived permissions for relink flows.
 - This fixes `/home/mtakemiya/dev/iroha/crates/ivm/tests/mock_wsv.rs` `unregister_account_detaches_subject_and_preserves_state_for_relink`, which expected `MintAsset` and `ReadAccountAssets` authorizations to survive account detachment and come back on re-registration.
