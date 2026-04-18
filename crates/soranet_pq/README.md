@@ -44,10 +44,11 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
 
 - Secrets are wrapped in `Zeroizing` containers so memory is scrubbed on drop.
 - ML-KEM and ML-DSA entry points now require explicit hedged RNG objects or the
-  fallible `_from_os` convenience helpers. The remaining pqcrypto backend gap is
-  tracked in code with `TODO:` comments because pqcrypto 0.1.x does not expose
-  the seeded FIPS derand hooks needed to inject those coins without another
-  unsafe internal FFI surface.
+  fallible `_from_os` convenience helpers.
+- The current backend uses the pqcrypto/PQClean FIPS implementations and calls
+  the PQClean derandomized hooks directly where the Rust wrappers do not expose
+  RNG injection. That keeps seeded and hedged randomness on the public execution
+  path while the backend remains replaceable behind the same API.
 
 ## C FFI
 

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 SoraNet PQ derand backend wiring):
+`soranet_pq` now routes hedged RNG output into ML-KEM and ML-DSA operations by
+calling the PQClean derandomized hooks that pqcrypto 0.1.x does not expose in
+safe Rust. The older `iroha_crypto` seeded ML-DSA-65 helper now relies on
+drop-based zeroization for its sensitive intermediate buffers while preserving
+the existing seeded-key derivation label.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mlkem.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa_backend.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/mldsa_seed.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/soranet/pq_primitives.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/README.md`
+- validation status:
+  - `cargo test -p soranet_pq mlkem -- --nocapture`
+  - `cargo test -p soranet_pq mldsa -- --nocapture`
+- open work after this slice:
+  - run broader `cargo check -p iroha_crypto --all-targets` and the workspace
+    PQ-adjacent crate checks after formatting
+  - continue replacing PQClean-backed internals with local scalar and
+    deterministic hardware-accelerated backends behind the existing API
+
 Latest sync (2026-04-18 IVM query-envelope linked-domain test resync):
 `crates/ivm/tests/wsv_host_execute_query_envelope.rs` now follows the current
 universal-account mock WSV semantics for cross-domain subjects. The query

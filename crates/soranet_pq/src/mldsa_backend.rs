@@ -1,6 +1,5 @@
 use core::{array, ffi::c_int};
 
-use pqcrypto_traits::Error as PqError;
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -8,8 +7,7 @@ use sha3::{
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::{
-    ML_DSA_CONTEXT_MAX_LEN, MlDsaError, MlDsaKeyPair, MlDsaSuite, validate_mldsa_public_key_len,
-    validate_mldsa_secret_key_len, validate_mldsa_signature_len,
+    ML_DSA_CONTEXT_MAX_LEN, MlDsaError, MlDsaKeyPair, MlDsaSuite, validate_mldsa_secret_key_len,
 };
 
 const SEEDBYTES: usize = 32;
@@ -87,31 +85,12 @@ pub(super) fn sign(
     }
 }
 
-fn shake256_into<const OUT: usize>(out: &mut [u8; OUT], inputs: &[&[u8]]) {
+fn shake256_into(out: &mut [u8], inputs: &[&[u8]]) {
     let mut h = Shake256::default();
     for input in inputs {
         h.update(input);
     }
     h.finalize_xof().read(out);
-}
-
-fn shake256_slice(out: &mut [u8], inputs: &[&[u8]]) {
-    let mut h = Shake256::default();
-    for input in inputs {
-        h.update(input);
-    }
-    h.finalize_xof().read(out);
-}
-
-fn bad_length(kind: &'static str, actual: usize, expected: usize) -> MlDsaError {
-    MlDsaError::bad_encoding(
-        kind,
-        PqError::BadLength {
-            name: kind,
-            actual,
-            expected,
-        },
-    )
 }
 
 macro_rules! mldsa_suite {
@@ -143,6 +122,7 @@ macro_rules! mldsa_suite {
         veck_invntt = $veck_invntt:ident,
         veck_pointwise = $veck_pointwise:ident,
         veck_reduce = $veck_reduce:ident,
+        veck_chknorm = $veck_chknorm:ident,
         veck_caddq = $veck_caddq:ident,
         veck_add = $veck_add:ident,
         veck_sub = $veck_sub:ident,
@@ -329,7 +309,7 @@ macro_rules! mldsa_suite {
                         $vecl_add(&mut z, &z_before_add, &y);
                         $vecl_reduce(&mut z);
                     }
-                    if unsafe { $vecl_chknorm(&z, $gamma1 - $beta) } != 0 {
+                    if (unsafe { $vecl_chknorm(&z, (($gamma1) - ($beta)) as i32) }) != 0 {
                         continue;
                     }
 
@@ -342,7 +322,7 @@ macro_rules! mldsa_suite {
                         $veck_sub(&mut w0, &w0_before_sub, &h);
                         $veck_reduce(&mut w0);
                     }
-                    if unsafe { $veck_chknorm(&w0, $gamma2 - $beta) } != 0 {
+                    if (unsafe { $veck_chknorm(&w0, (($gamma2) - ($beta)) as i32) }) != 0 {
                         continue;
                     }
 
@@ -351,7 +331,7 @@ macro_rules! mldsa_suite {
                         $veck_invntt(&mut h);
                         $veck_reduce(&mut h);
                     }
-                    if unsafe { $veck_chknorm(&h, $gamma2) } != 0 {
+                    if (unsafe { $veck_chknorm(&h, ($gamma2) as i32) }) != 0 {
                         continue;
                     }
 
@@ -387,6 +367,7 @@ macro_rules! mldsa_suite {
                 fn $veck_invntt(v: *mut Polyveck<$k>);
                 fn $veck_pointwise(r: *mut Polyveck<$k>, a: *const Poly, v: *const Polyveck<$k>);
                 fn $veck_reduce(v: *mut Polyveck<$k>);
+                fn $veck_chknorm(v: *const Polyveck<$k>, bound: i32) -> c_int;
                 fn $veck_caddq(v: *mut Polyveck<$k>);
                 fn $veck_add(w: *mut Polyveck<$k>, u: *const Polyveck<$k>, v: *const Polyveck<$k>);
                 fn $veck_sub(w: *mut Polyveck<$k>, u: *const Polyveck<$k>, v: *const Polyveck<$k>);
@@ -471,6 +452,7 @@ mldsa_suite!(
     veck_invntt = PQCLEAN_MLDSA44_CLEAN_polyveck_invntt_tomont,
     veck_pointwise = PQCLEAN_MLDSA44_CLEAN_polyveck_pointwise_poly_montgomery,
     veck_reduce = PQCLEAN_MLDSA44_CLEAN_polyveck_reduce,
+    veck_chknorm = PQCLEAN_MLDSA44_CLEAN_polyveck_chknorm,
     veck_caddq = PQCLEAN_MLDSA44_CLEAN_polyveck_caddq,
     veck_add = PQCLEAN_MLDSA44_CLEAN_polyveck_add,
     veck_sub = PQCLEAN_MLDSA44_CLEAN_polyveck_sub,
@@ -515,6 +497,7 @@ mldsa_suite!(
     veck_invntt = PQCLEAN_MLDSA65_CLEAN_polyveck_invntt_tomont,
     veck_pointwise = PQCLEAN_MLDSA65_CLEAN_polyveck_pointwise_poly_montgomery,
     veck_reduce = PQCLEAN_MLDSA65_CLEAN_polyveck_reduce,
+    veck_chknorm = PQCLEAN_MLDSA65_CLEAN_polyveck_chknorm,
     veck_caddq = PQCLEAN_MLDSA65_CLEAN_polyveck_caddq,
     veck_add = PQCLEAN_MLDSA65_CLEAN_polyveck_add,
     veck_sub = PQCLEAN_MLDSA65_CLEAN_polyveck_sub,
@@ -559,6 +542,7 @@ mldsa_suite!(
     veck_invntt = PQCLEAN_MLDSA87_CLEAN_polyveck_invntt_tomont,
     veck_pointwise = PQCLEAN_MLDSA87_CLEAN_polyveck_pointwise_poly_montgomery,
     veck_reduce = PQCLEAN_MLDSA87_CLEAN_polyveck_reduce,
+    veck_chknorm = PQCLEAN_MLDSA87_CLEAN_polyveck_chknorm,
     veck_caddq = PQCLEAN_MLDSA87_CLEAN_polyveck_caddq,
     veck_add = PQCLEAN_MLDSA87_CLEAN_polyveck_add,
     veck_sub = PQCLEAN_MLDSA87_CLEAN_polyveck_sub,
