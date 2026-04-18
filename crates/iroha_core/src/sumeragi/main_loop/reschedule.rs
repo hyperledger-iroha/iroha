@@ -1551,15 +1551,14 @@ impl Actor {
         }
         let frontier_slot_owner_was_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
-        let frontier_slot_vote_backed_owner_was_active =
-            contiguous_frontier
-                && self.frontier_slot.as_ref().is_some_and(|slot| {
-                    slot.height == height
-                        && slot.view == view
-                        && (slot.quorum_progress.votes_observed
-                            || slot.quorum_progress.commit_qc_observed
-                            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
-                });
+        let frontier_slot_vote_backed_owner_was_active = contiguous_frontier
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
+            });
         let same_slot_vote_backed_evidence = contiguous_frontier
             && !keep_commit_qc
             && self.slot_has_vote_backed_consensus_evidence(height, view);

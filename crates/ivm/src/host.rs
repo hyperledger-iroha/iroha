@@ -1503,8 +1503,13 @@ impl IVMHost for DefaultHost {
                     let ptr = vm.register(reg);
                     let tlv = vm.memory.validate_tlv(ptr)?;
                     match tlv.type_id {
-                        PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
-                            Ok(tlv.payload.to_vec())
+                        PointerType::Blob | PointerType::NoritoBytes => Ok(tlv.payload.to_vec()),
+                        PointerType::Json => {
+                            let json: Json =
+                                decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                            let value = norito::json::parse_value(json.get())
+                                .map_err(|_| VMError::DecodeError)?;
+                            norito::json::to_vec(&value).map_err(|_| VMError::DecodeError)
                         }
                         _ => Err(VMError::NoritoInvalid),
                     }
