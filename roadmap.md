@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Kotodama assert truthiness and role-account fixtures):
+Kotodama `assert(...)` now lowers with its original boolean condition intact,
+and the final compiler lowering only skips the abort syscall when that
+condition is true. The mock WSV role/permission admin syscalls now also accept
+runtime `AccountId` subjects directly, so runtime account arguments no longer
+trip `DecodeError` on `grant_role` / `grant_permission`. The affected role
+tests were refreshed to mint against the actual caller authority when checking
+role-derived mint permissions.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test kotodama_role_builtins -- --nocapture`
+  - `cargo test -p ivm --test kotodama assert_builtin_obeys_truthiness -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup -- --nocapture`
+- open work after this slice:
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
 Latest sync (2026-04-18 Kotodama explicit `AssetDefinitionId` registration):
 Kotodama no longer lowers `register_asset(...)` and `create_new_asset(...)`
 through a bare `Name` pointer for `SYSCALL_REGISTER_ASSET`. The language now
@@ -34,9 +60,6 @@ refresh.
   - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
   - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
 - open work after this slice:
-  - investigate the separate `kotodama_role_builtins` failures still present in
-    the runtime account/authority path (`grant_role`, `grant_permission`,
-    `authority()`, and the role-bootstrap mint flow)
   - run the full `cargo test --workspace` and strict clippy pass during a
     longer clean validation window
 
