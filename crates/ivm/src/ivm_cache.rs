@@ -228,11 +228,13 @@ impl IvmCache {
         self.get_or_predecode_with_key(key, code)
     }
 
-    /// Decode a full artifact that begins with an IVM header followed by code bytes.
+    /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code
+    /// bytes.
     pub fn decode_artifact(
         artifact: &[u8],
     ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
+        validate_supported_artifact_metadata(&parsed.metadata)?;
         let header_len = parsed.header_len;
         if artifact.len() < header_len {
             return Err(crate::VMError::InvalidMetadata);
@@ -242,13 +244,14 @@ impl IvmCache {
         Ok((parsed.metadata, decoded))
     }
 
-    /// Get a pre-decoded stream from a full artifact (header + code), using the header
-    /// version in the cache key.
+    /// Get a pre-decoded stream from a supported IVM 1.1 artifact (header + code), using the
+    /// header version in the cache key.
     pub fn get_or_predecode_artifact(
         &mut self,
         artifact: &[u8],
     ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {
         let parsed = ProgramMetadata::parse(artifact)?;
+        validate_supported_artifact_metadata(&parsed.metadata)?;
         let code = &artifact[parsed.code_offset..];
         let key = Self::key_for(
             code,
@@ -297,6 +300,13 @@ impl IvmCache {
     pub fn counters(&self) -> (u64, u64, u64) {
         (self.hits, self.misses, self.evictions)
     }
+}
+
+fn validate_supported_artifact_metadata(meta: &ProgramMetadata) -> Result<(), crate::VMError> {
+    if meta.version_major == 1 && meta.version_minor == 1 {
+        return Ok(());
+    }
+    Err(crate::VMError::InvalidMetadata)
 }
 
 // Global thread-safe cache and counters (Phase 2)
