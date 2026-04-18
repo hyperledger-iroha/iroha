@@ -1,4 +1,4 @@
-//! Helpers for enforcing the `HotStuff` `locked-QC` safety rules.
+//! Helpers for enforcing the `locked-QC` safety rules.
 
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
@@ -75,6 +75,18 @@ where
     current_height == locked.height && current_hash == locked.subject_block_hash
 }
 
+pub(super) fn qc_satisfies_locked_with_lookup<F>(
+    locked: QcHeaderRef,
+    highest: QcHeaderRef,
+    parent_lookup: F,
+) -> bool
+where
+    F: FnMut(HashOf<BlockHeader>, u64) -> Option<HashOf<BlockHeader>>,
+{
+    highest.view > locked.view || qc_extends_locked_with_lookup(locked, highest, parent_lookup)
+}
+
+#[cfg(test)]
 pub(super) fn qc_extends_locked_if_present<F, G>(
     locked: Option<QcHeaderRef>,
     highest: QcHeaderRef,
@@ -90,6 +102,28 @@ where
     };
     if !locked_present(locked.subject_block_hash) {
         // Missing locked payload must block extension checks to preserve safety.
+        return false;
+    }
+    qc_extends_locked_with_lookup(locked, highest, parent_lookup)
+}
+
+pub(super) fn qc_satisfies_locked_if_present<F, G>(
+    locked: Option<QcHeaderRef>,
+    highest: QcHeaderRef,
+    parent_lookup: F,
+    mut locked_present: G,
+) -> bool
+where
+    F: FnMut(HashOf<BlockHeader>, u64) -> Option<HashOf<BlockHeader>>,
+    G: FnMut(HashOf<BlockHeader>) -> bool,
+{
+    let Some(locked) = locked else {
+        return true;
+    };
+    if highest.view > locked.view {
+        return true;
+    }
+    if !locked_present(locked.subject_block_hash) {
         return false;
     }
     qc_extends_locked_with_lookup(locked, highest, parent_lookup)

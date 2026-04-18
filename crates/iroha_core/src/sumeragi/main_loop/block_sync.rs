@@ -9,7 +9,7 @@ use norito::codec::Encode as _;
 
 use crate::sumeragi::message::BlockMessageWire;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::message::FetchPendingBlockPriority;
 use super::*;
 
@@ -958,10 +958,10 @@ impl Actor {
             return true;
         };
         if !self.block_known_for_lock(lock.subject_block_hash) {
-            return false;
+            return qc.view > lock.view;
         }
         let candidate = Self::qc_to_header_ref(qc);
-        qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+        qc_satisfies_locked_with_lookup(lock, candidate, |hash, lookup_height| {
             self.parent_hash_for(hash, lookup_height)
         })
     }
@@ -970,7 +970,9 @@ impl Actor {
         lock: crate::sumeragi::consensus::QcHeaderRef,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> bool {
-        qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
+        qc.view <= lock.view
+            && qc.height == lock.height
+            && qc.subject_block_hash != lock.subject_block_hash
     }
 
     fn block_sync_qc_same_height_recoverable(
@@ -990,6 +992,9 @@ impl Actor {
             return false;
         };
         if self.block_known_locally(lock.subject_block_hash) {
+            return false;
+        }
+        if qc.view > lock.view {
             return false;
         }
         if qc.height == lock.height && qc.subject_block_hash == lock.subject_block_hash {
@@ -1023,7 +1028,8 @@ impl Actor {
         &self,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> bool {
-        self.locked_qc.is_some_and(|lock| qc.height < lock.height)
+        self.locked_qc
+            .is_some_and(|lock| qc.view <= lock.view && qc.height < lock.height)
     }
 
     fn log_block_sync_locked_qc_conflict(

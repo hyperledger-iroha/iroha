@@ -84,7 +84,7 @@ use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
     Actor, BlockMessage,
     background::dispatch_background_request,
-    locked_qc::qc_extends_locked_with_lookup,
+    locked_qc::{qc_extends_locked_with_lookup, qc_satisfies_locked_with_lookup},
     vrf::VrfLocalState,
     *,
 };
@@ -15751,9 +15751,6 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
-        eprintln!("test last={:?}", pending_after.last_quorum_reschedule);
-    }
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
@@ -23540,6 +23537,7 @@ fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
 async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
@@ -23548,7 +23546,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     let epoch = actor.epoch_for_height(height);
     actor.reset_collector_state();
 
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     let emitted = actor.emit_precommit_vote(
         block_hash,
@@ -23606,15 +23604,14 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
         .iter()
         .cloned()
         .collect();
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -24084,7 +24081,7 @@ async fn qc_broadcast_targets_snapshot_roster() {
         );
     }
 
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
     actor.try_form_qc_from_votes(
         Phase::Commit,
         block_hash,
@@ -24099,18 +24096,14 @@ async fn qc_broadcast_targets_snapshot_roster() {
         .filter(|peer| *peer != &local_peer)
         .cloned()
         .collect();
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::Qc(qc) if qc.subject_block_hash == block_hash
-                ) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("CommitCert"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -25422,6 +25415,73 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
         "conflicting precommit QC should not be aggregated"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 2, None);
+    actor
+        .kura
+        .store_block(locked_block.clone())
+        .expect("store locked block");
+    actor
+        .kura
+        .store_block(conflicting_block.clone())
+        .expect("store conflicting block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_block.hash());
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_block.hash(),
+        height: 1,
+        view: 1,
+        epoch,
+    });
+    super::status::set_locked_qc(1, 1, Some(locked_block.hash()));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let required = topology.min_votes_for_commit();
+    let height = 2;
+    let view = 2;
+
+    for signer_idx in 0..required {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: conflicting_block.hash(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    assert!(
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            conflicting_block.hash(),
+            height,
+            view,
+            epoch
+        )),
+        "newer-view conflicting precommit QC should aggregate via lock override"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
     harness.shutdown.send();
 }
 
@@ -69076,7 +69136,6 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         since: first_start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(first_now);
-    actor.slot_tracker.proposals_seen.clear();
 
     assert!(
         actor.force_view_change_if_idle(first_now),
@@ -98176,7 +98235,13 @@ async fn purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposa
     let proposal = Actor::build_consensus_proposal(
         &block,
         payload_hash,
-        sample_qc_ref(height.saturating_sub(1), view),
+        QcHeaderRef {
+            height: height.saturating_sub(1),
+            view: 0,
+            epoch: actor.epoch_for_height(height.saturating_sub(1)),
+            subject_block_hash: genesis_hash,
+            phase: Phase::Commit,
+        },
         0,
         view,
         actor.epoch_for_height(height),
@@ -116782,6 +116847,7 @@ async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
 async fn commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     actor.relay_backpressure.disable_for_tests();
 
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
@@ -116863,19 +116929,18 @@ async fn commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets(
         .propose
         .collectors_contacted
         .insert(collector_decoy);
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -117616,6 +117681,65 @@ async fn highest_qc_extends_locked_rejects_missing_highest() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn highest_qc_extends_locked_accepts_divergent_newer_view() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 1, None);
+    let locked_hash = locked_block.hash();
+    let divergent_block = sample_block(2, 2, None);
+    let divergent_hash = divergent_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    actor
+        .kura
+        .store_block(divergent_block)
+        .expect("store divergent block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    let lock = QcHeaderRef {
+        height: 1,
+        view: 1,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let highest = QcHeaderRef {
+        height: 2,
+        view: 2,
+        epoch,
+        subject_block_hash: divergent_hash,
+        phase: Phase::Prepare,
+    };
+
+    assert!(
+        !qc_extends_locked_with_lookup(lock, highest, |hash, lookup_height| {
+            actor.parent_hash_for(hash, lookup_height)
+        }),
+        "test setup should use a structurally divergent branch"
+    );
+    assert!(
+        actor.highest_qc_extends_locked(highest),
+        "newer-view highest QC must override an older divergent lock"
+    );
+    assert!(
+        actor.precommit_qc_extends_locked(Phase::Commit, divergent_hash, 2, 2, epoch),
+        "newer-view precommit QC must also override an older divergent lock"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
 #[test]
 fn qc_extends_locked_accepts_direct_parent() {
     let locked = sample_qc_ref(5, 1);
@@ -117783,6 +117907,28 @@ fn qc_extends_locked_rejects_height_regression_case() {
     let locked = sample_qc_ref(5, 1);
     let highest = sample_qc_ref(4, 0);
     assert!(!qc_extends_locked_with_lookup(
+        locked,
+        highest,
+        |_hash, _height| None
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_accepts_divergent_newer_view() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 2);
+    assert!(qc_satisfies_locked_with_lookup(
+        locked,
+        highest,
+        |_hash, _height| None
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_rejects_divergent_same_view() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 1);
+    assert!(!qc_satisfies_locked_with_lookup(
         locked,
         highest,
         |_hash, _height| None
