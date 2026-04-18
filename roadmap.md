@@ -2,6 +2,56 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Halo2 IPA diagnostic verifier resource hardening):
+The standalone Halo2 IPA poly-open helper now has bounded resource behavior:
+`OpenVerifyEnvelope` decoding accepts explicit `max_k` and transcript-label
+limits, proof-round counts are validated before IPA folding, the process-local
+parameter registry is capped with LRU eviction, malformed generator vector
+lengths are rejected before curve decoding, and the transcript uses a running
+SHA3 state instead of rehashing its complete history. Torii
+`/v1/zk/verify-batch` now routes through the app API proof guardrails and passes
+configured Halo2 batch/envelope/domain/label limits into the standalone helper;
+its JSON batch form now preserves one status per submitted entry, marking
+malformed or limit-rejected entries as `false`. The endpoint remains
+diagnostic-only; ledger-grade policy stays on the VK registry-backed
+`iroha_core::zk::verify_backend_with_timing_guardrails` path. Coverage now also
+exercises typed proof-wire failures, unsupported-backend dispatch, exact-limit
+success, backend-qualified parameter-registry keys, transcript scope/length
+separation, JSON oversized-batch rejection, Norito per-entry diagnostic limits,
+invalid-body responses, empty JSON batches, unknown numeric backend IDs,
+invalid scalar proof encodings, empty batch short-circuiting, registry reuse for
+pre-registered parameter wires, JSON `max_k` limit rejection, `text/json`
+content negotiation, malformed JSON handling, duplicate generator rejection,
+invalid public/proof group encodings, large `max_k >= usize::BITS` acceptance,
+unknown-curve parameter mismatches, default-handler JSON mixed-status
+verification, JSON charset content-types, and empty Norito batches. Registry
+tests now serialize their own cache clears so the optional parallel test suite
+does not race on the process-global params registry.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/errors.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/ipa.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/params.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/transcript.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/tests/zk_verify_batch_handler_integration.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/zk_audit_matrix.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `rustfmt --edition 2024` on the touched Halo2/Torii Rust files
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_zkp_halo2` (`44 passed`)
+  - `cargo test -p iroha_zkp_halo2 --features parallel,goldilocks_backend` (`48 passed`)
+  - `cargo test -p iroha_torii --features app_api,zk-verify-batch --test zk_verify_batch_handler_integration -- --nocapture` (`13 passed`)
+  - `git diff --check`
+- open work after this slice:
+  - keep `/v1/zk/verify-batch` documented and treated as diagnostic-only unless
+    a future task deliberately moves it onto the VK registry policy path
+
 Latest sync (2026-04-18 Kotodama ZK vote/unshield sample semantic sync):
 The checked-in `zk_vote_and_unshield.ko` sample now matches the current
 Kotodama semantic contract: its public `demo` entrypoint carries
@@ -21,16 +71,19 @@ sample regression test aligned with the language rules it exercises.
 
 Latest sync (2026-04-18 STARK/FRI V1 verifier hardening):
 STARK/FRI V1 was hardened in-place for the first release. The low-level native
-verifier now folds `(x, -x)` pairs with the domain element, STARK guardrails
-split outer OpenVerify envelope bytes from backend-native proof bytes,
-the synthetic STARK helper was removed from the production API, high-level
-STARK verification now requires verifier-reconstructed V1 binding-AIR
-composition values, offline recursive STARK readiness uses that composition
-path, and curve labels are exact canonical strings. FASTPQ verification now
-authenticates sampled LDE query chunks and per-round FRI query chains without
-trace rebuild, LDE derivation, or full recursive folding. FASTPQ proof fixtures,
-ordering hashes, and trace-commitment goldens were refreshed for the in-place V1
-wire shape.
+verifier now folds `(x, -x)` pairs with the domain element and V1 envelopes must
+carry an explicit AIR section: sampled row openings are authenticated under an
+AIR trace root, sampled composition values are recomputed from adjacent rows,
+and the composition root is bound to FRI layer 0. STARK guardrails split outer
+OpenVerify envelope bytes from backend-native proof bytes, the synthetic STARK
+helper is test-only, high-level STARK verification now requires a
+verifier-reconstructed AIR public digest, offline recursive STARK readiness uses
+that AIR-bound path, and curve labels are exact canonical strings. FASTPQ
+verification now authenticates sampled LDE query chunks, sampled AIR trace and
+composition openings, the exact V1 AIR challenge count, and per-round FRI query
+chains without trace rebuild, LDE derivation, or full recursive folding. FASTPQ
+proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for
+the in-place V1 wire shape.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -69,11 +122,8 @@ wire shape.
   - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
   - `git diff --check`
 - open work after this slice:
-  - add FASTPQ AIR composition openings so sampled constraints are checked
-    directly beside the per-round FRI openings now carried in V1 proofs
-  - replace the first-release native STARK binding circuits with full
-    circuit-specific execution AIRs where a feature needs cryptographic
-    execution semantics beyond deterministic replay/public-input binding
+  - run the full workspace test and strict clippy pass during a clean validation
+    window without concurrent Cargo jobs
 
 Latest sync (2026-04-18 Kotodama assert truthiness and role-account fixtures):
 Kotodama `assert(...)` now lowers with its original boolean condition intact,

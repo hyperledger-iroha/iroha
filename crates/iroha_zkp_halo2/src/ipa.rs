@@ -205,6 +205,21 @@ impl<B: IpaBackend> IpaVerifier<B> {
                 actual: b.len(),
             });
         }
+        if proof.l_vec.len() != proof.r_vec.len() {
+            return Err(Error::InvalidProofShape {
+                reason: "L/R round count",
+                expected: proof.l_vec.len(),
+                actual: proof.r_vec.len(),
+            });
+        }
+        let expected_rounds = n.trailing_zeros() as usize;
+        if proof.rounds() != expected_rounds {
+            return Err(Error::InvalidProofShape {
+                reason: "round count",
+                expected: expected_rounds,
+                actual: proof.rounds(),
+            });
+        }
 
         transcript.absorb("ipa.n", &(n as u64).to_le_bytes());
 

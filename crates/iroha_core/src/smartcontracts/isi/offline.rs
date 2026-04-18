@@ -164,19 +164,19 @@ fn verify_recursive_stark_envelope(proof: &[u8]) -> bool {
     else {
         return false;
     };
-    let Some(comp_values) = envelope.proof.comp_values.as_ref() else {
-        return false;
-    };
-    if envelope.proof.commits.comp_root.is_none() {
-        return false;
-    }
     let expected_terms =
         offline_stark_binding_terms(&envelope.params.domain_tag, &envelope.transcript_label);
-    if comp_values.iter().any(|comp| {
-        comp.constant != OFFLINE_STARK_BINDING_CONSTANT
-            || comp.z_coeff != OFFLINE_STARK_BINDING_Z_COEFF
-            || comp.aux_terms != expected_terms
-    }) {
+    let Ok(expected_digest) = crate::zk_stark::stark_air_public_digest_from_composition(
+        OFFLINE_STARK_BINDING_CONSTANT,
+        OFFLINE_STARK_BINDING_Z_COEFF,
+        &expected_terms,
+    ) else {
+        return false;
+    };
+    let Some(air) = envelope.proof.air.as_ref() else {
+        return false;
+    };
+    if air.public_digest != expected_digest {
         return false;
     }
     crate::zk_stark::verify_stark_fri_envelope(proof)

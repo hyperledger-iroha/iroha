@@ -783,6 +783,69 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     })
 }
 
+/// Return the canonical FASTPQ column layout for a transition batch without materialising rows.
+///
+#[must_use]
+pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
+    let mut canonical = batch.clone();
+    canonical.sort();
+
+    let mut max_key_limbs = 0usize;
+    let mut max_value_old = 0usize;
+    let mut max_value_new = 0usize;
+    let mut max_asset_limbs = 0usize;
+    for transition in &canonical.transitions {
+        let asset_id_bytes = match &transition.operation {
+            crate::OperationKind::MetaSet => transition.key.clone(),
+            _ => extract_asset_id(&transition.key),
+        };
+        max_key_limbs = max_key_limbs.max(pack_bytes(&transition.key).limbs.len());
+        max_value_old = max_value_old.max(pack_bytes(&transition.pre_value).limbs.len());
+        max_value_new = max_value_new.max(pack_bytes(&transition.post_value).limbs.len());
+        max_asset_limbs = max_asset_limbs.max(pack_bytes(&asset_id_bytes).limbs.len());
+    }
+
+    let mut columns = [
+        "s_active",
+        "s_transfer",
+        "s_mint",
+        "s_burn",
+        "s_role_grant",
+        "s_role_revoke",
+        "s_meta_set",
+        "s_perm",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    columns.extend((0..max_key_limbs).map(|idx| format!("key_limb_{idx}")));
+    columns.extend((0..max_value_old).map(|idx| format!("value_old_limb_{idx}")));
+    columns.extend((0..max_value_new).map(|idx| format!("value_new_limb_{idx}")));
+    columns.extend((0..max_asset_limbs).map(|idx| format!("asset_id_limb_{idx}")));
+    columns.extend(
+        [
+            "delta",
+            "running_asset_delta",
+            "metadata_hash",
+            "supply_counter",
+            "perm_hash",
+            "neighbour_leaf",
+            "dsid",
+            "slot",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    for level in 0..SMT_HEIGHT {
+        columns.push(format!("path_bit_{level}"));
+        columns.push(format!("sibling_{level}"));
+        columns.push(format!("node_in_{level}"));
+        columns.push(format!("node_out_{level}"));
+    }
+
+    columns
+}
+
 impl TraceColumn {
     fn new(name: impl Into<String>, values: impl Iterator<Item = u64>) -> Self {
         Self {
@@ -2026,6 +2089,19 @@ mod tests {
                 .iter()
                 .all(|col| col.values.len() == trace.padded_len)
         );
+    }
+
+    #[test]
+    fn column_names_for_batch_matches_trace_layout() {
+        let batch = sample_batch();
+        let trace = build_trace(&batch).expect("build trace");
+        let expected = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(column_names_for_batch(&batch), expected);
     }
 
     #[test]

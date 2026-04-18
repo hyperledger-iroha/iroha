@@ -39,6 +39,7 @@ const MAX_FRI_LAYERS: usize = 32;
 const MAX_FRI_QUERIES: usize = 32;
 const MAX_MERKLE_DEPTH: usize = 32;
 const MAX_AUX_TERMS: usize = 64;
+const MAX_AIR_WIDTH: usize = 16;
 const MAX_DOMAIN_TAG_LEN: usize = 64;
 const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
@@ -58,6 +59,8 @@ pub struct StarkVerifierLimits {
     pub max_merkle_depth: usize,
     /// Maximum auxiliary terms in composition leaf.
     pub max_aux_terms: usize,
+    /// Maximum values in a sampled AIR trace row.
+    pub max_air_width: usize,
     /// Maximum domain tag length.
     pub max_domain_tag_len: usize,
     /// Maximum transcript label length.
@@ -75,6 +78,7 @@ impl Default for StarkVerifierLimits {
             max_queries: MAX_FRI_QUERIES,
             max_merkle_depth: MAX_MERKLE_DEPTH,
             max_aux_terms: MAX_AUX_TERMS,
+            max_air_width: MAX_AIR_WIDTH,
             max_domain_tag_len: MAX_DOMAIN_TAG_LEN,
             max_transcript_label_len: MAX_TRANSCRIPT_LABEL_LEN,
             max_envelope_bytes: MAX_ENVELOPE_BYTES,
@@ -104,7 +108,6 @@ impl Fq {
         if v >= MOD_P_U64 { None } else { Some(Self(v)) }
     }
 
-    #[cfg(test)]
     fn zero() -> Self {
         Self(0)
     }
@@ -496,8 +499,13 @@ mod tests {
             hash_fn: STARK_HASH_SHA256_V1,
             domain_tag: "iroha:test:sha256".to_owned(),
         };
-        let bytes =
-            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        let bytes = prove_stark_fri_air_envelope_bytes(
+            params,
+            "IROHA-TEST-STARK".to_owned(),
+            "stark/fri/sha256-goldilocks:test".to_owned(),
+            [0x11; 32],
+        )
+        .expect("ok");
         assert!(verify_stark_fri_envelope(&bytes));
     }
 
@@ -513,9 +521,60 @@ mod tests {
             hash_fn: STARK_HASH_POSEIDON2_V1,
             domain_tag: "iroha:test:poseidon2".to_owned(),
         };
+        let bytes = prove_stark_fri_air_envelope_bytes(
+            params,
+            "IROHA-TEST-STARK".to_owned(),
+            "stark/fri/poseidon2-goldilocks:test".to_owned(),
+            [0x22; 32],
+        )
+        .expect("ok");
+        assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn synthesized_envelope_without_air_is_rejected() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:missing-air".to_owned(),
+        };
         let bytes =
             synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        assert!(!verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn air_envelope_verifies_and_rejects_tampered_opening() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:air".to_owned(),
+        };
+        let bytes = prove_stark_fri_air_envelope_bytes(
+            params,
+            "IROHA-TEST-STARK-AIR".to_owned(),
+            "stark/fri/sha256-goldilocks:air-test".to_owned(),
+            [0x42; 32],
+        )
+        .expect("air proof");
         assert!(verify_stark_fri_envelope(&bytes));
+
+        let mut envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode air envelope");
+        let air = envelope.proof.air.as_mut().expect("air section");
+        air.openings[0].row[1] ^= 1;
+        let tampered = norito::to_bytes(&envelope).expect("encode tampered air envelope");
+        assert!(!verify_stark_fri_envelope(&tampered));
     }
 
     #[test]
@@ -550,8 +609,13 @@ mod tests {
             hash_fn: STARK_HASH_SHA256_V1,
             domain_tag: "iroha:test:tamper".to_owned(),
         };
-        let bytes =
-            synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned()).expect("ok");
+        let bytes = prove_stark_fri_air_envelope_bytes(
+            params,
+            "IROHA-TEST-STARK".to_owned(),
+            "stark/fri/sha256-goldilocks:tamper".to_owned(),
+            [0x33; 32],
+        )
+        .expect("ok");
         let mut envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode synthesized envelope");
         envelope.params.domain_tag.push_str(":mutated");
@@ -798,6 +862,62 @@ pub struct StarkCompositionValueV1 {
     pub path: MerklePath,
 }
 
+/// Sampled AIR trace and composition opening for one verifier query.
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
+pub struct StarkAirOpeningV1 {
+    /// Evaluation-domain index sampled by the verifier transcript.
+    pub index: u32,
+    /// AIR trace row at `index`.
+    pub row: Vec<u64>,
+    /// AIR trace row at `(index + 1) mod domain_size`.
+    pub next_row: Vec<u64>,
+    /// Inclusion path for `row` under [`StarkAirProofV1::trace_root`].
+    pub row_path: MerklePath,
+    /// Inclusion path for `next_row` under [`StarkAirProofV1::trace_root`].
+    pub next_row_path: MerklePath,
+    /// AIR composition evaluation at `index`; this is the FRI base-layer value.
+    pub composition_value: u64,
+    /// Inclusion path for `composition_value` under [`StarkAirProofV1::composition_root`].
+    pub composition_path: MerklePath,
+}
+
+/// Verifier-owned AIR statement carried by V1 STARK proofs.
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
+pub struct StarkAirProofV1 {
+    /// Version tag.
+    pub version: u16,
+    /// Canonical circuit identifier for the public statement.
+    pub circuit_id: String,
+    /// Digest of the public statement reconstructed by the caller.
+    pub public_digest: [u8; 32],
+    /// Merkle root over row-major AIR trace rows.
+    pub trace_root: [u8; 32],
+    /// Merkle root over AIR composition evaluations; must equal FRI layer root 0.
+    pub composition_root: [u8; 32],
+    /// Number of field values in each AIR trace row.
+    pub trace_width: u16,
+    /// Sampled AIR openings, one per FRI query.
+    pub openings: Vec<StarkAirOpeningV1>,
+}
+
 /// Decommitment for one fold step at layer `k`.
 #[derive(
     Debug,
@@ -853,6 +973,8 @@ pub struct StarkProofV1 {
     /// When present, the expected composition leaf is
     /// `constant + z_coeff*z_final + sum_i coeff_i * value_i`.
     pub comp_values: Option<Vec<StarkCompositionValueV1>>,
+    /// V1 AIR section binding sampled trace and composition openings to FRI.
+    pub air: Option<StarkAirProofV1>,
 }
 
 /// Verification envelope for STARK FRI multi-round (binary) proofs.
@@ -873,49 +995,6 @@ pub struct StarkVerifyEnvelopeV1 {
     pub proof: StarkProofV1,
     /// Transcript label to domain-separate instances
     pub transcript_label: String,
-}
-
-fn zero_merkle_level_hashes(hash_fn: u8, max_depth: usize) -> Option<Vec<[u8; 32]>> {
-    let zero = Fq::from_canonical_u64(0)?;
-    let leaf = match hash_fn {
-        STARK_HASH_SHA256_V1 => leaf_hash(zero),
-        STARK_HASH_POSEIDON2_V1 => poseidon_leaf_hash(zero),
-        _ => return None,
-    };
-    let mut levels = Vec::with_capacity(max_depth + 1);
-    levels.push(leaf);
-    for _ in 0..max_depth {
-        let prev = *levels.last()?;
-        let next = match hash_fn {
-            STARK_HASH_SHA256_V1 => node_hash(&prev, &prev),
-            STARK_HASH_POSEIDON2_V1 => poseidon_node_hash(&prev, &prev)?,
-            _ => return None,
-        };
-        levels.push(next);
-    }
-    Some(levels)
-}
-
-fn zero_merkle_path(index: usize, depth: usize, level_hashes: &[[u8; 32]]) -> Option<MerklePath> {
-    if depth > level_hashes.len().saturating_sub(1) {
-        return None;
-    }
-    if depth >= usize::BITS as usize {
-        return None;
-    }
-    let width = 1usize << depth;
-    if index >= width {
-        return None;
-    }
-    let mut dirs = vec![0u8; (depth + 7) / 8];
-    let mut siblings = Vec::with_capacity(depth);
-    for level in 0..depth {
-        if ((index >> level) & 1) == 1 {
-            dirs[level / 8] |= 1u8 << (level % 8);
-        }
-        siblings.push(level_hashes[level]);
-    }
-    Some(MerklePath { dirs, siblings })
 }
 
 fn merkle_levels_from_values(
@@ -994,16 +1073,158 @@ fn merkle_root_from_levels(levels: &[Vec<[u8; 32]>]) -> Option<[u8; 32]> {
     levels.last()?.first().copied()
 }
 
-/// Build a deterministic STARK FRI proof envelope that passes native verification.
-///
-/// The generated witness uses all-zero layer evaluations and deterministic Merkle openings for
-/// transcript-derived query indices. This keeps proving deterministic and avoids trusted setup.
-///
-/// Returns Norito-encoded [`StarkVerifyEnvelopeV1`] bytes.
-fn synthesize_stark_fri_envelope_bytes(
-    params: StarkFriParamsV1,
-    transcript_label: String,
-) -> Result<Vec<u8>, String> {
+fn merkle_levels_from_hashes(
+    params: &StarkFriParamsV1,
+    leaves: Vec<[u8; 32]>,
+) -> Option<Vec<Vec<[u8; 32]>>> {
+    if leaves.is_empty() {
+        return None;
+    }
+    let mut current = leaves;
+    let mut levels = Vec::new();
+    loop {
+        levels.push(current.clone());
+        if current.len() == 1 {
+            break;
+        }
+        if current.len() % 2 == 1 {
+            let last = *current.last()?;
+            current.push(last);
+        }
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            next.push(match params.hash_fn {
+                STARK_HASH_SHA256_V1 => node_hash(&pair[0], &pair[1]),
+                STARK_HASH_POSEIDON2_V1 => poseidon_node_hash(&pair[0], &pair[1])?,
+                _ => return None,
+            });
+        }
+        current = next;
+    }
+    Some(levels)
+}
+
+fn merkle_verify_hash(
+    params: &StarkFriParamsV1,
+    root: &[u8; 32],
+    leaf: &[u8; 32],
+    path: &MerklePath,
+) -> bool {
+    let mut acc = *leaf;
+    for (i, sib) in path.siblings.iter().enumerate() {
+        let byte = i / 8;
+        if byte >= path.dirs.len() {
+            return false;
+        }
+        let dir_bit = (path.dirs[byte] >> (i % 8)) & 1;
+        acc = match params.hash_fn {
+            STARK_HASH_SHA256_V1 => {
+                if dir_bit == 0 {
+                    node_hash(&acc, sib)
+                } else {
+                    node_hash(sib, &acc)
+                }
+            }
+            STARK_HASH_POSEIDON2_V1 => {
+                let next = if dir_bit == 0 {
+                    poseidon_node_hash(&acc, sib)
+                } else {
+                    poseidon_node_hash(sib, &acc)
+                };
+                match next {
+                    Some(value) => value,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+    }
+    &acc == root
+}
+
+fn stark_air_trace_width() -> usize {
+    6
+}
+
+fn stark_air_digest_limbs(public_digest: &[u8; 32]) -> [u64; 4] {
+    let mut limbs = [0u64; 4];
+    for (idx, chunk) in public_digest.chunks_exact(8).enumerate() {
+        let mut word = [0u8; 8];
+        word.copy_from_slice(chunk);
+        limbs[idx] = (u128::from(u64::from_le_bytes(word)) % MOD_P) as u64;
+    }
+    limbs
+}
+
+fn stark_air_row(index: usize, public_digest: &[u8; 32]) -> Option<Vec<u64>> {
+    let index = u64::try_from(index).ok()?;
+    let index = (u128::from(index) % MOD_P) as u64;
+    let limbs = stark_air_digest_limbs(public_digest);
+    let width = u64::try_from(stark_air_trace_width()).ok()?;
+    Some(vec![index, limbs[0], limbs[1], limbs[2], limbs[3], width])
+}
+
+fn stark_air_trace_leaf_hash(params: &StarkFriParamsV1, row: &[u64]) -> Option<[u8; 32]> {
+    match params.hash_fn {
+        STARK_HASH_SHA256_V1 => {
+            let mut h = Sha256::new();
+            h.update(b"STARK:AIR:TRACE:ROW:V1");
+            h.update(&(row.len() as u64).to_le_bytes());
+            for value in row {
+                h.update(&value.to_le_bytes());
+            }
+            Some(h.finalize().into())
+        }
+        STARK_HASH_POSEIDON2_V1 => Some(u64_to_digest_le(poseidon_domain_hash_u64(
+            b"iroha:zk:stark:air:trace-row:v1",
+            row,
+        ))),
+        _ => None,
+    }
+}
+
+fn stark_air_composition_value(
+    index: usize,
+    domain_size: usize,
+    public_digest: &[u8; 32],
+    row: &[u64],
+    next_row: &[u64],
+) -> Option<Fq> {
+    let width = stark_air_trace_width();
+    if domain_size == 0 || row.len() != width || next_row.len() != width {
+        return None;
+    }
+    let expected = stark_air_row(index, public_digest)?;
+    let expected_next = stark_air_row((index + 1) % domain_size, public_digest)?;
+    let mut acc = Fq::zero();
+    let mut coeff = Fq::from_canonical_u64(3)?;
+    for (actual, expected) in row.iter().zip(expected.iter()) {
+        let residue = Fq::from_canonical_u64(*actual)?.sub(Fq::from_canonical_u64(*expected)?);
+        acc = acc.add(coeff.mul(residue));
+        coeff = coeff.add(Fq::from_canonical_u64(2)?);
+    }
+    for (actual, expected) in next_row.iter().zip(expected_next.iter()) {
+        let residue = Fq::from_canonical_u64(*actual)?.sub(Fq::from_canonical_u64(*expected)?);
+        acc = acc.add(coeff.mul(residue));
+        coeff = coeff.add(Fq::from_canonical_u64(2)?);
+    }
+    Some(acc)
+}
+
+fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> Vec<[u8; 32]> {
+    let mut query_roots = roots.to_vec();
+    if let Some(air) = air {
+        query_roots.push(air.trace_root);
+        query_roots.push(air.composition_root);
+        query_roots.push(air.public_digest);
+    }
+    query_roots
+}
+
+fn validate_stark_prover_params(
+    params: &StarkFriParamsV1,
+    transcript_label: &str,
+) -> Result<usize, String> {
     if params.version != 1 {
         return Err("unsupported STARK params version".to_owned());
     }
@@ -1036,29 +1257,93 @@ fn synthesize_stark_fri_envelope_bytes(
     if n_log2 > MAX_MERKLE_DEPTH {
         return Err("STARK domain depth exceeds verifier limits".to_owned());
     }
-    let required_layers =
-        layers_required(&params).ok_or_else(|| "invalid STARK folding parameters".to_owned())?;
+    layers_required(params).ok_or_else(|| "invalid STARK folding parameters".to_owned())
+}
 
-    let level_hashes = zero_merkle_level_hashes(params.hash_fn, n_log2)
-        .ok_or_else(|| "failed to construct zero Merkle levels".to_owned())?;
-    let roots: Vec<[u8; 32]> = (0..=required_layers)
-        .map(|layer| {
-            let depth = n_log2.saturating_sub(layer);
-            level_hashes
-                .get(depth)
-                .copied()
-                .ok_or_else(|| "failed to derive STARK commitment root".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+fn fri_round_challenge(
+    params: &StarkFriParamsV1,
+    transcript_label: &str,
+    root: &[u8; 32],
+) -> Option<Fq> {
+    let mut tb = Vec::new();
+    tb.extend_from_slice(transcript_label.as_bytes());
+    tb.extend_from_slice(&params.version.to_le_bytes());
+    tb.extend_from_slice(&[
+        params.n_log2,
+        params.blowup_log2,
+        params.fold_arity,
+        params.merkle_arity,
+        params.hash_fn,
+    ]);
+    tb.extend_from_slice(&params.queries.to_le_bytes());
+    tb.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+    tb.extend_from_slice(params.domain_tag.as_bytes());
+    tb.extend_from_slice(root);
+    challenge(params, "stark:fri:r:k", &tb)
+}
 
+fn synthesize_stark_fri_envelope_from_values(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    base_values: Vec<Fq>,
+    extra_query_roots: &[[u8; 32]],
+) -> Result<StarkVerifyEnvelopeV1, String> {
+    let required_layers = validate_stark_prover_params(&params, &transcript_label)?;
+    let total_domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    if base_values.len() != total_domain {
+        return Err("STARK base evaluations do not match domain size".to_owned());
+    }
+    let fold_arity = params.fold_arity as usize;
+
+    let mut layer_values = Vec::with_capacity(required_layers + 1);
+    let mut layer_merkle = Vec::with_capacity(required_layers + 1);
+    let mut roots = Vec::with_capacity(required_layers + 1);
+    layer_values.push(base_values);
+
+    for round in 0..required_layers {
+        let current = layer_values
+            .get(round)
+            .ok_or_else(|| "missing STARK FRI layer".to_owned())?;
+        let levels = merkle_levels_from_values(&params, current)
+            .ok_or_else(|| "failed to build STARK FRI Merkle layer".to_owned())?;
+        let root = merkle_root_from_levels(&levels)
+            .ok_or_else(|| "failed to derive STARK FRI root".to_owned())?;
+        let beta = fri_round_challenge(&params, &transcript_label, &root)
+            .ok_or_else(|| "failed to derive STARK FRI challenge".to_owned())?;
+        roots.push(root);
+        layer_merkle.push(levels);
+        let mut next = Vec::with_capacity(current.len() / fold_arity);
+        for (pair_index, pair) in current.chunks_exact(fold_arity).enumerate() {
+            let x = domain_x_for_pair(current.len(), pair_index)
+                .ok_or_else(|| "failed to derive STARK FRI domain element".to_owned())?;
+            let folded = fri_fold_pair(pair[0], pair[1], beta, x)
+                .ok_or_else(|| "failed to fold STARK FRI pair".to_owned())?;
+            next.push(folded);
+        }
+        layer_values.push(next);
+    }
+    let final_values = layer_values
+        .last()
+        .ok_or_else(|| "missing STARK final FRI layer".to_owned())?;
+    let final_levels = merkle_levels_from_values(&params, final_values)
+        .ok_or_else(|| "failed to build STARK final FRI Merkle layer".to_owned())?;
+    let final_root = merkle_root_from_levels(&final_levels)
+        .ok_or_else(|| "failed to derive STARK final FRI root".to_owned())?;
+    roots.push(final_root);
+    layer_merkle.push(final_levels);
+
+    let mut query_roots = roots.clone();
+    query_roots.extend_from_slice(extra_query_roots);
+
+    let query_count = params.queries as usize;
     let mut queries = Vec::with_capacity(query_count);
     for qi in 0..query_count {
-        let mut idx_layer = derive_query_index(&transcript_label, &params, &roots, qi)
+        let mut idx_layer = derive_query_index(&transcript_label, &params, &query_roots, qi)
             .ok_or_else(|| "failed to derive STARK query index".to_owned())?;
         let mut chain = Vec::with_capacity(required_layers);
         for k in 0..required_layers {
-            let depth_current = n_log2.saturating_sub(k);
-            let depth_next = depth_current.saturating_sub(1);
             let j = idx_layer / 2;
             let y0_idx = j
                 .checked_mul(2)
@@ -1066,20 +1351,35 @@ fn synthesize_stark_fri_envelope_bytes(
             let y1_idx = y0_idx
                 .checked_add(1)
                 .ok_or_else(|| "query index overflow".to_owned())?;
-            let path_y0 = zero_merkle_path(y0_idx, depth_current, &level_hashes)
+            let path_y0 = merkle_path_from_levels(y0_idx, &layer_merkle[k])
                 .ok_or_else(|| "failed to build y0 path".to_owned())?;
-            let path_y1 = zero_merkle_path(y1_idx, depth_current, &level_hashes)
+            let path_y1 = merkle_path_from_levels(y1_idx, &layer_merkle[k])
                 .ok_or_else(|| "failed to build y1 path".to_owned())?;
-            let path_z = zero_merkle_path(j, depth_next, &level_hashes)
+            let path_z = merkle_path_from_levels(j, &layer_merkle[k + 1])
                 .ok_or_else(|| "failed to build z path".to_owned())?;
             let j_u32 = u32::try_from(j).map_err(|_| "query index does not fit u32".to_owned())?;
+            let y0 = layer_values
+                .get(k)
+                .and_then(|values| values.get(y0_idx))
+                .copied()
+                .ok_or_else(|| "query y0 is out of range".to_owned())?;
+            let y1 = layer_values
+                .get(k)
+                .and_then(|values| values.get(y1_idx))
+                .copied()
+                .ok_or_else(|| "query y1 is out of range".to_owned())?;
+            let z = layer_values
+                .get(k + 1)
+                .and_then(|values| values.get(j))
+                .copied()
+                .ok_or_else(|| "query z is out of range".to_owned())?;
             chain.push(FoldDecommitV1 {
                 j: j_u32,
-                y0: 0,
-                y1: 0,
+                y0: y0.0,
+                y1: y1.0,
                 path_y0,
                 path_y1,
-                z: 0,
+                z: z.0,
                 path_z,
             });
             idx_layer = j;
@@ -1101,30 +1401,49 @@ fn synthesize_stark_fri_envelope_bytes(
             },
             queries,
             comp_values: None,
+            air: None,
         },
         transcript_label,
     };
+    Ok(envelope)
+}
+
+/// Build a deterministic STARK FRI proof envelope that passes native verification.
+///
+/// The generated witness uses all-zero layer evaluations and deterministic Merkle openings for
+/// transcript-derived query indices. This keeps proving deterministic and avoids trusted setup.
+///
+/// Returns Norito-encoded [`StarkVerifyEnvelopeV1`] bytes.
+#[cfg(test)]
+fn synthesize_stark_fri_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+) -> Result<Vec<u8>, String> {
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+    let values = vec![Fq::zero(); domain];
+    let envelope =
+        synthesize_stark_fri_envelope_from_values(params, transcript_label, values, &[])?;
     norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
 
-/// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
-///
-/// The FRI witness is the zero polynomial, while the composition leaf is derived from
-/// caller-supplied terms that the high-level verifier must reconstruct independently.
-/// This is used for first-release binding circuits whose execution semantics are checked
-/// outside this transparent native proof.
-pub fn prove_stark_fri_composition_envelope_bytes(
-    params: StarkFriParamsV1,
-    transcript_label: String,
+fn validate_stark_composition_terms(
     constant: u64,
     z_coeff: u64,
-    aux_terms: Vec<StarkCompositionTermV1>,
-) -> Result<Vec<u8>, String> {
+    aux_terms: &[StarkCompositionTermV1],
+) -> Result<(), String> {
     if aux_terms.len() > MAX_AUX_TERMS {
         return Err("too many STARK composition auxiliary terms".to_owned());
     }
+    if Fq::from_canonical_u64(constant).is_none() {
+        return Err("invalid STARK constant".to_owned());
+    }
+    if Fq::from_canonical_u64(z_coeff).is_none() {
+        return Err("invalid STARK z coefficient".to_owned());
+    }
     let mut last_wire = None;
-    for term in &aux_terms {
+    for term in aux_terms {
         if Fq::from_canonical_u64(term.value).is_none()
             || Fq::from_canonical_u64(term.coeff).is_none()
         {
@@ -1137,12 +1456,164 @@ pub fn prove_stark_fri_composition_envelope_bytes(
         }
         last_wire = Some(term.wire_index);
     }
+    Ok(())
+}
+
+/// Build the V1 public AIR statement digest for composition terms.
+pub fn stark_air_public_digest_from_composition(
+    constant: u64,
+    z_coeff: u64,
+    aux_terms: &[StarkCompositionTermV1],
+) -> Result<[u8; 32], String> {
+    validate_stark_composition_terms(constant, z_coeff, aux_terms)?;
+    let mut h = Sha256::new();
+    h.update(b"iroha:zk:stark:air-public-digest:v1");
+    h.update(&constant.to_le_bytes());
+    h.update(&z_coeff.to_le_bytes());
+    h.update(&(aux_terms.len() as u64).to_le_bytes());
+    for term in aux_terms {
+        h.update(&term.wire_index.to_le_bytes());
+        h.update(&term.value.to_le_bytes());
+        h.update(&term.coeff.to_le_bytes());
+    }
+    Ok(h.finalize().into())
+}
+
+/// Build a deterministic V1 STARK/FRI envelope with an explicit verifier-owned AIR section.
+pub fn prove_stark_fri_air_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    circuit_id: String,
+    public_digest: [u8; 32],
+) -> Result<Vec<u8>, String> {
+    if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
+        return Err("invalid STARK AIR circuit_id".to_owned());
+    }
+    validate_stark_prover_params(&params, &transcript_label)?;
+    let domain = 1usize
+        .checked_shl(u32::from(params.n_log2))
+        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
+
+    let rows = (0..domain)
+        .map(|index| {
+            stark_air_row(index, &public_digest)
+                .ok_or_else(|| "failed to build STARK AIR row".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let trace_leaves = rows
+        .iter()
+        .map(|row| {
+            stark_air_trace_leaf_hash(&params, row)
+                .ok_or_else(|| "failed to hash STARK AIR row".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let trace_levels = merkle_levels_from_hashes(&params, trace_leaves)
+        .ok_or_else(|| "failed to build STARK AIR trace commitment".to_owned())?;
+    let trace_root = merkle_root_from_levels(&trace_levels)
+        .ok_or_else(|| "failed to derive STARK AIR trace root".to_owned())?;
+
+    let composition_values = (0..domain)
+        .map(|index| {
+            stark_air_composition_value(
+                index,
+                domain,
+                &public_digest,
+                &rows[index],
+                &rows[(index + 1) % domain],
+            )
+            .ok_or_else(|| "failed to evaluate STARK AIR composition".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let composition_levels = merkle_levels_from_values(&params, &composition_values)
+        .ok_or_else(|| "failed to build STARK AIR composition commitment".to_owned())?;
+    let composition_root = merkle_root_from_levels(&composition_levels)
+        .ok_or_else(|| "failed to derive STARK AIR composition root".to_owned())?;
+    let extra_query_roots = [trace_root, composition_root, public_digest];
+
+    let mut envelope = synthesize_stark_fri_envelope_from_values(
+        params,
+        transcript_label,
+        composition_values,
+        &extra_query_roots,
+    )?;
+    if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
+        return Err("STARK AIR composition root does not match FRI base root".to_owned());
+    }
+
+    let query_roots = stark_air_query_roots(&envelope.proof.commits.roots, None)
+        .into_iter()
+        .chain(extra_query_roots)
+        .collect::<Vec<_>>();
+    let mut openings = Vec::with_capacity(envelope.proof.queries.len());
+    for qi in 0..envelope.proof.queries.len() {
+        let index = derive_query_index(
+            &envelope.transcript_label,
+            &envelope.params,
+            &query_roots,
+            qi,
+        )
+        .ok_or_else(|| "failed to derive STARK AIR query index".to_owned())?;
+        let next_index = (index + 1) % domain;
+        let row_path = merkle_path_from_levels(index, &trace_levels)
+            .ok_or_else(|| "failed to open STARK AIR row".to_owned())?;
+        let next_row_path = merkle_path_from_levels(next_index, &trace_levels)
+            .ok_or_else(|| "failed to open next STARK AIR row".to_owned())?;
+        let composition_path = merkle_path_from_levels(index, &composition_levels)
+            .ok_or_else(|| "failed to open STARK AIR composition".to_owned())?;
+        let composition_value = stark_air_composition_value(
+            index,
+            domain,
+            &public_digest,
+            &rows[index],
+            &rows[next_index],
+        )
+        .ok_or_else(|| "failed to evaluate opened STARK AIR composition".to_owned())?;
+        openings.push(StarkAirOpeningV1 {
+            index: u32::try_from(index)
+                .map_err(|_| "STARK AIR query index does not fit u32".to_owned())?,
+            row: rows[index].clone(),
+            next_row: rows[next_index].clone(),
+            row_path,
+            next_row_path,
+            composition_value: composition_value.0,
+            composition_path,
+        });
+    }
+    envelope.proof.air = Some(StarkAirProofV1 {
+        version: 1,
+        circuit_id,
+        public_digest,
+        trace_root,
+        composition_root,
+        trace_width: u16::try_from(stark_air_trace_width())
+            .map_err(|_| "STARK AIR trace width does not fit u16".to_owned())?,
+        openings,
+    });
+    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+}
+
+/// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
+pub fn prove_stark_fri_composition_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    constant: u64,
+    z_coeff: u64,
+    aux_terms: Vec<StarkCompositionTermV1>,
+) -> Result<Vec<u8>, String> {
+    validate_stark_composition_terms(constant, z_coeff, &aux_terms)?;
     let constant_f =
         Fq::from_canonical_u64(constant).ok_or_else(|| "invalid STARK constant".to_owned())?;
     let z_coeff_f =
         Fq::from_canonical_u64(z_coeff).ok_or_else(|| "invalid STARK z coefficient".to_owned())?;
-
-    let mut envelope = synthesize_stark_fri_envelope(params, transcript_label)?;
+    let public_digest = stark_air_public_digest_from_composition(constant, z_coeff, &aux_terms)?;
+    let bytes = prove_stark_fri_air_envelope_bytes(
+        params,
+        transcript_label,
+        "composition-v1".to_owned(),
+        public_digest,
+    )?;
+    let mut envelope: StarkVerifyEnvelopeV1 = norito::decode_from_bytes(&bytes)
+        .map_err(|err| format!("failed to decode STARK AIR envelope: {err}"))?;
     let z_final = Fq::from_canonical_u64(
         envelope
             .proof
@@ -1180,13 +1651,90 @@ pub fn prove_stark_fri_composition_envelope_bytes(
     norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
 
-fn synthesize_stark_fri_envelope(
-    params: StarkFriParamsV1,
-    transcript_label: String,
-) -> Result<StarkVerifyEnvelopeV1, String> {
-    let bytes = synthesize_stark_fri_envelope_bytes(params, transcript_label)?;
-    norito::decode_from_bytes(&bytes)
-        .map_err(|err| format!("failed to decode synthesized STARK envelope: {err}"))
+fn verify_stark_air_opening(
+    params: &StarkFriParamsV1,
+    air: &StarkAirProofV1,
+    opening: &StarkAirOpeningV1,
+    base_index: usize,
+    total_domain: usize,
+    first_decommit: &FoldDecommitV1,
+    limits: &StarkVerifierLimits,
+) -> bool {
+    if usize::try_from(opening.index).ok() != Some(base_index)
+        || opening.row.len() != air.trace_width as usize
+        || opening.next_row.len() != air.trace_width as usize
+        || opening.row.len() > limits.max_air_width
+        || opening.next_row.len() > limits.max_air_width
+    {
+        return false;
+    }
+    let depth = match log2_usize(total_domain) {
+        Some(value) => value,
+        None => return false,
+    };
+    if !merkle_path_depth_ok(&opening.row_path, depth, limits)
+        || !merkle_path_depth_ok(&opening.next_row_path, depth, limits)
+        || !merkle_path_depth_ok(&opening.composition_path, depth, limits)
+    {
+        return false;
+    }
+    let next_index = (base_index + 1) % total_domain;
+    if merkle_path_index(&opening.row_path) != Some(base_index)
+        || merkle_path_index(&opening.next_row_path) != Some(next_index)
+        || merkle_path_index(&opening.composition_path) != Some(base_index)
+    {
+        return false;
+    }
+    let row_leaf = match stark_air_trace_leaf_hash(params, &opening.row) {
+        Some(value) => value,
+        None => return false,
+    };
+    if !merkle_verify_hash(params, &air.trace_root, &row_leaf, &opening.row_path) {
+        return false;
+    }
+    let next_row_leaf = match stark_air_trace_leaf_hash(params, &opening.next_row) {
+        Some(value) => value,
+        None => return false,
+    };
+    if !merkle_verify_hash(
+        params,
+        &air.trace_root,
+        &next_row_leaf,
+        &opening.next_row_path,
+    ) {
+        return false;
+    }
+    let composition = match Fq::from_canonical_u64(opening.composition_value) {
+        Some(value) => value,
+        None => return false,
+    };
+    if !merkle_verify(
+        params,
+        &air.composition_root,
+        composition,
+        &opening.composition_path,
+    ) {
+        return false;
+    }
+    let expected = match stark_air_composition_value(
+        base_index,
+        total_domain,
+        &air.public_digest,
+        &opening.row,
+        &opening.next_row,
+    ) {
+        Some(value) => value,
+        None => return false,
+    };
+    if expected != composition {
+        return false;
+    }
+    let opened_fri_value = if base_index.is_multiple_of(2) {
+        first_decommit.y0
+    } else {
+        first_decommit.y1
+    };
+    opened_fri_value == opening.composition_value
 }
 
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
@@ -1219,6 +1767,19 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
             return false;
         }
     }
+    let Some(air) = env.proof.air.as_ref() else {
+        return false;
+    };
+    if air.version != 1
+        || air.circuit_id.is_empty()
+        || air.trace_width as usize != stark_air_trace_width()
+        || air.trace_width as usize > limits.max_air_width
+        || air.openings.len() != query_count
+        || roots.first().copied() != Some(air.composition_root)
+    {
+        return false;
+    }
+    let query_roots = stark_air_query_roots(roots, Some(air));
     let total_domain = 1usize << env.params.n_log2;
     if total_domain == 0 {
         return false;
@@ -1229,10 +1790,28 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
         if chain.len() != expected_chain_len {
             return false;
         }
-        let base_index = match derive_query_index(&env.transcript_label, &env.params, roots, qi) {
-            Some(idx) => idx % total_domain,
-            None => return false,
+        let base_index =
+            match derive_query_index(&env.transcript_label, &env.params, &query_roots, qi) {
+                Some(idx) => idx % total_domain,
+                None => return false,
+            };
+        let Some(opening) = air.openings.get(qi) else {
+            return false;
         };
+        let Some(first_decommit) = chain.first() else {
+            return false;
+        };
+        if !verify_stark_air_opening(
+            &env.params,
+            air,
+            opening,
+            base_index,
+            total_domain,
+            first_decommit,
+            limits,
+        ) {
+            return false;
+        }
         let mut idx_layer = base_index;
         let mut layer_domain = total_domain;
         let mut last_z: Option<Fq> = None;

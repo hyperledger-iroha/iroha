@@ -22,7 +22,7 @@ use crate::{
     fft::Planner,
     overrides, pack_bytes,
     poseidon::{self, PoseidonSponge},
-    proof::{FriQueryOpening, FriRoundOpening, PublicIO},
+    proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
         hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
@@ -33,6 +33,8 @@ const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const FIELD_ONE: u64 = 1;
 const LDE_LEAF_DOMAIN: &[u8] = b"fastpq:v1:lde:leaf";
 const FRI_LEAF_DOMAIN: &[u8] = b"fastpq:v1:fri:leaf";
+const AIR_TRACE_LEAF_DOMAIN: &[u8] = b"fastpq:v1:air:trace:leaf";
+const AIR_COMPOSITION_LEAF_DOMAIN: &[u8] = b"fastpq:v1:air:composition:leaf";
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 const FRI_FINAL_DOMAIN: &str = "fastpq:v1:fri:final";
@@ -59,9 +61,12 @@ pub const TRANSCRIPT_TAG_INIT: &str = "fastpq:v1:init";
 pub const TRANSCRIPT_TAG_ROOTS: &str = "fastpq:v1:roots";
 pub const TRANSCRIPT_TAG_GAMMA: &str = "fastpq:v1:gamma";
 pub const TRANSCRIPT_TAG_ALPHA_PREFIX: &str = "fastpq:v1:alpha";
+pub const TRANSCRIPT_TAG_AIR_ROOTS: &str = "fastpq:v1:air_roots";
 pub const TRANSCRIPT_TAG_QUERY_INDEX: &str = "fastpq:v1:query_index";
 pub const TRANSCRIPT_TAG_BETA_PREFIX: &str = "fastpq:v1:beta";
 pub const TRANSCRIPT_TAG_FRI_LAYER_PREFIX: &str = "fastpq:v1:fri_layer";
+/// Number of V1 AIR composition challenges derived from the transcript.
+pub const AIR_COMPOSITION_ALPHA_COUNT: usize = 2;
 
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -941,6 +946,10 @@ pub struct BackendArtifact {
     pub trace_rows: u32,
     /// Poseidon2 Merkle root over column commitments.
     pub trace_root: u64,
+    /// Poseidon2 Merkle root over row-major AIR trace openings.
+    pub air_trace_root: u64,
+    /// Poseidon2 Merkle root over AIR composition evaluations.
+    pub air_composition_root: u64,
     /// Poseidon2 Merkle root over the low-degree extension leaf hashes.
     pub lookup_root: u64,
     /// Number of evaluation rows committed under `lookup_root`.
@@ -965,6 +974,8 @@ pub struct BackendArtifact {
     pub query_chunks: Vec<Vec<u64>>,
     /// Merkle authentication paths for each queried evaluation chunk.
     pub query_paths: Vec<Vec<u64>>,
+    /// Sampled AIR row/composition openings.
+    pub air_openings: Vec<AirConstraintOpening>,
     /// Per-round FRI openings for sampled query indices.
     pub fri_query_openings: Vec<FriQueryOpening>,
 }
@@ -1020,6 +1031,274 @@ pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<u64> {
     limbs.push(index);
     limbs.extend(values.iter().copied());
     hash_with_domain(LDE_LEAF_DOMAIN, &limbs)
+}
+
+/// Hash one row-major AIR trace opening.
+///
+/// # Errors
+/// Returns an error if the row index cannot be represented as a field limb.
+pub fn hash_air_trace_row(row_index: usize, values: &[u64]) -> Result<u64> {
+    let index =
+        u64::try_from(row_index).map_err(|_| Error::QueryIndexOverflow { index: row_index })?;
+    let mut limbs = Vec::with_capacity(values.len() + 2);
+    limbs.push(index);
+    limbs.push(
+        u64::try_from(values.len()).map_err(|_| Error::PayloadLengthOverflow {
+            length: values.len(),
+        })?,
+    );
+    limbs.extend(values.iter().copied());
+    hash_with_domain(AIR_TRACE_LEAF_DOMAIN, &limbs)
+}
+
+/// Hash one AIR composition leaf.
+///
+/// # Errors
+/// Returns an error if the leaf index cannot be represented as a field limb.
+pub fn hash_air_composition_leaf(index: usize, value: u64) -> Result<u64> {
+    let index = u64::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
+    hash_with_domain(AIR_COMPOSITION_LEAF_DOMAIN, &[index, value])
+}
+
+/// Hash all row-major AIR trace leaves.
+///
+/// # Errors
+/// Returns an error if row hashing fails.
+pub fn hash_air_trace_rows(columns: &[Vec<u64>]) -> Result<Vec<u64>> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row_count = columns[0].len();
+    if !columns.iter().all(|column| column.len() == row_count) {
+        return Err(Error::AirOpeningMismatch { index: 0 });
+    }
+    (0..row_count)
+        .map(|row_index| {
+            let row = air_row_at(columns, row_index)?;
+            hash_air_trace_row(row_index, &row)
+        })
+        .collect()
+}
+
+/// Hash all AIR composition leaves.
+///
+/// # Errors
+/// Returns an error if leaf hashing fails.
+pub fn hash_air_composition_leaves(values: &[u64]) -> Result<Vec<u64>> {
+    values
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, value)| hash_air_composition_leaf(index, value))
+        .collect()
+}
+
+/// Evaluate the sampled FASTPQ AIR composition value for two adjacent rows.
+///
+/// # Errors
+/// Returns an error when the advertised column schema is missing mandatory columns or
+/// row widths do not match the schema.
+pub fn air_composition_value_for_rows(
+    column_names: &[String],
+    current: &[u64],
+    next: &[u64],
+    alphas: &[u64],
+) -> Result<u64> {
+    if alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            actual: alphas.len(),
+        });
+    }
+    if current.len() != column_names.len() || next.len() != column_names.len() {
+        return Err(Error::AirOpeningMismatch {
+            index: current.len(),
+        });
+    }
+    let get = |name: &str| -> Result<usize> {
+        column_names
+            .iter()
+            .position(|column| column == name)
+            .ok_or_else(|| Error::MissingColumn(name.to_owned()))
+    };
+    let s_active = get("s_active")?;
+    let s_transfer = get("s_transfer")?;
+    let s_mint = get("s_mint")?;
+    let s_burn = get("s_burn")?;
+    let s_role_grant = get("s_role_grant")?;
+    let s_role_revoke = get("s_role_revoke")?;
+    let s_meta_set = get("s_meta_set")?;
+    let s_perm = get("s_perm")?;
+    let delta = get("delta")?;
+    let metadata_hash = get("metadata_hash")?;
+    let dsid = get("dsid")?;
+    let slot = get("slot")?;
+
+    let value_old_0 = column_names
+        .iter()
+        .position(|column| column == "value_old_limb_0");
+    let value_new_0 = column_names
+        .iter()
+        .position(|column| column == "value_new_limb_0");
+
+    let mut acc = 0u64;
+    let mut idx = 0usize;
+    let absorb = |acc: &mut u64, idx: &mut usize, residue: u64| {
+        let coeff = alphas[*idx % AIR_COMPOSITION_ALPHA_COUNT];
+        *acc = add_mod(*acc, mul_mod(coeff, residue));
+        *idx = idx.saturating_add(1);
+    };
+
+    for selector in [
+        s_active,
+        s_transfer,
+        s_mint,
+        s_burn,
+        s_role_grant,
+        s_role_revoke,
+        s_meta_set,
+        s_perm,
+    ] {
+        absorb(
+            &mut acc,
+            &mut idx,
+            mul_mod(current[selector], sub_mod(current[selector], FIELD_ONE)),
+        );
+    }
+
+    let operation_sum = [
+        s_transfer,
+        s_mint,
+        s_burn,
+        s_role_grant,
+        s_role_revoke,
+        s_meta_set,
+    ]
+    .into_iter()
+    .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
+    absorb(
+        &mut acc,
+        &mut idx,
+        sub_mod(current[s_active], operation_sum),
+    );
+
+    let permission_sum = add_mod(current[s_role_grant], current[s_role_revoke]);
+    absorb(&mut acc, &mut idx, sub_mod(current[s_perm], permission_sum));
+    absorb(
+        &mut acc,
+        &mut idx,
+        mul_mod(next[s_active], sub_mod(FIELD_ONE, current[s_active])),
+    );
+
+    if let (Some(old), Some(new)) = (value_old_0, value_new_0) {
+        let numeric_selector = [s_transfer, s_mint, s_burn]
+            .into_iter()
+            .fold(0u64, |sum, selector| add_mod(sum, current[selector]));
+        let expected_delta = sub_mod(current[new], current[old]);
+        absorb(
+            &mut acc,
+            &mut idx,
+            mul_mod(numeric_selector, sub_mod(expected_delta, current[delta])),
+        );
+    }
+
+    for stable in [metadata_hash, dsid, slot] {
+        absorb(&mut acc, &mut idx, sub_mod(current[stable], next[stable]));
+    }
+
+    Ok(acc)
+}
+
+/// Evaluate FASTPQ AIR composition values over all row openings.
+///
+/// # Errors
+/// Returns an error when columns have inconsistent lengths or the schema is malformed.
+pub fn air_composition_values(
+    column_names: &[String],
+    columns: &[Vec<u64>],
+    alphas: &[u64],
+) -> Result<Vec<u64>> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row_count = columns[0].len();
+    if !columns.iter().all(|column| column.len() == row_count) {
+        return Err(Error::AirOpeningMismatch { index: 0 });
+    }
+    (0..row_count)
+        .map(|index| {
+            let current = air_row_at(columns, index)?;
+            let next = air_row_at(columns, (index + 1) % row_count)?;
+            air_composition_value_for_rows(column_names, &current, &next, alphas)
+        })
+        .collect()
+}
+
+fn air_row_at(columns: &[Vec<u64>], row_index: usize) -> Result<Vec<u64>> {
+    columns
+        .iter()
+        .map(|column| {
+            column
+                .get(row_index)
+                .copied()
+                .ok_or(Error::QueryIndexOutOfRange {
+                    index: row_index,
+                    len: column.len(),
+                })
+        })
+        .collect()
+}
+
+/// Open sampled AIR rows and composition values.
+///
+/// # Errors
+/// Returns an error when any sampled index is outside the AIR domain.
+pub fn open_air_constraint_openings(
+    columns: &[Vec<u64>],
+    air_trace_leaves: &[u64],
+    composition_values: &[u64],
+    composition_leaves: &[u64],
+    query_indices: &[usize],
+) -> Result<Vec<AirConstraintOpening>> {
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let row_count = columns[0].len();
+    let row_paths = merkle_paths_for_leaf_indices(air_trace_leaves, query_indices)?;
+    let next_indices: Vec<usize> = query_indices
+        .iter()
+        .map(|index| (index + 1) % row_count)
+        .collect();
+    let next_paths = merkle_paths_for_leaf_indices(air_trace_leaves, &next_indices)?;
+    let composition_paths = merkle_paths_for_leaf_indices(composition_leaves, query_indices)?;
+
+    query_indices
+        .iter()
+        .copied()
+        .zip(row_paths)
+        .zip(next_indices.into_iter().zip(next_paths))
+        .zip(composition_paths)
+        .map(
+            |(((index, current_row_path), (next_index, next_row_path)), composition_path)| {
+                let compact =
+                    u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
+                Ok(AirConstraintOpening {
+                    index: compact,
+                    current_row: air_row_at(columns, index)?,
+                    next_row: air_row_at(columns, next_index)?,
+                    current_row_path,
+                    next_row_path,
+                    composition_value: *composition_values.get(index).ok_or(
+                        Error::QueryIndexOutOfRange {
+                            index,
+                            len: composition_values.len(),
+                        },
+                    )?,
+                    composition_path,
+                })
+            },
+        )
+        .collect()
 }
 
 /// Hash one FRI round leaf with domain separation from LDE openings.
@@ -1350,6 +1629,7 @@ pub fn extend_row_hashes(
     }
 }
 
+#[cfg(test)]
 pub fn fold_with_fri(
     evaluations: &[u64],
     arity: u32,
@@ -1590,6 +1870,7 @@ fn fold_round(values: &[u64], arity: usize, challenge: u64) -> Vec<u64> {
     next
 }
 
+#[cfg(test)]
 fn fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
     let mut sponge = PoseidonSponge::new();
     let modulus = u128::from(GOLDILOCKS_MODULUS);
@@ -1676,6 +1957,11 @@ impl Backend for StarkBackend {
         }
 
         let trace = build_trace(batch)?;
+        let column_names: Vec<String> = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
         let planner = Planner::new(&self.config.params);
         let requested_mode = self.config.execution_mode();
         let resolved_mode = requested_mode.resolve();
@@ -1712,6 +1998,8 @@ impl Backend for StarkBackend {
             })?;
         let lde_hashes = hash_lde_leaves(&lde_values, self.config.params.fri.arity)?;
         let lde_root = merkle_root(&lde_hashes);
+        let air_trace_leaves = hash_air_trace_rows(lde_columns)?;
+        let air_trace_root = merkle_root(&air_trace_leaves);
 
         let mut transcript = Transcript::initialise(
             public_io,
@@ -1733,15 +2021,26 @@ impl Backend for StarkBackend {
         let witness_values = &lde_columns[witness_index];
         let lookup_grand_product =
             compute_lookup_grand_product(selector_values, witness_values, gamma);
-        let mut alphas = Vec::with_capacity(2);
-        for idx in 0..2 {
+        let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
+        for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
             let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
             alphas.push(transcript.challenge_field(&tag));
         }
+        let air_composition_values = air_composition_values(&column_names, lde_columns, &alphas)?;
+        let air_composition_leaves = hash_air_composition_leaves(&air_composition_values)?;
+        let air_composition_root = merkle_root(&air_composition_leaves);
+        transcript.append_message(
+            TRANSCRIPT_TAG_AIR_ROOTS,
+            &[
+                air_trace_root.to_le_bytes(),
+                air_composition_root.to_le_bytes(),
+            ]
+            .concat(),
+        );
         transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
 
         let (fri_layer_values, fri_layers, fri_betas) = fold_with_fri_opening_layers(
-            &lde_values,
+            &air_composition_values,
             self.config.params.fri.arity,
             self.config.params.fri.max_reductions,
             &mut transcript,
@@ -1760,6 +2059,13 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             lde_values.len(),
         )?;
+        let air_openings = open_air_constraint_openings(
+            lde_columns,
+            &air_trace_leaves,
+            &air_composition_values,
+            &air_composition_leaves,
+            &query_indices,
+        )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,
             &query_indices,
@@ -1773,6 +2079,8 @@ impl Backend for StarkBackend {
             parameter: self.config.params.name.to_string(),
             trace_rows,
             trace_root,
+            air_trace_root,
+            air_composition_root,
             lookup_root: lde_root,
             lde_domain_size,
             lookup_grand_product,
@@ -1785,6 +2093,7 @@ impl Backend for StarkBackend {
             query_openings,
             query_chunks,
             query_paths,
+            air_openings,
             fri_query_openings,
         })
     }
@@ -1878,12 +2187,14 @@ fn hash_with_domain(domain: &[u8], values: &[u64]) -> Result<u64> {
 }
 
 fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = a.wrapping_add(b);
-    if sum >= GOLDILOCKS_MODULUS {
-        sum - GOLDILOCKS_MODULUS
-    } else {
-        sum
-    }
+    let sum = u128::from(a) + u128::from(b);
+    u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
+}
+
+fn sub_mod(a: u64, b: u64) -> u64 {
+    let reduced = (u128::from(a) + u128::from(GOLDILOCKS_MODULUS) - u128::from(b))
+        % u128::from(GOLDILOCKS_MODULUS);
+    u64::try_from(reduced).expect("modulus reduction fits in u64")
 }
 
 fn mul_mod(a: u64, b: u64) -> u64 {

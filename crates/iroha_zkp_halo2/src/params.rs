@@ -7,7 +7,14 @@
 //!
 //! All generators are derived using SHA3-256 under a fixed DST.
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
@@ -17,6 +24,8 @@ use crate::{
     errors::Error,
     norito_types::{IpaParams, ZkCurveId, fingerprint_bytes},
 };
+
+pub(crate) const PARAMS_REGISTRY_MAX_ENTRIES: usize = 32;
 
 /// IPA public parameters instantiated for backend `B`.
 #[derive(Clone, Debug)]
@@ -172,14 +181,33 @@ impl<B: IpaBackend> Params<B> {
 
     pub(crate) fn from_wire(w: &IpaParams) -> Result<Self, Error> {
         if w.version != 1 {
-            return Err(Error::VerificationFailed);
+            return Err(Error::UnsupportedVersion {
+                component: "IpaParams",
+                version: w.version,
+            });
         }
-        if ZkCurveId::from_u16(w.curve_id) != B::CURVE_ID {
-            return Err(Error::VerificationFailed);
+        let actual_curve = ZkCurveId::from_u16(w.curve_id);
+        if actual_curve != B::CURVE_ID {
+            return Err(Error::CurveMismatch {
+                expected: B::CURVE_ID,
+                actual: actual_curve,
+            });
         }
         let n = w.n as usize;
         if n == 0 || (n & (n - 1)) != 0 {
             return Err(Error::InvalidN(n));
+        }
+        if w.g.len() != n {
+            return Err(Error::DimensionMismatch {
+                expected: n,
+                actual: w.g.len(),
+            });
+        }
+        if w.h.len() != n {
+            return Err(Error::DimensionMismatch {
+                expected: n,
+                actual: w.h.len(),
+            });
         }
         let g =
             w.g.iter()
@@ -224,15 +252,26 @@ where
 type ParamsKey = (ZkCurveId, [u8; 32]);
 type ParamsSlot = Arc<dyn Any + Send + Sync>;
 
+struct ParamsEntry {
+    slot: ParamsSlot,
+    last_used: u64,
+}
+
 struct ParamsRegistry {
-    map: RwLock<HashMap<ParamsKey, ParamsSlot>>,
+    map: RwLock<HashMap<ParamsKey, ParamsEntry>>,
+    clock: AtomicU64,
 }
 
 impl ParamsRegistry {
     fn new() -> Self {
         Self {
             map: RwLock::new(HashMap::new()),
+            clock: AtomicU64::new(0),
         }
+    }
+
+    fn tick(&self) -> u64 {
+        self.clock.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
     }
 
     fn lookup<B>(&self, fp: &[u8; 32]) -> Option<Arc<Params<B>>>
@@ -240,10 +279,10 @@ impl ParamsRegistry {
         B: IpaBackend + 'static,
     {
         let key = (B::CURVE_ID, *fp);
-        self.map
-            .read()
-            .get(&key)
-            .and_then(|arc| arc.clone().downcast::<Params<B>>().ok())
+        let mut guard = self.map.write();
+        let entry = guard.get_mut(&key)?;
+        entry.last_used = self.tick();
+        entry.slot.clone().downcast::<Params<B>>().ok()
     }
 
     fn insert<B>(&self, fp: [u8; 32], params: Arc<Params<B>>) -> Arc<Params<B>>
@@ -252,14 +291,74 @@ impl ParamsRegistry {
     {
         let key = (B::CURVE_ID, fp);
         let mut guard = self.map.write();
-        let entry = guard
-            .entry(key)
-            .or_insert_with(|| params.clone() as Arc<dyn Any + Send + Sync>);
-        entry
-            .clone()
+        let now = self.tick();
+        if let Some(entry) = guard.get_mut(&key) {
+            entry.last_used = now;
+            return entry
+                .slot
+                .clone()
+                .downcast::<Params<B>>()
+                .expect("registry type mismatch");
+        }
+
+        if guard.len() >= PARAMS_REGISTRY_MAX_ENTRIES
+            && let Some(evict_key) = guard
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| *key)
+        {
+            guard.remove(&evict_key);
+        }
+
+        let slot = params.clone() as Arc<dyn Any + Send + Sync>;
+        guard.insert(
+            key,
+            ParamsEntry {
+                slot: slot.clone(),
+                last_used: now,
+            },
+        );
+        slot.clone()
             .downcast::<Params<B>>()
             .expect("registry type mismatch")
+    }
+
+    #[cfg(test)]
+    fn clear(&self) {
+        self.map.write().clear();
+        self.clock.store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.read().len()
+    }
+
+    #[cfg(test)]
+    fn contains<B>(&self, fp: &[u8; 32]) -> bool
+    where
+        B: IpaBackend + 'static,
+    {
+        self.map.read().contains_key(&(B::CURVE_ID, *fp))
     }
 }
 
 static PARAMS_REGISTRY: Lazy<ParamsRegistry> = Lazy::new(ParamsRegistry::new);
+
+#[cfg(test)]
+pub(crate) fn clear_params_registry_for_tests() {
+    PARAMS_REGISTRY.clear();
+}
+
+#[cfg(test)]
+pub(crate) fn params_registry_len_for_tests() -> usize {
+    PARAMS_REGISTRY.len()
+}
+
+#[cfg(test)]
+pub(crate) fn params_registry_contains_for_tests<B>(fp: &[u8; 32]) -> bool
+where
+    B: IpaBackend + 'static,
+{
+    PARAMS_REGISTRY.contains::<B>(fp)
+}

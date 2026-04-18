@@ -26,6 +26,46 @@ pub enum Error {
     #[error("verification failed")]
     VerificationFailed,
 
+    /// Wire component version is not supported by this verifier.
+    #[error("unsupported {component} version: {version}")]
+    UnsupportedVersion {
+        /// Wire component being decoded.
+        component: &'static str,
+        /// Version encountered in the payload.
+        version: u16,
+    },
+
+    /// Curve/backend identifiers in a payload do not match.
+    #[error("curve mismatch: expected {expected:?}, got {actual:?}")]
+    CurveMismatch {
+        /// Expected curve/backend identifier.
+        expected: crate::norito_types::ZkCurveId,
+        /// Actual curve/backend identifier.
+        actual: crate::norito_types::ZkCurveId,
+    },
+
+    /// Proof shape is inconsistent with the parameter domain.
+    #[error("invalid proof shape for {reason}: expected {expected}, got {actual}")]
+    InvalidProofShape {
+        /// Shape property that failed validation.
+        reason: &'static str,
+        /// Expected value.
+        expected: usize,
+        /// Actual value.
+        actual: usize,
+    },
+
+    /// Envelope exceeded a configured verification limit.
+    #[error("envelope limit exceeded for {limit}: max {max}, got {actual}")]
+    EnvelopeLimitExceeded {
+        /// Limit that rejected the payload.
+        limit: &'static str,
+        /// Configured maximum.
+        max: usize,
+        /// Actual value.
+        actual: usize,
+    },
+
     /// Encountered non-canonical field or group encoding.
     #[error("invalid encoding")]
     InvalidEncoding,
