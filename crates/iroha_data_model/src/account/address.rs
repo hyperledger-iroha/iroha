@@ -663,6 +663,7 @@ impl JsonDeserialize for AccountAddress {
 const CONTROLLER_MAX_LEN: usize = 1024;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
+const CONTROLLER_SINGLE_KEY_EXTENDED_TAG: u8 = 0x02;
 const CONTROLLER_MULTISIG_MEMBER_MAX: usize = u16::MAX as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -846,16 +847,20 @@ impl ControllerPayload {
     fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), AccountAddressError> {
         match self {
             Self::SingleKey { curve, public_key } => {
-                out.push(CONTROLLER_SINGLE_KEY_TAG);
-                out.push(curve.as_u8());
                 let (_alg, payload) = public_key.to_bytes();
-                if payload.len() > u8::MAX as usize {
-                    let reported = u16::try_from(payload.len()).unwrap_or(u16::MAX);
-                    return Err(AccountAddressError::KeyPayloadTooLong(reported));
+                if payload.len() <= u8::MAX as usize {
+                    out.push(CONTROLLER_SINGLE_KEY_TAG);
+                    out.push(curve.as_u8());
+                    let length =
+                        u8::try_from(payload.len()).expect("payload length bounded by prior check");
+                    out.push(length);
+                } else {
+                    out.push(CONTROLLER_SINGLE_KEY_EXTENDED_TAG);
+                    out.push(curve.as_u8());
+                    let length = u16::try_from(payload.len())
+                        .map_err(|_| AccountAddressError::KeyPayloadTooLong(u16::MAX))?;
+                    out.extend_from_slice(&length.to_be_bytes());
                 }
-                let length =
-                    u8::try_from(payload.len()).expect("payload length bounded by prior check");
-                out.push(length);
                 out.extend_from_slice(payload);
                 Ok(())
             }
@@ -897,6 +902,28 @@ impl ControllerPayload {
                     .get(*cursor)
                     .ok_or(AccountAddressError::InvalidLength)? as usize;
                 *cursor += 1;
+                let payload = bytes
+                    .get(*cursor..*cursor + len)
+                    .ok_or(AccountAddressError::InvalidLength)?;
+                *cursor += len;
+                let public_key = PublicKey::from_bytes(curve.algorithm(), payload)
+                    .map_err(|_| AccountAddressError::InvalidPublicKey)?;
+                Ok(Self::SingleKey { curve, public_key })
+            }
+            CONTROLLER_SINGLE_KEY_EXTENDED_TAG => {
+                let curve_raw = *bytes
+                    .get(*cursor)
+                    .ok_or(AccountAddressError::InvalidLength)?;
+                *cursor += 1;
+                let curve = CurveId::try_from(curve_raw).map_err(AccountAddressError::from)?;
+                let len_bytes = bytes
+                    .get(*cursor..*cursor + 2)
+                    .ok_or(AccountAddressError::InvalidLength)?;
+                *cursor += 2;
+                let len = u16::from_be_bytes(len_bytes.try_into().unwrap()) as usize;
+                if len <= u8::MAX as usize {
+                    return Err(AccountAddressError::InvalidLength);
+                }
                 let payload = bytes
                     .get(*cursor..*cursor + len)
                     .ok_or(AccountAddressError::InvalidLength)?;
@@ -1993,6 +2020,54 @@ mod tests {
             .to_account_controller()
             .expect("decode secp256k1 controller");
         assert_eq!(controller.single_signatory(), Some(&public_key));
+    }
+
+    #[test]
+    fn account_address_encodes_mldsa_controller_with_extended_length() {
+        let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::MlDsa).into_parts();
+        let (_algorithm, key_payload) = public_key.to_bytes();
+        assert!(
+            key_payload.len() > u8::MAX as usize,
+            "ML-DSA public keys must exercise extended single-key encoding"
+        );
+
+        let account = AccountId::new(public_key.clone());
+        let address = AccountAddress::from_account_id(&account).expect("encode mldsa");
+        let canonical = address.canonical_bytes().expect("canonical bytes");
+
+        assert_eq!(canonical[1], CONTROLLER_SINGLE_KEY_EXTENDED_TAG);
+        assert_eq!(canonical[2], CurveId::MLDSA.as_u8());
+        assert_eq!(
+            usize::from(u16::from_be_bytes([canonical[3], canonical[4]])),
+            key_payload.len()
+        );
+
+        let roundtrip = AccountAddress::from_canonical_bytes(&canonical)
+            .expect("extended single-key address decodes")
+            .to_account_id()
+            .expect("extended single-key account id decodes");
+        assert_eq!(roundtrip, account);
+    }
+
+    #[test]
+    fn account_address_rejects_extended_encoding_for_short_single_key() {
+        let account = AccountId::new(ed25519_pk());
+        let canonical = AccountAddress::from_account_id(&account)
+            .expect("encode")
+            .canonical_bytes()
+            .expect("canonical bytes");
+        let key_len = canonical[3];
+
+        let mut extended = Vec::with_capacity(canonical.len() + 1);
+        extended.extend_from_slice(&canonical[..1]);
+        extended.push(CONTROLLER_SINGLE_KEY_EXTENDED_TAG);
+        extended.push(canonical[2]);
+        extended.extend_from_slice(&u16::from(key_len).to_be_bytes());
+        extended.extend_from_slice(&canonical[4..]);
+
+        let err = AccountAddress::from_canonical_bytes(&extended)
+            .expect_err("short keys must use canonical compact length");
+        assert!(matches!(err, AccountAddressError::InvalidLength));
     }
 
     #[test]

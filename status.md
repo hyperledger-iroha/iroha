@@ -145,7 +145,7 @@ Last updated: 2026-04-18
 - FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries the committed LDE domain size, query chunks, Merkle authentication paths, sampled AIR openings, and per-round FRI openings.
 - ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
 - Follow-up gap closure: the STARK VK update regression now seeds a valid encoded V1 STARK verifying key before exercising the mixed-case curve rejection, and the Nexus compile-only integration target no longer carries unused single-client helper wrappers.
-- Coverage follow-up: FASTPQ now explicitly tests extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR Merkle-path limits, FRI round-value limits, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
+- Coverage follow-up: FASTPQ now explicitly tests extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR/query Merkle-path and query-count limits, query-chunk limits, FRI round-value limits, zero LDE domain-size rejection, folded/final FRI value tampering, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/VK-hash/missing-VK/inner-parameter/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
@@ -153,6 +153,9 @@ Last updated: 2026-04-18
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri_merkle_path -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
@@ -160,6 +163,7 @@ Last updated: 2026-04-18
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark stark_prover_tests -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
