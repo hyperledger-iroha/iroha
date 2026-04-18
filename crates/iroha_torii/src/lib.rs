@@ -4076,6 +4076,32 @@ pub async fn handle_v1_zk_verify_batch(
     crate::routing::handle_v1_zk_verify_batch(headers, body).await
 }
 
+/// Forward `/v1/zk/verify-batch` requests with explicit diagnostic verifier limits.
+///
+/// # Errors
+/// Propagates routing errors when response rendering fails.
+#[cfg(all(feature = "app_api", feature = "zk-verify-batch"))]
+pub async fn handle_v1_zk_verify_batch_with_limits(
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    open_limits: iroha_zkp_halo2::OpenVerifyLimits,
+    max_batch: usize,
+    max_envelope_bytes: usize,
+    enforce_transcript_label_ascii: bool,
+) -> Result<impl IntoResponse, Error> {
+    crate::routing::handle_v1_zk_verify_batch_with_limits(
+        headers,
+        body,
+        crate::routing::ZkVerifyBatchLimits {
+            open: open_limits,
+            max_batch,
+            max_envelope_bytes,
+            enforce_transcript_label_ascii,
+        },
+    )
+    .await
+}
+
 /// Fallback `/v1/zk/verify-batch` handler when `zk-verify-batch` feature is disabled.
 ///
 /// # Errors
@@ -8684,6 +8710,45 @@ async fn handler_zk_verify(
     )
     .await?;
     routing::handle_v1_zk_verify(headers, body).await
+}
+
+#[cfg(feature = "zk-verify-batch")]
+async fn handler_zk_verify_batch(
+    State(app): State<SharedAppState>,
+    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    let cost = (body.len() as u64)
+        .saturating_div(4 * 1024)
+        .saturating_add(1);
+    ensure_proof_api_version(&app, negotiated, "v1/zk/verify-batch")?;
+    enforce_proof_body_limit(&app, body.len(), "v1/zk/verify-batch")?;
+    check_proof_access(
+        &app,
+        negotiated,
+        &headers,
+        Some(remote_ip),
+        "v1/zk/verify-batch",
+        cost,
+        true,
+    )
+    .await?;
+
+    let halo2 = app.state.zk_snapshot().halo2;
+    let limits = routing::ZkVerifyBatchLimits {
+        open: iroha_zkp_halo2::OpenVerifyLimits {
+            max_k: Some(halo2.max_k),
+            max_transcript_label_len: Some(halo2.max_transcript_label_len),
+        },
+        max_batch: halo2.verifier_max_batch.max(1) as usize,
+        max_envelope_bytes: halo2.max_envelope_bytes,
+        enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
+    };
+
+    routing::handle_v1_zk_verify_batch_with_limits(headers, body, limits).await
 }
 
 async fn handler_zk_submit_proof(
@@ -29890,6 +29955,18 @@ impl Torii {
                     get(handler_zk_ivm_prove_get).delete(handler_zk_ivm_prove_delete),
                 )
                 .route("/v1/zk/vote/tally", post(handler_zk_vote_tally));
+
+            #[cfg(feature = "zk-verify-batch")]
+            {
+                zk_router = zk_router.route("/v1/zk/verify-batch", post(handler_zk_verify_batch));
+            }
+            #[cfg(not(feature = "zk-verify-batch"))]
+            {
+                zk_router = zk_router.route(
+                    "/v1/zk/verify-batch",
+                    post(|| async { StatusCode::NOT_IMPLEMENTED }),
+                );
+            }
 
             if zk_attachments_enabled {
                 let attachments_methods = {

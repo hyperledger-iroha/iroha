@@ -2026,6 +2026,7 @@ impl Actor {
                 highest.subject_block_hash,
                 source,
                 now,
+                retry_window,
             );
         let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
             MissingBlockFetchMode::AggressiveTopology

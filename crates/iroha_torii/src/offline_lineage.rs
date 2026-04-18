@@ -12,8 +12,8 @@ use ciborium::{de::from_reader, value::Value as CborValue};
 use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
 #[cfg(feature = "zk-stark")]
 use iroha_core::zk_stark::{
-    STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
-    synthesize_stark_fri_envelope_bytes,
+    STARK_HASH_SHA256_V1, StarkCompositionTermV1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
+    prove_stark_fri_composition_envelope_bytes,
 };
 use iroha_core::{
     queue,
@@ -204,9 +204,12 @@ mod zk_stark_compat {
         pub transcript_label: String,
     }
 
-    pub fn synthesize_stark_fri_envelope_bytes(
+    pub fn prove_stark_fri_composition_envelope_bytes(
         _params: StarkFriParamsV1,
         _transcript_label: String,
+        _constant: u64,
+        _z_coeff: u64,
+        _aux_terms: Vec<StarkCompositionTermV1>,
     ) -> Result<Vec<u8>, String> {
         Err("zk-stark feature is disabled".to_owned())
     }
@@ -214,8 +217,8 @@ mod zk_stark_compat {
 
 #[cfg(not(feature = "zk-stark"))]
 use zk_stark_compat::{
-    STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
-    synthesize_stark_fri_envelope_bytes,
+    STARK_HASH_SHA256_V1, StarkCompositionTermV1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
+    prove_stark_fri_composition_envelope_bytes,
 };
 
 const TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
@@ -238,6 +241,9 @@ const OFFLINE_REDEEM_REQUEST_CIRCUIT_ID: &str = "offline-bearer-redeem-request-v
 const OFFLINE_STARK_DOMAIN_LOG2: u8 = 4;
 const OFFLINE_STARK_BLOWUP_LOG2: u8 = 3;
 const OFFLINE_STARK_QUERY_COUNT: u16 = 8;
+const OFFLINE_STARK_BINDING_CONSTANT: u64 = 23;
+const OFFLINE_STARK_BINDING_Z_COEFF: u64 = 29;
+const OFFLINE_STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct StoredLineage {
@@ -3573,10 +3579,7 @@ struct SubmittedTransactionReceipt {
 }
 
 pub(crate) fn offline_recursive_stark_ready() -> bool {
-    // Recursive offline STARK proofs remain unavailable in V1 until the proof
-    // format carries verifier-owned AIR openings instead of synthetic
-    // low-degree envelopes.
-    false
+    cfg!(feature = "zk-stark")
 }
 
 fn ensure_offline_recursive_stark_ready() -> Result<(), Error> {
@@ -3602,17 +3605,48 @@ fn offline_stark_params(domain_tag: String) -> StarkFriParamsV1 {
     }
 }
 
-fn synthesize_stark_envelope(
+fn prove_stark_envelope(
     domain_tag: String,
     transcript_label: &str,
 ) -> Result<StarkVerifyEnvelopeV1, Error> {
-    let bytes = synthesize_stark_fri_envelope_bytes(
-        offline_stark_params(domain_tag),
+    let terms = offline_stark_binding_terms(&domain_tag, transcript_label);
+    let bytes = prove_stark_fri_composition_envelope_bytes(
+        offline_stark_params(domain_tag.clone()),
         transcript_label.to_owned(),
+        OFFLINE_STARK_BINDING_CONSTANT,
+        OFFLINE_STARK_BINDING_Z_COEFF,
+        terms,
     )
-    .map_err(|err| conversion_error(format!("failed to synthesize stark envelope: {err}")))?;
+    .map_err(|err| conversion_error(format!("failed to prove stark envelope: {err}")))?;
     norito::decode_from_bytes::<StarkVerifyEnvelopeV1>(&bytes)
         .map_err(|err| conversion_error(format!("failed to decode stark envelope: {err}")))
+}
+
+fn offline_stark_binding_terms(
+    domain_tag: &str,
+    transcript_label: &str,
+) -> Vec<StarkCompositionTermV1> {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:offline:stark-binding-air:v1");
+    preimage.extend_from_slice(&(domain_tag.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(domain_tag.as_bytes());
+    preimage.extend_from_slice(&(transcript_label.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(transcript_label.as_bytes());
+    let digest = Sha256::digest(&preimage);
+    digest
+        .chunks_exact(8)
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(chunk);
+            StarkCompositionTermV1 {
+                wire_index: idx as u32,
+                value: (u128::from(u64::from_le_bytes(word)) % OFFLINE_STARK_GOLDILOCKS_MODULUS)
+                    as u64,
+                coeff: (idx as u64) + 31,
+            }
+        })
+        .collect()
 }
 
 fn encode_stark_envelope_bytes(envelope: &StarkVerifyEnvelopeV1) -> Result<Vec<u8>, Error> {
@@ -3712,8 +3746,7 @@ fn verify_redeem_request_proof(
             "redeem proof domain tag does not match the request".to_owned(),
         ));
     }
-    let expected =
-        synthesize_stark_envelope(expected_commitment, OFFLINE_REDEEM_REQUEST_CIRCUIT_ID)?;
+    let expected = prove_stark_envelope(expected_commitment, OFFLINE_REDEEM_REQUEST_CIRCUIT_ID)?;
     if encode_stark_envelope_bytes(&req.redeem_proof.envelope)?
         != encode_stark_envelope_bytes(&expected)?
     {
@@ -3743,7 +3776,7 @@ fn settlement_from_tx(
         post_state_hash,
         tx,
     )?;
-    let envelope = synthesize_stark_envelope(
+    let envelope = prove_stark_envelope(
         settlement_commitment_hex.clone(),
         OFFLINE_SETTLEMENT_CIRCUIT_ID,
     )?;

@@ -8106,6 +8106,29 @@ impl Actor {
         }
     }
 
+    fn refresh_pending_activation_window(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            if !pending.aborted && pending.height == height && pending.view == view {
+                pending.refresh_activation_window(now);
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut() {
+            if inflight.block_hash == block_hash
+                && !inflight.pending.aborted
+                && inflight.pending.height == height
+                && inflight.pending.view == view
+            {
+                inflight.pending.refresh_activation_window(now);
+            }
+        }
+    }
+
     fn refresh_tip_activated_pending_progress(
         &mut self,
         committed_height: u64,
@@ -8129,7 +8152,12 @@ impl Actor {
             })
             .collect();
         for (hash, view) in &activated {
-            self.touch_pending_progress(*hash, committed_height.saturating_add(1), *view, now);
+            self.refresh_pending_activation_window(
+                *hash,
+                committed_height.saturating_add(1),
+                *view,
+                now,
+            );
         }
         activated.len()
     }
@@ -15518,7 +15546,11 @@ impl Actor {
                 && slot.exact_fetch_armed
                 && !slot.body_present
         });
-        if frontier_slot_can_fetch {
+        let ingress_grace_elapsed = self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| self.frontier_body_fetch_grace_elapsed(slot, now));
+        if frontier_slot_can_fetch && ingress_grace_elapsed {
             let _ = self.retry_frontier_block_body_fetch(now);
         }
         true
@@ -28132,6 +28164,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         source: &'static str,
         now: Instant,
+        retry_window: Duration,
     ) -> bool {
         let committed_height = self.committed_height_snapshot();
         if height <= committed_height || self.block_payload_available_for_progress(block_hash) {
@@ -28139,7 +28172,7 @@ impl Actor {
             return false;
         }
         let reason_group = Self::highest_qc_force_fetch_reason_group(source);
-        let window = self.highest_qc_force_fetch_window();
+        let window = self.highest_qc_force_fetch_window().max(retry_window);
         let key = (height, block_hash, reason_group);
         let gate = self
             .highest_qc_force_fetch_window_gates

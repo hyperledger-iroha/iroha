@@ -1,7 +1,7 @@
 //! Tests for adaptive AoS/columnar Norito encoding.
 
 use norito::columnar::{
-    ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_str_bool_adaptive,
+    ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_str_bool_adaptive, encode_ncb_u64_str_bool,
     encode_rows_u64_str_bool_adaptive, should_use_columnar,
 };
 
@@ -48,4 +48,29 @@ fn adaptive_large_prefers_columnar() {
     assert_eq!(bytes[0], expected_tag);
     let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
+}
+
+#[test]
+fn adaptive_small_high_delta_short_names_prefers_aos() {
+    for n in [8usize, 32, 64] {
+        let rows: Vec<(u64, String, bool)> = (0..n as u64)
+            .map(|i| (i << 56, format!("s{i}"), i % 2 == 0))
+            .collect();
+        let borrowed: Vec<(u64, &str, bool)> = rows
+            .iter()
+            .map(|(id, s, b)| (*id, s.as_str(), *b))
+            .collect();
+
+        let bytes = encode_rows_u64_str_bool_adaptive(&borrowed);
+        let aos_len = norito::aos::encode_rows_u64_str_bool(&borrowed).len();
+        let ncb_len = encode_ncb_u64_str_bool(&borrowed).len();
+
+        assert!(
+            aos_len <= ncb_len,
+            "fixture must remain AoS-friendly for n={n}: aos={aos_len}, ncb={ncb_len}"
+        );
+        assert_eq!(bytes[0], ADAPTIVE_TAG_AOS);
+        let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
+        assert_eq!(decoded, rows);
+    }
 }

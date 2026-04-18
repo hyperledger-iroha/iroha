@@ -499,41 +499,6 @@ fn wait_for_height_with_timeout(
     ))
 }
 
-fn wait_for_height_with_tick_timeout(
-    mut client_factory: impl FnMut() -> Client,
-    target_height: u64,
-    context: &str,
-    timeout_duration: Duration,
-    _tick_every_polls: u64,
-) -> Result<SumeragiStatusWire> {
-    // Keep the waiter read-only. Submitting extra transactions from the observer path perturbs the
-    // queue under test and can turn a slow lane into a saturated one.
-    let started = Instant::now();
-    let mut last_height = 0;
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= timeout_duration {
-        let client = client_factory();
-        match client.get_sumeragi_status_wire() {
-            Ok(status) => {
-                last_height = status.commit_qc.height;
-                if status.commit_qc.height >= target_height {
-                    return Ok(status);
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-    let suffix = last_error
-        .map(|err| format!("; last status query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
-    ))
-}
-
 fn wait_for_height_with_tick_timeout_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     target_height: u64,
@@ -1116,45 +1081,6 @@ fn wait_for_expected_balances_with_tick_timeout(
     ))
 }
 
-fn wait_for_account_permissions(
-    mut client_factory: impl FnMut() -> Client,
-    account_id: &AccountId,
-    required_permissions: &[Permission],
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = Vec::new();
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let client = client_factory();
-        let permissions = match client
-            .query(FindPermissionsByAccountId::new(account_id.clone()))
-            .execute_all()
-        {
-            Ok(permissions) => permissions,
-            Err(err) => {
-                last_error = Some(render_error_with_debug(&err));
-                thread::sleep(STATUS_POLL_INTERVAL);
-                continue;
-            }
-        };
-        last_observed = permissions.clone();
-        let all_present = required_permissions
-            .iter()
-            .all(|required| permissions.iter().any(|permission| permission == required));
-        if all_present {
-            return Ok(());
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-    let suffix = last_error
-        .map(|err| format!("; last permission query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
-    ))
-}
-
 fn wait_for_account_permissions_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     account_id: &AccountId,
@@ -1482,33 +1408,6 @@ fn query_committed_tx_outcome(
         })
 }
 
-fn wait_for_committed_tx_outcome(
-    mut client_factory: impl FnMut() -> Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-    timeout_duration: Duration,
-) -> Result<CommittedTxOutcome> {
-    let started = Instant::now();
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= timeout_duration {
-        let client = client_factory();
-        match query_committed_tx_outcome(&client, &entry_hash) {
-            Ok(Some(outcome)) => return Ok(outcome),
-            Ok(None) => {}
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-    let suffix = last_error
-        .map(|err| format!("; last tx history query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
-    ))
-}
-
 fn wait_for_committed_tx_outcome_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -1566,44 +1465,6 @@ fn wait_for_committed_success_across_clients(
     }
 }
 
-fn wait_for_committed_success(
-    client_factory: impl FnMut() -> Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-    timeout_duration: Duration,
-) -> Result<()> {
-    match wait_for_committed_tx_outcome(
-        client_factory,
-        entry_hash.clone(),
-        context,
-        timeout_duration,
-    )? {
-        CommittedTxOutcome::Applied => Ok(()),
-        CommittedTxOutcome::Rejected(reason) => Err(eyre!(
-            "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
-        )),
-    }
-}
-
-fn wait_for_committed_rejection_reason(
-    client_factory: impl FnMut() -> Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-    timeout_duration: Duration,
-) -> Result<String> {
-    match wait_for_committed_tx_outcome(
-        client_factory,
-        entry_hash.clone(),
-        context,
-        timeout_duration,
-    )? {
-        CommittedTxOutcome::Applied => Err(eyre!(
-            "{context}: transaction {entry_hash} committed successfully, expected rejection"
-        )),
-        CommittedTxOutcome::Rejected(reason) => Ok(reason),
-    }
-}
-
 fn wait_for_committed_rejection_reason_across_clients(
     clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -1620,60 +1481,6 @@ fn wait_for_committed_rejection_reason_across_clients(
             "{context}: transaction {entry_hash} committed successfully, expected rejection"
         )),
         CommittedTxOutcome::Rejected(reason) => Ok(reason),
-    }
-}
-
-fn wait_for_committed_success_or_height_fallback(
-    mut observer_factory: impl FnMut() -> Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    committed_context: &str,
-    fallback_context: &str,
-    pre_barrier_height: u64,
-    committed_timeout: Duration,
-    post_barrier_outcome_timeout: Duration,
-) -> Result<SumeragiStatusWire> {
-    match wait_for_committed_success(
-        &mut observer_factory,
-        entry_hash.clone(),
-        committed_context,
-        committed_timeout,
-    ) {
-        Ok(()) => observer_factory()
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err)),
-        Err(err) => {
-            let error_text = err.to_string();
-            if !is_inconclusive_committed_outcome_error(&error_text) {
-                return Err(err);
-            }
-            eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
-            let barrier_status = wait_for_height_with_tick_timeout(
-                &mut observer_factory,
-                pre_barrier_height.saturating_add(1),
-                fallback_context,
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            let post_context = format!("{committed_context} (post-barrier)");
-            match wait_for_committed_success(
-                &mut observer_factory,
-                entry_hash,
-                post_context.as_str(),
-                post_barrier_outcome_timeout,
-            ) {
-                Ok(()) => observer_factory()
-                    .get_sumeragi_status_wire()
-                    .map_err(|err| eyre!(err)),
-                Err(post_err) => {
-                    let post_error_text = post_err.to_string();
-                    if is_inconclusive_committed_outcome_error(&post_error_text) {
-                        Ok(barrier_status)
-                    } else {
-                        Err(post_err)
-                    }
-                }
-            }
-        }
     }
 }
 

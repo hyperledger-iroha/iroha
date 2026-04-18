@@ -1825,6 +1825,8 @@ pub fn reset_membership_snapshot_for_tests() {
 
 /// Set PRF context (seed/height/view) used for leader selection (best-effort).
 pub fn set_prf_context(seed: [u8; 32], height: u64, view: u64) {
+    #[cfg(test)]
+    let _guard = mode_tags_test_guard();
     PRF_HEIGHT.store(height, Ordering::Relaxed);
     PRF_VIEW.store(view, Ordering::Relaxed);
     let slot = PRF_SEED.get_or_init(|| Mutex::new(None));
@@ -2015,6 +2017,8 @@ pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u
 
 /// Snapshot PRF context if known: (seed, height, view).
 pub fn prf_context() -> (Option<[u8; 32]>, u64, u64) {
+    #[cfg(test)]
+    let _guard = mode_tags_test_guard();
     let h = PRF_HEIGHT.load(Ordering::Relaxed);
     let v = PRF_VIEW.load(Ordering::Relaxed);
     let seed = PRF_SEED

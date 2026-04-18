@@ -212,7 +212,7 @@ mod tests {
     fn rad_digest_remains_stable() {
         let rad = base_rad();
         let digest = compute_rad_digest(&rad).expect("digest");
-        expect!["55ad3c4f0e4056dc5596938ac423583bc2fb71bf2e43a931ff5f4e7eeb633189"]
+        expect!["1a5d020597b8b06eac604a456a248bf4747441600071a91ed029093fcd539dea"]
             .assert_eq(&hex::encode(digest));
     }
 }

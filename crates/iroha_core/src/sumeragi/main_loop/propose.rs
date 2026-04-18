@@ -1554,11 +1554,6 @@ impl Actor {
             ));
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
-                if inline_frontier_block_created_transport {
-                    // Exact frontier proposals can skip handle_proposal(), so record the locally
-                    // assembled view as observed here to avoid immediate no-proposal churn.
-                    self.note_proposal_seen(proposal_height, view, payload_hash);
-                }
             }
             if !inline_frontier_block_created_transport {
                 self.handle_proposal(proposal)?;
@@ -1573,6 +1568,10 @@ impl Actor {
                     .proposal_cache
                     .insert_proposal(proposal);
             }
+            // A locally assembled proposal is authoritative evidence that this slot was observed,
+            // even when the inline BlockCreated path skips proposal handling or validation consumes
+            // and reinserts the proposal cache entry.
+            self.note_proposal_seen(proposal_height, view, payload_hash);
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();

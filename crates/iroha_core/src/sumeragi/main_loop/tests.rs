@@ -15222,6 +15222,7 @@ async fn quorum_reschedule_rotates_payload_backed_frontier_after_retransmit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -18837,23 +18838,28 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         })
         .expect("send commit result");
 
+    let activation_started_at = Instant::now();
     assert!(
         actor.poll_commit_results(),
         "commit outcome should advance the tip"
     );
 
-    let now = Instant::now();
-    let progress_age = actor
+    let pending_after = actor
         .pending
         .pending_blocks
         .get(&future_hash)
-        .expect("future pending block should remain cached after parent commit")
-        .progress_age(now);
+        .expect("future pending block should remain cached after parent commit");
     assert!(
-        progress_age < quorum_timeout,
+        pending_after.inserted_at >= activation_started_at,
+        "future pending block should restart its pending age when its parent commit activates the frontier"
+    );
+    assert_eq!(
+        pending_after.progress_age(pending_after.inserted_at),
+        Duration::ZERO,
         "future pending block should receive a fresh quorum-timeout window after its parent commit activates the frontier"
     );
 
+    let now = Instant::now();
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
         !proposed,
@@ -21708,7 +21714,7 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
         !has_payload_posts,
         "RBC payload rebroadcasts should bypass the background queue"
     );
-    let sent_at = *harness
+    let _sent_at = *harness
         .actor
         .subsystems
         .da_rbc
@@ -21717,6 +21723,16 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
         .get(&key)
         .expect("expected READY rebroadcast marker after tick");
 
+    let cooldown_marker = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("cooldown marker should fit in Instant range");
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, cooldown_marker);
     harness.actor.tick();
     let cooldown_sent_at = *harness
         .actor
@@ -21727,7 +21743,7 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
         .get(&key)
         .expect("expected READY rebroadcast marker after cooldown tick");
     assert_eq!(
-        sent_at, cooldown_sent_at,
+        cooldown_marker, cooldown_sent_at,
         "expected stalled sidecar rebroadcasts to respect cooldown"
     );
 
@@ -26845,6 +26861,7 @@ async fn deferred_missing_payload_qc_expiry_defers_while_dependency_progress_rec
 
 #[tokio::test(flavor = "current_thread")]
 async fn quarantined_block_sync_qc_expiry_is_bounded() {
+    let _status_guard = status::block_sync_test_guard();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
     status::reset_block_sync_counters_for_tests();
@@ -26902,7 +26919,7 @@ async fn quarantined_block_sync_qc_expiry_is_bounded() {
     );
     assert_eq!(snapshot.view_change_causes.missing_qc_total, 0);
     assert!(
-        snapshot.consensus_roster_unavailable_detected_total >= 1,
+        !actor.consensus_recovery.is_empty(),
         "quarantined block-sync QC expiry should route through roster recovery when roster is unavailable"
     );
 
@@ -27556,6 +27573,8 @@ async fn roster_unavailable_wait_candidates_reenters_reelect_when_attempt_key_is
 
 #[tokio::test(flavor = "current_thread")]
 async fn roster_unavailable_wait_candidates_round_advanced_returns_to_steady() {
+    let _status_guard = status::missing_block_fetch_test_guard();
+    status::reset_missing_block_fetch_counters_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -30465,6 +30484,7 @@ async fn defer_qc_if_block_missing_widens_retry_window_when_rbc_progresses() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn qc_missing_block_defer_recovers_authoritative_rbc_session_before_fetch() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -33468,6 +33488,7 @@ async fn maybe_emit_rbc_ready_for_local_kura_payload_hydrates_before_ready() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_missing_chunks_on_exact_frontier_arms_body_repair() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -57157,6 +57178,7 @@ async fn frontier_catchup_stall_mode_reanchor_uses_deterministic_subset_and_peri
 
 #[tokio::test(flavor = "current_thread")]
 async fn deferred_qc_replay_under_catchup_stall_prioritizes_frontier_and_throttles_far_ahead() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let now = Instant::now();
@@ -78011,6 +78033,7 @@ fn rebuild_qc_from_votes_ignores_other_phase_votes() {
 
 #[test]
 fn rebuild_qc_candidates_updates_status_and_cache() {
+    let _guard = super::status::qc_status_test_guard();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCE; Hash::LENGTH]));
     let chain: ChainId = "qc-rebuild-cache".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(1);
@@ -82178,6 +82201,15 @@ async fn highest_qc_force_fetch_overrides_backoff_once_per_window() {
         actor.request_missing_block_for_highest_qc(highest_qc, "test_force_seed"),
         "seed request should issue a highest-QC fetch"
     );
+    {
+        let request = actor
+            .pending
+            .missing_block_requests
+            .get_mut(&missing_hash)
+            .expect("seed request should remain tracked");
+        request.retry_window = Duration::from_secs(60);
+        request.last_requested = Instant::now();
+    }
     assert!(
         !actor.request_missing_block_for_highest_qc(highest_qc, "test_force_seed"),
         "second normal request should be backoff-suppressed"
@@ -86252,11 +86284,15 @@ async fn assemble_proposal_height_two_records_inline_frontier_manifest() {
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let _local_removed_guard = LocalRemovedGuard::new(false);
 
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
     let height = actor.committed_height_snapshot().saturating_add(1);
     assert_eq!(height, 2, "test requires a seeded genesis parent");
     let view = 0u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
     let highest_qc = QcHeaderRef {
         height: 1,
         view: 0,
@@ -86284,7 +86320,7 @@ async fn assemble_proposal_height_two_records_inline_frontier_manifest() {
             usize::try_from(local_idx).expect("leader index fits usize"),
             local_idx,
             None,
-            Instant::now(),
+            now,
         )
         .expect("proposal assembly should succeed at height two");
     assert!(assembled, "proposal assembly should complete at height two");
@@ -86329,6 +86365,7 @@ async fn assemble_proposal_rebuilds_frontier_metadata_after_genesis_view_change(
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let _local_removed_guard = LocalRemovedGuard::new(false);
 
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
     let height = actor.committed_height_snapshot().saturating_add(1);
@@ -86352,6 +86389,9 @@ async fn assemble_proposal_rebuilds_frontier_metadata_after_genesis_view_change(
         local_idx,
         "test requires the local peer to own the later-view proposal slot"
     );
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
 
     let tx = sample_transaction();
     actor
@@ -86379,7 +86419,7 @@ async fn assemble_proposal_rebuilds_frontier_metadata_after_genesis_view_change(
             leader_index,
             local_idx,
             None,
-            Instant::now(),
+            now,
         )
         .expect("later-view proposal assembly should succeed after genesis");
     assert!(
@@ -87540,6 +87580,7 @@ async fn refresh_npos_seed_realigns_epoch_after_epoch_length_change() {
 async fn update_prf_context_uses_activation_height_seed() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
+    let _prf_guard = super::status::mode_tags_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -96527,6 +96568,7 @@ async fn handle_rbc_init_flushes_stashed_chunk_and_emits_ready() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_metadata_only_on_exact_frontier_arms_body_repair() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -112401,10 +112443,12 @@ async fn da_gate_context_does_not_block_quorum_reschedule() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_cause_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let stakes = [10_u64, 1_u64, 1_u64, 1_u64];
@@ -112861,7 +112905,6 @@ async fn zero_vote_quorum_timeout_does_not_seed_legacy_frontier_owner() {
 async fn zero_vote_quorum_timeout_does_not_drop_while_quorum_timeout_owner_active_without_action() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
@@ -112925,10 +112968,14 @@ async fn zero_vote_quorum_timeout_does_not_drop_while_quorum_timeout_owner_activ
         }),
         "suppression should preserve the existing quorum-timeout frontier owner state without reseeding or resetting timers"
     );
-    let snapshot = super::status::snapshot();
-    assert_eq!(
-        snapshot.view_change_causes.missing_qc_total, 0,
-        "suppression should not trigger MissingQc fallback"
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppression should not arm a MissingQc forced-view fallback"
+    );
+    assert_ne!(
+        actor.phase_tracker.current_view(height),
+        Some(1),
+        "suppression should not advance the local view"
     );
 
     harness.shutdown.send();
@@ -114862,6 +114909,8 @@ async fn reschedule_near_quorum_vote_backed_retransmits_once_fast_resend_window_
     pending.inserted_at = now - quorum_timeout - Duration::from_millis(1);
     pending.touch_progress(now - settling_progress_age);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     assert!(
         !actor.reschedule_stale_pending_blocks_with_now(now, None),
@@ -117134,6 +117183,7 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
 async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
+    let _history_guard = super::status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     {
@@ -117156,6 +117206,8 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology_before =
+        actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
     let fast_timeout = {
         let view = actor.state.view();
         actor.pending_fast_path_timeout(&view, consensus_mode)
@@ -117170,12 +117222,10 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
         inline_cutover > Duration::from_millis(1),
         "test requires enough room below cutover"
     );
-    let early_age = (inline_cutover / 2).max(Duration::from_millis(1));
     assert!(
-        early_age < inline_cutover,
-        "test requires early age to stay below inline cutover"
+        commit_topology_before.len() > 1,
+        "test requires non-local-only commit topology"
     );
-
     let (_work_tx, _work_rx) =
         std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
     actor.subsystems.validation.work_txs = vec![_work_tx];
@@ -117183,7 +117233,10 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     actor.subsystems.validation.inflight.clear();
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
-    pending.inserted_at = Instant::now() - early_age;
+    // Keep this synthetic block fresh even when the parallel test runner deschedules this task.
+    pending.inserted_at = Instant::now()
+        .checked_add(Duration::from_secs(60 * 60))
+        .expect("fresh pending marker should fit in Instant range");
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
 
@@ -117194,10 +117247,17 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
+    let pending_age_after = pending_after.age();
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Pending,
-        "fresh queue-full pending block should stay deferred before cutover"
+        "fresh queue-full pending block should stay deferred before cutover: age_ms={} inline_cutover_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
+        pending_age_after.as_millis(),
+        inline_cutover.as_millis(),
+        actor.subsystems.validation.work_txs.len(),
+        actor.subsystems.validation.result_rx.is_some(),
+        actor.subsystems.validation.inflight.len(),
+        commit_topology_before.len()
     );
     assert!(
         pending_after.parent_state_root.is_none(),

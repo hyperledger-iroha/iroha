@@ -2,18 +2,203 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Sumeragi pending activation window refresh):
+Cached future proposals that become the next active frontier after a parent
+commit now restart their pending age, progress age, and quorum-reschedule
+window at activation time. This keeps future proposals that were correctly
+cached while waiting for their parent from timing out immediately once the
+commit pipeline advances the tip. The queue-full validation cutover regression
+also isolates commit-history state and asserts the multi-validator topology
+precondition before checking that fresh pending validation remains deferred.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/pending_block.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::pending_block::tests::refresh_activation_window_resets_pending_timers -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::cached_future_proposal_does_not_immediately_timeout_after_parent_commit_activation -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline_keeps_deferred_validation_before_queue_full_cutover -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline -- --nocapture`
+  - `cargo test -p iroha_core --lib`
+- open work after this slice:
+  - run the full multi-hour workspace test suite during a longer validation
+    window
+
+Latest sync (2026-04-18 root `ivm.md` pointer type doc sync):
+The workspace-root `ivm.md` generated pointer-type table now includes the
+Soracloud ABI rows again (`SoracloudRequest` / `SoracloudResponse`), bringing
+the root doc back in sync with `ivm::render_pointer_types_markdown_table()`
+and the already-correct crate-local pointer ABI doc.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/ivm.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test pointer_types_doc_generated_ivm_md -- --nocapture`
+  - `cargo test -p ivm --test pointer_types_doc_generated -- --nocapture`
+- open work after this slice:
+  - rerun broader `cargo test -p ivm` / workspace validation during a longer
+    clean window
+
+Latest sync (2026-04-18 `NftId` bare-domain parser compatibility):
+`NftId::from_str` now accepts both `name$domain` and `name$domain.dataspace`
+literals again. Bare domains canonicalize to `domain.universal`, while
+malformed dotted literals still fail closed instead of falling back. This
+closes the `pointer_tlv` parse panic on `rose$wonderland` and brings the parser
+back in line with the existing IVM/Kotodama/docs fixtures that still use bare
+NFT-domain literals.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nft.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model nft_id -- --nocapture`
+  - `cargo test -p iroha_data_model domain_literal -- --nocapture`
+  - `cargo test -p ivm --test pointer_tlv validate_known_types_ok -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-18 Halo2 IPA diagnostic verifier resource hardening):
+The standalone Halo2 IPA poly-open helper now has bounded resource behavior:
+`OpenVerifyEnvelope` decoding accepts explicit `max_k` and transcript-label
+limits, proof-round counts are validated before IPA folding, the process-local
+parameter registry is capped with LRU eviction, malformed generator vector
+lengths are rejected before curve decoding, and the transcript uses a running
+SHA3 state instead of rehashing its complete history. Torii
+`/v1/zk/verify-batch` now routes through the app API proof guardrails and passes
+configured Halo2 batch/envelope/domain/label limits into the standalone helper;
+its JSON batch form now preserves one status per submitted entry, marking
+malformed or limit-rejected entries as `false`. The endpoint remains
+diagnostic-only; ledger-grade policy stays on the VK registry-backed
+`iroha_core::zk::verify_backend_with_timing_guardrails` path. Coverage now also
+exercises typed proof-wire failures, unsupported-backend dispatch, exact-limit
+success, backend-qualified parameter-registry keys, transcript scope/length
+separation, JSON oversized-batch rejection, Norito per-entry diagnostic limits,
+invalid-body responses, empty JSON batches, unknown numeric backend IDs,
+invalid scalar proof encodings, empty batch short-circuiting, registry reuse for
+pre-registered parameter wires, JSON `max_k` limit rejection, `text/json`
+content negotiation, malformed JSON handling, duplicate generator rejection,
+invalid public/proof group encodings, large `max_k >= usize::BITS` acceptance,
+unknown-curve parameter mismatches, default-handler JSON mixed-status
+verification, JSON charset content-types, and empty Norito batches. Registry
+tests now serialize their own cache clears so the optional parallel test suite
+does not race on the process-global params registry.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/errors.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/ipa.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/params.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/transcript.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_zkp_halo2/src/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/tests/zk_verify_batch_handler_integration.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/zk_audit_matrix.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `rustfmt --edition 2024` on the touched Halo2/Torii Rust files
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_zkp_halo2` (`44 passed`)
+  - `cargo test -p iroha_zkp_halo2 --features parallel,goldilocks_backend` (`48 passed`)
+  - `cargo test -p iroha_torii --features app_api,zk-verify-batch --test zk_verify_batch_handler_integration -- --nocapture` (`13 passed`)
+  - `git diff --check`
+- open work after this slice:
+  - keep `/v1/zk/verify-batch` documented and treated as diagnostic-only unless
+    a future task deliberately moves it onto the VK registry policy path
+Latest sync (2026-04-18 developer portal Norito snippet fixture refresh):
+The developer-portal Norito snippet harness now seeds a linked caller subject
+before permission-gated setup and uses the same canonical account/asset
+literals as the checked-in portal examples. The portal example sources were
+also refreshed to the current literal surface: `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`
+for the canonical asset definition, valid I105 account literals for the
+transfer examples, and the fully qualified `n0$wonderland.universal` NFT id.
+The generated portal docs and downloadable `.ko` snippets were resynced from
+those sources.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/norito_portal_snippets_compile.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/08_call_transfer_asset.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/12_nft_flow.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`
+  - `/home/mtakemiya/dev/iroha/examples/transfer/transfer.ko`
+  - `/home/mtakemiya/dev/iroha/docs/portal/docs/norito/examples/`
+  - `/home/mtakemiya/dev/iroha/docs/portal/static/norito-snippets/`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test norito_portal_snippets_compile -- --nocapture`
+  - `npm run sync-norito-snippets` from `docs/portal`
+  - `npm run test:norito-snippets` from `docs/portal`
+  - `git diff --check`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-18 mock WSV unregister/relink permission retention):
+The mock WSV now preserves detached subject permissions and role assignments
+when `unregister_account_subject` removes an active account row. The subject
+still behaves as unregistered until it is registered again, but relinking the
+same subject restores the prior `has_permission` surface as expected by the
+mock account-detach tests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test mock_wsv unregister_account_detaches_subject_and_preserves_state_for_relink -- --nocapture`
+  - `cargo test -p ivm --test mock_wsv -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+Latest sync (2026-04-18 Kotodama ZK vote/unshield sample semantic sync):
+The checked-in `zk_vote_and_unshield.ko` sample now matches the current
+Kotodama semantic contract: its public `demo` entrypoint carries
+`permission(Admin)`, and the inline unshield builder uses compile-time literal
+constructor arguments instead of runtime-only `authority()`. This keeps the IVM
+sample regression test aligned with the language rules it exercises.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.to`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test kotodama_sample_zk_vote_unshield -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a longer clean window
+
 Latest sync (2026-04-18 STARK/FRI V1 verifier hardening):
 STARK/FRI V1 was hardened in-place for the first release. The low-level native
-verifier now folds `(x, -x)` pairs with the domain element, STARK guardrails
-split outer OpenVerify envelope bytes from backend-native proof bytes,
-synthetic STARK proving and high-level STARK verification now fail closed until
-real verifier-owned AIR openings exist, the gated STARK tests now assert that
-fail-closed behavior, and curve labels are exact canonical strings. FASTPQ
-verification now has V1 replay limits and authenticates sampled LDE query
-chunks against Merkle paths rooted at `lookup_root`, so node-facing calls cannot
-skip sampled opening authentication while the remaining per-round FRI and AIR
-composition verifier is implemented. FASTPQ proof fixtures, ordering hashes, and
-trace-commitment goldens were refreshed for the in-place V1 wire shape.
+verifier now folds `(x, -x)` pairs with the domain element and V1 envelopes must
+carry an explicit AIR section: sampled row openings are authenticated under an
+AIR trace root, sampled composition values are recomputed from adjacent rows,
+and the composition root is bound to FRI layer 0. STARK guardrails split outer
+OpenVerify envelope bytes from backend-native proof bytes, the synthetic STARK
+helper is test-only, high-level STARK verification now requires a
+verifier-reconstructed AIR public digest, offline recursive STARK readiness uses
+that AIR-bound path, and curve labels are exact canonical strings. FASTPQ
+verification now authenticates sampled LDE query chunks, sampled AIR trace and
+composition openings, the exact V1 AIR challenge count, and per-round FRI query
+chains without trace rebuild, LDE derivation, or full recursive folding. FASTPQ
+proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for
+the in-place V1 wire shape. Follow-up gap closure keeps the mixed-case STARK VK
+update regression on a valid encoded V1 STARK verifying key and removes unused
+single-client Nexus helper wrappers from the compile-only integration target.
+Additional coverage now pins extra AIR challenge rejection, AIR opening-count
+checks, AIR row-value limits, AIR composition-root binding, AIR public-digest
+tampering, AIR width limits, and high-level STARK wrapper public-input binding.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -36,29 +221,30 @@ trace-commitment goldens were refreshed for the in-place V1 wire shape.
   - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/zk/lifecycle.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/zk_stark_network.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
 - validation status:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark overlay_stark -- --nocapture`
-  - `cargo test -p iroha_core --lib --features zk-stark overlay_rejects_stark_ivm_proved_until_air_prover_available -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_accepts_stark_ivm_proved_binding_air_proof -- --nocapture`
   - `cargo test -p iroha_config --test fixtures -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api,zk-verify-batch,zk-stark --test zk_verify_batch_handler_integration -- --nocapture`
   - `cargo test -p integration_tests --features zk-stark --test consensus_and_da --no-run`
   - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
   - `git diff --check`
 - open work after this slice:
-  - replace FASTPQ replay verification with a logarithmic verifier that consumes
-    per-round FRI openings and AIR composition openings under the existing V1
-    proof family; sampled LDE Merkle authentication paths are already carried
-    and checked
-  - implement the real native STARK AIR prover before re-enabling STARK
-    proof generation, high-level STARK proof acceptance, or offline recursive
-    aggregate STARK envelopes
+  - run the full workspace test and strict clippy pass during a clean validation
+    window without concurrent Cargo jobs
 
 Latest sync (2026-04-18 Kotodama assert truthiness and role-account fixtures):
 Kotodama `assert(...)` now lowers with its original boolean condition intact,

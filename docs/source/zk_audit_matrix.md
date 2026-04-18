@@ -18,7 +18,7 @@ statement before verification, and which paths are demo-only or non-ZK.
 | Lane relay / FASTPQ | Native FASTPQ prover/verifier | Safety-critical for lane proof checking | Rebuilt transition batch from binding, full `PublicIO` equality (`dsid`, `slot`, roots, hashes), transcript already seeded with `public_io` | `fastpq_prover::verify` | Medium-low. Claims are now checked field-for-field; remaining risk is in FASTPQ arithmetic/circuit correctness rather than omitted public claims. |
 | Torii `POST /v1/zk/verify` | None (decode-only) | Non-consensus demo surface | Content-type decode only | None | High if misinterpreted as a verifier; docs/comments now explicitly mark it decode-only. |
 | Torii `POST /v1/zk/submit-proof` | None (decode + deterministic id) | Non-consensus demo surface | Content-type decode only, body hash for returned id | None | High if misinterpreted as a verifier; docs/comments now explicitly mark it non-verifying and non-durable. |
-| Torii `POST /v1/zk/verify-batch` | Standalone native IPA poly-open helper | Diagnostic only, not ledger-equivalent | Norito envelope decode plus transcript-bound statement (`transcript_label`, curve/`n`, `z`, `t`, `p_g`, optional metadata) | `iroha_zkp_halo2::batch::verify_open_batch` | Medium. Cryptographically stricter after this patch, but still intentionally lacks VK registry / circuit/schema policy enforcement. |
+| Torii `POST /v1/zk/verify-batch` | Standalone native IPA poly-open helper | Diagnostic only, not ledger-equivalent | Norito envelope decode plus transcript-bound statement (`transcript_label`, curve/`n`, `z`, `t`, `p_g`, optional metadata), configured batch/envelope/curve-`k`/label caps, and proof-round shape checks | `iroha_zkp_halo2::batch::verify_open_batch_with_limits` | Medium-low for diagnostics. Resource use is now bounded by config and the shared parameter cache is capped, but the endpoint still intentionally lacks VK registry / circuit/schema policy enforcement. |
 | IVM batch syscall (`SYSCALL_ZK_VERIFY_BATCH`) | Registry-backed `halo2/ipa` verifier on `CoreHost`; disabled on `DefaultHost` | Runtime helper with ledger-grade binding on the node host | Outer `OpenVerifyEnvelope` header checks, VK registry lookup, circuit/schema/manifest/curve/`max_k` enforcement, then backend verification with guardrails | `iroha_core::smartcontracts::ivm::host::CoreHost` -> `iroha_core::zk::verify_backend_with_timing_guardrails` | Low on the runtime host. `DefaultHost` intentionally returns `ERR_DISABLED`, so the remaining risk is misuse of a non-runtime host rather than a standalone verifier bypass. |
 
 ## Notes
@@ -35,3 +35,7 @@ statement before verification, and which paths are demo-only or non-ZK.
 - Production ledger verification remains centered on the guarded
   `iroha_core::zk::verify_backend_with_timing_guardrails` path and should stay
   the reference implementation for future proof-bearing features.
+- The standalone Halo2 helper now keeps a bounded process-local parameter
+  registry and derives Fiat-Shamir challenges from a running transcript state.
+  That closes the previously noted unbounded-cache and quadratic-history rough
+  edges without changing its non-ledger status.

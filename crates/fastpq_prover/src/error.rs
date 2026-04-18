@@ -63,6 +63,46 @@ pub enum Error {
     /// Lookup grand-product does not match the recomputed accumulator.
     #[error("lookup grand product mismatch")]
     LookupGrandProductMismatch,
+    /// AIR trace Merkle root mismatch detected during verification.
+    #[error("AIR trace root mismatch")]
+    AirTraceRootMismatch,
+    /// AIR composition Merkle root mismatch detected during verification.
+    #[error("AIR composition root mismatch")]
+    AirCompositionRootMismatch,
+    /// AIR opening count mismatch between proof and verifier transcript.
+    #[error("AIR opening count mismatch: expected {expected}, got {actual}")]
+    AirOpeningCountMismatch {
+        /// Expected number of openings.
+        expected: usize,
+        /// Actual number of openings in the proof.
+        actual: usize,
+    },
+    /// AIR composition challenge count does not match the V1 transcript shape.
+    #[error("AIR challenge count mismatch: expected {expected}, got {actual}")]
+    AirChallengeCountMismatch {
+        /// Expected number of transcript challenges.
+        expected: usize,
+        /// Actual number advertised by the proof.
+        actual: usize,
+    },
+    /// AIR row or composition opening did not match the sampled statement.
+    #[error("AIR opening mismatch at position {index}")]
+    AirOpeningMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// AIR Merkle authentication path did not resolve to the advertised root.
+    #[error("AIR Merkle path mismatch at position {index}")]
+    AirMerklePathMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// AIR sampled constraint did not evaluate to zero.
+    #[error("AIR constraint mismatch at position {index}")]
+    AirConstraintMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
     /// FRI layer vector length differs from the recomputed transcript.
     #[error("FRI layer length mismatch: expected {expected}, got {actual}")]
     FriLayerLengthMismatch {
