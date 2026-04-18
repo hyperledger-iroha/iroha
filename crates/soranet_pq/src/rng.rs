@@ -107,9 +107,7 @@ pub fn hedged_chacha20_rng(seed: HedgedRngSeed, personalization: &[u8]) -> Hedge
 ///
 /// # Errors
 /// Returns [`RngError`] when the initial OS seed draw fails.
-pub fn hedged_chacha20_rng_from_os(
-    personalization: &[u8],
-) -> Result<HedgedChaCha20Rng, RngError> {
+pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCha20Rng, RngError> {
     HedgedRngSeed::from_os().map(|seed| hedged_chacha20_rng(seed, personalization))
 }
 

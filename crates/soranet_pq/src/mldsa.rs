@@ -1,4 +1,3 @@
-use rand_core::RngCore;
 use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
 use pqcrypto_traits::{
     Error as PqError,
@@ -7,6 +6,7 @@ use pqcrypto_traits::{
         SecretKey as PrimitiveSecretKey, VerificationError,
     },
 };
+use rand_core::RngCore;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -353,8 +353,16 @@ mod tests {
             .expect("ML-DSA keypair generation should succeed");
         let message = b"SoraNet PQ harness";
         let context = b"soranet-pq:test";
-        let signature = sign_mldsa(suite, kp.secret_key(), context, message, &mut sign_rng).unwrap();
-        verify_mldsa(suite, kp.public_key(), context, message, signature.as_bytes()).unwrap();
+        let signature =
+            sign_mldsa(suite, kp.secret_key(), context, message, &mut sign_rng).unwrap();
+        verify_mldsa(
+            suite,
+            kp.public_key(),
+            context,
+            message,
+            signature.as_bytes(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -386,9 +394,14 @@ mod tests {
             .expect("ML-DSA keypair generation should succeed");
         let message = b"context";
         let context = b"soranet-pq:test";
-        let signature =
-            sign_mldsa(MlDsaSuite::MlDsa44, kp.secret_key(), context, message, &mut sign_rng)
-                .unwrap();
+        let signature = sign_mldsa(
+            MlDsaSuite::MlDsa44,
+            kp.secret_key(),
+            context,
+            message,
+            &mut sign_rng,
+        )
+        .unwrap();
         let mut tampered = message.to_vec();
         tampered[0] ^= 0xFF;
         let err = verify_mldsa(

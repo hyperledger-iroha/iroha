@@ -598,9 +598,7 @@ impl RelayCertificateV2 {
         let mldsa_digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
         let mldsa_signature =
             sign_mldsa_from_os(MlDsaSuite::MlDsa65, mldsa_secret_key, &[], &mldsa_digest).map_err(
-                |err| {
-                CertificateError::SignatureFailure(format!("ML-DSA signing failed: {err}"))
-                },
+                |err| CertificateError::SignatureFailure(format!("ML-DSA signing failed: {err}")),
             )?;
 
         Ok(RelayCertificateBundleV2 {
@@ -777,9 +775,7 @@ impl RelayCertificateBundleV2 {
                 let digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
                 verify_mldsa(MlDsaSuite::MlDsa65, mldsa_public, &[], &digest, bytes).map_err(
                     |err| {
-                        CertificateError::SignatureFailure(format!(
-                            "ML-DSA verify failed: {err}"
-                        ))
+                        CertificateError::SignatureFailure(format!("ML-DSA verify failed: {err}"))
                     },
                 )?;
             }

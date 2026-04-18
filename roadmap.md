@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 SoraNet PQ hedged RNG boundary hardening):
+SoraNet PQ call sites now flow through explicit hedged RNG objects or fallible
+`_from_os` helpers, and ML-DSA fixture signatures were refreshed for the
+context-aware verifier. This makes the randomness boundary visible to callers
+while preserving the current pqcrypto-backed backend until the local scalar
+implementation lands.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/soranet/pq_primitives.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/soranet_pq/pq_kat.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/tests/fixtures/pq_vectors.json`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo check -p soranet_pq`
+  - `cargo check -p soranet_pq --all-targets`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo check -p soranet-puzzle-service -p soranet-relay -p soranet-handshake-harness -p sorafs_orchestrator -p iroha_p2p -p iroha_cli --all-targets`
+  - `cargo test -p soranet_pq`
+- open work after this slice:
+  - replace the remaining pqcrypto-backed ML-KEM/ML-DSA internals with the
+    local pure-Rust scalar backend, then layer deterministic hardware-accelerated
+    paths behind feature flags without changing outputs
+  - rerun the full workspace test suite during a longer clean validation window
+
 Latest sync (2026-04-18 syscall policy unknown-number test resync):
 `crates/ivm/tests/syscalls_policy.rs` no longer assumes hard-coded numbers such
 as `0x80` are outside the ABI surface. The regression now derives unknown
@@ -246,7 +272,13 @@ LDE domain rejection, folded/final FRI value tampering, VK-hash tampering,
 missing STARK VK rejection, and inner STARK parameter tampering. The latest
 FASTPQ coverage adds transition-count, batch-byte, FRI layer-count, extra
 AIR/FRI query-vector, query-path, final-FRI-value, final-FRI-path, and
-round-FRI-path guardrail tests.
+round-FRI-path guardrail tests. The newest verifier branch tests cover
+unsupported protocol versions, unknown proof parameters, malformed FRI layer
+root encodings, malformed query/AIR/FRI opening shapes, and direct zero-arity
+FRI query-chain rejection. The newest proof-module coverage also pins backend
+artifact materialisation field mapping, backend artifact count mismatches,
+malformed trace/lookup/AIR root encodings, AIR challenge value rejection, and
+default-limit AIR/FRI vector-count mismatches.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`

@@ -235,8 +235,7 @@ pub mod dilithium3 {
             shake256(tr.as_mut_ptr(), tr.len(), pk_bytes.as_ptr(), pk_bytes.len());
         }
 
-        let mut sk_bytes =
-            Zeroizing::new([0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES]);
+        let mut sk_bytes = Zeroizing::new([0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES]);
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_pack_sk(
                 sk_bytes.as_mut_ptr(),
@@ -251,7 +250,7 @@ pub mod dilithium3 {
 
         let public_key = PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))?;
-        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, &sk_bytes)
+        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, &sk_bytes[..])
             .map_err(|err| Error::KeyGen(err.to_string()))?;
 
         Ok((public_key, private_key))

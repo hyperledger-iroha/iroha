@@ -67,9 +67,8 @@ fn mldsa_known_answer_vectors_verify_and_sign() {
         );
         let regenerated = sign_mldsa(suite, &sk, &[], &msg, &mut sign_rng)
             .unwrap_or_else(|err| panic!("{} signing failed: {err}", fixture.suite));
-        verify_mldsa(suite, &pk, &[], &msg, regenerated.as_bytes()).unwrap_or_else(|err| {
-            panic!("{} regenerated signature failed: {err}", fixture.suite)
-        });
+        verify_mldsa(suite, &pk, &[], &msg, regenerated.as_bytes())
+            .unwrap_or_else(|err| panic!("{} regenerated signature failed: {err}", fixture.suite));
     }
 }
 
