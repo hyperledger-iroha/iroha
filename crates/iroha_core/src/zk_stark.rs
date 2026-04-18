@@ -756,6 +756,8 @@ pub struct StarkCommitmentsV1 {
     Debug,
     Clone,
     Copy,
+    PartialEq,
+    Eq,
     Serialize,
     Deserialize,
     JsonSerialize,
@@ -916,13 +918,89 @@ fn zero_merkle_path(index: usize, depth: usize, level_hashes: &[[u8; 32]]) -> Op
     Some(MerklePath { dirs, siblings })
 }
 
+fn merkle_levels_from_values(
+    params: &StarkFriParamsV1,
+    values: &[Fq],
+) -> Option<Vec<Vec<[u8; 32]>>> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut current = values
+        .iter()
+        .map(|&value| match params.hash_fn {
+            STARK_HASH_SHA256_V1 => Some(leaf_hash(value)),
+            STARK_HASH_POSEIDON2_V1 => Some(poseidon_leaf_hash(value)),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let mut levels = Vec::new();
+    loop {
+        levels.push(current.clone());
+        if current.len() == 1 {
+            break;
+        }
+        if current.len() % 2 == 1 {
+            let last = *current.last()?;
+            current.push(last);
+        }
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            next.push(match params.hash_fn {
+                STARK_HASH_SHA256_V1 => node_hash(&pair[0], &pair[1]),
+                STARK_HASH_POSEIDON2_V1 => poseidon_node_hash(&pair[0], &pair[1])?,
+                _ => return None,
+            });
+        }
+        current = next;
+    }
+    Some(levels)
+}
+
+fn merkle_path_from_levels(index: usize, levels: &[Vec<[u8; 32]>]) -> Option<MerklePath> {
+    let leaf_level = levels.first()?;
+    if index >= leaf_level.len() {
+        return None;
+    }
+    let depth = levels.len().checked_sub(1)?;
+    if depth > usize::BITS as usize {
+        return None;
+    }
+    let mut dirs = vec![0u8; (depth + 7) / 8];
+    let mut siblings = Vec::with_capacity(depth);
+    let mut current_index = index;
+    for (level_idx, level) in levels.iter().take(depth).enumerate() {
+        if current_index >= level.len() {
+            return None;
+        }
+        let sibling_idx = if current_index.is_multiple_of(2) {
+            current_index + 1
+        } else {
+            current_index.saturating_sub(1)
+        };
+        let sibling = level
+            .get(sibling_idx)
+            .copied()
+            .unwrap_or_else(|| level[current_index]);
+        if current_index % 2 == 1 {
+            dirs[level_idx / 8] |= 1u8 << (level_idx % 8);
+        }
+        siblings.push(sibling);
+        current_index /= 2;
+    }
+    Some(MerklePath { dirs, siblings })
+}
+
+fn merkle_root_from_levels(levels: &[Vec<[u8; 32]>]) -> Option<[u8; 32]> {
+    levels.last()?.first().copied()
+}
+
 /// Build a deterministic STARK FRI proof envelope that passes native verification.
 ///
 /// The generated witness uses all-zero layer evaluations and deterministic Merkle openings for
 /// transcript-derived query indices. This keeps proving deterministic and avoids trusted setup.
 ///
 /// Returns Norito-encoded [`StarkVerifyEnvelopeV1`] bytes.
-pub fn synthesize_stark_fri_envelope_bytes(
+fn synthesize_stark_fri_envelope_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
 ) -> Result<Vec<u8>, String> {
@@ -1027,6 +1105,88 @@ pub fn synthesize_stark_fri_envelope_bytes(
         transcript_label,
     };
     norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+}
+
+/// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
+///
+/// The FRI witness is the zero polynomial, while the composition leaf is derived from
+/// caller-supplied terms that the high-level verifier must reconstruct independently.
+/// This is used for first-release binding circuits whose execution semantics are checked
+/// outside this transparent native proof.
+pub fn prove_stark_fri_composition_envelope_bytes(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+    constant: u64,
+    z_coeff: u64,
+    aux_terms: Vec<StarkCompositionTermV1>,
+) -> Result<Vec<u8>, String> {
+    if aux_terms.len() > MAX_AUX_TERMS {
+        return Err("too many STARK composition auxiliary terms".to_owned());
+    }
+    let mut last_wire = None;
+    for term in &aux_terms {
+        if Fq::from_canonical_u64(term.value).is_none()
+            || Fq::from_canonical_u64(term.coeff).is_none()
+        {
+            return Err("invalid STARK composition auxiliary field element".to_owned());
+        }
+        if let Some(prev) = last_wire
+            && term.wire_index <= prev
+        {
+            return Err("STARK composition auxiliary wires must be strictly ordered".to_owned());
+        }
+        last_wire = Some(term.wire_index);
+    }
+    let constant_f =
+        Fq::from_canonical_u64(constant).ok_or_else(|| "invalid STARK constant".to_owned())?;
+    let z_coeff_f =
+        Fq::from_canonical_u64(z_coeff).ok_or_else(|| "invalid STARK z coefficient".to_owned())?;
+
+    let mut envelope = synthesize_stark_fri_envelope(params, transcript_label)?;
+    let z_final = Fq::from_canonical_u64(
+        envelope
+            .proof
+            .queries
+            .first()
+            .and_then(|chain| chain.last())
+            .map(|decommit| decommit.z)
+            .unwrap_or(0),
+    )
+    .ok_or_else(|| "invalid STARK final folded value".to_owned())?;
+    let mut expected = constant_f.add(z_coeff_f.mul(z_final));
+    for term in &aux_terms {
+        let coeff = Fq::from_canonical_u64(term.coeff)
+            .ok_or_else(|| "invalid STARK composition coefficient".to_owned())?;
+        let value = Fq::from_canonical_u64(term.value)
+            .ok_or_else(|| "invalid STARK composition value".to_owned())?;
+        expected = expected.add(coeff.mul(value));
+    }
+    let comp_levels = merkle_levels_from_values(&envelope.params, &[expected])
+        .ok_or_else(|| "failed to build STARK composition commitment".to_owned())?;
+    let comp_root = merkle_root_from_levels(&comp_levels)
+        .ok_or_else(|| "failed to derive STARK composition root".to_owned())?;
+    let comp_path = merkle_path_from_levels(0, &comp_levels)
+        .ok_or_else(|| "failed to derive STARK composition path".to_owned())?;
+    let comp_value = StarkCompositionValueV1 {
+        leaf: expected.0,
+        constant,
+        z_coeff,
+        aux_terms,
+        path: comp_path,
+    };
+    let comp_values = vec![comp_value; envelope.proof.queries.len()];
+    envelope.proof.commits.comp_root = Some(comp_root);
+    envelope.proof.comp_values = Some(comp_values);
+    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+}
+
+fn synthesize_stark_fri_envelope(
+    params: StarkFriParamsV1,
+    transcript_label: String,
+) -> Result<StarkVerifyEnvelopeV1, String> {
+    let bytes = synthesize_stark_fri_envelope_bytes(params, transcript_label)?;
+    norito::decode_from_bytes(&bytes)
+        .map_err(|err| format!("failed to decode synthesized STARK envelope: {err}"))
 }
 
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.

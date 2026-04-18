@@ -10,12 +10,7 @@ use crate::{
         PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA,
         TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
     },
-    ordering,
-    trace::{
-        self, PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
-        hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
-    },
-    trace_commitment,
+    ordering, trace, trace_commitment,
 };
 
 /// Protocol version advertised by the Stage 2 prover implementation.
@@ -36,6 +31,8 @@ const DEFAULT_MAX_VERIFY_QUERIES: usize = 128;
 const DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES: usize = 128;
 /// Default maximum Merkle siblings carried by a single query opening.
 const DEFAULT_MAX_VERIFY_QUERY_PATH_LEN: usize = 64;
+/// Default maximum FRI values carried by a single round opening.
+const DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES: usize = 16;
 
 /// Public inputs committed by the prover and replayed by the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
@@ -73,6 +70,38 @@ pub struct QueryOpening {
     pub merkle_path: Vec<u64>,
 }
 
+/// Opened FRI fold group for one query at one round.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[repr(C)]
+pub struct FriRoundOpening {
+    /// FRI round number.
+    pub round: u32,
+    /// Index inside the current round domain.
+    pub index: u32,
+    /// Full arity-sized group opened at this round.
+    pub values: Vec<u64>,
+    /// Folded value carried into the next round.
+    pub folded_value: u64,
+    /// Merkle authentication path for `values` under `fri_layers[round]`.
+    pub merkle_path: Vec<u64>,
+}
+
+/// Per-query FRI opening chain across all committed rounds.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[repr(C)]
+pub struct FriQueryOpening {
+    /// Initial evaluation-domain index sampled by the transcript.
+    pub initial_index: u32,
+    /// Round openings from the initial layer through the last fold.
+    pub rounds: Vec<FriRoundOpening>,
+    /// Index inside the final FRI layer.
+    pub final_index: u32,
+    /// Final FRI leaf values authenticated under the terminal root.
+    pub final_values: Vec<u64>,
+    /// Merkle authentication path for `final_values` under the terminal root.
+    pub final_merkle_path: Vec<u64>,
+}
+
 /// Proof artifact produced by the FASTPQ prover.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
@@ -103,6 +132,8 @@ pub struct Proof {
     pub fri_layers: Vec<[u8; 32]>,
     /// Openings into the evaluation domain sampled by the verifier.
     pub queries: Vec<QueryOpening>,
+    /// Per-round FRI openings for the same sampled query indices.
+    pub fri_queries: Vec<FriQueryOpening>,
 }
 
 impl Proof {
@@ -127,6 +158,8 @@ pub struct VerifyLimits {
     pub max_query_chunk_values: usize,
     /// Maximum Merkle authentication path length accepted for each query.
     pub max_query_path_len: usize,
+    /// Maximum values opened in one FRI round group.
+    pub max_fri_round_values: usize,
 }
 
 impl Default for VerifyLimits {
@@ -138,6 +171,7 @@ impl Default for VerifyLimits {
             max_queries: DEFAULT_MAX_VERIFY_QUERIES,
             max_query_chunk_values: DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES,
             max_query_path_len: DEFAULT_MAX_VERIFY_QUERY_PATH_LEN,
+            max_fri_round_values: DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES,
         }
     }
 }
@@ -294,30 +328,10 @@ pub fn verify_with_limits(
         build_public_io(batch, expected_ordering, expected_permission_hashes.clone());
     ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
 
-    let trace = build_trace(batch)?;
-    let planner = crate::Planner::new(&params);
-    let mut polynomial_data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
-
-    let column_digests = hash_columns_from_coefficients(
-        &trace,
-        &polynomial_data.coefficients,
-        &planner,
-        ExecutionMode::Cpu,
-        PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
-    );
     let trace_root =
-        merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
-    if proof.trace_root != field_norito::core::to_bytes(trace_root) {
-        return Err(Error::TraceRootMismatch);
-    }
-
-    let lde_columns = polynomial_data.lde_columns();
-    let lde_values = backend::hash_trace_rows(lde_columns);
-    let lde_hashes = backend::hash_lde_leaves(&lde_values, params.fri.arity)?;
-    let lde_root = merkle_root(&lde_hashes);
-    if proof.lookup_root != field_norito::core::to_bytes(lde_root) {
-        return Err(Error::LookupRootMismatch);
-    }
+        field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
+    let lde_root =
+        field_norito::core::from_bytes(&proof.lookup_root).ok_or(Error::LookupRootMismatch)?;
 
     let mut transcript = backend::Transcript::initialise(
         &proof.public_io,
@@ -342,58 +356,58 @@ pub fn verify_with_limits(
             return Err(Error::FriChallengeMismatch { round: idx });
         }
     }
-
-    let selector_index =
-        column_index(&trace, "s_perm").ok_or_else(|| Error::MissingColumn("s_perm".to_string()))?;
-    let witness_index = column_index(&trace, "perm_hash")
-        .ok_or_else(|| Error::MissingColumn("perm_hash".to_string()))?;
-    let lookup_product = backend::compute_lookup_grand_product(
-        lde_columns[selector_index].as_slice(),
-        lde_columns[witness_index].as_slice(),
-        gamma,
-    );
-    if lookup_product != proof.lookup_grand_product {
-        return Err(Error::LookupGrandProductMismatch);
-    }
     transcript.append_message(
         LOOKUP_PRODUCT_DOMAIN,
         &proof.lookup_grand_product.to_le_bytes(),
     );
 
-    let (fri_layers, betas) = backend::fold_with_fri(
-        &lde_values,
-        params.fri.arity,
-        params.fri.max_reductions,
-        &mut transcript,
-    )?;
-    if fri_layers.len() != proof.fri_layers.len() {
+    if proof.fri_layers.is_empty() {
         return Err(Error::FriLayerLengthMismatch {
-            expected: fri_layers.len(),
+            expected: 1,
+            actual: 0,
+        });
+    }
+    let round_count = proof.fri_layers.len().saturating_sub(1);
+    let max_rounds = usize::try_from(params.fri.max_reductions).expect("FRI rounds fit usize");
+    if round_count > max_rounds {
+        return Err(Error::FriLayerLengthMismatch {
+            expected: max_rounds + 1,
             actual: proof.fri_layers.len(),
         });
     }
-    for (round, (&expected, actual_bytes)) in
-        fri_layers.iter().zip(proof.fri_layers.iter()).enumerate()
-    {
-        if field_norito::core::to_bytes(expected) != *actual_bytes {
-            return Err(Error::FriLayerMismatch { round });
-        }
+    let mut expected_betas = Vec::with_capacity(round_count);
+    for (round, root_bytes) in proof.fri_layers.iter().take(round_count).enumerate() {
+        let root =
+            field_norito::core::from_bytes(root_bytes).ok_or(Error::FriLayerMismatch { round })?;
+        transcript.append_fri_layer(round, root);
+        expected_betas.push(transcript.challenge_beta(round));
     }
+    let final_root = field_norito::core::from_bytes(
+        proof
+            .fri_layers
+            .last()
+            .expect("non-empty FRI layer commitments"),
+    )
+    .ok_or(Error::FriLayerMismatch { round: round_count })?;
+    transcript.append_fri_final(final_root);
 
-    if betas.len() != proof.betas.len() {
+    if expected_betas.len() != proof.betas.len() {
         return Err(Error::FriChallengeLengthMismatch {
-            expected: betas.len(),
+            expected: expected_betas.len(),
             actual: proof.betas.len(),
         });
     }
-    for (round, (&expected, &actual)) in betas.iter().zip(proof.betas.iter()).enumerate() {
+    for (round, (&expected, &actual)) in expected_betas.iter().zip(proof.betas.iter()).enumerate() {
         if expected != actual {
             return Err(Error::FriChallengeMismatch { round });
         }
     }
 
+    let lde_domain_size = 1usize
+        .checked_shl(params.lde_log_size)
+        .ok_or(Error::QueryIndexOverflow { index: usize::MAX })?;
     let expected_queries = backend::sample_queries(
-        lde_values.len(),
+        lde_domain_size,
         usize::try_from(params.fri.queries).expect("query count fits usize"),
         &mut transcript,
     );
@@ -401,6 +415,12 @@ pub fn verify_with_limits(
         return Err(Error::QueryCountMismatch {
             expected: expected_queries.len(),
             actual: proof.queries.len(),
+        });
+    }
+    if proof.fri_queries.len() != proof.queries.len() {
+        return Err(Error::QueryCountMismatch {
+            expected: proof.queries.len(),
+            actual: proof.fri_queries.len(),
         });
     }
     for (pos, (&expected_idx, query)) in expected_queries.iter().zip(&proof.queries).enumerate() {
@@ -411,28 +431,9 @@ pub fn verify_with_limits(
         if expected_index != query.index {
             return Err(Error::QueryMismatch { index: pos });
         }
-        let value = lde_values
-            .get(expected_idx)
-            .copied()
-            .ok_or(Error::QueryIndexOutOfRange {
-                index: expected_idx,
-                len: lde_values.len(),
-            })?;
-        if value != query.value {
-            return Err(Error::QueryMismatch { index: pos });
-        }
-
         let chunk_size = backend::lde_chunk_size(params.fri.arity).max(1);
         let leaf_index = expected_idx / chunk_size;
         let chunk_offset = expected_idx % chunk_size;
-        let chunk_start = leaf_index
-            .checked_mul(chunk_size)
-            .ok_or(Error::QueryMismatch { index: pos })?;
-        let chunk_end = chunk_start.saturating_add(chunk_size).min(lde_values.len());
-        let expected_chunk = &lde_values[chunk_start..chunk_end];
-        if query.chunk_values.as_slice() != expected_chunk {
-            return Err(Error::QueryMismatch { index: pos });
-        }
         if query.chunk_values.get(chunk_offset).copied() != Some(query.value) {
             return Err(Error::QueryMismatch { index: pos });
         }
@@ -440,6 +441,15 @@ pub fn verify_with_limits(
         if !backend::verify_merkle_path(lde_root, leaf, leaf_index, &query.merkle_path)? {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
+        verify_fri_query_chain(
+            pos,
+            expected_idx,
+            query.value,
+            &proof.fri_queries[pos],
+            &proof.fri_layers,
+            &proof.betas,
+            params.fri.arity,
+        )?;
     }
 
     Ok(())
@@ -450,13 +460,6 @@ fn enforce_verify_limits(
     proof: &Proof,
     limits: VerifyLimits,
 ) -> Result<()> {
-    if batch.transitions.len() > limits.max_transitions {
-        return Err(Error::VerifierLimitExceeded {
-            limit: "max_transitions",
-            actual: batch.transitions.len(),
-            max: limits.max_transitions,
-        });
-    }
     let batch_bytes = batch_size_hint(batch);
     if batch_bytes > limits.max_batch_bytes {
         return Err(Error::VerifierLimitExceeded {
@@ -495,7 +498,155 @@ fn enforce_verify_limits(
             });
         }
     }
+    if proof.fri_queries.len() > limits.max_queries {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_queries",
+            actual: proof.fri_queries.len(),
+            max: limits.max_queries,
+        });
+    }
+    for fri_query in &proof.fri_queries {
+        if fri_query.final_values.len() > limits.max_fri_round_values {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_fri_round_values",
+                actual: fri_query.final_values.len(),
+                max: limits.max_fri_round_values,
+            });
+        }
+        if fri_query.final_merkle_path.len() > limits.max_query_path_len {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual: fri_query.final_merkle_path.len(),
+                max: limits.max_query_path_len,
+            });
+        }
+        for round in &fri_query.rounds {
+            if round.values.len() > limits.max_fri_round_values {
+                return Err(Error::VerifierLimitExceeded {
+                    limit: "max_fri_round_values",
+                    actual: round.values.len(),
+                    max: limits.max_fri_round_values,
+                });
+            }
+            if round.merkle_path.len() > limits.max_query_path_len {
+                return Err(Error::VerifierLimitExceeded {
+                    limit: "max_query_path_len",
+                    actual: round.merkle_path.len(),
+                    max: limits.max_query_path_len,
+                });
+            }
+        }
+    }
     Ok(())
+}
+
+fn verify_fri_query_chain(
+    query_pos: usize,
+    initial_index: usize,
+    initial_value: u64,
+    fri_query: &FriQueryOpening,
+    fri_layers: &[[u8; 32]],
+    betas: &[u64],
+    arity: u32,
+) -> Result<()> {
+    let arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
+    if arity == 0 {
+        return Err(Error::FriArity(0));
+    }
+    if usize::try_from(fri_query.initial_index).ok() != Some(initial_index) {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    if fri_query.rounds.len() != betas.len() {
+        return Err(Error::FriChallengeLengthMismatch {
+            expected: betas.len(),
+            actual: fri_query.rounds.len(),
+        });
+    }
+    if fri_layers.len() != betas.len() + 1 {
+        return Err(Error::FriLayerLengthMismatch {
+            expected: betas.len() + 1,
+            actual: fri_layers.len(),
+        });
+    }
+
+    let mut index = initial_index;
+    let mut value = initial_value;
+    for (round, opening) in fri_query.rounds.iter().enumerate() {
+        if usize::try_from(opening.round).ok() != Some(round)
+            || usize::try_from(opening.index).ok() != Some(index)
+            || opening.values.is_empty()
+        {
+            return Err(Error::QueryMismatch { index: query_pos });
+        }
+        let leaf_index = index / arity;
+        let offset = index % arity;
+        if opening.values.get(offset).copied() != Some(value) {
+            return Err(Error::QueryMismatch { index: query_pos });
+        }
+        let root = field_norito::core::from_bytes(&fri_layers[round])
+            .ok_or(Error::FriLayerMismatch { round })?;
+        let leaf = backend::hash_fri_chunk(round, leaf_index, &opening.values)?;
+        if !backend::verify_merkle_path(root, leaf, leaf_index, &opening.merkle_path)? {
+            return Err(Error::QueryMerklePathMismatch { index: query_pos });
+        }
+        let folded = fold_fri_values(&opening.values, betas[round]);
+        if folded != opening.folded_value {
+            return Err(Error::QueryMismatch { index: query_pos });
+        }
+        index = leaf_index;
+        value = folded;
+    }
+
+    if usize::try_from(fri_query.final_index).ok() != Some(index)
+        || fri_query.final_values.is_empty()
+    {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    let final_leaf_index = index / arity;
+    let final_offset = index % arity;
+    if fri_query.final_values.get(final_offset).copied() != Some(value) {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    let final_round = betas.len();
+    let final_root = field_norito::core::from_bytes(&fri_layers[final_round])
+        .ok_or(Error::FriLayerMismatch { round: final_round })?;
+    let final_leaf =
+        backend::hash_fri_chunk(final_round, final_leaf_index, &fri_query.final_values)?;
+    if !backend::verify_merkle_path(
+        final_root,
+        final_leaf,
+        final_leaf_index,
+        &fri_query.final_merkle_path,
+    )? {
+        return Err(Error::QueryMerklePathMismatch { index: query_pos });
+    }
+    Ok(())
+}
+
+const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+
+fn fold_fri_values(values: &[u64], challenge: u64) -> u64 {
+    let mut acc = 0u64;
+    let mut power = 1u64;
+    for &value in values {
+        acc = add_mod(acc, mul_mod(value, power));
+        power = mul_mod(power, challenge);
+    }
+    acc
+}
+
+fn add_mod(a: u64, b: u64) -> u64 {
+    let sum = a.wrapping_add(b);
+    if sum >= GOLDILOCKS_MODULUS {
+        sum - GOLDILOCKS_MODULUS
+    } else {
+        sum
+    }
+}
+
+fn mul_mod(a: u64, b: u64) -> u64 {
+    let product = u128::from(a) * u128::from(b);
+    u64::try_from(product % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
 }
 
 fn batch_size_hint(batch: &TransitionBatch) -> usize {
@@ -550,6 +701,12 @@ fn materialise_proof(
             actual: artifact.query_paths.len(),
         });
     }
+    if artifact.query_openings.len() != artifact.fri_query_openings.len() {
+        return Err(Error::QueryCountMismatch {
+            expected: artifact.query_openings.len(),
+            actual: artifact.fri_query_openings.len(),
+        });
+    }
     let fri_layers = artifact
         .fri_layers
         .into_iter()
@@ -583,6 +740,7 @@ fn materialise_proof(
         betas: artifact.fri_betas,
         fri_layers,
         queries,
+        fri_queries: artifact.fri_query_openings,
     })
 }
 
@@ -718,6 +876,15 @@ mod field_norito {
             out[..8].copy_from_slice(&value.to_le_bytes());
             out
         }
+
+        pub fn from_bytes(bytes: &[u8; 32]) -> Option<u64> {
+            if bytes[8..].iter().any(|byte| *byte != 0) {
+                return None;
+            }
+            Some(u64::from_le_bytes(
+                bytes[..8].try_into().expect("slice length is 8"),
+            ))
+        }
     }
 }
 
@@ -847,7 +1014,10 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.trace_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::TraceRootMismatch));
+        assert!(matches!(
+            err,
+            Error::TraceRootMismatch | Error::LookupChallengeMismatch
+        ));
     }
 
     #[test]
@@ -981,7 +1151,7 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_grand_product = proof.lookup_grand_product.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupGrandProductMismatch));
+        assert!(matches!(err, Error::FriChallengeMismatch { .. }));
     }
 
     #[test]
@@ -991,7 +1161,10 @@ mod tests {
         let mut proof = prover.prove(&batch).unwrap();
         proof.lookup_root[0] ^= 0xAA;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::LookupRootMismatch));
+        assert!(matches!(
+            err,
+            Error::LookupRootMismatch | Error::LookupChallengeMismatch
+        ));
     }
 
     #[test]
@@ -1019,7 +1192,10 @@ mod tests {
         );
         proof.fri_layers[0][0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::FriLayerMismatch { round: 0 }));
+        assert!(matches!(
+            err,
+            Error::FriLayerMismatch { round: 0 } | Error::FriChallengeMismatch { round: 0 }
+        ));
     }
 
     #[test]
@@ -1073,7 +1249,10 @@ mod tests {
             .expect("expected query chunk values");
         *chunk_value = chunk_value.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::QueryMismatch { .. }));
+        assert!(matches!(
+            err,
+            Error::QueryMismatch { .. } | Error::QueryMerklePathMismatch { .. }
+        ));
     }
 
     #[test]
@@ -1095,31 +1274,21 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_batches_over_default_replay_limit() {
+    fn verify_rejects_mismatched_large_batch_by_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let small_batch = sample_batch();
         let proof = prover.prove(&small_batch).unwrap();
         let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
         let err = verify(&large_batch, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::VerifierLimitExceeded {
-                limit: "max_transitions",
-                ..
-            }
-        ));
+        assert!(matches!(err, Error::CommitmentMismatch));
     }
 
     #[test]
-    fn verify_with_limits_allows_explicit_replay_window() {
+    fn verify_allows_large_batch_without_replay_transition_window() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
         let proof = prover.prove(&batch).unwrap();
-        let limits = VerifyLimits {
-            max_transitions: DEFAULT_MAX_VERIFY_TRANSITIONS + 1,
-            ..VerifyLimits::default()
-        };
-        verify_with_limits(&batch, &proof, limits).unwrap();
+        verify(&batch, &proof).unwrap();
     }
 
     #[test]
@@ -1161,6 +1330,19 @@ mod tests {
                 value: 123,
                 chunk_values: vec![123],
                 merkle_path: Vec::new(),
+            }],
+            fri_queries: vec![FriQueryOpening {
+                initial_index: 0,
+                rounds: vec![FriRoundOpening {
+                    round: 0,
+                    index: 0,
+                    values: vec![123],
+                    folded_value: 123,
+                    merkle_path: Vec::new(),
+                }],
+                final_index: 0,
+                final_values: vec![123],
+                final_merkle_path: Vec::new(),
             }],
         };
         let first = norito::core::to_bytes(&proof).expect("encode proof");

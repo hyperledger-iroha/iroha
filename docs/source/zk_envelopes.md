@@ -149,14 +149,15 @@ Example (JSON-like, annotated)
 ## STARK: FRI-Style Multi-Fold Envelope
 
 Hashing and transcript
-- Leaves: `LEAF || u64_le(value)` hashed with SHA-256.
-- Internal nodes: SHA-256(left || right).
+- Leaves: SHA-256 uses `LEAF || u64_le(value)`; Poseidon2 uses the
+  `iroha:zk:stark:leaf:v1` domain over the field value.
+- Internal nodes: SHA-256(left || right), or Poseidon2 under
+  `iroha:zk:stark:node:v1` for Poseidon2 envelopes.
 - Per-layer challenge `r_k = H(label || params || root_k)` mapped to field, where `params` =
   `version || n_log2 || blowup_log2 || fold_arity || merkle_arity || hash_fn || queries ||
   len(domain_tag) || domain_tag`. The same prefix is used for query sampling.
-- Field: Goldilocks-like prime `p = 2^64 - 2^32 + 1` (test backend). Hash selector `hash_fn`
-  currently supports SHA-256 (`1`); Poseidon2 (`2`) is reserved and rejected by the native
-  verifier.
+- Field: Goldilocks-like prime `p = 2^64 - 2^32 + 1`. Hash selector `hash_fn`
+  supports SHA-256 (`1`) and Poseidon2 (`2`).
 
 Wire types (as implemented in `iroha_core::zk_stark`)
 
@@ -167,7 +168,7 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `fold_arity: u8` — FRI arity (power-of-two; current backend supports 2)
   - `queries: u16` — expected query count (must match `proof.queries.len()`)
   - `merkle_arity: u8` — Merkle branching factor (binary only in v1)
-  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = Poseidon2` reserved)
+  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = Poseidon2`)
   - `domain_tag: String` — domain separator baked into the transcript/sampler
 
 - `MerklePath`
@@ -229,6 +230,9 @@ Verifier behavior (native STARK)
 - If `comp_root` present, verifies the composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.
+- `OpenVerifyEnvelope` STARK verification requires `comp_root` and `comp_values`; the
+  high-level verifier reconstructs the V1 binding-AIR terms from backend, circuit id,
+  VK hash, schema descriptor, and public input columns before accepting the raw FRI proof.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
   unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
@@ -259,7 +263,8 @@ Verifier behavior (native STARK)
 	  containing the expected `circuit_id` and the FRI parameter set (`n_log2`, `blowup_log2`,
 	  `fold_arity`, `queries`, `merkle_arity`, `hash_fn`).
 	- The verifier enforces that the outer wrapper metadata is bound into the inner STARK
-	  envelope (via `domain_tag`) and that the inner envelope parameters match the VK payload.
+	  envelope (via `domain_tag`), that the inner envelope parameters match the VK payload,
+	  and that the composition terms match the verifier-reconstructed V1 binding AIR.
 
 	Example (JSON-like, annotated)
 	```jsonc
