@@ -24511,9 +24511,12 @@ Last updated: 2026-04-18
 - Restored the lock-override rule for Sumeragi lock checks: a candidate QC now satisfies the local lock when it either structurally extends `locked_qc` or carries a strictly newer view than `locked_qc.view`.
 - Threaded the predicate through incoming proposal highest-QC validation, precommit vote filtering, precommit-QC aggregation/processing, local precommit emission, and block-sync QC prefilters so divergent higher-view branches are not dropped before they can restore liveness.
 - Same-view and older-view divergent branches still fail closed through the structural ancestry path.
+- Expanded focused regression coverage for missing locked-payload cases, block-sync QC prefilters, local precommit emission, inbound precommit vote filtering, and cached precommit-vote pruning.
 - Focused validation completed:
   - `cargo test -p iroha_core qc_satisfies_locked_accepts_divergent_newer_view -- --nocapture`
   - `cargo test -p iroha_core --lib newer_view -- --nocapture`
   - `cargo test -p iroha_core --lib qc_satisfies_locked_rejects_divergent_same_view -- --nocapture`
+  - `cargo test -p iroha_core --lib divergent_same_view -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_qc_lock_override_handles_missing_locked_payload -- --nocapture`
   - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
   - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.
