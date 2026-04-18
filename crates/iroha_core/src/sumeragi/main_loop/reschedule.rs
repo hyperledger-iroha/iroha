@@ -1572,6 +1572,12 @@ impl Actor {
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = !effective_has_reschedule_votes;
+        #[cfg(test)]
+        if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+            eprintln!(
+                "inner {block_hash} keep_qc={keep_commit_qc} manifest={manifest_gate_pending} has={has_reschedule_votes} same={same_slot_vote_backed_evidence} owner={frontier_slot_owner_was_active} drop={drop_pending}"
+            );
+        }
         let authoritative_payload_present = !drop_pending
             && Self::payload_available_for_da(
                 &self.subsystems.da_rbc.rbc.sessions,
@@ -1705,6 +1711,10 @@ impl Actor {
                 )
                 .is_empty()
         {
+            #[cfg(test)]
+            if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+                eprintln!("noop targets empty {block_hash}");
+            }
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =
@@ -1811,6 +1821,17 @@ impl Actor {
             || rebroadcast.block_sync
             || rebroadcast.block
             || rebroadcast.missing_block_fetch;
+        #[cfg(test)]
+        if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+            eprintln!(
+                "action {block_hash} action={action_taken} drop={drop_pending} requeued={requeued} emitted={emitted_local_vote} local={} votes={} block={} sync={} fetch={}",
+                rebroadcast.local_vote,
+                rebroadcast.votes,
+                rebroadcast.block,
+                rebroadcast.block_sync,
+                rebroadcast.missing_block_fetch
+            );
+        }
         if !action_taken {
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
