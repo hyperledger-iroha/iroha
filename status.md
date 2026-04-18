@@ -1,6 +1,15 @@
 # Status
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
+
+## 2026-04-17 Follow-up: AXT golden fixtures resynced with current handle binding
+- `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current descriptor/handle/policy Norito bytes again, including the handle's refreshed descriptor binding and header bytes after the bare-payload binding change.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_policy.rs` now derives the fixture intent's `from` account from the decoded fixture handle instead of an older hardcoded account literal, so the state-level handle check stays aligned with the canonical account encoding embedded in the golden fixture.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=/tmp/iroha-axt-golden-target cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ivm-core-host-policy-target cargo test -p ivm --test core_host_policy core_host_enforces_fixture_snapshot_fields -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
 
 ## 2026-04-17 Follow-up: `SYSCALL_NAME_DECODE` reserved-delimiter regression test corrected
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_name_decode_syscall.rs` now exercises `SYSCALL_NAME_DECODE` with `alice@banka` for the reserved-delimiter rejection path. The previous fixture used `not-a-norito-name`, but hyphens are valid `Name` characters and are already accepted across `iroha_data_model`.
@@ -24488,3 +24497,14 @@ Last updated: 2026-04-17
   - `git diff --check`
   - `cargo test -p iroha_core --features app_api --lib block::commit::axt_validation_tests -- --nocapture`
   - `cargo test -p iroha_core --lib block::tests -- --nocapture`
+
+## 2026-04-18 Sumeragi Lock-Override Liveness Fix
+- Restored the lock-override rule for Sumeragi lock checks: a candidate QC now satisfies the local lock when it either structurally extends `locked_qc` or carries a strictly newer view than `locked_qc.view`.
+- Threaded the predicate through incoming proposal highest-QC validation, precommit vote filtering, precommit-QC aggregation/processing, local precommit emission, and block-sync QC prefilters so divergent higher-view branches are not dropped before they can restore liveness.
+- Same-view and older-view divergent branches still fail closed through the structural ancestry path.
+- Focused validation completed:
+  - `cargo test -p iroha_core qc_satisfies_locked_accepts_divergent_newer_view -- --nocapture`
+  - `cargo test -p iroha_core --lib newer_view -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_satisfies_locked_rejects_divergent_same_view -- --nocapture`
+  - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
+  - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.

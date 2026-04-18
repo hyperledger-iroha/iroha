@@ -84,7 +84,7 @@ use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
     Actor, BlockMessage,
     background::dispatch_background_request,
-    locked_qc::qc_extends_locked_with_lookup,
+    locked_qc::{qc_extends_locked_with_lookup, qc_satisfies_locked_with_lookup},
     vrf::VrfLocalState,
     *,
 };
@@ -25419,6 +25419,73 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn try_form_qc_from_votes_allows_newer_view_lock_override() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 2, None);
+    actor
+        .kura
+        .store_block(locked_block.clone())
+        .expect("store locked block");
+    actor
+        .kura
+        .store_block(conflicting_block.clone())
+        .expect("store conflicting block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_block.hash());
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_block.hash(),
+        height: 1,
+        view: 1,
+        epoch,
+    });
+    super::status::set_locked_qc(1, 1, Some(locked_block.hash()));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let required = topology.min_votes_for_commit();
+    let height = 2;
+    let view = 2;
+
+    for signer_idx in 0..required {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: conflicting_block.hash(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    assert!(
+        actor.qc_cache.contains_key(&(
+            Phase::Commit,
+            conflicting_block.hash(),
+            height,
+            view,
+            epoch
+        )),
+        "newer-view conflicting precommit QC should aggregate via lock override"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn try_form_qc_from_votes_keeps_commit_qc_when_higher_new_view_quorum_exists() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
@@ -46002,6 +46069,218 @@ async fn frontier_recovery_allows_cleanup_after_same_height_rbc_sender_activity_
         "stale same-height RBC sender cooldown state may remain cached because committed + 1 no longer uses cleanup-based purge"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_commit_qc_repair_remains_recent()
+ {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
+    let window = actor.frontier_recovery_window();
+    let stale = now
+        .checked_sub(
+            super::saturating_mul_duration(window, 3).saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let block = sample_block(height, view, Some(genesis_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            now,
+        ),
+        "test setup should seed the exact frontier slot for known-block commit-QC repair"
+    );
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_requested: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_dependency_progress: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: stale,
+        last_progress_at: stale,
+        last_dependency_progress_at: Some(stale),
+        last_action_at: None,
+        no_progress_windows: 2,
+        cleanup_done: false,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let advance =
+        actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
+    assert_eq!(
+        advance,
+        super::FrontierRecoveryAdvance::None,
+        "recent same-slot known-block commit-QC repair should suppress quorum-timeout cleanup"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && !state.cleanup_done
+                && state.last_action_at.is_none()
+                && state.last_cause == "quorum_timeout"
+        }),
+        "cleanup suppression should preserve the active quorum-timeout frontier owner"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "cleanup suppression must keep the exact-slot known block"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "cleanup suppression must keep the same-slot missing commit-QC repair request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_recovery_suppresses_rotation_while_same_slot_missing_commit_qc_repair_remains_recent()
+ {
+    let _view_change_guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
+    let window = actor.frontier_recovery_window();
+    let stale = now
+        .checked_sub(
+            super::saturating_mul_duration(window, 3).saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let block = sample_block(height, view, Some(genesis_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            now,
+        ),
+        "test setup should seed the exact frontier slot for known-block commit-QC repair"
+    );
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_requested: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_dependency_progress: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: stale,
+        last_progress_at: stale,
+        last_dependency_progress_at: Some(stale),
+        last_action_at: Some(stale),
+        no_progress_windows: 3,
+        cleanup_done: true,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let before = super::status::snapshot();
+    let advance =
+        actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
+    let after = super::status::snapshot();
+    assert_eq!(
+        advance,
+        super::FrontierRecoveryAdvance::None,
+        "recent same-slot known-block commit-QC repair should suppress quorum-timeout rotation"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_rotation_view.is_none()
+                && state.last_cause == "quorum_timeout"
+        }),
+        "rotation suppression should preserve the armed quorum-timeout frontier owner"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "suppressed rotation must keep the current view"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "rotation suppression must keep the same-slot missing commit-QC repair request"
+    );
+    assert_eq!(
+        after.view_change_causes.quorum_timeout_total,
+        before.view_change_causes.quorum_timeout_total,
+        "same-slot known-block commit-QC repair must not trigger an extra quorum-timeout view change"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
 
@@ -68859,7 +69138,6 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         since: first_start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(first_now);
-    actor.slot_tracker.proposals_seen.clear();
 
     assert!(
         actor.force_view_change_if_idle(first_now),
@@ -71398,7 +71676,7 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_directly() {
+async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -71457,27 +71735,24 @@ async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_directly() 
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "empty contiguous-frontier missing_qc should rotate directly instead of arming unified frontier recovery"
+        !actor.force_view_change_if_idle(now),
+        "empty contiguous-frontier missing_qc should arm unified frontier recovery before rotating"
     );
     let after = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "direct empty-frontier missing_qc should advance the view immediately"
+        Some(current_view),
+        "unified frontier recovery should keep the current view until recovery windows are exhausted"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "direct empty-frontier missing_qc should count one MissingQc rotation"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "arming unified frontier recovery should not count a MissingQc rotation"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .forced_view_after_timeout
-            .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
-        "direct empty-frontier missing_qc should install the next forced-view marker"
+        actor.frontier_recovery.is_some_and(
+            |state| state.frontier_height == height && state.last_cause == "missing_qc"
+        ),
+        "empty contiguous-frontier missing_qc should install unified frontier recovery state"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -97966,7 +98241,13 @@ async fn purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposa
     let proposal = Actor::build_consensus_proposal(
         &block,
         payload_hash,
-        sample_qc_ref(height.saturating_sub(1), view),
+        QcHeaderRef {
+            height: height.saturating_sub(1),
+            view: 0,
+            epoch: actor.epoch_for_height(height.saturating_sub(1)),
+            subject_block_hash: genesis_hash,
+            phase: Phase::Commit,
+        },
         0,
         view,
         actor.epoch_for_height(height),
@@ -117406,6 +117687,65 @@ async fn highest_qc_extends_locked_rejects_missing_highest() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn highest_qc_extends_locked_accepts_divergent_newer_view() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 1, None);
+    let locked_hash = locked_block.hash();
+    let divergent_block = sample_block(2, 2, None);
+    let divergent_hash = divergent_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    actor
+        .kura
+        .store_block(divergent_block)
+        .expect("store divergent block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    let lock = QcHeaderRef {
+        height: 1,
+        view: 1,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let highest = QcHeaderRef {
+        height: 2,
+        view: 2,
+        epoch,
+        subject_block_hash: divergent_hash,
+        phase: Phase::Prepare,
+    };
+
+    assert!(
+        !qc_extends_locked_with_lookup(lock, highest, |hash, lookup_height| {
+            actor.parent_hash_for(hash, lookup_height)
+        }),
+        "test setup should use a structurally divergent branch"
+    );
+    assert!(
+        actor.highest_qc_extends_locked(highest),
+        "newer-view highest QC must override an older divergent lock"
+    );
+    assert!(
+        actor.precommit_qc_extends_locked(Phase::Commit, divergent_hash, 2, 2, epoch),
+        "newer-view precommit QC must also override an older divergent lock"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
 #[test]
 fn qc_extends_locked_accepts_direct_parent() {
     let locked = sample_qc_ref(5, 1);
@@ -117573,6 +117913,28 @@ fn qc_extends_locked_rejects_height_regression_case() {
     let locked = sample_qc_ref(5, 1);
     let highest = sample_qc_ref(4, 0);
     assert!(!qc_extends_locked_with_lookup(
+        locked,
+        highest,
+        |_hash, _height| None
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_accepts_divergent_newer_view() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 2);
+    assert!(qc_satisfies_locked_with_lookup(
+        locked,
+        highest,
+        |_hash, _height| None
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_rejects_divergent_same_view() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 1);
+    assert!(!qc_satisfies_locked_with_lookup(
         locked,
         highest,
         |_hash, _height| None

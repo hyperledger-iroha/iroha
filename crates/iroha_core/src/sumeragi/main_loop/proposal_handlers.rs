@@ -1161,6 +1161,7 @@ impl Actor {
             )
         };
         if updated {
+            self.note_authoritative_slot_owner(height, view, block_hash);
             self.clear_missing_block_request(
                 &block_hash,
                 MissingBlockClearReason::PayloadAvailable,
