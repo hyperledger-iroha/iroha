@@ -14,9 +14,17 @@ Last updated: 2026-04-18
 - The older `iroha_crypto` seeded ML-DSA-65 helper now uses drop-based
   zeroization for polynomial and seed buffers, while keeping the legacy HKDF
   label stable for existing seeded keys.
+- Focused `soranet_pq` coverage now exercises the public deterministic RNG
+  constructor, ML-KEM seeded personalization changes, ML-KEM decapsulation
+  length rejection, ML-DSA deterministic signing replay, ML-DSA key/signature
+  length rejection, and C FFI invalid-suite/null-pointer/tampered-signature
+  branches.
 - Focused validation for this slice:
-  - `cargo test -p soranet_pq mlkem -- --nocapture`
-  - `cargo test -p soranet_pq mldsa -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p soranet_pq -- --nocapture`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo test -p iroha_crypto --test mldsa_keypair --test mldsa_multihash -- --nocapture`
 
 ## 2026-04-18 Follow-up: IVM query-envelope linked-domain test resync
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_execute_query_envelope.rs`
@@ -44,10 +52,10 @@ Last updated: 2026-04-18
   and
   `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/tests/fixtures/pq_vectors.json`
   were refreshed to match that behavior.
-- The remaining pqcrypto backend limitation is explicit: the 0.1.x bindings
-  still do not expose the seeded ML-KEM/ML-DSA derand hooks needed for complete
-  RNG injection, so code and docs keep the local pure-Rust scalar backend as
-  the outstanding replacement step.
+- The pqcrypto wrapper limitation is explicit: the 0.1.x safe Rust bindings do
+  not expose the seeded ML-KEM/ML-DSA derand hooks, so `soranet_pq` calls the
+  PQClean hooks directly and keeps the local pure-Rust scalar backend as the
+  outstanding replacement step.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
@@ -284,11 +292,14 @@ Last updated: 2026-04-18
 - Coverage follow-up: FASTPQ now explicitly tests backend-artifact materialisation mapping and count mismatches, malformed commitment-root encodings, transition-count and batch-byte guardrails, FRI layer-count limits, extra AIR/FRI query vectors, unsupported protocol/unknown proof-parameter rejection, malformed FRI layer roots, malformed query/AIR/FRI opening shapes, AIR challenge value rejection, zero FRI arity rejection, extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR/query/FRI Merkle-path and query-count limits, query-chunk limits, FRI round/final-value limits, zero LDE domain-size rejection, folded/final FRI value tampering, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/VK-hash/missing-VK/inner-parameter/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
 - Additional FASTPQ proof-helper coverage now pins explicit public-input root preservation, direct `PublicIO` mismatch error reporting, permission-root/transaction-set hash domain separation, grant/revoke permission hash sorting, invalid role/permission id rejection, verifier batch-size accounting for metadata and role payloads, and field-Norito decode rejection for non-canonical tail bytes.
 - The latest FASTPQ proof-helper tests also cover terminal FRI query-chain success/failure without fold rounds and Goldilocks modular folding wraparound.
+- Additional FASTPQ helper coverage now covers canonical parameter-version catalogue ordering and non-catalogue rejection, role-grant/revoke operation-size hints, order-sensitive fallback roots, multi-query materialisation, and single-round FRI query-chain accept/reject paths.
+- Further FASTPQ helper coverage now covers `canonical_with_modes` unknown-parameter rejection, materialised commitment/PublicIO preservation, exact-boundary `VerifyLimits` acceptance, AIR next-row/composition path limit rejection, and FRI query-chain nonzero final-offset success/failure.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`84 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_ -- --nocapture`

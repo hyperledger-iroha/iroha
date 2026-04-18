@@ -400,9 +400,28 @@ pub unsafe extern "C" fn soranet_mldsa_verify(
 
 #[cfg(test)]
 mod tests {
+    use core::ptr;
+
     use pqcrypto_traits::sign::VerificationError;
 
     use super::*;
+
+    fn ffi_mldsa_keypair(suite: MlDsaSuite) -> (Vec<u8>, Vec<u8>) {
+        let suite_id = c_uint::from(suite.suite_id());
+        let mut public_key = vec![0u8; suite.public_key_len()];
+        let mut secret_key = vec![0u8; suite.secret_key_len()];
+        let rc = unsafe {
+            soranet_mldsa_generate_keypair(
+                suite_id,
+                public_key.as_mut_ptr(),
+                public_key.len() as c_ulong,
+                secret_key.as_mut_ptr(),
+                secret_key.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, 0);
+        (public_key, secret_key)
+    }
 
     #[test]
     fn ffi_mlkem_roundtrip() {
@@ -454,21 +473,64 @@ mod tests {
     }
 
     #[test]
-    fn ffi_mldsa_sign_and_verify() {
-        let suite = MlDsaSuite::MlDsa44;
-        let suite_id = c_uint::from(suite.suite_id());
-        let mut public_key = vec![0u8; suite.public_key_len()];
-        let mut secret_key = vec![0u8; suite.secret_key_len()];
+    fn ffi_mlkem_rejects_invalid_suite_and_lengths() {
+        let mut public_key_len = 0;
+        let mut secret_key_len = 0;
+        let mut ciphertext_len = 0;
+        let mut shared_secret_len = 0;
         let rc = unsafe {
-            soranet_mldsa_generate_keypair(
-                suite_id,
+            soranet_mlkem_parameters(
+                0xFF,
+                &mut public_key_len,
+                &mut secret_key_len,
+                &mut ciphertext_len,
+                &mut shared_secret_len,
+            )
+        };
+        assert_eq!(rc, ERR_INVALID_SUITE);
+
+        let suite = MlKemSuite::MlKem512;
+        let params = suite.parameters();
+        let mut public_key = vec![0u8; params.public_key - 1];
+        let mut secret_key = vec![0u8; params.secret_key];
+        let rc = unsafe {
+            soranet_mlkem_generate_keypair(
+                c_uint::from(suite.kem_id()),
                 public_key.as_mut_ptr(),
                 public_key.len() as c_ulong,
                 secret_key.as_mut_ptr(),
                 secret_key.len() as c_ulong,
             )
         };
-        assert_eq!(rc, 0);
+        assert_eq!(rc, ERR_LENGTH_MISMATCH);
+    }
+
+    #[test]
+    fn ffi_mlkem_rejects_null_nonempty_input() {
+        let suite = MlKemSuite::MlKem512;
+        let params = suite.parameters();
+        let mut ciphertext = vec![0u8; params.ciphertext];
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_encapsulate(
+                c_uint::from(suite.kem_id()),
+                ptr::null(),
+                params.public_key as c_ulong,
+                ciphertext.as_mut_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn ffi_mldsa_sign_and_verify() {
+        let suite = MlDsaSuite::MlDsa44;
+        let suite_id = c_uint::from(suite.suite_id());
+        let (public_key, secret_key) = ffi_mldsa_keypair(suite);
 
         let message = b"pq ffi smoke";
         let mut signature = vec![0u8; suite.signature_len()];
@@ -497,6 +559,107 @@ mod tests {
             )
         };
         assert_eq!(rc, 0);
+    }
+
+    #[test]
+    fn ffi_mldsa_rejects_invalid_suite_and_null_outputs() {
+        let mut public_key_len = 0;
+        let mut secret_key_len = 0;
+        let mut signature_len = 0;
+        let rc = unsafe {
+            soranet_mldsa_parameters(
+                0xFF,
+                &mut public_key_len,
+                &mut secret_key_len,
+                &mut signature_len,
+            )
+        };
+        assert_eq!(rc, ERR_INVALID_SUITE);
+
+        let rc = unsafe {
+            soranet_mldsa_parameters(
+                c_uint::from(MlDsaSuite::MlDsa44.suite_id()),
+                ptr::null_mut(),
+                &mut secret_key_len,
+                &mut signature_len,
+            )
+        };
+        assert_eq!(rc, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn ffi_mldsa_sign_accepts_null_zero_length_message() {
+        let suite = MlDsaSuite::MlDsa44;
+        let (_, secret_key) = ffi_mldsa_keypair(suite);
+        let mut signature = vec![0u8; suite.signature_len()];
+
+        let rc = unsafe {
+            soranet_mldsa_sign(
+                c_uint::from(suite.suite_id()),
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ptr::null(),
+                0,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, 0);
+    }
+
+    #[test]
+    fn ffi_mldsa_sign_rejects_null_nonempty_message() {
+        let suite = MlDsaSuite::MlDsa44;
+        let (_, secret_key) = ffi_mldsa_keypair(suite);
+        let mut signature = vec![0u8; suite.signature_len()];
+
+        let rc = unsafe {
+            soranet_mldsa_sign(
+                c_uint::from(suite.suite_id()),
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ptr::null(),
+                1,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn ffi_mldsa_verify_rejects_tampered_signature() {
+        let suite = MlDsaSuite::MlDsa44;
+        let suite_id = c_uint::from(suite.suite_id());
+        let (public_key, secret_key) = ffi_mldsa_keypair(suite);
+        let message = b"pq ffi tamper";
+        let mut signature = vec![0u8; suite.signature_len()];
+        let rc = unsafe {
+            soranet_mldsa_sign(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, 0);
+
+        signature[0] ^= 0x01;
+        let rc = unsafe {
+            soranet_mldsa_verify(
+                suite_id,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc, ERR_VERIFICATION_FAILED);
     }
 
     #[test]

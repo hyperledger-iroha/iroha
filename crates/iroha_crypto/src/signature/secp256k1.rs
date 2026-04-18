@@ -316,7 +316,9 @@ mod test {
 
     use super::*;
 
+    #[cfg(feature = "crypto-parity-tests")]
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
+    #[cfg(feature = "crypto-parity-tests")]
     const SIGNATURE_1: &str = "0aab347be3530a3fd7d91c354956561101e6f273b8a1ea3d414f82fbd5939db34b99c54c16c45bf4cde8193b58d718e7efa8c055e7add7d9c9cbe8935e849200";
     const PRIVATE_KEY: &str = "e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713";
     const PUBLIC_KEY: &str = "0242c1e1f775237a26da4fd51b8d75ee2709711f6e90303e511169a324ef0789c0";

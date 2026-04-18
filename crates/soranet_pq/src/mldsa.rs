@@ -340,7 +340,7 @@ pub fn verify_mldsa(
 
 #[cfg(test)]
 mod tests {
-    use crate::hedged_chacha20_rng;
+    use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
 
     use super::*;
 
@@ -399,6 +399,112 @@ mod tests {
 
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn seeded_keypair_personalization_changes_output() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let seed = HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0xD8); 32]);
+            let first = generate_mldsa_keypair_from_seed(suite, seed.clone(), b"seeded-keygen-a")
+                .expect("seeded keypair generation should succeed");
+            let second = generate_mldsa_keypair_from_seed(suite, seed, b"seeded-keygen-b")
+                .expect("seeded keypair generation should succeed");
+
+            assert_ne!(first.public_key(), second.public_key());
+            assert_ne!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn deterministic_signing_replays_with_same_seed() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xE1; 32]),
+            b"deterministic-sign-keygen",
+        )
+        .expect("seeded keypair generation should succeed");
+        let mut first_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE2; 32]),
+            b"deterministic-sign",
+        );
+        let mut second_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE2; 32]),
+            b"deterministic-sign",
+        );
+        let context = b"soranet-pq:deterministic-sign";
+        let message = b"repeatable ML-DSA signature";
+
+        let first = sign_mldsa(
+            suite,
+            keypair.secret_key(),
+            context,
+            message,
+            &mut first_rng,
+        )
+        .expect("signature succeeds");
+        let second = sign_mldsa(
+            suite,
+            keypair.secret_key(),
+            context,
+            message,
+            &mut second_rng,
+        )
+        .expect("signature succeeds");
+
+        assert_eq!(first.as_bytes(), second.as_bytes());
+        verify_mldsa(
+            suite,
+            keypair.public_key(),
+            context,
+            message,
+            first.as_bytes(),
+        )
+        .expect("deterministic signature verifies");
+    }
+
+    #[test]
+    fn sign_rejects_invalid_secret_key_length() {
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE3; 32]),
+            b"invalid-secret-sign",
+        );
+        let err = sign_mldsa(MlDsaSuite::MlDsa44, &[0u8; 8], b"", b"message", &mut rng)
+            .expect_err("short secret must fail");
+
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_invalid_public_key_and_signature_lengths() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xE4; 32]),
+            b"invalid-verify-keygen",
+        )
+        .expect("seeded keypair generation should succeed");
+
+        let err = verify_mldsa(suite, &[0u8; 8], b"", b"message", &[0u8; 1])
+            .expect_err("short public key must fail");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("public key")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = verify_mldsa(suite, keypair.public_key(), b"", b"message", &[0u8; 8])
+            .expect_err("short signature must fail");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("signature")),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 

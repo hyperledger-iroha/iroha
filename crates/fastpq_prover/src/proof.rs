@@ -1436,6 +1436,44 @@ mod tests {
     }
 
     #[test]
+    fn operation_size_hint_counts_role_grant_and_revoke_payloads() {
+        let role_id = vec![0x11; 3];
+        let permission_id = vec![0x22; 4];
+        let expected = role_id.len() + permission_id.len();
+
+        assert_eq!(
+            operation_size_hint(&OperationKind::RoleGrant {
+                role_id: role_id.clone(),
+                permission_id: permission_id.clone(),
+                epoch: 1,
+            }),
+            expected
+        );
+        assert_eq!(
+            operation_size_hint(&OperationKind::RoleRevoke {
+                role_id,
+                permission_id,
+                epoch: 2,
+            }),
+            expected
+        );
+    }
+
+    #[test]
+    fn fallback_roots_are_order_and_input_sensitive() {
+        let first = [0x11; 32];
+        let second = [0x22; 32];
+        assert_ne!(
+            perm_root_from_permission_hashes(&[first, second]),
+            perm_root_from_permission_hashes(&[second, first])
+        );
+        assert_ne!(
+            tx_set_hash_from_ordering(&Hash::new(b"ordering-a")),
+            tx_set_hash_from_ordering(&Hash::new(b"ordering-b"))
+        );
+    }
+
+    #[test]
     fn prove_and_verify_roundtrip() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
@@ -1450,11 +1488,41 @@ mod tests {
     }
 
     #[test]
+    fn canonical_with_modes_rejects_unknown_parameter() {
+        let err = Prover::canonical_with_modes(
+            "does-not-exist",
+            ExecutionMode::Cpu,
+            PoseidonExecutionMode::Cpu,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::UnknownParameter(parameter) if parameter == "does-not-exist"
+        ));
+    }
+
+    #[test]
     fn canonical_with_execution_mode_overrides_backend() {
         let prover =
             Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
                 .expect("prover");
         assert_eq!(prover.backend.execution_mode(), ExecutionMode::Cpu);
+    }
+
+    #[test]
+    fn canonical_params_versions_track_catalogue_order() {
+        let sets = Prover::canonical_parameter_sets();
+        assert_eq!(sets, CANONICAL_PARAMETER_SETS.as_slice());
+        for (idx, params) in sets.iter().enumerate() {
+            assert_eq!(
+                canonical_params_version(params),
+                Some(u16::try_from(idx + 1).expect("test catalogue version fits u16"))
+            );
+        }
+
+        let mut custom = sets[0];
+        custom.name = "fastpq-local-test-parameter";
+        assert_eq!(canonical_params_version(&custom), None);
     }
 
     #[test]
@@ -1479,6 +1547,64 @@ mod tests {
         assert_eq!(proof.queries[0].chunk_values, vec![20]);
         assert_eq!(proof.air_openings.len(), 1);
         assert_eq!(proof.fri_queries.len(), 1);
+    }
+
+    #[test]
+    fn materialise_proof_preserves_commitment_and_public_io() {
+        let commitment = Hash::new(b"explicit-materialise-commitment");
+        let public_io = PublicIO {
+            dsid: [0x01; 16],
+            slot: 17,
+            old_root: [0x02; 32],
+            new_root: [0x03; 32],
+            perm_root: [0x04; 32],
+            tx_set_hash: [0x05; 32],
+            ordering_hash: [0x06; 32],
+            permission_hashes: vec![[0x07; 32], [0x08; 32]],
+        };
+
+        let proof = materialise_proof(commitment, public_io.clone(), sample_backend_artifact(), 11)
+            .expect("materialise proof");
+
+        assert_eq!(proof.commitment(), commitment);
+        assert_eq!(proof.trace_commitment, commitment);
+        assert_eq!(proof.public_io, public_io);
+        assert_eq!(proof.params_version, 11);
+    }
+
+    #[test]
+    fn materialise_proof_preserves_multiple_query_openings_and_paths() {
+        let mut artifact = sample_backend_artifact();
+        artifact.query_openings.push((3, 33));
+        artifact.query_chunks.push(vec![30, 31, 32, 33]);
+        artifact.query_paths.push(vec![101, 102]);
+        artifact.air_openings.push(AirConstraintOpening {
+            index: 3,
+            current_row: vec![1, 2, 3],
+            next_row: vec![4, 5, 6],
+            current_row_path: vec![201],
+            next_row_path: vec![202],
+            composition_value: 34,
+            composition_path: vec![203],
+        });
+        artifact.fri_query_openings.push(FriQueryOpening {
+            initial_index: 3,
+            rounds: Vec::new(),
+            final_index: 3,
+            final_values: vec![33, 34, 35, 36],
+            final_merkle_path: vec![204],
+        });
+
+        let proof = materialise_sample_artifact(artifact).unwrap();
+
+        assert_eq!(proof.queries.len(), 2);
+        assert_eq!(proof.queries[1].index, 3);
+        assert_eq!(proof.queries[1].value, 33);
+        assert_eq!(proof.queries[1].chunk_values, vec![30, 31, 32, 33]);
+        assert_eq!(proof.queries[1].merkle_path, vec![101, 102]);
+        assert_eq!(proof.air_openings[1].index, 3);
+        assert_eq!(proof.air_openings[1].composition_path, vec![203]);
+        assert_eq!(proof.fri_queries[1].final_merkle_path, vec![204]);
     }
 
     #[test]
@@ -2304,6 +2430,54 @@ mod tests {
     }
 
     #[test]
+    fn enforce_verify_limits_allows_values_at_exact_boundaries() {
+        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let limits = VerifyLimits {
+            max_transitions: batch.transitions.len(),
+            max_batch_bytes: batch_size_hint(&batch),
+            max_fri_layers: proof.fri_layers.len(),
+            max_queries: proof.queries.len(),
+            max_query_chunk_values: proof.queries[0].chunk_values.len(),
+            max_query_path_len: 0,
+            max_fri_round_values: proof.fri_queries[0].final_values.len(),
+            max_air_row_values: 0,
+        };
+
+        enforce_verify_limits(&batch, &proof, limits).unwrap();
+    }
+
+    #[test]
+    fn enforce_verify_limits_rejects_air_next_and_composition_paths() {
+        let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.air_openings[0].next_row_path.push(7);
+        let mut limits = VerifyLimits::default();
+        limits.max_query_path_len = 0;
+        let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual: 1,
+                max: 0
+            }
+        ));
+
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.air_openings[0].composition_path.push(8);
+        let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual: 1,
+                max: 0
+            }
+        ));
+    }
+
+    #[test]
     fn verify_limits_reject_oversized_air_merkle_paths() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -2610,6 +2784,130 @@ mod tests {
         };
 
         verify_fri_query_chain(0, 0, 42, &fri_query, &fri_layers, &[], 2).unwrap();
+    }
+
+    #[test]
+    fn verify_fri_query_chain_accepts_single_fold_round() {
+        let beta = 3;
+        let round_values = vec![10, 20];
+        let folded = fold_fri_values(&round_values, beta);
+        let final_values = vec![folded, 99];
+        let fri_layers = vec![
+            field_norito::core::to_bytes(backend::hash_fri_chunk(0, 0, &round_values).unwrap()),
+            field_norito::core::to_bytes(backend::hash_fri_chunk(1, 0, &final_values).unwrap()),
+        ];
+        let fri_query = FriQueryOpening {
+            initial_index: 1,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 1,
+                values: round_values,
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 0,
+            final_values,
+            final_merkle_path: Vec::new(),
+        };
+
+        verify_fri_query_chain(0, 1, 20, &fri_query, &fri_layers, &[beta], 2).unwrap();
+    }
+
+    #[test]
+    fn verify_fri_query_chain_accepts_nonzero_final_offset() {
+        let beta = 5;
+        let round_values = vec![12, 34];
+        let folded = fold_fri_values(&round_values, beta);
+        let final_values = vec![99, folded];
+        let fri_layers = vec![
+            field_norito::core::to_bytes(backend::hash_fri_chunk(0, 1, &round_values).unwrap()),
+            field_norito::core::to_bytes(backend::hash_fri_chunk(1, 0, &final_values).unwrap()),
+        ];
+        let fri_query = FriQueryOpening {
+            initial_index: 3,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 3,
+                values: round_values,
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 1,
+            final_values,
+            final_merkle_path: Vec::new(),
+        };
+
+        verify_fri_query_chain(0, 3, 34, &fri_query, &fri_layers, &[beta], 2).unwrap();
+    }
+
+    #[test]
+    fn verify_fri_query_chain_rejects_single_fold_round_mismatch() {
+        let beta = 3;
+        let round_values = vec![10, 20];
+        let folded = fold_fri_values(&round_values, beta);
+        let final_values = vec![folded];
+        let mut fri_layers = vec![
+            field_norito::core::to_bytes(backend::hash_fri_chunk(0, 0, &round_values).unwrap()),
+            field_norito::core::to_bytes(backend::hash_fri_chunk(1, 0, &final_values).unwrap()),
+        ];
+        let fri_query = FriQueryOpening {
+            initial_index: 1,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 1,
+                values: round_values,
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 0,
+            final_values,
+            final_merkle_path: Vec::new(),
+        };
+
+        fri_layers[0][0] ^= 0x01;
+        let err =
+            verify_fri_query_chain(0, 1, 20, &fri_query, &fri_layers, &[beta], 2).unwrap_err();
+        assert!(matches!(err, Error::QueryMerklePathMismatch { index: 0 }));
+
+        let mut bad_query = fri_query;
+        bad_query.rounds[0].folded_value = bad_query.rounds[0].folded_value.wrapping_add(1);
+        fri_layers[0][0] ^= 0x01;
+        let err =
+            verify_fri_query_chain(0, 1, 20, &bad_query, &fri_layers, &[beta], 2).unwrap_err();
+        assert!(matches!(err, Error::QueryMismatch { index: 0 }));
+    }
+
+    #[test]
+    fn verify_fri_query_chain_rejects_offset_value_mismatches() {
+        let beta = 5;
+        let round_values = vec![12, 34];
+        let folded = fold_fri_values(&round_values, beta);
+        let final_values = vec![folded];
+        let fri_layers = vec![
+            field_norito::core::to_bytes(backend::hash_fri_chunk(0, 1, &round_values).unwrap()),
+            field_norito::core::to_bytes(backend::hash_fri_chunk(1, 0, &final_values).unwrap()),
+        ];
+        let fri_query = FriQueryOpening {
+            initial_index: 3,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 3,
+                values: round_values,
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 1,
+            final_values,
+            final_merkle_path: Vec::new(),
+        };
+
+        let err =
+            verify_fri_query_chain(0, 3, 35, &fri_query, &fri_layers, &[beta], 2).unwrap_err();
+        assert!(matches!(err, Error::QueryMismatch { index: 0 }));
+
+        let err =
+            verify_fri_query_chain(0, 3, 34, &fri_query, &fri_layers, &[beta], 2).unwrap_err();
+        assert!(matches!(err, Error::QueryMismatch { index: 0 }));
     }
 
     #[test]

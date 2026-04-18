@@ -219,4 +219,26 @@ mod tests {
             HedgedEntropyStatus::MixedOsEntropy | HedgedEntropyStatus::OsEntropyUnavailable
         ));
     }
+
+    #[test]
+    fn deterministic_constructor_replays_public_stream() {
+        let seed = HedgedRngSeed::from_entropy([0xD7; 32]);
+        let mut first = deterministic_chacha20_rng(seed.clone(), b"fixture-stream");
+        let mut second = deterministic_chacha20_rng(seed, b"fixture-stream");
+        let mut first_bytes = [0u8; 64];
+        let mut second_bytes = [0u8; 64];
+
+        first.fill_bytes(&mut first_bytes);
+        second.fill_bytes(&mut second_bytes);
+
+        assert_eq!(
+            first.entropy_status(),
+            HedgedEntropyStatus::OsEntropyUnavailable
+        );
+        assert_eq!(
+            second.entropy_status(),
+            HedgedEntropyStatus::OsEntropyUnavailable
+        );
+        assert_eq!(first_bytes, second_bytes);
+    }
 }

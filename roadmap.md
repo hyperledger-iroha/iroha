@@ -7,9 +7,14 @@ Latest sync (2026-04-18 SoraNet PQ derand backend wiring):
 calling the PQClean derandomized hooks that pqcrypto 0.1.x does not expose in
 safe Rust. The older `iroha_crypto` seeded ML-DSA-65 helper now relies on
 drop-based zeroization for its sensitive intermediate buffers while preserving
-the existing seeded-key derivation label.
+the existing seeded-key derivation label. The focused coverage now includes the
+public deterministic RNG constructor, seeded personalization behavior,
+ML-KEM/ML-DSA length rejection, deterministic ML-DSA signing replay, and C FFI
+invalid-suite/null-pointer/tampered-signature branches.
 
 - shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/rng.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/ffi.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mlkem.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa_backend.rs`
@@ -17,11 +22,14 @@ the existing seeded-key derivation label.
   - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/soranet/pq_primitives.md`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/README.md`
 - validation status:
-  - `cargo test -p soranet_pq mlkem -- --nocapture`
-  - `cargo test -p soranet_pq mldsa -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p soranet_pq -- --nocapture`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo test -p iroha_crypto --test mldsa_keypair --test mldsa_multihash -- --nocapture`
 - open work after this slice:
-  - run broader `cargo check -p iroha_crypto --all-targets` and the workspace
-    PQ-adjacent crate checks after formatting
+  - run the broader PQ-adjacent crate checks across `iroha_p2p`, `iroha_cli`,
+    and `sorafs_orchestrator`
   - continue replacing PQClean-backed internals with local scalar and
     deterministic hardware-accelerated backends behind the existing API
 
@@ -351,7 +359,14 @@ permission-root/transaction-set hash domain separation, grant/revoke permission
 hash sorting and id-length rejection, batch-size accounting for metadata and
 role payloads, field-Norito non-canonical tail rejection, terminal FRI
 query-chain success/failure without fold rounds, and Goldilocks modular folding
-wraparound.
+wraparound. Additional FASTPQ helper coverage now pins canonical
+parameter-version catalogue ordering and non-catalogue rejection, role
+grant/revoke operation-size hints, order-sensitive fallback roots, multi-query
+materialisation, and single-round FRI query-chain accept/reject paths. Further
+FASTPQ helper coverage now pins `canonical_with_modes` unknown-parameter
+rejection, materialised commitment/PublicIO preservation, exact-boundary
+`VerifyLimits` acceptance, AIR next-row/composition path limit rejection, and
+FRI query-chain nonzero final-offset success/failure.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -380,6 +395,7 @@ wraparound.
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`84 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_ -- --nocapture`
