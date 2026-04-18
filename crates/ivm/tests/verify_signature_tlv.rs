@@ -28,8 +28,16 @@ fn run_syscall_verify_signature_ed25519(message_type: PointerType, message: &[u8
     let sk = ed25519_test_key(key_tag);
     let pk_bytes = sk.verifying_key().to_bytes();
     let sig = sk.sign(message);
+    let msg_payload = match message_type {
+        PointerType::Json => {
+            let raw = std::str::from_utf8(message).expect("json message utf8");
+            let json = iroha_primitives::json::Json::from_str_norito(raw).expect("valid json");
+            norito::to_bytes(&json).expect("encode json payload")
+        }
+        _ => message.to_vec(),
+    };
 
-    let msg_tlv = make_tlv(message_type as u16, message);
+    let msg_tlv = make_tlv(message_type as u16, &msg_payload);
     let sig_tlv = make_tlv(PointerType::Blob as u16, &sig.to_bytes());
     let pk_tlv = make_tlv(PointerType::Blob as u16, &pk_bytes);
 
