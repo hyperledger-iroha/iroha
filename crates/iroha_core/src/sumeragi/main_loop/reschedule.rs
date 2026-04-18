@@ -1537,12 +1537,13 @@ impl Actor {
         }
         let frontier_slot_owner_was_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
-        let frontier_slot_present_for_view =
-            contiguous_frontier && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height && slot.view == view
-            });
-        let stale_frontier_slot_owner_for_other_view =
-            contiguous_frontier && self.frontier_slot.as_ref().is_some_and(|slot| {
+        let frontier_slot_present_for_view = contiguous_frontier
+            && self
+                .frontier_slot
+                .as_ref()
+                .is_some_and(|slot| slot.height == height && slot.view == view);
+        let stale_frontier_slot_owner_for_other_view = contiguous_frontier
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == height
                     && slot.view != view
                     && Self::frontier_slot_has_active_owner_state_in_slot(slot)
@@ -1718,9 +1719,8 @@ impl Actor {
                 )
                 .is_empty()
         {
-            let rotate_stake_quorum_noop_immediately = contiguous_frontier
-                && stake_quorum_missing
-                && effective_has_reschedule_votes;
+            let rotate_stake_quorum_noop_immediately =
+                contiguous_frontier && stake_quorum_missing && effective_has_reschedule_votes;
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =

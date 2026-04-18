@@ -30535,15 +30535,14 @@ impl Actor {
                 self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason, true);
         }
         let exact_frontier_height = self.frontier_slot_is_exact_height(height);
-        let exact_slot_owner_present = self.frontier_slot_has_active_owner_state_for_view(
-            height,
-            view,
-        );
-        let stale_exact_slot_owner_for_other_view = self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == height
-                && slot.view != view
-                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
-        });
+        let exact_slot_owner_present =
+            self.frontier_slot_has_active_owner_state_for_view(height, view);
+        let stale_exact_slot_owner_for_other_view =
+            self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view != view
+                    && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+            });
         let same_slot_missing_block_request_active = reason == "quorum_timeout"
             && self.frontier_recovery_same_slot_missing_block_request_active(height, view, now);
         let empty_frontier_missing_qc =

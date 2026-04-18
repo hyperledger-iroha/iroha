@@ -75560,7 +75560,7 @@ async fn missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitte
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn missing_qc_view_zero_reanchor_suppression_precedes_unified_recovery_handoff() {
+async fn missing_qc_view_zero_reanchor_suppression_rotates_after_window_advance() {
     use std::borrow::Cow;
 
     let _worker_guard = super::status::worker_queue_test_guard();
@@ -75618,6 +75618,7 @@ async fn missing_qc_view_zero_reanchor_suppression_precedes_unified_recovery_han
     actor.slot_tracker.proposals_seen.clear();
     actor.pending.pending_blocks.clear();
     actor.frontier_recovery = None;
+    actor.frontier_slot = None;
 
     let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
     actor.subsystems.propose.last_missing_qc_timeout_trigger =
@@ -75716,9 +75717,8 @@ async fn missing_qc_view_zero_reanchor_suppression_precedes_unified_recovery_han
         "suppression should not count a missing_qc rotation"
     );
     assert!(
-        !actor.frontier_slot_is_exact_height(height)
-            && !actor.frontier_recovery_exists_at_height(height),
-        "suppression should win before the view-zero unified frontier recovery handoff is armed"
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppression should not install a forced frontier view on the first idle tick"
     );
 
     let later = now
@@ -75727,24 +75727,22 @@ async fn missing_qc_view_zero_reanchor_suppression_precedes_unified_recovery_han
         .unwrap_or(now);
     let before_handoff = super::status::snapshot();
     assert!(
-        !actor.force_view_change_if_idle(later),
-        "once the shared reanchor window advances, the same view-zero missing_qc should hand off into unified frontier recovery instead of rotating directly"
+        actor.force_view_change_if_idle(later),
+        "once the shared reanchor window advances, the same view-zero missing_qc should be allowed to rotate directly"
     );
     let after_handoff = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "view-zero handoff should keep the current view until unified frontier recovery exhausts its own windows"
+        Some(current_view.saturating_add(1)),
+        "view should advance once the shared reanchor suppression window expires"
     );
     assert_eq!(
         after_handoff.view_change_causes.missing_qc_total,
-        before_handoff.view_change_causes.missing_qc_total,
-        "arming unified frontier recovery after the shared window advances should still avoid counting a direct missing_qc rotation"
-    );
-    assert!(
-        actor.frontier_slot_is_exact_height(height)
-            || actor.frontier_recovery_exists_at_height(height),
-        "view-zero handoff should arm exact-frontier recovery after suppression expires"
+        before_handoff
+            .view_change_causes
+            .missing_qc_total
+            .saturating_add(1),
+        "rotation after the shared window advances should count exactly one direct missing_qc view-change"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
