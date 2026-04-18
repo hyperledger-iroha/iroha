@@ -417,24 +417,24 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*blind);
         }
         RegisterAsset {
-            name,
+            asset,
             symbol,
             quantity,
             mintable,
         } => {
-            f(*name);
+            f(*asset);
             f(*symbol);
             f(*quantity);
             f(*mintable);
         }
         CreateNewAsset {
-            name,
+            asset,
             symbol,
             quantity,
             account,
             mintable,
         } => {
-            f(*name);
+            f(*asset);
             f(*symbol);
             f(*quantity);
             f(*account);
