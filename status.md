@@ -640,11 +640,18 @@ Last updated: 2026-04-18
   The base helpers preserve those responses as `null` JSON instead of failing
   on an EOF decode, and the direct setup reads retry until they receive a real
   JSON payload or the existing test timeout expires.
+- Added focused unit coverage for the routed JSON retry gate itself, including
+  the positive empty-body retryable path and the negative cases for decoded
+  JSON error bodies and non-retryable empty statuses.
 - Current verification for the Nexus cross-dataspace slice is green again:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-coreclean cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-extra cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix cargo test -p integration_tests --test nexus_and_streaming routed_json_empty_body_is_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit cargo test -p integration_tests --test nexus_and_streaming routed_json_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
 - The cross-dataspace localnet module now passes end to end on the current
   tree:
   - `nexus::cross_dataspace_localnet::bounded_observer_request_timeout_slices_remaining_budget`

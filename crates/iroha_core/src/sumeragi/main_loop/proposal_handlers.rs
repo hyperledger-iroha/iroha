@@ -1202,13 +1202,13 @@ impl Actor {
                 }),
         );
         for (hash, old_view) in superseded {
-            let retain_payload =
-                self.pending
-                    .pending_blocks
-                    .get(&hash)
-                    .is_some_and(|pending| {
-                        self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
-                    });
+            let retain_payload = self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| {
+                    self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
+                });
             let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
             self.pending.pending_fetch_requests.remove(&hash);

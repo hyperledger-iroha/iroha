@@ -1492,8 +1492,26 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 
 #[cfg(test)]
 mod tests {
-    use super::routed_json_empty_body_is_transient;
+    use super::{
+        RoutedJsonResponse, routed_json_empty_body_is_transient, routed_json_response_is_transient,
+    };
+    use norito::json::Value as JsonValue;
     use reqwest::StatusCode as HttpStatusCode;
+
+    fn routed_json_response(
+        status: HttpStatusCode,
+        body: JsonValue,
+        body_text: &str,
+    ) -> RoutedJsonResponse {
+        RoutedJsonResponse {
+            status,
+            body,
+            body_text: body_text.to_owned(),
+            routed_by: None,
+            route_lane_id: None,
+            route_dataspace_id: None,
+        }
+    }
 
     #[test]
     fn routed_json_empty_body_is_transient_for_empty_timeout_statuses() {
@@ -1517,5 +1535,31 @@ mod tests {
             HttpStatusCode::OK,
             b""
         ));
+    }
+
+    #[test]
+    fn routed_json_response_is_transient_only_for_empty_retryable_routed_failures() {
+        let response = routed_json_response(HttpStatusCode::BAD_GATEWAY, JsonValue::Null, "");
+
+        assert!(routed_json_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_json_response_is_not_transient_after_json_body_decodes() {
+        let body_text = r#"{"error":"route_unavailable"}"#;
+        let response = routed_json_response(
+            HttpStatusCode::SERVICE_UNAVAILABLE,
+            norito::json::from_str(body_text).expect("decode test JSON"),
+            body_text,
+        );
+
+        assert!(!routed_json_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_json_response_is_not_transient_for_non_retryable_empty_statuses() {
+        let response = routed_json_response(HttpStatusCode::NOT_FOUND, JsonValue::Null, "");
+
+        assert!(!routed_json_response_is_transient(&response));
     }
 }
