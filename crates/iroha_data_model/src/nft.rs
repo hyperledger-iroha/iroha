@@ -31,8 +31,8 @@ mod model {
     /// ```rust
     /// use iroha_data_model::nft::NftId;
     ///
-    /// let nft_id =
-    ///     "nft_name$soramitsu.universal".parse::<NftId>().expect("Valid");
+    /// let nft_id = "nft_name$soramitsu".parse::<NftId>().expect("Valid");
+    /// assert_eq!(nft_id.to_string(), "nft_name$soramitsu.universal");
     /// ```
     #[derive(
         derive_more::Debug,
@@ -135,7 +135,7 @@ impl NftId {
     }
 }
 
-/// NFT Identification is represented by `name$domain.dataspace` string.
+/// NFT Identification is represented by `name$domain` or `name$domain.dataspace` string.
 impl FromStr for NftId {
     type Err = ParseError;
 
@@ -143,17 +143,21 @@ impl FromStr for NftId {
         let (name_candidate, domain_id_candidate) = split_nonempty(
             s,
             '$',
-            "Non Fungible Asset ID should have format `name$domain`",
+            "Non Fungible Asset ID should have format `name$domain` or `name$domain.dataspace`",
             "Empty `name` part in `name$domain`",
             "Empty `domain` part in `name$domain`",
         )?;
         let name = name_candidate.parse().map_err(|_| ParseError {
             reason: "Failed to parse `name` part in `name$domain`",
         })?;
-        let domain_id = crate::domain::DomainId::parse_fully_qualified(domain_id_candidate)
-            .map_err(|_| ParseError {
-                reason: "Failed to parse `domain` part in `name$domain`",
-            })?;
+        let domain_id = if domain_id_candidate.contains('.') {
+            crate::domain::DomainId::parse_fully_qualified(domain_id_candidate)
+        } else {
+            crate::domain::DomainId::try_new(domain_id_candidate, "universal")
+        }
+        .map_err(|_| ParseError {
+            reason: "Failed to parse `domain` part in `name$domain` or `name$domain.dataspace`",
+        })?;
         Ok(Self::new(domain_id, name))
     }
 }
@@ -194,6 +198,44 @@ mod json_tests {
 
         assert_eq!(decoded.id, id);
         assert_eq!(decoded.content, content);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Name, domain::prelude::DomainId};
+
+    #[test]
+    fn bare_domain_literal_defaults_to_universal_dataspace() {
+        let id: NftId = "mona_lisa$art".parse().expect("valid nft id");
+
+        assert_eq!(
+            id,
+            NftId::new(
+                DomainId::try_new("art", "universal").expect("domain id"),
+                Name::from_str("mona_lisa").expect("nft name"),
+            )
+        );
+        assert_eq!(id.to_string(), "mona_lisa$art.universal");
+    }
+
+    #[test]
+    fn fully_qualified_domain_literal_is_preserved() {
+        let id: NftId = "mona_lisa$art.gallery".parse().expect("valid nft id");
+
+        assert_eq!(
+            id,
+            NftId::new(
+                DomainId::try_new("art", "gallery").expect("domain id"),
+                Name::from_str("mona_lisa").expect("nft name"),
+            )
+        );
+    }
+
+    #[test]
+    fn invalid_dotted_domain_literal_stays_rejected() {
+        assert!("mona_lisa$art.gallery.extra".parse::<NftId>().is_err());
     }
 }
 
