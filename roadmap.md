@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 mock WSV unregister/relink permission retention):
+The mock WSV now preserves detached subject permissions and role assignments
+when `unregister_account_subject` removes an active account row. The subject
+still behaves as unregistered until it is registered again, but relinking the
+same subject restores the prior `has_permission` surface as expected by the
+mock account-detach tests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test mock_wsv unregister_account_detaches_subject_and_preserves_state_for_relink -- --nocapture`
+  - `cargo test -p ivm --test mock_wsv -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 Kotodama ZK vote/unshield sample semantic sync):
 The checked-in `zk_vote_and_unshield.ko` sample now matches the current
 Kotodama semantic contract: its public `demo` entrypoint carries

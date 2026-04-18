@@ -1279,7 +1279,8 @@ impl MockWorldStateView {
     ///
     /// If the account subject is linked to multiple domains, only the current
     /// domain link is removed. When the final domain link is removed, subject
-    /// state remains detached (account metadata/permissions/roles are preserved).
+    /// authority state remains detached so permissions and role assignments can
+    /// be reattached by a later re-registration of the same subject.
     ///
     /// Unlinking the final domain while non-zero balances or NFT ownership
     /// remain is rejected to avoid leaving owned resources without a canonical
@@ -1311,8 +1312,6 @@ impl MockWorldStateView {
         self.domain_accounts
             .retain(|_, subjects| !subjects.is_empty());
         self.accounts.remove(subject);
-        self.permissions.remove(subject);
-        self.role_assignments.remove(subject);
         true
     }
 
