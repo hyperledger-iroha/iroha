@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 IVM cache artifact minor-version gate):
+`IvmCache::decode_artifact` and `IvmCache::get_or_predecode_artifact` now fail closed unless the parsed artifact header is IVM `1.1`. This keeps legacy generic `1.0` metadata parsing available where callers explicitly use `ProgramMetadata::parse`, while artifact-specific cache helpers now match the golden-vector expectation that unsupported minor versions are rejected.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/ivm_cache.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/ivm_cache_artifact.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test predecoder_golden_vectors -- --nocapture`
+  - `cargo test -p ivm --test ivm_cache_artifact -- --nocapture`
+  - `cargo test -p ivm --test predecode_artifact_keying -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a longer clean window
+
 Latest sync (2026-04-18 Sumeragi pending activation window refresh):
 Cached future proposals that become the next active frontier after a parent
 commit now restart their pending age, progress age, and quorum-reschedule
