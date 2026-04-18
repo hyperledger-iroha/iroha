@@ -16,13 +16,10 @@ REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
 RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus.universal}"
 BOOTSTRAP_AUTHORITY_DOMAIN="${IROHA_TAIRA_KAIGI_BOOTSTRAP_AUTHORITY_DOMAIN:-nexus.universal}"
 KAIGI_HELPER_BIN="${IROHA_TAIRA_KAIGI_HELPER_BIN:-}"
-
-RELAY_HPKE_KEYS=(
-  "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ="
-  "i4v17uBA5sK6YeK1+f3jvHfgvX4QAZp8ktPSVgJiccc="
-  "aB9ehhc+zl8pKrjIY2g+it2e6G3I8gGxev5dCwSMQ9E="
-)
-RELAY_BANDWIDTH_CLASSES=(3 2 1)
+DPN_DATASPACE_ID="${IROHA_TAIRA_DPN_DATASPACE_ID:-10}"
+DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.dpn}"
+DPN_SPONSOR_ACCOUNT_ID="${IROHA_TAIRA_DPN_SPONSOR_ACCOUNT_ID:-}"
+DPN_SPONSOR_FUND_AMOUNT="${IROHA_TAIRA_DPN_SPONSOR_FUND_AMOUNT:-1000}"
 
 need_file() {
   if [[ ! -f "$1" ]]; then
@@ -36,6 +33,41 @@ need_cmd() {
     echo "missing required command: $1" >&2
     exit 1
   fi
+}
+
+discover_peer_configs() {
+  PEER_CONFIGS=()
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    PEER_CONFIGS+=("$path")
+  done < <(find "$LOCALNET_DIR" -maxdepth 1 -type f -name 'peer*.toml' | sort)
+  if [[ "${#PEER_CONFIGS[@]}" -eq 0 ]]; then
+    echo "no peer configs found under $LOCALNET_DIR" >&2
+    exit 1
+  fi
+}
+
+relay_hpke_key_for_index() {
+  local index="$1"
+  python3 - "$index" <<'PY'
+import base64
+import hashlib
+import sys
+
+index = sys.argv[1]
+digest = hashlib.sha256(f"taira-relay-{index}".encode("utf-8")).digest()
+print(base64.b64encode(digest).decode("ascii"))
+PY
+}
+
+relay_bandwidth_class_for_index() {
+  local index="$1"
+  case "$index" in
+    0) echo 3 ;;
+    1) echo 2 ;;
+    *) echo 1 ;;
+  esac
 }
 
 load_taira_authority() {
@@ -55,7 +87,10 @@ load_taira_authority() {
   done < <(
     python3 - "$TAIRA_PROFILE_CONFIG" "$TAIRA_SECRETS_FILE" <<'PY'
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 path = sys.argv[1]
 secrets_path = sys.argv[2]
@@ -223,6 +258,194 @@ for path in sorted(localnet_dir.glob("peer*.toml")):
 PY
 }
 
+ensure_private_dataspace_onboarding_permissions() {
+  GENESIS_JSON="$GENESIS_JSON" \
+  TAIRA_AUTHORITY="$TAIRA_AUTHORITY" \
+  DPN_DATASPACE_ID="$DPN_DATASPACE_ID" \
+  python3 <<'PY'
+from pathlib import Path
+import json
+import os
+
+path = Path(os.environ["GENESIS_JSON"])
+authority = os.environ["TAIRA_AUTHORITY"]
+dataspace_id = int(os.environ["DPN_DATASPACE_ID"])
+
+payload_alias = {"scope": {"scope": "dataspace", "value": dataspace_id}}
+payload_manifest = {"dataspace": dataspace_id}
+
+with path.open(encoding="utf-8") as fh:
+    genesis = json.load(fh)
+
+has_alias_permission = False
+has_manifest_permission = False
+for tx in genesis.get("transactions", []):
+    for instruction in tx.get("instructions", []):
+        if not isinstance(instruction, dict):
+            continue
+        permission_grant = instruction.get("Grant", {}).get("Permission")
+        if not isinstance(permission_grant, dict):
+            continue
+        if permission_grant.get("destination") != authority:
+            continue
+        obj = permission_grant.get("object")
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("name") == "CanManageAccountAlias" and obj.get("payload") == payload_alias:
+            has_alias_permission = True
+        if (
+            obj.get("name") == "CanPublishSpaceDirectoryManifest"
+            and obj.get("payload") == payload_manifest
+        ):
+            has_manifest_permission = True
+
+instructions = []
+if not has_alias_permission:
+    instructions.append(
+        {
+            "Grant": {
+                "Permission": {
+                    "destination": authority,
+                    "object": {
+                        "name": "CanManageAccountAlias",
+                        "payload": payload_alias,
+                    },
+                }
+            }
+        }
+    )
+if not has_manifest_permission:
+    instructions.append(
+        {
+            "Grant": {
+                "Permission": {
+                    "destination": authority,
+                    "object": {
+                        "name": "CanPublishSpaceDirectoryManifest",
+                        "payload": payload_manifest,
+                    },
+                }
+            }
+        }
+    )
+
+if not instructions:
+    print("private dataspace onboarding permissions already present")
+else:
+    genesis.setdefault("transactions", []).append(
+        {
+            "instructions": instructions,
+            "ivm_triggers": [],
+            "topology": [],
+        }
+    )
+    path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"seeded private dataspace onboarding permissions for dataspace {dataspace_id}"
+    )
+PY
+}
+
+ensure_dpn_genesis_seed_state() {
+  if [[ -z "$DPN_SPONSOR_ACCOUNT_ID" ]]; then
+    echo "no DPN sponsor account configured; skipping DPN genesis seeding"
+    return 0
+  fi
+
+  GENESIS_JSON="$GENESIS_JSON" \
+  DPN_ACCOUNT_DOMAIN="$DPN_ACCOUNT_DOMAIN" \
+  DPN_SPONSOR_ACCOUNT_ID="$DPN_SPONSOR_ACCOUNT_ID" \
+  DPN_SPONSOR_FUND_AMOUNT="$DPN_SPONSOR_FUND_AMOUNT" \
+  TAIRA_FEE_ASSET_ID="$1" \
+  python3 <<'PY'
+from pathlib import Path
+import json
+import os
+
+path = Path(os.environ["GENESIS_JSON"])
+domain_id = os.environ["DPN_ACCOUNT_DOMAIN"]
+sponsor_account_id = os.environ["DPN_SPONSOR_ACCOUNT_ID"]
+fund_amount = str(int(os.environ["DPN_SPONSOR_FUND_AMOUNT"]))
+fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
+target_balance = f"{fee_asset_id}#{sponsor_account_id}"
+
+with path.open(encoding="utf-8") as fh:
+    genesis = json.load(fh)
+
+has_domain = False
+has_account = False
+has_funding = False
+for tx in genesis.get("transactions", []):
+    for instruction in tx.get("instructions", []):
+        if not isinstance(instruction, dict):
+            continue
+        register = instruction.get("Register")
+        if isinstance(register, dict):
+            domain = register.get("Domain")
+            if isinstance(domain, dict) and domain.get("id") == domain_id:
+                has_domain = True
+            account = register.get("Account")
+            if isinstance(account, dict) and account.get("id") == sponsor_account_id:
+                has_account = True
+
+        mint = instruction.get("Mint", {}).get("Asset")
+        if isinstance(mint, dict) and mint.get("destination") == target_balance:
+            has_funding = True
+
+instructions = []
+if not has_domain:
+    instructions.append(
+        {
+            "Register": {
+                "Domain": {
+                    "id": domain_id,
+                    "logo": None,
+                    "metadata": {},
+                }
+            }
+        }
+    )
+if not has_account:
+    instructions.append(
+        {
+            "Register": {
+                "Account": {
+                    "id": sponsor_account_id,
+                    "metadata": {},
+                }
+            }
+        }
+    )
+if not has_funding:
+    instructions.append(
+        {
+            "Mint": {
+                "Asset": {
+                    "destination": target_balance,
+                    "object": fund_amount,
+                }
+            }
+        }
+    )
+
+if not instructions:
+    print("DPN domain/account/funding already present in genesis")
+else:
+    genesis.setdefault("transactions", []).append(
+        {
+            "instructions": instructions,
+            "ivm_triggers": [],
+            "topology": [],
+        }
+    )
+    path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(
+        "seeded DPN genesis state "
+        f"(domain={domain_id}, sponsor={sponsor_account_id}, amount={fund_amount})"
+    )
+PY
+}
+
 ensure_launchd_runner() {
   local runner="$LOCALNET_DIR/launchd-run.sh"
   if [[ -f "$runner" ]]; then
@@ -344,31 +567,85 @@ need_cmd python3
 need_cmd screen
 need_file "$GENESIS_JSON"
 need_file "$LOCALNET_DIR/client.toml"
-need_file "$LOCALNET_DIR/peer0.toml"
-need_file "$LOCALNET_DIR/peer1.toml"
-need_file "$LOCALNET_DIR/peer2.toml"
 need_file "$TAIRA_PROFILE_CONFIG"
 ensure_launchd_runner
+discover_peer_configs
 load_taira_authority
 load_localnet_genesis_signer_config
 
 HOST_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/client.toml")"
-PEER0_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer0.toml")"
-PEER1_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer1.toml")"
-PEER2_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer2.toml")"
-FEE_ASSET_ID="$(extract_toml_string fee_asset_id "$LOCALNET_DIR/peer0.toml")"
+FEE_ASSET_ID="$(extract_toml_string fee_asset_id "${PEER_CONFIGS[0]}")"
+PEER_PUBLIC_KEYS=()
+for peer_config in "${PEER_CONFIGS[@]}"; do
+  peer_public_key="$(extract_toml_string public_key "$peer_config")"
+  if [[ -z "$peer_public_key" ]]; then
+    echo "failed to extract public key from $peer_config" >&2
+    exit 1
+  fi
+  PEER_PUBLIC_KEYS+=("$peer_public_key")
+done
 
-if [[ -z "$HOST_PUBLIC_KEY" || -z "$PEER0_PUBLIC_KEY" || -z "$PEER1_PUBLIC_KEY" || -z "$PEER2_PUBLIC_KEY" || -z "$FEE_ASSET_ID" || -z "$LOCALNET_GENESIS_PUBLIC_KEY" ]]; then
-  echo "failed to extract host/relay public keys, fee asset, or genesis signer from localnet configs" >&2
+if [[ -z "$HOST_PUBLIC_KEY" || -z "$FEE_ASSET_ID" || -z "$LOCALNET_GENESIS_PUBLIC_KEY" ]]; then
+  echo "failed to extract host public key, fee asset, or genesis signer from localnet configs" >&2
   exit 1
 fi
 
 patch_peer_configs_for_taira_authority "$FEE_ASSET_ID"
+ensure_private_dataspace_onboarding_permissions
+ensure_dpn_genesis_seed_state "$FEE_ASSET_ID"
+
+bootstrap_authority_seed_state="$(
+  python3 - "$GENESIS_JSON" "$TAIRA_AUTHORITY" "$FEE_ASSET_ID" <<'PY'
+import json
+import sys
+
+path, authority, fee_asset_id = sys.argv[1:]
+target_balance = f"{fee_asset_id}#{authority}"
+flags = {
+    "account": False,
+    "funding": False,
+    "CanManageSoracloud": False,
+    "CanManageAccountAlias": False,
+    "CanPublishSpaceDirectoryManifest": False,
+}
+
+with open(path, encoding="utf-8") as fh:
+    genesis = json.load(fh)
+
+for tx in genesis.get("transactions", []):
+    for instruction in tx.get("instructions", []):
+        if not isinstance(instruction, dict):
+            continue
+        register = instruction.get("Register")
+        if register and register.get("Account", {}).get("id") == authority:
+            flags["account"] = True
+
+        mint = instruction.get("Mint")
+        if mint and mint.get("Asset", {}).get("destination") == target_balance:
+            flags["funding"] = True
+
+        permission_grant = instruction.get("Grant", {}).get("Permission")
+        if permission_grant and permission_grant.get("destination") == authority:
+            name = permission_grant.get("object", {}).get("name")
+            if name in flags:
+                flags[name] = True
+
+required = (
+    flags["account"]
+    and flags["funding"]
+    and flags["CanManageSoracloud"]
+    and flags["CanManageAccountAlias"]
+    and flags["CanPublishSpaceDirectoryManifest"]
+)
+print("present" if required else "missing")
+PY
+)"
 
 helper_bin="$(discover_helper_bin || true)"
 echo "building signed Kaigi overlay genesis"
 helper_args=(
   --genesis "$GENESIS_JSON"
+  --config "$LOCALNET_DIR/peer0.toml"
   --out-file "$GENESIS_SIGNED"
   --expected-genesis-public-key "$LOCALNET_GENESIS_PUBLIC_KEY"
   --host-public-key "$HOST_PUBLIC_KEY"
@@ -376,13 +653,21 @@ helper_args=(
   --call-domain "$CALL_DOMAIN"
   --call-name "$CALL_NAME"
   --reported-at-ms "$REPORTED_AT_MS"
-  --bootstrap-authority-account "$TAIRA_AUTHORITY"
-  --bootstrap-authority-domain "$BOOTSTRAP_AUTHORITY_DOMAIN"
-  --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
-  --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}"
-  --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}"
-  --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"
 )
+for index in "${!PEER_PUBLIC_KEYS[@]}"; do
+  helper_args+=(
+    --relay-spec "${PEER_PUBLIC_KEYS[$index]}:$(relay_hpke_key_for_index "$index"):$(relay_bandwidth_class_for_index "$index")"
+  )
+done
+if [[ "$bootstrap_authority_seed_state" == "present" ]]; then
+  echo "bootstrap authority already seeded in genesis; skipping bootstrap overlay"
+else
+  helper_args+=(
+    --bootstrap-authority-account "$TAIRA_AUTHORITY"
+    --bootstrap-authority-domain "$BOOTSTRAP_AUTHORITY_DOMAIN"
+    --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
+  )
+fi
 if [[ -n "$GENESIS_PRIVATE_KEY" ]]; then
   helper_args+=(--genesis-private-key "$GENESIS_PRIVATE_KEY")
 elif [[ -n "$LOCALNET_BASE_SEED" ]]; then
@@ -418,7 +703,7 @@ done
 echo "waiting for Kaigi relay metadata"
 for _ in {1..60}; do
   relay_json="$(curl -sf 'http://127.0.0.1:29080/v1/kaigi/relays' || true)"
-  if [[ -n "$relay_json" ]] && [[ "$(jq -r '.total // 0' <<<"$relay_json")" -ge 3 ]]; then
+  if [[ -n "$relay_json" ]] && [[ "$(jq -r '.total // 0' <<<"$relay_json")" -ge "${#PEER_PUBLIC_KEYS[@]}" ]]; then
     break
   fi
   sleep 2
