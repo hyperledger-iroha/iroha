@@ -2,6 +2,13 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: mock WSV unregister/relink permission retention
+- `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs` now keeps detached subject permissions and role assignments when `unregister_account_subject` removes the active account row. `has_permission` still returns `false` while the subject is unregistered because link state is gone, but re-registering the same subject restores its direct and role-derived permissions for relink flows.
+- This fixes `/home/mtakemiya/dev/iroha/crates/ivm/tests/mock_wsv.rs` `unregister_account_detaches_subject_and_preserves_state_for_relink`, which expected `MintAsset` and `ReadAccountAssets` authorizations to survive account detachment and come back on re-registration.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test mock_wsv unregister_account_detaches_subject_and_preserves_state_for_relink -- --nocapture`
+  - `cargo test -p ivm --test mock_wsv -- --nocapture`
+
 ## 2026-04-18 Follow-up: Kotodama ZK vote/unshield sample semantic sync
 - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko` now matches the current Kotodama semantic checks: the public `demo` entrypoint is tagged with `permission(Admin)`, and the inline unshield builder now uses compile-time literal constructor arguments instead of runtime-only `authority()`.
 - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.to` was regenerated from the updated source so the bundled sample bytecode stays aligned with the checked-in `.ko`.
