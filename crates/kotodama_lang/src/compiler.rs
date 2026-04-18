@@ -1234,6 +1234,41 @@ seiyaku Test {
     }
 
     #[test]
+    fn zero_arg_public_entrypoint_retains_scalar_state_hints() {
+        let src = r#"
+seiyaku Test {
+  state int counter;
+
+  kotoage fn run() {
+    let current = counter;
+    if current > 0 {
+      info("tick");
+    }
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec!["state:counter".to_string()]);
+        assert!(hints.write_keys.is_empty());
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.read_keys, vec!["state:counter".to_string()]);
+        assert!(run.write_keys.is_empty());
+        assert_eq!(run.access_hints_complete, Some(true));
+        assert!(run.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn entrypoint_hints_include_map_base_for_dynamic_state_paths() {
         let src = r#"
 seiyaku Test {
@@ -8264,11 +8299,13 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
 }
 
 fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
-    match entrypoint_kind_from_modifiers(&func.modifiers) {
-        Some(EntryPointKind::Public | EntryPointKind::View) => {
-            format!("__entrypoint_impl__{}", func.name)
-        }
-        _ => func.name.clone(),
+    let needs_wrapper = (matches!(func.modifiers.kind, super::ast::FunctionKind::View)
+        || func.modifiers.visibility == super::ast::FunctionVisibility::Public)
+        && !func.param_types.is_empty();
+    if needs_wrapper {
+        format!("__entrypoint_impl__{}", func.name)
+    } else {
+        func.name.clone()
     }
 }
 
