@@ -651,7 +651,12 @@ impl Actor {
                 "routing same-height frontier commit QC through authoritative supersede"
             );
             self.clear_superseded_frontier_owner_proposal_state(height, block_hash);
-            self.drop_superseded_contiguous_frontier_owner_state(block_hash, height, resolved_view);
+            self.drop_superseded_contiguous_frontier_owner_state(
+                block_hash,
+                height,
+                resolved_view,
+                payload_present,
+            );
             self.note_authoritative_slot_owner(height, resolved_view, block_hash);
             let frontier_info =
                 self.authoritative_slot_frontier_info(height, resolved_view, block_hash);
