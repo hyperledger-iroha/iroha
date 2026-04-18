@@ -60,6 +60,9 @@ struct ManifestValidatorBindingFile {
     pub validator: Option<String>,
     /// Consensus/transport peer identity literal.
     pub peer_id: Option<String>,
+    /// Optional Torii base URL used when authoritative routing must bridge over HTTP.
+    #[norito(default)]
+    pub torii_url: Option<String>,
 }
 
 /// Manifest-level privacy commitment descriptor.
@@ -313,6 +316,8 @@ pub struct ManifestValidatorBinding {
     pub validator: AccountId,
     /// Consensus and routed-traffic peer identity.
     pub peer_id: PeerId,
+    /// Optional Torii base URL used when authoritative routing must bridge over HTTP.
+    pub torii_url: Option<String>,
 }
 
 /// Artifacts derived from a manifest file.
@@ -506,10 +511,31 @@ impl GovernanceRules {
                     ));
                 }
 
+                let torii_url = entry
+                    .torii_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned);
+                let torii_url = match torii_url {
+                    Some(url) => {
+                        let uri = http::Uri::from_str(&url)
+                            .map_err(|err| format!("invalid validator torii_url `{url}`: {err}"))?;
+                        if uri.scheme().is_none() || uri.authority().is_none() {
+                            return Err(format!(
+                                "validator torii_url `{url}` must include an absolute scheme and authority"
+                            ));
+                        }
+                        Some(url)
+                    }
+                    None => None,
+                };
+
                 validators.push(account.clone());
                 validator_bindings.push(ManifestValidatorBinding {
                     validator: account,
                     peer_id,
+                    torii_url,
                 });
             }
         }
@@ -1650,7 +1676,7 @@ mod tests {
                 "lane": "gov",
                 "governance": "parliament",
                 "validators": [
-                    {{"validator":"  {alice}  ","peer_id":" {alice_peer} "}},
+                    {{"validator":"  {alice}  ","peer_id":" {alice_peer} ","torii_url":" https://alice.example.com:19080 "}},
                     {{"validator":"{bob}","peer_id":"{bob_peer}"}}
                 ],
                 "quorum": 2,
@@ -1684,8 +1710,13 @@ mod tests {
         assert_eq!(rules.protected_namespaces.len(), 2);
         assert_eq!(rules.validator_bindings[0].validator, ALICE_ID.clone());
         assert_eq!(rules.validator_bindings[0].peer_id, alice_peer);
+        assert_eq!(
+            rules.validator_bindings[0].torii_url.as_deref(),
+            Some("https://alice.example.com:19080")
+        );
         assert_eq!(rules.validator_bindings[1].validator, BOB_ID.clone());
         assert_eq!(rules.validator_bindings[1].peer_id, bob_peer);
+        assert!(rules.validator_bindings[1].torii_url.is_none());
         let runtime_hook = rules
             .hooks
             .runtime_upgrade
@@ -1790,6 +1821,45 @@ mod tests {
         );
         assert_eq!(registry.lane_quorum(LaneId::new(0)), Some(2));
         assert_eq!(registry.lane_quorum(LaneId::new(1)), Some(2));
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_validator_torii_url() {
+        crate::test_alias::ensure();
+        LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "gov".to_string(),
+                governance: Some("parliament".to_string()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("valid catalog");
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        let alice = account_id_literal(&ALICE_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        fs::write(
+            &path,
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}","torii_url":"not-a-url"}}],"quorum":1}}"#
+            ),
+        )
+        .expect("write manifest");
+        let err = LaneManifestRegistry::validate_manifest(
+            &path,
+            LaneId::new(0),
+            "gov",
+            Some("parliament"),
+            &governance,
+        )
+        .expect_err("invalid torii_url should fail manifest validation");
+        assert!(err.contains("torii_url"));
     }
 
     #[test]
