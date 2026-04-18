@@ -1498,7 +1498,17 @@ impl IVMHost for DefaultHost {
                 Err(VMError::NotImplemented { syscall: number })
             }
             crate::syscalls::SYSCALL_VERIFY_SIGNATURE => {
-                // r10 = &Blob message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
+                // r10 = &message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
+                let decode_message = |vm: &IVM, reg: usize| -> Result<Vec<u8>, VMError> {
+                    let ptr = vm.register(reg);
+                    let tlv = vm.memory.validate_tlv(ptr)?;
+                    match tlv.type_id {
+                        PointerType::Blob | PointerType::NoritoBytes | PointerType::Json => {
+                            Ok(tlv.payload.to_vec())
+                        }
+                        _ => Err(VMError::NoritoInvalid),
+                    }
+                };
                 let decode_blob = |vm: &IVM, reg: usize| -> Result<Vec<u8>, VMError> {
                     let ptr = vm.register(reg);
                     let tlv = vm.memory.validate_tlv(ptr)?;
@@ -1507,7 +1517,7 @@ impl IVMHost for DefaultHost {
                     }
                     Ok(tlv.payload.to_vec())
                 };
-                let msg = decode_blob(vm, 10)?;
+                let msg = decode_message(vm, 10)?;
                 let sig = decode_blob(vm, 11)?;
                 let pk = decode_blob(vm, 12)?;
                 let scheme_code = vm.register(13) as u8;

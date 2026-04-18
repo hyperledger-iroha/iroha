@@ -69023,21 +69023,19 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     actor.frontier_recovery = None;
 
     assert!(
-        actor.force_view_change_if_idle(now),
-        "idle timeout should trigger a view change"
+        !actor.force_view_change_if_idle(now),
+        "idle timeout should arm contiguous-frontier recovery before advancing the view"
     );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((height, current_view.saturating_add(1)))
-    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+    assert_eq!(actor.subsystems.propose.forced_view_after_timeout, None);
 
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "idle timeout should leave contiguous-frontier recovery state armed"
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -70221,20 +70219,22 @@ async fn force_view_change_if_idle_clamps_tracked_round_height_to_commit_horizon
         since: start,
     });
     assert!(
-        actor.force_view_change_if_idle(now),
-        "idle timeout should rotate on the clamped commit horizon"
+        !actor.force_view_change_if_idle(now),
+        "idle timeout should arm recovery on the clamped commit horizon before rotating"
     );
     assert_eq!(
         actor.phase_tracker.current_view(commit_horizon),
-        Some(current_view.saturating_add(1))
+        Some(current_view)
     );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((commit_horizon, current_view.saturating_add(1)))
-    );
+    assert_eq!(actor.subsystems.propose.forced_view_after_timeout, None);
 
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(
+        actor.frontier_slot_is_exact_height(commit_horizon)
+            || actor.frontier_recovery_exists_at_height(commit_horizon),
+        "the clamped commit horizon should leave contiguous-frontier recovery armed"
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -71340,26 +71340,19 @@ async fn force_view_change_if_idle_ignores_stale_quorum_timeout_owner_after_fron
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "empty-frontier missing_qc should rotate directly even if stale quorum-timeout frontier recovery state exists"
+        !actor.force_view_change_if_idle(now),
+        "empty-frontier missing_qc should keep a stale quorum-timeout recovery owner armed instead of rotating immediately"
     );
     let after = super::status::snapshot();
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
     assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-    assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "direct frontier rotation should count one missing_qc view change"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "keeping the stale quorum-timeout owner armed should avoid a direct missing_qc rotation"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .forced_view_after_timeout
-            .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
-        "direct frontier rotation should install the next forced view marker"
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "the frontier should stay armed for deterministic recovery work"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -71596,23 +71589,16 @@ async fn force_view_change_if_idle_ignores_stale_missing_payload_owner_after_fro
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "empty-frontier timeout should rotate directly instead of honoring stale missing-payload frontier ownership"
+        !actor.force_view_change_if_idle(now),
+        "empty-frontier timeout should keep stale missing-payload frontier ownership armed for one recovery window"
     );
     let after = super::status::snapshot();
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
     assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "stale missing-payload ownership should not trigger a direct missing_qc rotation"
     );
-    assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "direct frontier rotation should count one missing_qc view change"
-    );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((height, current_view.saturating_add(1)))
-    );
+    assert_eq!(actor.subsystems.propose.forced_view_after_timeout, None);
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -71993,22 +71979,24 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "idle timeout should still rotate empty-frontier local vote evidence even after higher-view NEW_VIEW traffic arrives"
+        !actor.force_view_change_if_idle(now),
+        "idle timeout should keep empty-frontier local vote evidence in deterministic recovery even after higher-view NEW_VIEW traffic arrives"
     );
     let after = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "remote NEW_VIEW traffic must not pin local empty-frontier vote evidence at the old view"
+        Some(current_view),
+        "remote NEW_VIEW traffic must not force an immediate local view advance for empty-frontier vote evidence"
     );
     assert_eq!(
         after.view_change_causes.quorum_timeout_total,
-        before
-            .view_change_causes
-            .quorum_timeout_total
-            .saturating_add(1),
-        "empty-frontier local vote evidence with remote NEW_VIEW traffic should still count one quorum_timeout rotation"
+        before.view_change_causes.quorum_timeout_total,
+        "arming deterministic recovery should not yet count a quorum_timeout rotation"
+    );
+    assert!(
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "empty-frontier local vote evidence should keep exact-frontier recovery state armed"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -72089,10 +72077,9 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unif
         "arming unified frontier recovery should not count a MissingQc rotation"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(
-            |state| state.frontier_height == height && state.last_cause == "missing_qc"
-        ),
-        "empty contiguous-frontier missing_qc should install unified frontier recovery state"
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "empty contiguous-frontier missing_qc should preserve exact-frontier recovery state instead of rotating"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -72100,8 +72087,8 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unif
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_with_remote_higher_view_votes()
-{
+async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_with_remote_higher_view_votes_through_unified_recovery()
+ {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -72352,19 +72339,23 @@ async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_with_remote
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "empty contiguous-frontier missing_qc should still rotate even after remote higher-view NEW_VIEW traffic"
+        !actor.force_view_change_if_idle(now),
+        "empty contiguous-frontier missing_qc should still seed unified recovery even after remote higher-view NEW_VIEW traffic"
     );
     let after = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "remote higher-view NEW_VIEW traffic must not pin the local empty frontier at view 0"
+        Some(current_view),
+        "remote higher-view NEW_VIEW traffic must not force an immediate local view advance on the empty frontier"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "the timeout should still register as a MissingQc rotation"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "the first timeout should seed recovery without counting a MissingQc rotation"
+    );
+    assert!(
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "remote higher-view NEW_VIEW traffic should still leave exact-frontier recovery state armed"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -72687,19 +72678,18 @@ async fn force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes() 
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "missing-leader recovery should use the aged round after a pacemaker attempt even if the queue marker was refreshed"
+        !actor.force_view_change_if_idle(now),
+        "missing-leader recovery should use the aged round to arm frontier recovery even if the queue marker was refreshed"
     );
     let after = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "the aged round should advance instead of being pinned by the refreshed queue timer"
+        Some(current_view),
+        "the aged round should arm recovery instead of advancing immediately"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "the timeout should count as one MissingQc rotation"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "arming frontier recovery should not count as a MissingQc rotation"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -74236,12 +74226,14 @@ async fn force_view_change_if_idle_waits_for_pacemaker_attempt() {
 
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     assert!(
-        actor.force_view_change_if_idle(now),
-        "idle view change should trigger after a pacemaker attempt times out"
+        !actor.force_view_change_if_idle(now),
+        "idle view change should arm recovery after a pacemaker attempt times out"
     );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+    assert!(
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "post-pacemaker timeout should leave contiguous-frontier recovery state armed"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -74313,12 +74305,14 @@ async fn force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bo
         .unwrap_or(now);
     actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
     assert!(
-        actor.force_view_change_if_idle(rotate_at),
-        "rotation should resume once the bounded commit-skew grace expires"
+        !actor.force_view_change_if_idle(rotate_at),
+        "bounded commit-skew expiry should arm deterministic recovery before any rotation"
     );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+    assert!(
+        actor.frontier_slot_is_exact_height(height)
+            || actor.frontier_recovery_exists_at_height(height),
+        "bounded commit-skew expiry should leave contiguous-frontier recovery armed"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
