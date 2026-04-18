@@ -6149,7 +6149,6 @@ impl Actor {
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
         self.frontier_slot_has_active_owner_state_for_view(frontier_height, frontier_view)
-            || self.slot_has_authoritative_payload(frontier_height, frontier_view)
             || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
             || self.frontier_recovery_quorum_timeout_same_height_recovery_active(
                 frontier_height,
@@ -29848,12 +29847,18 @@ impl Actor {
         now: Instant,
         source: &'static str,
     ) {
+        let preserve_live_frontier_state = source == "quorum_timeout"
+            && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
+        let preserve_same_view_authoritative_owner =
+            source != "quorum_timeout" || preserve_live_frontier_state;
         let preserved_frontier_owners: Vec<_> = self
             .slot_tracker
             .authoritative_block_slots
             .iter()
             .filter_map(|(&(height, owner_view), &hash)| {
-                (height == frontier_height).then_some((owner_view, hash))
+                (height == frontier_height
+                    && (owner_view != view || preserve_same_view_authoritative_owner))
+                    .then_some((owner_view, hash))
             })
             .collect();
         let preserved_frontier_infos: Vec<_> = self
@@ -29861,11 +29866,11 @@ impl Actor {
             .authoritative_block_frontiers
             .iter()
             .filter_map(|(&(height, owner_view, hash), info)| {
-                (height == frontier_height).then_some((owner_view, hash, info.clone()))
+                (height == frontier_height
+                    && (owner_view != view || preserve_same_view_authoritative_owner))
+                    .then_some((owner_view, hash, info.clone()))
             })
             .collect();
-        let preserve_live_frontier_state = source == "quorum_timeout"
-            && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
         // Frontier cleanup must own all same-height recovery state, including RBC sessions
         // that no longer have a pending-block wrapper but still block contiguous progress.
         let frontier_rbc_removed = if preserve_live_frontier_state {
@@ -30433,9 +30438,11 @@ impl Actor {
                 self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
             let same_height_rbc_sender_activity_active = reason == "quorum_timeout"
                 && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
-            if same_slot_missing_payload_recovery_active
+            if same_slot_ingress_active
+                || same_slot_missing_payload_recovery_active
                 || same_slot_vote_backed_recovery_active
                 || same_slot_reassembly_active
+                || same_height_rbc_sender_activity_active
             {
                 debug!(
                     height,
