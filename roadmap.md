@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 IVM bare-domain TLV normalization and opaque asset unregister sync):
+`crates/ivm/tests/common.rs` now normalizes bare `PointerType::DomainId`
+payloads onto `*.universal`, which restores the IVM WSV-host tests that still
+use short domain literals like `wonder`. `MockWorldStateView::unregister_domain`
+now uses `AssetDefinitionId::try_domain()` so opaque canonical asset
+definitions no longer panic or spuriously pin a domain, and the affected
+unregister tests now model the current universal-account / opaque-id semantics
+explicitly.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/common.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_register_domain_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_neg_cases.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib unregister_domain_ignores_opaque_asset_definition_ids -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_account_admin --test wsv_host_register_domain_tlv --test wsv_host_register_account_asset_tlv --test wsv_host_role_admin_tlv --test wsv_host_role_admin_neg --test wsv_host_role_vs_direct_perm --test wsv_host_unregister_tlv --test wsv_host_unregister_neg_cases --test wsv_host_nft_unregister_positive -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 syscall policy unknown-number test resync):
 `crates/ivm/tests/syscalls_policy.rs` no longer assumes hard-coded numbers such
 as `0x80` are outside the ABI surface. The regression now derives unknown

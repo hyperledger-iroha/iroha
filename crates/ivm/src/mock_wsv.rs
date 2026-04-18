@@ -1257,7 +1257,10 @@ impl MockWorldStateView {
             .domain_accounts
             .get(id)
             .is_some_and(|subjects| !subjects.is_empty());
-        let has_assets = self.asset_definitions.keys().any(|ad| ad.domain() == id);
+        let has_assets = self
+            .asset_definitions
+            .keys()
+            .any(|ad| ad.try_domain() == Some(id));
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
         if has_accounts || has_assets || has_nfts {
             return false;
@@ -6740,6 +6743,34 @@ mod tests_zk_asset_bindings {
         assert!(
             wsv.asset_definitions.contains_key(&opaque),
             "registered opaque asset definition should be stored"
+        );
+    }
+
+    #[test]
+    fn unregister_domain_ignores_opaque_asset_definition_ids() {
+        let caller: AccountId = test_account_id(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+            "domain",
+        );
+        let domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
+        let projected = iroha_data_model::asset::AssetDefinitionId::new(
+            domain.clone(),
+            "rose".parse().unwrap(),
+        );
+        let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
+            &norito::to_bytes(&projected).expect("encode asset definition"),
+        )
+        .expect("decode opaque canonical asset definition");
+
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+        wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+        assert!(wsv.register_domain(&caller, domain.clone()));
+        assert!(wsv.register_asset_definition(&caller, opaque, Mintable::Infinitely));
+        assert!(
+            wsv.unregister_domain(&domain),
+            "opaque asset definitions must not pin a domain because they have no domain projection"
         );
     }
 }

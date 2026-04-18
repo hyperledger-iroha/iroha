@@ -19,6 +19,9 @@ fn main() -> Result<()> {
 
     let public_key = PublicKey::from_str(&public_key)?;
     let account_id = AccountId::new(public_key);
-    println!("{}", account_id.to_i105_for_discriminant(chain_discriminant)?);
+    println!(
+        "{}",
+        account_id.to_i105_for_discriminant(chain_discriminant)?
+    );
     Ok(())
 }
