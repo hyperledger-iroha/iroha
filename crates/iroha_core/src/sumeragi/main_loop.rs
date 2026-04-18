@@ -131,8 +131,10 @@ mod vote_verify;
 mod votes;
 mod vrf;
 
+#[cfg(test)]
+use locked_qc::qc_extends_locked_if_present;
 use locked_qc::{
-    LockedQcRejection, ensure_locked_qc_allows, qc_extends_locked_if_present,
+    LockedQcRejection, ensure_locked_qc_allows, qc_satisfies_locked_if_present,
     realign_locked_to_committed_if_extends,
 };
 use pacing::{
@@ -4067,9 +4069,6 @@ impl Actor {
         if parent_height > direct_parent_height_ceiling {
             // Invariant A: recover contiguously from committed_height + 1 instead of
             // repeatedly chasing far-future parent branches.
-            let now = Instant::now();
-            let requested_pull =
-                self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
             debug!(
                 height = block_height,
                 view = block_view,
@@ -4081,8 +4080,7 @@ impl Actor {
                 block = %block_hash,
                 missing_parent = ?parent_hash,
                 trigger,
-                requested_pull,
-                "skipping far-future missing-parent fetch and reanchoring committed-anchor range pull"
+                "skipping far-future missing-parent fetch while contiguous frontier recovery remains authoritative"
             );
             return;
         }
@@ -6011,6 +6009,36 @@ impl Actor {
         )
     }
 
+    fn frontier_recovery_same_slot_missing_commit_qc_repair_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let committed_height = self.committed_height_snapshot();
+        self.pending
+            .missing_commit_qc_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == frontier_height
+                    && request.view == frontier_view
+                    && (recent(request.last_requested)
+                        || recent(request.last_dependency_progress)
+                        || recent(request.first_seen))
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
     fn frontier_recovery_same_slot_missing_payload_recovery_active(
         &self,
         frontier_height: u64,
@@ -6130,6 +6158,11 @@ impl Actor {
             queue_depths,
         ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_missing_block_request_active(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_missing_commit_qc_repair_active(
                 frontier_height,
                 frontier_view,
                 now,
@@ -15778,7 +15811,7 @@ impl Actor {
         if !self.block_known_for_lock(highest.subject_block_hash) {
             return false;
         }
-        qc_extends_locked_if_present(
+        qc_satisfies_locked_if_present(
             self.locked_qc,
             highest,
             |hash, height| self.parent_hash_for(hash, height),
@@ -24098,6 +24131,44 @@ impl Actor {
         }
     }
 
+    fn canonical_frontier_reanchor_stride_blocks_missing_qc_rotation(
+        &mut self,
+        frontier_height: u64,
+        canonical_height: u64,
+        now: Instant,
+    ) -> bool {
+        if !self.frontier_catchup_has_unresolved_dependency(frontier_height) {
+            return false;
+        }
+        if !self
+            .canonical_frontier_reanchor_window_gates
+            .get(&(frontier_height, canonical_height))
+            .is_some_and(|state| state.last_action_window_index.is_some())
+        {
+            return false;
+        }
+        let snapshot = self.canonical_frontier_reanchor_window_snapshot(
+            frontier_height,
+            canonical_height,
+            now,
+        );
+        let stride = Self::canonical_frontier_reanchor_stride_for_window(snapshot.window_index);
+        if snapshot.window_index % stride == 0 {
+            return false;
+        }
+        debug!(
+            frontier_height,
+            canonical_height,
+            window_index = snapshot.window_index,
+            stride,
+            dwell_ms = now
+                .saturating_duration_since(snapshot.entered_at)
+                .as_millis(),
+            "suppressing same-height missing_qc rotation until canonical frontier reanchor stride window is eligible"
+        );
+        true
+    }
+
     fn mark_canonical_frontier_reanchor_window_emitted(
         &mut self,
         frontier_height: u64,
@@ -24625,6 +24696,24 @@ impl Actor {
         }
         self.mark_missing_qc_height_stall_rotation_window(height, stall.window_index, now);
         true
+    }
+
+    fn missing_qc_height_stall_rotation_window_available(
+        &mut self,
+        height: u64,
+        now: Instant,
+    ) -> bool {
+        let Some(stall) = self
+            .missing_qc_height_stall_snapshot(height, now)
+            .filter(|stall| stall.mode_active && stall.height == height)
+        else {
+            return false;
+        };
+        !self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+            state.height == stall.height
+                && state.mode_active
+                && state.last_rotation_window_index == Some(stall.window_index)
+        })
     }
 
     fn missing_payload_fetch_has_unresolved_dependency(
@@ -30424,9 +30513,11 @@ impl Actor {
         });
         let same_slot_missing_block_request_active = reason == "quorum_timeout"
             && self.frontier_recovery_same_slot_missing_block_request_active(height, view, now);
+        let empty_frontier_missing_qc =
+            reason == "missing_qc" && !proposal_seen && height == frontier_height;
         if exact_frontier_height
             && (exact_slot_owner_present
-                || self.frontier_recovery.is_none()
+                || (!empty_frontier_missing_qc && self.frontier_recovery.is_none())
                 || same_slot_missing_block_request_active)
         {
             if self.frontier_slot_lag_window_expired(height, now)
@@ -30444,6 +30535,8 @@ impl Actor {
                 self.frontier_recovery_same_slot_ingress_active(height, view, now, queue_depths);
             let same_slot_missing_payload_recovery_active =
                 self.frontier_recovery_same_slot_missing_payload_recovery_active(height, view, now);
+            let same_slot_missing_commit_qc_repair_active =
+                self.frontier_recovery_same_slot_missing_commit_qc_repair_active(height, view, now);
             let same_slot_vote_backed_recovery_active =
                 self.frontier_recovery_same_slot_vote_backed_recovery_active(height, view, now);
             let same_slot_reassembly_active =
@@ -30452,6 +30545,7 @@ impl Actor {
                 && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
             if same_slot_ingress_active
                 || same_slot_missing_payload_recovery_active
+                || same_slot_missing_commit_qc_repair_active
                 || same_slot_vote_backed_recovery_active
                 || same_slot_reassembly_active
                 || same_height_rbc_sender_activity_active
@@ -30462,6 +30556,7 @@ impl Actor {
                     reason,
                     same_slot_ingress_active,
                     same_slot_missing_payload_recovery_active,
+                    same_slot_missing_commit_qc_repair_active,
                     same_slot_vote_backed_recovery_active,
                     same_slot_reassembly_active,
                     same_height_rbc_sender_activity_active,
@@ -30511,8 +30606,6 @@ impl Actor {
         let reserved_recovery_window = self.frontier_recovery.is_some_and(|current| {
             current.frontier_height == frontier_height && current.last_cause != "missing_qc"
         });
-        let empty_frontier_missing_qc =
-            reason == "missing_qc" && !proposal_seen && height == frontier_height;
         let actionable_dependency = reserved_recovery_window
             || empty_frontier_missing_qc
             || backlog_signals
@@ -31971,6 +32064,13 @@ impl Actor {
             } else {
                 false
             };
+        let pre_reset_frontier_reanchor_stride_blocked = height
+            == contiguous_frontier_height_for_reset
+            && self.canonical_frontier_reanchor_stride_blocks_missing_qc_rotation(
+                contiguous_frontier_height_for_reset,
+                contiguous_frontier_height_for_reset,
+                now,
+            );
         let reset_stalled_frontier_state =
             self.maybe_reset_stalled_frontier_state(committed_height, now);
         let pruned_lock_lag_future_state =
@@ -32223,15 +32323,24 @@ impl Actor {
         if !missing_qc_actionable_dependency_signals {
             if height == contiguous_frontier_height {
                 if exact_frontier_body_repair_active {
-                    let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
-                    debug!(
-                        height,
-                        view = current_view,
-                        committed_height,
-                        exact_retry_emitted,
-                        "deferring contiguous-frontier idle rotation while exact body repair remains active"
-                    );
-                    return false;
+                    if self.missing_qc_height_stall_rotation_window_available(height, now) {
+                        debug!(
+                            height,
+                            view = current_view,
+                            committed_height,
+                            "allowing missing_qc rotation after exact body repair consumed its stall window"
+                        );
+                    } else {
+                        let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                        debug!(
+                            height,
+                            view = current_view,
+                            committed_height,
+                            exact_retry_emitted,
+                            "deferring contiguous-frontier idle rotation while exact body repair remains active"
+                        );
+                        return false;
+                    }
                 }
                 if frontier_matching_pending {
                     debug!(
@@ -32250,6 +32359,51 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+                if pre_reset_frontier_reanchor_unresolved_in_window
+                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                    && !self
+                        .missing_qc_height_stall_snapshot(height, now)
+                        .is_some_and(|stall| stall.mode_active && stall.height == height)
+                {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                    );
+                    return false;
+                }
+                if pre_reset_frontier_reanchor_stride_blocked
+                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "suppressing same-height idle view-change until canonical frontier reanchor stride window is eligible"
+                    );
+                    return false;
+                }
+                if !proposal_seen && matches!(direct_cause, ViewChangeCause::MissingQc) {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "routing empty contiguous-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
+                    );
+                    return matches!(
+                        self.advance_frontier_recovery(
+                            "missing_qc",
+                            height,
+                            current_view,
+                            proposal_seen,
+                            false,
+                            true,
+                            now,
+                        ),
+                        FrontierRecoveryAdvance::Rotate
+                    );
+                }
                 if matches!(direct_cause, ViewChangeCause::MissingQc)
                     && !self.try_reserve_missing_qc_height_stall_rotation_window(
                         height,
@@ -32373,16 +32527,26 @@ impl Actor {
         }
         if height == contiguous_frontier_height {
             if exact_frontier_body_repair_active {
-                let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
-                debug!(
-                    height,
-                    view = current_view,
-                    committed_height,
-                    missing_qc_actionable_dependency_signals,
-                    exact_retry_emitted,
-                    "deferring contiguous-frontier idle rotation while exact body repair remains active"
-                );
-                return false;
+                if self.missing_qc_height_stall_rotation_window_available(height, now) {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        missing_qc_actionable_dependency_signals,
+                        "allowing missing_qc rotation after exact body repair consumed its stall window"
+                    );
+                } else {
+                    let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        missing_qc_actionable_dependency_signals,
+                        exact_retry_emitted,
+                        "deferring contiguous-frontier idle rotation while exact body repair remains active"
+                    );
+                    return false;
+                }
             }
             if frontier_matching_pending {
                 debug!(
@@ -32400,6 +32564,31 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+            if pre_reset_frontier_reanchor_unresolved_in_window
+                && matches!(direct_cause, ViewChangeCause::MissingQc)
+                && !self
+                    .missing_qc_height_stall_snapshot(height, now)
+                    .is_some_and(|stall| stall.mode_active && stall.height == height)
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                );
+                return false;
+            }
+            if pre_reset_frontier_reanchor_stride_blocked
+                && matches!(direct_cause, ViewChangeCause::MissingQc)
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change until canonical frontier reanchor stride window is eligible"
+                );
+                return false;
+            }
             if matches!(direct_cause, ViewChangeCause::MissingQc)
                 && !self.try_reserve_missing_qc_height_stall_rotation_window(
                     height,

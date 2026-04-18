@@ -11,7 +11,7 @@ use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
 use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
 use super::pending_block::ValidatedCommitArtifact;
 use super::propose::ProposalBackpressure;
@@ -744,7 +744,7 @@ impl Actor {
 
         if let Some(lock) = self.locked_qc
             && let Some(highest) = self.highest_qc
-            && !qc_extends_locked_with_lookup(lock, highest, |hash, height| {
+            && !qc_satisfies_locked_with_lookup(lock, highest, |hash, height| {
                 self.parent_hash_for(hash, height)
             })
         {
@@ -1666,7 +1666,11 @@ impl Actor {
 
                 if commit_signatures_missing
                     && !has_quorum_signers
-                    && missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached)
+                    && missing_quorum_stale(
+                        quorum_stall_age,
+                        effective_quorum_timeout,
+                        quorum_reached,
+                    )
                 {
                     let reschedule_backoff =
                         super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
@@ -3847,7 +3851,8 @@ impl Actor {
                 .get(&block_hash)
                 .map_or((false, false), |stats| {
                     (
-                        now.saturating_duration_since(stats.last_dependency_progress) >= stall_window,
+                        now.saturating_duration_since(stats.last_dependency_progress)
+                            >= stall_window,
                         now.saturating_duration_since(stats.first_seen) >= dwell_window,
                     )
                 });
@@ -4389,7 +4394,16 @@ impl Actor {
             return false;
         }
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_for_lock(lock.subject_block_hash) {
+            let candidate = crate::sumeragi::consensus::QcHeaderRef {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                height,
+                view,
+                epoch,
+            };
+            if !self.block_known_for_lock(lock.subject_block_hash)
+                && candidate.view <= lock.view
+            {
                 let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
@@ -4401,15 +4415,8 @@ impl Actor {
                 );
                 return false;
             }
-            let candidate = crate::sumeragi::consensus::QcHeaderRef {
-                phase: crate::sumeragi::consensus::Phase::Commit,
-                subject_block_hash: block_hash,
-                height,
-                view,
-                epoch,
-            };
             let extends_locked =
-                qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+                qc_satisfies_locked_with_lookup(lock, candidate, |hash, lookup_height| {
                     if hash == block_hash && lookup_height == height {
                         parent_hash
                     } else {

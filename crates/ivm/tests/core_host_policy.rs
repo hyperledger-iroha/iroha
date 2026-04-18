@@ -1153,13 +1153,14 @@ fn core_host_enforces_fixture_snapshot_fields() {
         .entries
         .first()
         .expect("snapshot contains policy entry");
-    let base_intent = fixture_intent(
+    let mut base_intent = fixture_intent(
         descriptor
             .dsids
             .first()
             .copied()
             .expect("dataspace id present"),
     );
+    base_intent.op.from = base_handle.subject.account.clone();
 
     {
         use std::num::NonZeroU64;

@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 AXT golden fixture resync):
+The shared AXT golden vectors are back in sync with the current descriptor
+binding and account encoding. `axt_golden.rs` now embeds the current
+descriptor/handle/policy Norito bytes again, and the `ivm`
+`core_host_enforces_fixture_snapshot_fields` regression now derives the
+fixture intent's `from` account from the decoded fixture handle so the state
+validation path matches the canonical account string stored in the handle.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_policy.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `CARGO_TARGET_DIR=/tmp/iroha-axt-golden-target cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ivm-core-host-policy-target cargo test -p ivm --test core_host_policy core_host_enforces_fixture_snapshot_fields -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 plain `cargo bench` benchmark selection):
 Criterion is now a dev-dependency for the workspace crates that already ship
 Criterion benchmarks, and plain `cargo bench` now discovers those benchmark
@@ -19403,6 +19425,11 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 2. Completed: traced the direct NPoS validator death path to `irohad` supervisor shutdown-on-unexpected-exit. In the fresh full soak the failing peer exits with `Some of the supervisor children exited unexpectedly`, and `crates/iroha_futures/src/supervisor.rs:302-312` plus `crates/irohad/src/main.rs:8631-8635` explain the status-`1` process exit.
 3. Remaining open: identify the exact supervised child inside `irohad` that exits first on the fresh failing NPoS binary. The current surviving evidence localizes it to the validator-internal NPoS Sumeragi/RBC/proposal path, but the original peer dirs were not retained and the present dirty tree cannot be rebuilt cleanly because of unrelated `iroha_data_model` errors.
 4. Remaining open: once a buildable repro tree is available again, rerun the NPoS soak with preserved peer dirs and `iroha_futures::supervisor=debug` so the fatal `Supervisor observed child exit` log includes the child `caller_location`, closing the last remaining attribution gap.
+
+## 2026-04-18 Lock-Override Follow-up
+1. Completed: Sumeragi lock validation now accepts structurally divergent QCs when the candidate view is strictly newer than the local `locked_qc.view`, matching the lock-override liveness rule while retaining same-view/older-view structural-extension safety.
+2. Completed: focused unit coverage now exercises the proposal highest-QC path, precommit QC/vote aggregation path, divergent newer-view acceptance, and divergent same-view rejection.
+3. Remaining open: rerun a 4+ peer view-change/localnet regression once the surrounding dirty-tree Sumeragi formatting drift is settled enough for the standard full validation corridor.
 
 ## 2026-04-04 Throughput Harness Follow-up
 1. Completed: `stable` now defaults to the preallocated transfer hot path instead of the previous mixed stateful recipe set. Izanami genesis pre-seeds user balances, stable transfer plans no longer mint inline, and the default stable path stays on ingress acceptance.
