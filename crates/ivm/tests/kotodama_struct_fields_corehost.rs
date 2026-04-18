@@ -13,7 +13,7 @@ fn struct_fields_lower_to_corehost_syscall_args() {
             struct TransferArgs { domain: DomainId; to: AccountId; }
             fn main() {
                 let args = TransferArgs(
-                    domain("wonderland"),
+                    domain("wonderland.universal"),
                     account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
                 );
                 transfer_domain(authority(), args.domain, args.to);
