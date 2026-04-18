@@ -2019,6 +2019,12 @@ impl Actor {
             highest.height,
             highest.view,
         );
+        let force_gate_retry_window = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .filter(|stats| stats.height == highest.height)
+            .map_or(retry_window, |stats| retry_window.max(stats.retry_window));
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let force_retry_now = force_fetch
             && self.allow_highest_qc_force_fetch_retry(
@@ -2026,7 +2032,7 @@ impl Actor {
                 highest.subject_block_hash,
                 source,
                 now,
-                retry_window,
+                force_gate_retry_window,
             );
         let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
             MissingBlockFetchMode::AggressiveTopology

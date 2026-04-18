@@ -9,7 +9,7 @@ pub mod dilithium3 {
     use hkdf::Hkdf;
     use pqcrypto_mldsa::ffi;
     use sha2::Sha512;
-    use zeroize::Zeroize;
+    use zeroize::{Zeroize, Zeroizing};
 
     use crate::{Algorithm, Error, PrivateKey, PublicKey};
 
@@ -82,9 +82,9 @@ pub mod dilithium3 {
             )));
         }
 
-        let mut rho = [0u8; SEEDBYTES];
-        let mut tr = [0u8; TRBYTES];
-        let mut key = [0u8; SEEDBYTES];
+        let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
+        let mut tr = Zeroizing::new([0u8; TRBYTES]);
+        let mut key = Zeroizing::new([0u8; SEEDBYTES]);
         let mut t0 = Polyveck::default();
         let mut s1 = Polyvecl::default();
         let mut s2 = Polyveck::default();
@@ -135,9 +135,6 @@ pub mod dilithium3 {
         }
 
         if t0_check != t0 {
-            rho.zeroize();
-            tr.zeroize();
-            key.zeroize();
             return Err(Error::KeyGen(String::from(
                 "Inconsistent ML-DSA secret key components",
             )));
@@ -147,10 +144,6 @@ pub mod dilithium3 {
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_pack_pk(pk_bytes.as_mut_ptr(), rho.as_ptr(), addr_of!(t1));
         }
-
-        rho.zeroize();
-        tr.zeroize();
-        key.zeroize();
 
         PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))
@@ -168,7 +161,7 @@ pub mod dilithium3 {
     fn keypair_from_seed_material(
         seed_material: &[u8; SEEDBYTES],
     ) -> Result<(PublicKey, PrivateKey), Error> {
-        let mut expanded = [0u8; 2 * SEEDBYTES + CRHBYTES];
+        let mut expanded = Zeroizing::new([0u8; 2 * SEEDBYTES + CRHBYTES]);
         unsafe {
             shake256(
                 expanded.as_mut_ptr(),
@@ -237,12 +230,13 @@ pub mod dilithium3 {
             );
         }
 
-        let mut tr = [0u8; TRBYTES];
+        let mut tr = Zeroizing::new([0u8; TRBYTES]);
         unsafe {
             shake256(tr.as_mut_ptr(), tr.len(), pk_bytes.as_ptr(), pk_bytes.len());
         }
 
-        let mut sk_bytes = [0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES];
+        let mut sk_bytes =
+            Zeroizing::new([0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES]);
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_pack_sk(
                 sk_bytes.as_mut_ptr(),
@@ -254,9 +248,6 @@ pub mod dilithium3 {
                 addr_of!(s2),
             );
         }
-
-        expanded.zeroize();
-        tr.zeroize();
 
         let public_key = PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))?;

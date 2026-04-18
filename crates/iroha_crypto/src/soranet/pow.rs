@@ -15,7 +15,7 @@ use norito::{
     to_bytes,
 };
 use rand::{CryptoRng, RngCore};
-use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
+use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
 /// Domain separator used when deriving `PoW` challenges.
@@ -146,7 +146,7 @@ impl SignedTicket {
         secret_key: &[u8],
     ) -> Result<Self, Error> {
         let payload = Self::build_payload(&ticket, relay_id, transcript_hash);
-        let signature = sign_mldsa(MlDsaSuite::MlDsa44, secret_key, &payload)
+        let signature = sign_mldsa_from_os(MlDsaSuite::MlDsa44, secret_key, &[], &payload)
             .map_err(|e| Error::Signing(e.to_string()))?;
 
         Ok(Self {
@@ -185,7 +185,14 @@ impl SignedTicket {
     pub fn verify(&self, public_key: &[u8]) -> Result<(), Error> {
         let payload =
             Self::build_payload(&self.ticket, &self.relay_id, self.transcript_hash.as_ref());
-        verify_mldsa(MlDsaSuite::MlDsa44, public_key, &payload, &self.signature).map_err(
+        verify_mldsa(
+            MlDsaSuite::MlDsa44,
+            public_key,
+            &[],
+            &payload,
+            &self.signature,
+        )
+        .map_err(
             |e| match e {
                 MlDsaError::VerificationFailed(_) => Error::InvalidSignature,
                 other => Error::PostQuantum(other.to_string()),
@@ -1254,7 +1261,7 @@ mod tests {
 
     #[test]
     fn signed_ticket_roundtrip() {
-        use soranet_pq::generate_mldsa_keypair;
+        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
         let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let ticket = Ticket {
             version: 1,
@@ -1288,7 +1295,7 @@ mod tests {
 
     #[test]
     fn signed_ticket_encode_decode_roundtrip() {
-        use soranet_pq::generate_mldsa_keypair;
+        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
 
         let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let ticket = Ticket {
@@ -1571,7 +1578,7 @@ mod tests {
 
     #[test]
     fn signed_ticket_replay_rejected_after_reload() {
-        use soranet_pq::generate_mldsa_keypair;
+        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let now = UNIX_EPOCH + Duration::from_secs(42_000);
@@ -1632,7 +1639,7 @@ mod tests {
 
     #[test]
     fn signed_ticket_relay_mismatch_is_reported() {
-        use soranet_pq::generate_mldsa_keypair;
+        use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let now = UNIX_EPOCH + Duration::from_secs(50_000);

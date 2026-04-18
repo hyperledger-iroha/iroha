@@ -22,13 +22,13 @@ use norito::streaming::{
         derive_content_key, encrypt_chunk, nonce_len_for_suite, wrap_gck,
     },
 };
-use soranet_pq::{MlKemKeyPair, MlKemSuite, generate_mlkem_keypair};
+use soranet_pq::{MlKemKeyPair, MlKemSuite, generate_mlkem_keypair_from_os};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 const TEST_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
 
 fn mlkem_keypair() -> MlKemKeyPair {
-    generate_mlkem_keypair(TEST_KEM_SUITE)
+    generate_mlkem_keypair_from_os(TEST_KEM_SUITE).expect("ML-KEM keypair")
 }
 
 fn mlkem_keypair_bytes() -> (Vec<u8>, Vec<u8>) {

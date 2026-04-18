@@ -251,6 +251,7 @@ pub unsafe extern "C" fn soranet_mlkem_decapsulate(
             0
         }
         Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
     }
 }
 

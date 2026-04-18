@@ -2,7 +2,10 @@
 #![allow(clippy::unwrap_used)]
 
 use norito::json::{self, Map, Value};
-use soranet_pq::{MlDsaSuite, MlKemSuite, decapsulate_mlkem, sign_mldsa, verify_mldsa};
+use soranet_pq::{
+    HedgedRngSeed, MlDsaSuite, MlKemSuite, decapsulate_mlkem, hedged_chacha20_rng, sign_mldsa,
+    verify_mldsa,
+};
 
 #[test]
 fn mlkem_vectors_decapsulate_to_expected_shared_secret() {
@@ -46,11 +49,18 @@ fn mldsa_vectors_verify_and_resign() {
         let message = decode_hex_field(obj, "message");
         let signature = decode_hex_field(obj, "signature");
 
-        verify_mldsa(suite, &public_key, &message, &signature).expect("fixture signature verifies");
+        verify_mldsa(suite, &public_key, &[], &message, &signature)
+            .expect("fixture signature verifies");
 
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
+            b"pq-kat:mldsa:sign",
+        );
         let regenerated =
-            sign_mldsa(suite, &secret_key, &message).expect("fixture signing succeeds");
-        assert_eq!(regenerated.as_bytes(), signature.as_slice());
+            sign_mldsa(suite, &secret_key, &[], &message, &mut sign_rng)
+                .expect("fixture signing succeeds");
+        verify_mldsa(suite, &public_key, &[], &message, regenerated.as_bytes())
+            .expect("regenerated signature verifies");
     }
 }
 
