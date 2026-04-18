@@ -6,9 +6,10 @@ use norito::{NoritoDeserialize, NoritoSerialize};
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
-        self, Backend, BackendArtifact, BackendConfig, ExecutionMode, LOOKUP_PRODUCT_DOMAIN,
-        PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA,
-        TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
+        self, AIR_COMPOSITION_ALPHA_COUNT, Backend, BackendArtifact, BackendConfig, ExecutionMode,
+        LOOKUP_PRODUCT_DOMAIN, PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_AIR_ROOTS,
+        TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA, TRANSCRIPT_TAG_INIT,
+        TRANSCRIPT_TAG_ROOTS,
     },
     ordering, trace, trace_commitment,
 };
@@ -33,6 +34,8 @@ const DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES: usize = 128;
 const DEFAULT_MAX_VERIFY_QUERY_PATH_LEN: usize = 64;
 /// Default maximum FRI values carried by a single round opening.
 const DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES: usize = 16;
+/// Default maximum AIR row values carried by a sampled opening.
+const DEFAULT_MAX_VERIFY_AIR_ROW_VALUES: usize = 512;
 
 /// Public inputs committed by the prover and replayed by the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
@@ -102,6 +105,26 @@ pub struct FriQueryOpening {
     pub final_merkle_path: Vec<u64>,
 }
 
+/// Sampled AIR row and composition opening.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[repr(C)]
+pub struct AirConstraintOpening {
+    /// Evaluation-domain index sampled by the verifier transcript.
+    pub index: u32,
+    /// AIR trace row values at `index`.
+    pub current_row: Vec<u64>,
+    /// AIR trace row values at `(index + 1) mod domain_size`.
+    pub next_row: Vec<u64>,
+    /// Merkle authentication path for `current_row` under `air_trace_root`.
+    pub current_row_path: Vec<u64>,
+    /// Merkle authentication path for `next_row` under `air_trace_root`.
+    pub next_row_path: Vec<u64>,
+    /// Sampled AIR composition value folded by FRI.
+    pub composition_value: u64,
+    /// Merkle authentication path for `composition_value` under `air_composition_root`.
+    pub composition_path: Vec<u64>,
+}
+
 /// Proof artifact produced by the FASTPQ prover.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
@@ -118,8 +141,14 @@ pub struct Proof {
     pub public_io: PublicIO,
     /// Poseidon commitment over the trace columns.
     pub trace_root: [u8; 32],
+    /// Poseidon commitment over row-major AIR trace openings.
+    pub air_trace_root: [u8; 32],
+    /// Poseidon commitment over the AIR composition evaluation vector.
+    pub air_composition_root: [u8; 32],
     /// Poseidon commitment over the lookup witness LDE leaves.
     pub lookup_root: [u8; 32],
+    /// Number of evaluation rows committed by `lookup_root`.
+    pub lde_domain_size: u32,
     /// Lookup grand-product accumulator evaluated by the prover.
     pub lookup_grand_product: u64,
     /// Lookup Fiat–Shamir challenge (`γ`).
@@ -132,6 +161,8 @@ pub struct Proof {
     pub fri_layers: Vec<[u8; 32]>,
     /// Openings into the evaluation domain sampled by the verifier.
     pub queries: Vec<QueryOpening>,
+    /// AIR constraint openings for the same sampled query indices.
+    pub air_openings: Vec<AirConstraintOpening>,
     /// Per-round FRI openings for the same sampled query indices.
     pub fri_queries: Vec<FriQueryOpening>,
 }
@@ -160,6 +191,8 @@ pub struct VerifyLimits {
     pub max_query_path_len: usize,
     /// Maximum values opened in one FRI round group.
     pub max_fri_round_values: usize,
+    /// Maximum values opened in one AIR row.
+    pub max_air_row_values: usize,
 }
 
 impl Default for VerifyLimits {
@@ -172,6 +205,7 @@ impl Default for VerifyLimits {
             max_query_chunk_values: DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES,
             max_query_path_len: DEFAULT_MAX_VERIFY_QUERY_PATH_LEN,
             max_fri_round_values: DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES,
+            max_air_row_values: DEFAULT_MAX_VERIFY_AIR_ROW_VALUES,
         }
     }
 }
@@ -332,6 +366,10 @@ pub fn verify_with_limits(
         field_norito::core::from_bytes(&proof.trace_root).ok_or(Error::TraceRootMismatch)?;
     let lde_root =
         field_norito::core::from_bytes(&proof.lookup_root).ok_or(Error::LookupRootMismatch)?;
+    let air_trace_root =
+        field_norito::core::from_bytes(&proof.air_trace_root).ok_or(Error::AirTraceRootMismatch)?;
+    let air_composition_root = field_norito::core::from_bytes(&proof.air_composition_root)
+        .ok_or(Error::AirCompositionRootMismatch)?;
 
     let mut transcript = backend::Transcript::initialise(
         &proof.public_io,
@@ -349,6 +387,12 @@ pub fn verify_with_limits(
         return Err(Error::LookupChallengeMismatch);
     }
 
+    if proof.alphas.len() != AIR_COMPOSITION_ALPHA_COUNT {
+        return Err(Error::AirChallengeCountMismatch {
+            expected: AIR_COMPOSITION_ALPHA_COUNT,
+            actual: proof.alphas.len(),
+        });
+    }
     for (idx, &alpha) in proof.alphas.iter().enumerate() {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
         let expected = transcript.challenge_field(&tag);
@@ -356,6 +400,14 @@ pub fn verify_with_limits(
             return Err(Error::FriChallengeMismatch { round: idx });
         }
     }
+    transcript.append_message(
+        TRANSCRIPT_TAG_AIR_ROOTS,
+        &[
+            air_trace_root.to_le_bytes(),
+            air_composition_root.to_le_bytes(),
+        ]
+        .concat(),
+    );
     transcript.append_message(
         LOOKUP_PRODUCT_DOMAIN,
         &proof.lookup_grand_product.to_le_bytes(),
@@ -403,9 +455,11 @@ pub fn verify_with_limits(
         }
     }
 
-    let lde_domain_size = 1usize
-        .checked_shl(params.lde_log_size)
-        .ok_or(Error::QueryIndexOverflow { index: usize::MAX })?;
+    let lde_domain_size = usize::try_from(proof.lde_domain_size)
+        .map_err(|_| Error::QueryIndexOverflow { index: usize::MAX })?;
+    if lde_domain_size == 0 {
+        return Err(Error::QueryIndexOutOfRange { index: 0, len: 0 });
+    }
     let expected_queries = backend::sample_queries(
         lde_domain_size,
         usize::try_from(params.fri.queries).expect("query count fits usize"),
@@ -423,6 +477,13 @@ pub fn verify_with_limits(
             actual: proof.fri_queries.len(),
         });
     }
+    if proof.air_openings.len() != proof.queries.len() {
+        return Err(Error::AirOpeningCountMismatch {
+            expected: proof.queries.len(),
+            actual: proof.air_openings.len(),
+        });
+    }
+    let column_names = trace::column_names_for_batch(batch);
     for (pos, (&expected_idx, query)) in expected_queries.iter().zip(&proof.queries).enumerate() {
         let expected_index =
             u32::try_from(expected_idx).map_err(|_| Error::QueryIndexOverflow {
@@ -441,10 +502,55 @@ pub fn verify_with_limits(
         if !backend::verify_merkle_path(lde_root, leaf, leaf_index, &query.merkle_path)? {
             return Err(Error::QueryMerklePathMismatch { index: pos });
         }
+        let air_opening = &proof.air_openings[pos];
+        if usize::try_from(air_opening.index).ok() != Some(expected_idx)
+            || air_opening.current_row.len() != column_names.len()
+            || air_opening.next_row.len() != column_names.len()
+        {
+            return Err(Error::AirOpeningMismatch { index: pos });
+        }
+        let current_leaf = backend::hash_air_trace_row(expected_idx, &air_opening.current_row)?;
+        if !backend::verify_merkle_path(
+            air_trace_root,
+            current_leaf,
+            expected_idx,
+            &air_opening.current_row_path,
+        )? {
+            return Err(Error::AirMerklePathMismatch { index: pos });
+        }
+        let next_idx = (expected_idx + 1) % lde_domain_size;
+        let next_leaf = backend::hash_air_trace_row(next_idx, &air_opening.next_row)?;
+        if !backend::verify_merkle_path(
+            air_trace_root,
+            next_leaf,
+            next_idx,
+            &air_opening.next_row_path,
+        )? {
+            return Err(Error::AirMerklePathMismatch { index: pos });
+        }
+        let expected_composition = backend::air_composition_value_for_rows(
+            &column_names,
+            &air_opening.current_row,
+            &air_opening.next_row,
+            &proof.alphas,
+        )?;
+        if expected_composition != air_opening.composition_value {
+            return Err(Error::AirConstraintMismatch { index: pos });
+        }
+        let composition_leaf =
+            backend::hash_air_composition_leaf(expected_idx, air_opening.composition_value)?;
+        if !backend::verify_merkle_path(
+            air_composition_root,
+            composition_leaf,
+            expected_idx,
+            &air_opening.composition_path,
+        )? {
+            return Err(Error::AirMerklePathMismatch { index: pos });
+        }
         verify_fri_query_chain(
             pos,
             expected_idx,
-            query.value,
+            air_opening.composition_value,
             &proof.fri_queries[pos],
             &proof.fri_layers,
             &proof.betas,
@@ -504,6 +610,37 @@ fn enforce_verify_limits(
             actual: proof.fri_queries.len(),
             max: limits.max_queries,
         });
+    }
+    if proof.air_openings.len() > limits.max_queries {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_queries",
+            actual: proof.air_openings.len(),
+            max: limits.max_queries,
+        });
+    }
+    for air_opening in &proof.air_openings {
+        for row_len in [air_opening.current_row.len(), air_opening.next_row.len()] {
+            if row_len > limits.max_air_row_values {
+                return Err(Error::VerifierLimitExceeded {
+                    limit: "max_air_row_values",
+                    actual: row_len,
+                    max: limits.max_air_row_values,
+                });
+            }
+        }
+        for path_len in [
+            air_opening.current_row_path.len(),
+            air_opening.next_row_path.len(),
+            air_opening.composition_path.len(),
+        ] {
+            if path_len > limits.max_query_path_len {
+                return Err(Error::VerifierLimitExceeded {
+                    limit: "max_query_path_len",
+                    actual: path_len,
+                    max: limits.max_query_path_len,
+                });
+            }
+        }
     }
     for fri_query in &proof.fri_queries {
         if fri_query.final_values.len() > limits.max_fri_round_values {
@@ -636,12 +773,8 @@ fn fold_fri_values(values: &[u64], challenge: u64) -> u64 {
 }
 
 fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = a.wrapping_add(b);
-    if sum >= GOLDILOCKS_MODULUS {
-        sum - GOLDILOCKS_MODULUS
-    } else {
-        sum
-    }
+    let sum = u128::from(a) + u128::from(b);
+    u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
 }
 
 fn mul_mod(a: u64, b: u64) -> u64 {
@@ -707,6 +840,12 @@ fn materialise_proof(
             actual: artifact.fri_query_openings.len(),
         });
     }
+    if artifact.query_openings.len() != artifact.air_openings.len() {
+        return Err(Error::AirOpeningCountMismatch {
+            expected: artifact.query_openings.len(),
+            actual: artifact.air_openings.len(),
+        });
+    }
     let fri_layers = artifact
         .fri_layers
         .into_iter()
@@ -733,13 +872,17 @@ fn materialise_proof(
         trace_commitment: commitment,
         public_io,
         trace_root: field_norito::core::to_bytes(artifact.trace_root),
+        air_trace_root: field_norito::core::to_bytes(artifact.air_trace_root),
+        air_composition_root: field_norito::core::to_bytes(artifact.air_composition_root),
         lookup_root: field_norito::core::to_bytes(artifact.lookup_root),
+        lde_domain_size: artifact.lde_domain_size,
         lookup_grand_product: artifact.lookup_grand_product,
         lookup_challenge: artifact.lookup_challenge,
         alphas: artifact.alphas,
         betas: artifact.fri_betas,
         fri_layers,
         queries,
+        air_openings: artifact.air_openings,
         fri_queries: artifact.fri_query_openings,
     })
 }
@@ -1178,7 +1321,10 @@ mod tests {
         );
         proof.fri_layers.pop();
         let err = verify(&batch, &proof).unwrap_err();
-        assert!(matches!(err, Error::FriLayerLengthMismatch { .. }));
+        assert!(matches!(
+            err,
+            Error::FriLayerLengthMismatch { .. } | Error::FriChallengeLengthMismatch { .. }
+        ));
     }
 
     #[test]
@@ -1274,6 +1420,73 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_wrong_air_composition_root() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.air_composition_root[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirCompositionRootMismatch | Error::FriChallengeMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_missing_air_challenges() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.alphas.clear();
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirChallengeCountMismatch {
+                expected: 2,
+                actual: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_air_row_opening() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .air_openings
+            .first_mut()
+            .expect("expected at least one AIR opening");
+        let value = first
+            .current_row
+            .first_mut()
+            .expect("expected sampled AIR row values");
+        *value = value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirMerklePathMismatch { .. } | Error::AirConstraintMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_air_composition_opening() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .air_openings
+            .first_mut()
+            .expect("expected at least one AIR opening");
+        first.composition_value = first.composition_value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirConstraintMismatch { .. } | Error::AirMerklePathMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn verify_rejects_mismatched_large_batch_by_commitment() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let small_batch = sample_batch();
@@ -1319,29 +1532,41 @@ mod tests {
                 permission_hashes: vec![[6; 32]],
             },
             trace_root: [7; 32],
-            lookup_root: [8; 32],
-            lookup_grand_product: 9,
-            lookup_challenge: 10,
-            alphas: vec![11, 12],
-            betas: vec![13, 14],
-            fri_layers: vec![[15; 32], [16; 32]],
+            air_trace_root: [8; 32],
+            air_composition_root: [9; 32],
+            lookup_root: [10; 32],
+            lde_domain_size: 1,
+            lookup_grand_product: 11,
+            lookup_challenge: 12,
+            alphas: vec![13, 14],
+            betas: vec![15, 16],
+            fri_layers: vec![[17; 32], [18; 32]],
             queries: vec![QueryOpening {
                 index: 0,
                 value: 123,
                 chunk_values: vec![123],
                 merkle_path: Vec::new(),
             }],
+            air_openings: vec![AirConstraintOpening {
+                index: 0,
+                current_row: vec![1, 2],
+                next_row: vec![3, 4],
+                current_row_path: Vec::new(),
+                next_row_path: Vec::new(),
+                composition_value: 456,
+                composition_path: Vec::new(),
+            }],
             fri_queries: vec![FriQueryOpening {
                 initial_index: 0,
                 rounds: vec![FriRoundOpening {
                     round: 0,
                     index: 0,
-                    values: vec![123],
-                    folded_value: 123,
+                    values: vec![456],
+                    folded_value: 456,
                     merkle_path: Vec::new(),
                 }],
                 final_index: 0,
-                final_values: vec![123],
+                final_values: vec![456],
                 final_merkle_path: Vec::new(),
             }],
         };

@@ -15518,7 +15518,11 @@ impl Actor {
                 && slot.exact_fetch_armed
                 && !slot.body_present
         });
-        if frontier_slot_can_fetch {
+        let ingress_grace_elapsed = self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| self.frontier_body_fetch_grace_elapsed(slot, now));
+        if frontier_slot_can_fetch && ingress_grace_elapsed {
             let _ = self.retry_frontier_block_body_fetch(now);
         }
         true
@@ -28132,6 +28136,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         source: &'static str,
         now: Instant,
+        retry_window: Duration,
     ) -> bool {
         let committed_height = self.committed_height_snapshot();
         if height <= committed_height || self.block_payload_available_for_progress(block_hash) {
@@ -28139,7 +28144,7 @@ impl Actor {
             return false;
         }
         let reason_group = Self::highest_qc_force_fetch_reason_group(source);
-        let window = self.highest_qc_force_fetch_window();
+        let window = self.highest_qc_force_fetch_window().max(retry_window);
         let key = (height, block_hash, reason_group);
         let gate = self
             .highest_qc_force_fetch_window_gates

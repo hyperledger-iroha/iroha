@@ -16213,6 +16213,56 @@ pub mod isi {
         }
 
         #[test]
+        fn register_vk_rejects_mixed_case_stark_curve() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let backend = "stark/fri/sha256-goldilocks";
+            let id = VerifyingKeyId::new(backend, "vk_stark_mixed_case_curve");
+            let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri/sha256-goldilocks:curve-test",
+                None,
+                "test",
+                BackendTag::Stark,
+                "GoLdIlOcKs",
+                [0x42; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("stark_default".into());
+            let instr: InstructionBox =
+                verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("mixed-case STARK curve must be rejected");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("verifying key curve must be \"goldilocks\""),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[test]
         fn register_consensus_key_enforces_policy() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -17625,6 +17675,83 @@ pub mod isi {
             let msg = smart_contract_error_message(err);
             assert!(
                 msg.contains("backend cannot change"),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[test]
+        fn update_vk_rejects_mixed_case_stark_curve() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let backend = "stark/fri/sha256-goldilocks";
+            let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
+            let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri/sha256-goldilocks:update-curve",
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.gas_schedule_id = Some("stark_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let mut new_rec = VerifyingKeyRecord::new_with_owner(
+                2,
+                "stark/fri/sha256-goldilocks:update-curve",
+                None,
+                "test",
+                BackendTag::Stark,
+                "GoLdIlOcKs",
+                [0x52; 32],
+                hash_vk(&vk_box),
+            );
+            new_rec.vk_len = 3;
+            new_rec.status = ConfidentialStatus::Active;
+            new_rec.key = Some(vk_box);
+            new_rec.gas_schedule_id = Some("stark_default".into());
+            let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                id: id.clone(),
+                record: new_rec,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                .expect_err("mixed-case STARK curve update must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("verifying key curve must be \"goldilocks\""),
                 "unexpected msg: {msg}"
             );
         }

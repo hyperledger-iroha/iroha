@@ -603,11 +603,9 @@ fn stark_binding_air_terms(
 
 /// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
-/// The first-release native V1 circuit is a binding circuit: it proves low-degree
-/// FRI consistency for a deterministic witness and binds the envelope metadata,
-/// verifying-key hash, schema descriptor, and public input columns through a
-/// verifier-reconstructed composition leaf. Execution semantics remain enforced
-/// by the callers that derive and replay those public commitments.
+/// The first-release native V1 circuit carries an explicit AIR section whose
+/// public statement digest is reconstructed from the outer envelope metadata,
+/// verifying-key hash, schema descriptor, and public input columns.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_open_verify_envelope(
     backend: &str,
@@ -672,12 +670,16 @@ pub fn prove_stark_fri_open_verify_envelope(
         schema_descriptor,
         &public_inputs,
     );
-    let envelope_bytes = crate::zk_stark::prove_stark_fri_composition_envelope_bytes(
-        params,
-        "IROHA-STARK-BINDING-AIR-V1".to_owned(),
+    let public_digest = crate::zk_stark::stark_air_public_digest_from_composition(
         STARK_BINDING_AIR_CONSTANT,
         STARK_BINDING_AIR_Z_COEFF,
-        terms,
+        &terms,
+    )?;
+    let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
+        params,
+        "IROHA-STARK-AIR-V1".to_owned(),
+        env_circuit_id.clone(),
+        public_digest,
     )?;
     let open = StarkFriOpenProofV1 {
         version: 1,
@@ -4734,12 +4736,6 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         return reject("domain tag integrity mismatch");
     }
 
-    let Some(comp_values) = inner.proof.comp_values.as_ref() else {
-        return reject("missing STARK binding AIR composition values");
-    };
-    if inner.proof.commits.comp_root.is_none() {
-        return reject("missing STARK binding AIR composition root");
-    }
     let expected_terms = stark_binding_air_terms(
         backend,
         &env.circuit_id,
@@ -4747,13 +4743,27 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         &env.public_inputs,
         &open.public_inputs,
     );
-    for comp in comp_values {
-        if comp.constant != STARK_BINDING_AIR_CONSTANT
-            || comp.z_coeff != STARK_BINDING_AIR_Z_COEFF
-            || comp.aux_terms != expected_terms
-        {
-            return reject("STARK binding AIR composition mismatch");
-        }
+    let expected_public_digest = match crate::zk_stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &expected_terms,
+    ) {
+        Ok(digest) => digest,
+        Err(_) => return reject("STARK AIR public digest reconstruction failed"),
+    };
+    let Some(air) = inner.proof.air.as_ref() else {
+        return reject("missing STARK AIR section");
+    };
+    let air_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
+    {
+        Some(id) => id,
+        None => return reject("invalid STARK AIR circuit_id"),
+    };
+    if air_circuit_id != env_circuit_id {
+        return reject("STARK AIR circuit_id mismatch");
+    }
+    if air.public_digest != expected_public_digest {
+        return reject("STARK AIR public digest mismatch");
     }
     if !crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits) {
         return reject("inner STARK/FRI verifier rejected proof");
