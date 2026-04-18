@@ -5689,9 +5689,6 @@ impl Actor {
         frontier_height: u64,
         now: Instant,
     ) -> bool {
-        if self.frontier_slot_is_exact_height(frontier_height) {
-            return false;
-        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -6343,26 +6340,15 @@ impl Actor {
         }
 
         // Quorum-timeout cleanup should only keep same-height state when the current
-        // contiguous-frontier owner still has concrete same-slot recovery evidence.
-        // Merely matching the live view is not enough; otherwise a stale pending block can
-        // survive repeated timeout cleanup cycles and keep the frontier wedged indefinitely.
-        self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
-                frontier_height,
-                view,
-                now,
-            )
-            || self.frontier_recovery_same_slot_vote_backed_recovery_active(
-                frontier_height,
-                view,
-                now,
-            )
-            || self.frontier_recovery_same_slot_reassembly_active(
-                frontier_height,
-                view,
-                now,
-                super::status::worker_queue_depth_snapshot(),
-            )
+        // contiguous-frontier owner still has actionable work. Merely matching the live
+        // view is not enough; otherwise stale state can survive repeated timeout cleanup
+        // cycles and keep the frontier wedged indefinitely.
+        self.frontier_quorum_timeout_owner_still_actionable(
+            frontier_height,
+            view,
+            now,
+            super::status::worker_queue_depth_snapshot(),
+        )
     }
 
     fn suppress_quorum_view_change_while_frontier_repair_active(
@@ -30173,12 +30159,32 @@ impl Actor {
                 );
             }
             let queue_depths = super::status::worker_queue_depth_snapshot();
-            if self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths) {
+            let same_slot_ingress_active =
+                self.frontier_recovery_same_slot_ingress_active(height, view, now, queue_depths);
+            let same_slot_missing_payload_recovery_active =
+                self.frontier_recovery_same_slot_missing_payload_recovery_active(height, view, now);
+            let same_slot_vote_backed_recovery_active =
+                self.frontier_recovery_same_slot_vote_backed_recovery_active(height, view, now);
+            let same_slot_reassembly_active =
+                self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
+            let same_height_rbc_sender_activity_active = reason == "quorum_timeout"
+                && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
+            if same_slot_ingress_active
+                || same_slot_missing_payload_recovery_active
+                || same_slot_vote_backed_recovery_active
+                || same_slot_reassembly_active
+                || same_height_rbc_sender_activity_active
+            {
                 debug!(
                     height,
                     view,
                     reason,
-                    "suppressing exact-frontier recovery rotation while same-slot reassembly remains buffered"
+                    same_slot_ingress_active,
+                    same_slot_missing_payload_recovery_active,
+                    same_slot_vote_backed_recovery_active,
+                    same_slot_reassembly_active,
+                    same_height_rbc_sender_activity_active,
+                    "suppressing exact-frontier recovery while live same-height recovery work remains active"
                 );
                 return FrontierRecoveryAdvance::None;
             }
