@@ -657,21 +657,43 @@ Last updated: 2026-04-18
 - Added focused unit coverage for the routed JSON retry gate itself, including
   the positive empty-body retryable path and the negative cases for decoded
   JSON error bodies and non-retryable empty statuses.
+- Added a focused Sumeragi regression in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  covering the `view == 0` interaction with an already-emitted canonical
+  frontier reanchor window: the first idle tick stays suppressed, and once the
+  shared window advances the round records exactly one direct `MissingQc`
+  rotation.
+- Added focused helper coverage in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs`
+  for proof-record payload decoding, including the minimal JSON object shape,
+  Norito payload decoding, and rejection of unknown status strings.
 - Current verification for the Nexus cross-dataspace slice is green again:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-coreclean cargo check -p iroha_core --lib`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-extra cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-more cargo test -p iroha_core --lib missing_qc_view_zero_reanchor_suppression_rotates_after_window_advance -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix cargo test -p integration_tests --test nexus_and_streaming routed_json_empty_body_is_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit cargo test -p integration_tests --test nexus_and_streaming routed_json_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet:: -- --test-threads=1 --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark cargo test -p integration_tests --features zk-stark --test nexus_and_streaming decode_proof_record_payload -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark cargo test -p integration_tests --features zk-stark --test nexus_and_streaming parse_proof_status_from_json_rejects_unknown_status_strings -- --nocapture`
 - The cross-dataspace localnet module now passes end to end on the current
   tree:
   - `nexus::cross_dataspace_localnet::bounded_observer_request_timeout_slices_remaining_budget`
   - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
   - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
   - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+- Additional STARK-enabled cross-dataspace localnet coverage is currently red:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --features zk-stark --test nexus_and_streaming nexus::cross_dataspace_zk_stark_localnet:: -- --test-threads=1 --nocapture`
+  - Result on the current tree: `stark_cross_dataspace_verifyproof_rejection_without_payload_leak`
+    passed, but `stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak`,
+    `stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak`, and
+    `stark_cross_dataspace_verifyproof_validity_without_payload_leak` all timed out in
+    `wait_for_proof_record_status` at
+    `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs:1019`
+    with the last error `proof record not found yet`.
 
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
