@@ -85029,6 +85029,7 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
 async fn censorship_evidence_triggers_view_change() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _cause_guard = super::status::view_change_cause_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let tx_hash =
