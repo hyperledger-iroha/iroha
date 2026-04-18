@@ -299,20 +299,6 @@ impl Actor {
                         && vote.height == pending.height
                         && vote.view == pending.view
                 });
-                let missing_request =
-                    self.pending
-                        .missing_block_requests
-                        .get(hash)
-                        .is_some_and(|request| {
-                            request.height == pending.height
-                                && request.view == pending.view
-                                && self.missing_block_request_has_actionable_dependency(
-                                    *hash,
-                                    request,
-                                    committed_height,
-                                    now,
-                                )
-                        });
                 let missing_commit_qc_request = self
                     .pending
                     .missing_commit_qc_requests
@@ -337,7 +323,7 @@ impl Actor {
                     expected_epoch,
                 )
                 .is_some();
-                if has_votes || missing_request || missing_commit_qc_request || commit_qc_cached {
+                if has_votes || missing_commit_qc_request || commit_qc_cached {
                     continue;
                 }
                 let pending_age = now.saturating_duration_since(pending.inserted_at);
@@ -1551,6 +1537,16 @@ impl Actor {
         }
         let frontier_slot_owner_was_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
+        let frontier_slot_present_for_view =
+            contiguous_frontier && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height && slot.view == view
+            });
+        let stale_frontier_slot_owner_for_other_view =
+            contiguous_frontier && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view != view
+                    && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+            });
         let frontier_slot_vote_backed_owner_was_active = contiguous_frontier
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == height
@@ -1596,7 +1592,9 @@ impl Actor {
             && effective_has_reschedule_votes
             && !manifest_gate_pending
             && authoritative_payload_present
-            && !frontier_slot_owner_was_active;
+            && frontier_slot_present_for_view
+            && !frontier_slot_owner_was_active
+            && !stale_frontier_slot_owner_for_other_view;
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -1720,6 +1718,9 @@ impl Actor {
                 )
                 .is_empty()
         {
+            let rotate_stake_quorum_noop_immediately = contiguous_frontier
+                && stake_quorum_missing
+                && effective_has_reschedule_votes;
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =
@@ -1742,11 +1743,15 @@ impl Actor {
                 view,
                 votes = vote_count,
                 min_votes = min_votes_for_commit,
+                stake_quorum_missing,
                 pending_age_ms = pending_age.as_millis(),
                 quorum_stall_age_ms = quorum_stall_age.as_millis(),
                 "skipping no-op commit-quorum reschedule: no actionable retransmit targets remain"
             );
-            if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+            if rotate_authoritative_frontier_immediately
+                || rotate_zero_vote_frontier_immediately
+                || rotate_stake_quorum_noop_immediately
+            {
                 info!(
                     block = %block_hash,
                     height,
@@ -1756,6 +1761,7 @@ impl Actor {
                     pending_age_ms = pending_age.as_millis(),
                     quorum_stall_age_ms = quorum_stall_age.as_millis(),
                     drop_pending,
+                    stake_quorum_missing,
                     "no actionable quorum retransmit targets remain for contiguous frontier block; rotating view deterministically"
                 );
                 if rotate_authoritative_frontier_immediately {
@@ -1764,6 +1770,12 @@ impl Actor {
                         view,
                         direct_view_change_cause,
                         now,
+                    );
+                } else if rotate_stake_quorum_noop_immediately {
+                    self.apply_view_change_with_cause_for_height(
+                        height,
+                        view,
+                        direct_view_change_cause,
                     );
                 } else {
                     self.trigger_view_change_with_cause(height, view, direct_view_change_cause);

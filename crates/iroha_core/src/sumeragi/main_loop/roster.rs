@@ -417,7 +417,13 @@ pub(super) fn derive_active_topology_for_mode_from_world(
             BTreeSet::new()
         };
         let local_lane_ids = crate::state::validator_lane_ids_for_peer(world, me);
-        let (lane_scope, local_scope_fallback) = if !topology_lane_ids.is_empty() {
+        let (lane_scope, local_scope_fallback) = if topology_lane_ids.len() == 1 {
+            (topology_lane_ids, false)
+        } else if !local_lane_ids.is_empty() {
+            // A bootstrap/full commit topology can span multiple public lanes. Treat that as
+            // transport history, not a lane assignment, so local voting remains lane-scoped.
+            (local_lane_ids, true)
+        } else if !topology_lane_ids.is_empty() {
             (topology_lane_ids, false)
         } else {
             (local_lane_ids, true)

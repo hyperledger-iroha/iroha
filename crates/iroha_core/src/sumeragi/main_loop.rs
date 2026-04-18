@@ -20633,6 +20633,7 @@ impl Actor {
         if mismatch_detected {
             return Ok(());
         }
+        let local_ready_emitted = ready_to_send.is_some();
         if let Some(ready) = ready_to_send {
             iroha_logger::debug!(
                 height = key.1,
@@ -20663,7 +20664,11 @@ impl Actor {
             });
         }
 
-        self.maybe_emit_rbc_deliver(key)?;
+        if local_ready_emitted {
+            self.maybe_emit_rbc_deliver_after_local_ready(key)?;
+        } else {
+            self.maybe_emit_rbc_deliver(key)?;
+        }
 
         Ok(())
     }
@@ -22301,10 +22306,28 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
+    fn maybe_emit_rbc_deliver_after_local_ready(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) -> Result<()> {
+        self.maybe_emit_rbc_deliver_at_with_local_ready_bypass(key, Instant::now(), true)
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_deliver_at(
         &mut self,
         key: super::rbc_store::SessionKey,
         now: Instant,
+    ) -> Result<()> {
+        self.maybe_emit_rbc_deliver_at_with_local_ready_bypass(key, now, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn maybe_emit_rbc_deliver_at_with_local_ready_bypass(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        now: Instant,
+        allow_authoritative_local_ready_bypass: bool,
     ) -> Result<()> {
         if self.retire_exact_frontier_rbc_runtime(key, "deliver_emit") {
             return Ok(());
@@ -22516,7 +22539,11 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
         let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
         let missing_ready_peers = Self::rbc_missing_ready_peers(&session, &signature_topology);
-        if ready_count < required {
+        let authoritative_local_ready_bypass = allow_authoritative_local_ready_bypass
+            && authoritative_known_payload
+            && session.sent_ready
+            && ready_count != 0;
+        if ready_count < required && !authoritative_local_ready_bypass {
             let should_log = self.should_emit_rbc_deliver_deferral(
                 key,
                 now,
@@ -29950,6 +29977,9 @@ impl Actor {
     ) {
         let preserve_live_frontier_state = source == "quorum_timeout"
             && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
+        let preserve_same_height_rbc_state = source == "quorum_timeout"
+            && frontier_height == self.committed_height_snapshot().saturating_add(1)
+            && self.phase_tracker.current_view(frontier_height) == Some(view);
         let preserve_same_view_authoritative_owner =
             source != "quorum_timeout" || preserve_live_frontier_state;
         let preserved_frontier_owners: Vec<_> = self
@@ -29972,9 +30002,10 @@ impl Actor {
                     .then_some((owner_view, hash, info.clone()))
             })
             .collect();
-        // Frontier cleanup must own all same-height recovery state, including RBC sessions
-        // that no longer have a pending-block wrapper but still block contiguous progress.
-        let frontier_rbc_removed = if preserve_live_frontier_state {
+        // Quorum-timeout recovery at the live contiguous frontier is no longer
+        // cleanup-owned: it may advance to a rotate-armed state after stale sender
+        // activity without discarding same-height RBC state that can still converge.
+        let frontier_rbc_removed = if preserve_same_height_rbc_state {
             0
         } else {
             self.purge_rbc_sessions_at_or_above_height(frontier_height, false)
@@ -30504,12 +30535,14 @@ impl Actor {
                 self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason, true);
         }
         let exact_frontier_height = self.frontier_slot_is_exact_height(height);
-        let exact_slot_owner_present = self.frontier_slot.as_ref().is_some_and(|slot| {
+        let exact_slot_owner_present = self.frontier_slot_has_active_owner_state_for_view(
+            height,
+            view,
+        );
+        let stale_exact_slot_owner_for_other_view = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height
-                && !matches!(
-                    slot.mode,
-                    FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
-                )
+                && slot.view != view
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
         });
         let same_slot_missing_block_request_active = reason == "quorum_timeout"
             && self.frontier_recovery_same_slot_missing_block_request_active(height, view, now);
@@ -30517,7 +30550,9 @@ impl Actor {
             reason == "missing_qc" && !proposal_seen && height == frontier_height;
         if exact_frontier_height
             && (exact_slot_owner_present
-                || (!empty_frontier_missing_qc && self.frontier_recovery.is_none())
+                || (!stale_exact_slot_owner_for_other_view
+                    && !empty_frontier_missing_qc
+                    && self.frontier_recovery.is_none())
                 || same_slot_missing_block_request_active)
         {
             if self.frontier_slot_lag_window_expired(height, now)
@@ -32730,7 +32765,11 @@ impl Actor {
             .missing_block_requests
             .iter()
             .filter(|(_, request)| request.height == height && request.view < min_view)
-            .filter(|(hash, _)| !da_enabled || self.authoritative_block_payload_available(**hash))
+            .filter(|(hash, _)| {
+                !da_enabled
+                    || self.authoritative_block_payload_available(**hash)
+                    || self.kura.block_payload_available_by_hash(**hash)
+            })
             .map(|(hash, _)| *hash)
             .collect();
         for hash in stale_missing {

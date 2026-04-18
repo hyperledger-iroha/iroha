@@ -18437,7 +18437,7 @@ async fn finalize_pending_block_uses_cached_vote_roster_for_commit_job() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
     actor.cache_vote_roster(placeholder_hash, height, view, cached_roster.clone());
     let expected_commit_topology =
-        actor.roster_for_vote_with_mode(placeholder_hash, height, view, consensus_mode);
+        super::roster::canonicalize_roster_for_mode(cached_roster.clone(), consensus_mode);
     assert_ne!(
         expected_commit_topology, live_roster,
         "test setup requires a cached vote roster that differs from the live roster"

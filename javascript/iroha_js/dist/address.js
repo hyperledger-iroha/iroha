@@ -20,14 +20,10 @@ const I105_SENTINEL_SORA = "sora";
 const I105_SENTINEL_TEST = "test";
 const I105_SENTINEL_DEV = "dev";
 const I105_SENTINEL_NUMERIC_PREFIX = "n";
-const I105_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ";
-const I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
-const I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
-const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
+  "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -41,19 +37,13 @@ let nativeAddressCodecResolved = false;
 const BASE58_ALPHABET = Array.from(
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
 );
-const IROHA_POEM_KANA_FULLWIDTH = [
-  "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ",
-  "ヨ", "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク",
-  "ヤ", "マ", "ケ", "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ",
-  "ヱ", "ヒ", "モ", "セ", "ス",
-];
 const IROHA_POEM_KANA_HALFWIDTH = [
   "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ",
   "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ",
   "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ",
   "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ];
-const I105_ALPHABET = [...BASE58_ALPHABET, ...IROHA_POEM_KANA_FULLWIDTH];
+const I105_ALPHABET = [...BASE58_ALPHABET, ...IROHA_POEM_KANA_HALFWIDTH];
 const I105_BASE = I105_ALPHABET.length;
 
 export const AccountAddressErrorCode = Object.freeze({
@@ -1144,8 +1134,11 @@ function assertCanonicalI105Literal(input, address) {
     return;
   }
   const discriminant = tryExtractI105Discriminant(input);
-  if (discriminant === null) {
-    return;
+  if (discriminant === undefined) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "account address literals must use canonical I105 form",
+    );
   }
   if (address.toI105(discriminant) !== input) {
     throw new AccountAddressError(
@@ -1531,28 +1524,16 @@ function parseI105SentinelAndPayload(encoded) {
   if (typeof encoded !== "string") {
     return null;
   }
-  if (
-    encoded.startsWith(I105_SENTINEL_SORA) ||
-    encoded.startsWith(I105_SENTINEL_SORA_FULLWIDTH)
-  ) {
+  if (encoded.startsWith(I105_SENTINEL_SORA)) {
     return [DEFAULT_I105_DISCRIMINANT, encoded.slice(I105_SENTINEL_SORA.length)];
   }
-  if (
-    encoded.startsWith(I105_SENTINEL_TEST) ||
-    encoded.startsWith(I105_SENTINEL_TEST_FULLWIDTH)
-  ) {
+  if (encoded.startsWith(I105_SENTINEL_TEST)) {
     return [0x0171, encoded.slice(I105_SENTINEL_TEST.length)];
   }
-  if (
-    encoded.startsWith(I105_SENTINEL_DEV) ||
-    encoded.startsWith(I105_SENTINEL_DEV_FULLWIDTH)
-  ) {
+  if (encoded.startsWith(I105_SENTINEL_DEV)) {
     return [0x0000, encoded.slice(I105_SENTINEL_DEV.length)];
   }
-  if (
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX) &&
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH)
-  ) {
+  if (!encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX)) {
     return null;
   }
   const tail = encoded.slice(I105_SENTINEL_NUMERIC_PREFIX.length);
@@ -1587,9 +1568,6 @@ function toAsciiDigit(char) {
   if (char >= "0" && char <= "9") {
     return char;
   }
-  if (char >= "０" && char <= "９") {
-    return String.fromCharCode(char.codePointAt(0) - 0xfee0);
-  }
   return null;
 }
 
@@ -1616,10 +1594,6 @@ function lookupI105Digit(symbol) {
   const canonicalIndex = I105_ALPHABET.indexOf(symbol);
   if (canonicalIndex !== -1) {
     return canonicalIndex;
-  }
-  const halfwidthIndex = IROHA_POEM_KANA_HALFWIDTH.indexOf(symbol);
-  if (halfwidthIndex !== -1) {
-    return BASE58_ALPHABET.length + halfwidthIndex;
   }
   return undefined;
 }

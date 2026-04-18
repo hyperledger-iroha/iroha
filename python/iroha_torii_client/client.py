@@ -62,6 +62,7 @@ I105_CHECKSUM_LEN = 6
 I105_BECH32M_CONST = 0x2BC830A3
 I105_SENTINELS = ("sora", "test", "dev")
 I105_NUMERIC_SENTINEL_PREFIX = "n"
+I105_DISCRIMINANT_MAX = 0xFFFF
 SCCP_FINALITY_MODEL_VALUES = {
     "EthereumBeaconExecution",
     "BscValidatorSet",
@@ -173,6 +174,11 @@ def _strip_i105_sentinel(encoded: str) -> str:
         while index < len(encoded) and "0" <= encoded[index] <= "9":
             index += 1
         if index > len(I105_NUMERIC_SENTINEL_PREFIX):
+            discriminant = int(encoded[len(I105_NUMERIC_SENTINEL_PREFIX):index])
+            if discriminant > I105_DISCRIMINANT_MAX:
+                raise ValueError(
+                    "i105 chain discriminant must fit in an unsigned 16-bit integer"
+                )
             return encoded[index:]
     raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
 

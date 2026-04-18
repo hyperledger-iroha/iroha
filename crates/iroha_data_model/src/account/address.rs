@@ -449,7 +449,7 @@ impl AccountAddress {
         Ok(address)
     }
 
-    /// Decode the i105 representation against an explicit expected chain
+    /// Decode the i105 representation, optionally enforcing an expected chain
     /// discriminant.
     ///
     /// # Errors
@@ -461,9 +461,10 @@ impl AccountAddress {
         encoded: &str,
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
-        let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
         let (found, canonical) = decode_i105_literal(encoded)?;
-        if found != expected {
+        if let Some(expected) = expected_discriminant
+            && found != expected
+        {
             return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
         }
         Self::from_canonical_bytes(&canonical)
@@ -503,17 +504,21 @@ impl AccountAddress {
         if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
             return Err(AccountAddressError::UnsupportedAddressFormat);
         }
-        let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
         let address =
-            Self::from_i105_for_discriminant(trimmed, Some(expected)).map_err(|err| match err {
-                AccountAddressError::MissingI105Sentinel
-                | AccountAddressError::I105TooShort
-                | AccountAddressError::InvalidI105Char(_)
-                | AccountAddressError::InvalidI105Digit(_) => {
-                    AccountAddressError::UnsupportedAddressFormat
+            Self::from_i105_for_discriminant(trimmed, expected_discriminant).map_err(|err| {
+                match err {
+                    AccountAddressError::MissingI105Sentinel
+                    | AccountAddressError::I105TooShort
+                    | AccountAddressError::InvalidI105Char(_)
+                    | AccountAddressError::InvalidI105Digit(_) => {
+                        AccountAddressError::UnsupportedAddressFormat
+                    }
+                    other => other,
                 }
-                other => other,
             })?;
+        let expected = expected_discriminant
+            .or_else(|| i105_discriminant_from_sentinel(trimmed))
+            .ok_or(AccountAddressError::UnsupportedAddressFormat)?;
         address.ensure_canonical_i105_literal(trimmed, expected)?;
         Ok(address)
     }
@@ -1902,6 +1907,33 @@ mod tests {
                 address.canonical_bytes().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn parse_encoded_without_expected_discriminant_accepts_literal_prefix() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let testnet = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_TEST)
+            .expect("testnet i105");
+
+        let parsed = AccountAddress::parse_encoded(&testnet, None)
+            .expect("omitted expected prefix accepts literal sentinel");
+        assert_eq!(
+            parsed.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+
+        let err = AccountAddress::parse_encoded(&testnet, Some(CHAIN_DISCRIMINANT_SORA))
+            .expect_err("explicit mainnet prefix still rejects testnet literal");
+        assert!(matches!(
+            err,
+            AccountAddressError::UnexpectedNetworkPrefix {
+                expected: CHAIN_DISCRIMINANT_SORA,
+                found: CHAIN_DISCRIMINANT_TEST
+            }
+        ));
     }
 
     #[test]
