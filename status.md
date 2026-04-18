@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: SDK i105 prefix validation fixes
+- Rust and Python strict account-address parsing now auto-detects any valid i105 sentinel when no expected discriminant is supplied, while explicit expected prefixes still reject mismatched `sora`/`test`/`dev`/`n<decimal>` literals.
+- Python SDK and Python Torii client validation now reject numeric i105 discriminants outside the unsigned 16-bit range, including `n65536`, `n70000`, and negative encoder inputs.
+- The JavaScript checked-in `dist` package artifacts were refreshed from `src`, including the missing `curveRegistry`, `sccp`, and browser-connect subpath artifacts, and `dist/address.js` now uses only the half-width i105 alphabet.
+- Focused validation for this slice:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/package_dist.test.js` from `javascript/iroha_js`
+  - `node -e "import('./javascript/iroha_js/dist/index.js').then(() => console.log('dist import ok'))"`
+  - direct Python import smokes for `iroha_python.address` and `iroha_torii_client.client` i105 edge cases
+  - `CARGO_TARGET_DIR=/tmp/iroha-sdk-i105-target cargo test -p iroha_data_model parse_encoded_without_expected_discriminant_accepts_literal_prefix -- --nocapture`
+  - `./target/debug/xtask address-vectors --verify`
+- `python3 -m pytest python/iroha_python/tests/test_address_format.py python/iroha_torii_client/tests/test_client.py` could not run locally because this Python environment does not have `pytest` installed.
+
 ## 2026-04-18 Follow-up: I105 half-width kana standardization
 - I105 account-address codecs now use the half-width Iroha-kana alphabet as the canonical base-105 suffix across Rust, Swift, Kotlin, Java, JavaScript, Python, and C#; legacy full-width kana payload aliases are rejected instead of decoded.
 - The ASCII sentinels remain the only network-prefix spellings: `sora` renders Sora Nexus mainnet (`753` / `0x02F1`), `test` renders Taira testnet (`369` / `0x0171`), `dev` renders `0`, and other discriminants use `n<decimal>`. No additional network bytes were added to the i105 account payload.
