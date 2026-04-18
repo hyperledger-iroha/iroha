@@ -77,7 +77,7 @@ fn sample_contract_address(
         0,
         authority,
         deploy_nonce,
-        DataSpaceId::new(0),
+        DataSpaceId::UNIVERSAL,
     )
     .expect("contract address")
 }

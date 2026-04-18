@@ -88,13 +88,6 @@ impl Actor {
         if hash == locked_hash {
             return false;
         }
-        if height == locked_height && self.kura.get_block_height_by_hash(locked_hash).is_some() {
-            // Same-height recovery is disproven once the competing lock subject is already
-            // durable in local storage. If the lock subject only exists in pending/inflight
-            // state, keep the request alive until committed history or later local evidence
-            // settles the conflict.
-            return true;
-        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let known_conflict = self
             .committed_block_hash_for_height(height)
@@ -115,13 +108,18 @@ impl Actor {
             ),
             Some(false)
         );
-        let header_proves_locked_conflict = known_parent.is_some() && locally_conflicts_with_locked;
         let locked_chain_committed = locked_height <= committed_height;
+        let header_proves_locked_conflict =
+            locked_chain_committed && known_parent.is_some() && locally_conflicts_with_locked;
+        let missing_parent_competes_with_durable_lock = height == locked_height
+            && known_parent.is_none()
+            && self.kura.get_block_height_by_hash(locked_hash).is_some();
         // Lock rejection may clear requests once local evidence disproves the branch:
         // either committed history conflicts with the hash, or local ancestry proves the hash
         // does not extend a lock that is already anchored by committed history. Preserve
         // unresolved requests when lock ancestry may still legitimately realign.
-        (height <= committed_height || height <= locked_height) && known_conflict
+        missing_parent_competes_with_durable_lock
+            || (height <= committed_height || height <= locked_height) && known_conflict
             || header_proves_locked_conflict
             || (locked_chain_committed && locally_conflicts_with_locked)
     }
@@ -160,7 +158,7 @@ impl Actor {
             .highest_qc
             .or(self.latest_committed_qc())
             .is_some_and(|highest| {
-                self.request_missing_block_for_highest_qc_force(highest, source)
+                self.request_missing_block_for_highest_qc_force_exact_repair(highest, source)
             });
         let recovery_advance =
             self.advance_frontier_recovery("missing_qc", height, view, false, true, true, now);
@@ -278,6 +276,11 @@ impl Actor {
             return Ok(());
         }
         let committed_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
+        let matches_current_highest_qc = self.highest_qc.is_some_and(|current| {
+            highest_qc.height == current.height
+                && highest_qc.view == current.view
+                && highest_qc.subject_block_hash == current.subject_block_hash
+        });
 
         if let Some(existing) = self
             .subsystems
@@ -374,25 +377,26 @@ impl Actor {
                 );
                 return Ok(());
             }
-        } else if highest_qc.height <= committed_height {
-            let committed_conflict_suppressed =
-                self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal_hint");
-            info!(
-                height,
-                view,
-                committed_height,
-                highest_height = highest_qc.height,
-                block = %highest_qc.subject_block_hash,
-                committed_conflict_suppressed,
-                "dropping proposal hint: highest QC block missing locally for committed height"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::ProposalHint,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::MissingHighestQc,
-            );
-            return Ok(());
-        } else {
+        } else if !matches_current_highest_qc {
+            if highest_qc.height <= committed_height {
+                let committed_conflict_suppressed = self
+                    .suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal_hint");
+                info!(
+                    height,
+                    view,
+                    committed_height,
+                    highest_height = highest_qc.height,
+                    block = %highest_qc.subject_block_hash,
+                    committed_conflict_suppressed,
+                    "dropping proposal hint: highest QC block missing locally for committed height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::ProposalHint,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
+                );
+                return Ok(());
+            }
             info!(
                 height,
                 view,
@@ -406,6 +410,9 @@ impl Actor {
                 highest_qc,
                 "proposal_hint",
             );
+            if highest_qc.view != view {
+                self.subsystems.propose.proposal_cache.insert_hint(hint);
+            }
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::ProposalHint,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -452,7 +459,9 @@ impl Actor {
         }
 
         self.update_prf_context(height, view);
-        if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal hint") {
+        if !matches_current_highest_qc
+            && !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal hint")
+        {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::ProposalHint,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -468,14 +477,21 @@ impl Actor {
                 && current.phase != crate::sumeragi::consensus::Phase::Commit;
             incoming > existing || promotes_phase
         });
+        let phase_promotion_only = matches_current_highest_qc
+            && highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
+            && self
+                .highest_qc
+                .is_some_and(|current| current.phase != crate::sumeragi::consensus::Phase::Commit);
         if should_update_highest {
-            if self.defer_highest_qc_update_for_lock_catchup(
-                height,
-                view,
-                highest_qc,
-                Instant::now(),
-                "proposal_hint",
-            ) {
+            if !phase_promotion_only
+                && self.defer_highest_qc_update_for_lock_catchup(
+                    height,
+                    view,
+                    highest_qc,
+                    Instant::now(),
+                    "proposal_hint",
+                )
+            {
                 debug!(
                     height,
                     view,
@@ -548,7 +564,8 @@ impl Actor {
         } else {
             self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc)
         };
-        let requested_highest = self.request_missing_block_for_highest_qc_force(highest_qc, source);
+        let requested_highest =
+            self.request_missing_block_for_highest_qc_force_exact_repair(highest_qc, source);
         let requested_range =
             self.request_range_pull_from_anchor(catchup_height, "lock_lag_highest_qc_defer", now);
         debug!(
@@ -585,9 +602,9 @@ impl Actor {
         }
         let marked = self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc);
         let requested = if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
-            self.request_missing_block_for_highest_qc_force(highest_qc, source)
+            self.request_missing_block_for_highest_qc_force_exact_repair(highest_qc, source)
         } else {
-            self.request_missing_block_for_highest_qc(highest_qc, source)
+            self.request_missing_block_for_highest_qc_exact_repair(highest_qc, source)
         };
         debug!(
             height,
@@ -1183,8 +1200,10 @@ impl Actor {
                         .then_some((owner_hash, entry_view))
                 }),
         );
+        let incoming_payload_present = self.frontier_block_materialized_locally(incoming_hash);
         for (hash, old_view) in superseded {
-            let retain_payload = self
+            let retain_payload = !incoming_payload_present
+                && self
                 .pending
                 .pending_blocks
                 .get(&hash)
@@ -2287,6 +2306,7 @@ impl Actor {
                                         session_key,
                                         super::RbcSeedIntent {
                                             rebroadcast_missing_init,
+                                            emit_ready: true,
                                         },
                                     );
                                     match self.insert_stub_rbc_session_from_block(
@@ -2338,6 +2358,7 @@ impl Actor {
                                 &block,
                                 payload_hash,
                                 rebroadcast_missing_init,
+                                true,
                             )?;
                         }
                     }
@@ -2413,6 +2434,7 @@ impl Actor {
                                         session_key,
                                         super::RbcSeedIntent {
                                             rebroadcast_missing_init,
+                                            emit_ready: true,
                                         },
                                     );
                                     queued_seed = true;
@@ -2650,8 +2672,67 @@ impl Actor {
         }
         if let Some(hint) = cached_hint {
             let mut hint_highest = hint.highest_qc;
+            let mut adopted_missing_locked_qc = false;
+            if let Some(lock) = self.locked_qc
+                && !self.block_known_for_lock(lock.subject_block_hash)
+                && (hint_highest.height, hint_highest.view) >= (lock.height, lock.view)
+            {
+                warn!(
+                    locked_qc_height = lock.height,
+                    locked_qc_view = lock.view,
+                    locked_qc_hash = %lock.subject_block_hash,
+                    hint_highest_qc_height = hint_highest.height,
+                    hint_highest_qc_view = hint_highest.view,
+                    hint_highest_qc_hash = %hint_highest.subject_block_hash,
+                    height,
+                    view,
+                    "locked QC missing from local block store; replacing lock from BlockCreated hint"
+                );
+                self.locked_qc = Some(hint_highest);
+                super::status::set_locked_qc(
+                    hint_highest.height,
+                    hint_highest.view,
+                    Some(hint_highest.subject_block_hash),
+                );
+                adopted_missing_locked_qc = true;
+            }
             let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
-            if hint_highest_missing {
+            if hint_highest_missing && !adopted_missing_locked_qc {
+                if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest)
+                    && let Some(lock) = self
+                        .locked_qc
+                        .filter(|lock| self.block_known_for_lock(lock.subject_block_hash))
+                {
+                    self.note_lock_rejected_block(
+                        height,
+                        block_hash,
+                        lock.height,
+                        lock.subject_block_hash,
+                        "block_created_missing_hint_locked_qc_gate",
+                    );
+                    let _ = self.purge_lock_rejected_block_artifacts(height, view, block_hash);
+                    super::status::inc_block_created_dropped_by_lock();
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_block_created_dropped_by_lock();
+                    warn!(
+                        ?reason,
+                        locked_qc_height = lock.height,
+                        locked_qc_view = lock.view,
+                        locked_qc_hash = %lock.subject_block_hash,
+                        hint_highest_qc_height = hint_highest.height,
+                        hint_highest_qc_view = hint_highest.view,
+                        hint_highest_qc_hash = %hint_highest.subject_block_hash,
+                        height,
+                        view,
+                        "BlockCreated missing highest-QC hint rejected by locked QC gate"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockCreated,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
+                    return Ok(());
+                }
                 info!(
                     height,
                     view,
@@ -2790,7 +2871,7 @@ impl Actor {
                     }
                 }
             }
-            if !self.highest_qc_extends_locked(hint_highest) {
+            if !adopted_missing_locked_qc && !self.highest_qc_extends_locked(hint_highest) {
                 if let Some(new_lock) = realign_locked_to_committed_if_extends(
                     self.locked_qc,
                     self.latest_committed_qc(),
@@ -2816,7 +2897,7 @@ impl Actor {
                     }
                 }
             }
-            if !self.highest_qc_extends_locked(hint_highest) {
+            if !adopted_missing_locked_qc && !self.highest_qc_extends_locked(hint_highest) {
                 let (pending_conflicts_purged, missing_conflicts_purged, deferred_conflicts_purged) =
                     self.locked_qc.map_or((0, 0, 0), |lock| {
                         self.purge_locked_conflicting_branch_state(height, lock.subject_block_hash)
@@ -3107,6 +3188,11 @@ impl Actor {
                                     .pending
                                     .missing_block_requests
                                     .contains_key(parent_hash);
+                                let parent_request_snapshot = self
+                                    .pending
+                                    .missing_block_requests
+                                    .get(parent_hash)
+                                    .cloned();
                                 parent_request_tracked = parent_had_request;
                                 let parent_height = height.saturating_sub(1);
                                 if self.should_clear_missing_request_on_locked_reject(
@@ -3124,6 +3210,17 @@ impl Actor {
                                         cleared_existing_parent_request = true;
                                     }
                                 } else {
+                                    if parent_had_request
+                                        && !self
+                                            .pending
+                                            .missing_block_requests
+                                            .contains_key(parent_hash)
+                                        && let Some(request) = parent_request_snapshot
+                                    {
+                                        self.pending
+                                            .missing_block_requests
+                                            .insert(*parent_hash, request);
+                                    }
                                     debug!(
                                         height,
                                         view,
@@ -3308,6 +3405,7 @@ impl Actor {
                                     session_key,
                                     super::RbcSeedIntent {
                                         rebroadcast_missing_init,
+                                        emit_ready: true,
                                     },
                                 );
                                 match self.insert_stub_rbc_session_from_block(
@@ -3355,6 +3453,7 @@ impl Actor {
                             &block,
                             payload_hash,
                             rebroadcast_missing_init,
+                            true,
                         )?;
                     }
                     seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -3427,6 +3526,7 @@ impl Actor {
                                     session_key,
                                     super::RbcSeedIntent {
                                         rebroadcast_missing_init,
+                                        emit_ready: true,
                                     },
                                 );
                                 queued_seed = true;
@@ -3456,6 +3556,7 @@ impl Actor {
                         payload_hash,
                         sender.as_ref(),
                     )?;
+                    self.populate_rbc_session_metadata_from_block(session_key, &block);
                     self.retry_rbc_progress_after_block_created_hydration(session_key);
                     hydrate_ms =
                         u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -3661,6 +3762,9 @@ impl Actor {
             }
             if height == committed_height.saturating_add(1) {
                 self.note_view_change_from_block(height, view);
+            }
+            if da_enabled && exact_frontier_block_created {
+                let _ = self.retire_exact_frontier_rbc_runtime(session_key, "block_created");
             }
         }
         self.record_phase_sample(PipelinePhase::CollectDa, height, view);

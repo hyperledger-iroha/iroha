@@ -605,7 +605,7 @@ impl Actor {
         &mut self,
         height: u64,
         view: u64,
-        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        mut highest_qc: crate::sumeragi::consensus::QcHeaderRef,
         topology: &mut super::network_topology::Topology,
         leader_index: usize,
         local_validator_index: u32,
@@ -637,16 +637,33 @@ impl Actor {
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
         if let Some(existing_vote) = self.local_same_height_vote(proposal_height, proposal_epoch) {
-            warn!(
-                height = proposal_height,
-                view,
-                epoch = proposal_epoch,
-                voted_view = existing_vote.view,
-                voted_phase = ?existing_vote.phase,
-                voted_block = %existing_vote.block_hash,
-                "deferring proposal assembly: local same-height vote already anchors another branch"
-            );
-            return Ok(false);
+            let voted_block_anchors_round = self.block_known_locally(existing_vote.block_hash)
+                || self
+                    .authoritative_slot_owner_hash(proposal_height, existing_vote.view)
+                    .is_some_and(|owner| owner == existing_vote.block_hash)
+                || self.slot_has_proposal_evidence(proposal_height, existing_vote.view);
+            if !voted_block_anchors_round {
+                debug!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    voted_view = existing_vote.view,
+                    voted_phase = ?existing_vote.phase,
+                    voted_block = %existing_vote.block_hash,
+                    "ignoring same-height local vote for unknown block during proposal assembly"
+                );
+            } else {
+                warn!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    voted_view = existing_vote.view,
+                    voted_phase = ?existing_vote.phase,
+                    voted_block = %existing_vote.block_hash,
+                    "deferring proposal assembly: local same-height vote already anchors another branch"
+                );
+                return Ok(false);
+            }
         }
         if self.same_height_vote_verification_pending_at_or_before_view(
             proposal_height,
@@ -661,13 +678,30 @@ impl Actor {
             );
             return Ok(false);
         }
+        if let Err(LockedQcRejection::HeightRegressed { locked, highest }) =
+            ensure_locked_qc_allows(self.locked_qc, highest_qc)
+        {
+            let Some(lock) = self.promote_locked_qc_to_highest_if_needed("proposal_assembly")
+            else {
+                return Ok(false);
+            };
+            info!(
+                locked_height = locked,
+                highest_height = highest,
+                height = proposal_height,
+                view,
+                lock_hash = %lock.subject_block_hash,
+                "replacing regressed highest QC with locked QC for direct proposal assembly"
+            );
+            highest_qc = lock;
+        }
         let _lock_lag_highest_qc_deferred = !self.highest_qc_extends_locked(highest_qc)
             && self.defer_highest_qc_update_for_lock_catchup(
                 height, view, highest_qc, now, "proposal",
             );
         if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
             if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
-                self.observe_new_view_highest_qc(highest_qc);
+                self.observe_new_view_highest_qc_exact_repair(highest_qc);
             }
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                 ProposalDeferWarningKind::HighestQcMissing,
@@ -697,7 +731,7 @@ impl Actor {
         if prev_block.is_none() && proposal_height > 1 {
             if !self.block_known_locally(highest_qc.subject_block_hash) {
                 if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
-                    self.observe_new_view_highest_qc(highest_qc);
+                    self.observe_new_view_highest_qc_exact_repair(highest_qc);
                 }
             }
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
@@ -2643,8 +2677,10 @@ impl Actor {
                             queue_depths,
                         );
                     if same_slot_recovery_active {
-                        let seeded =
-                            self.seed_frontier_recovery_for_quorum_timeout(height, view_idx, now);
+                        let seeded = self
+                            .seed_frontier_recovery_for_quorum_timeout_without_local_pending(
+                                height, view_idx, now,
+                            );
                         debug!(
                             height,
                             view = view_idx,
@@ -2667,7 +2703,9 @@ impl Actor {
                             timeout_streak,
                             "cached proposal slot stalled past quorum timeout; routing through unified frontier recovery"
                         );
-                        self.seed_frontier_recovery_for_quorum_timeout(height, view_idx, now);
+                        self.seed_frontier_recovery_for_quorum_timeout_without_local_pending(
+                            height, view_idx, now,
+                        );
                         let _ = self.advance_frontier_recovery(
                             "quorum_timeout",
                             height,
@@ -2762,7 +2800,13 @@ impl Actor {
             }
         }
 
-        if height == self.committed_height_snapshot().saturating_add(1) {
+        if height == self.committed_height_snapshot().saturating_add(1)
+            && (self.slot_has_proposal_evidence(height, view_idx)
+                || self
+                    .frontier_slot_live_local_owner_for_round(height, view_idx)
+                    .is_some()
+                || self.slot_has_locally_known_vote_backed_consensus_evidence(height, view_idx))
+        {
             let _ = self.seed_frontier_slot_from_same_height_evidence(
                 height,
                 view_idx,
@@ -2839,7 +2883,12 @@ impl Actor {
             && let Some(existing_vote) =
                 self.local_same_height_vote(height, self.epoch_for_height(height))
         {
-            if pending_queue_len > 0 {
+            let voted_block_anchors_round = self.block_known_locally(existing_vote.block_hash)
+                || self
+                    .authoritative_slot_owner_hash(height, existing_vote.view)
+                    .is_some_and(|owner| owner == existing_vote.block_hash)
+                || self.slot_has_proposal_evidence(height, existing_vote.view);
+            if !voted_block_anchors_round {
                 debug!(
                     height,
                     view = view_idx,
@@ -2847,19 +2896,31 @@ impl Actor {
                     voted_view = existing_vote.view,
                     voted_phase = ?existing_vote.phase,
                     voted_block = %existing_vote.block_hash,
-                    "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
+                    "ignoring same-height local vote for unknown block while assembling fresh proposal"
                 );
             } else {
-                trace!(
-                    height,
-                    view = view_idx,
-                    voted_view = existing_vote.view,
-                    voted_phase = ?existing_vote.phase,
-                    voted_block = %existing_vote.block_hash,
-                    "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
-                );
+                if pending_queue_len > 0 {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        voted_view = existing_vote.view,
+                        voted_phase = ?existing_vote.phase,
+                        voted_block = %existing_vote.block_hash,
+                        "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
+                    );
+                } else {
+                    trace!(
+                        height,
+                        view = view_idx,
+                        voted_view = existing_vote.view,
+                        voted_phase = ?existing_vote.phase,
+                        voted_block = %existing_vote.block_hash,
+                        "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
+                    );
+                }
+                return false;
             }
-            return false;
         }
 
         if let Some((pending_age, pending_view)) = self
@@ -2989,7 +3050,7 @@ impl Actor {
                         let first_defer_in_round = self
                             .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc);
                         if first_defer_in_round {
-                            self.observe_new_view_highest_qc(highest_qc);
+                            self.observe_new_view_highest_qc_exact_repair(highest_qc);
                         }
                         if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                             ProposalDeferWarningKind::HighestQcMissing,
