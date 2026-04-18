@@ -25,6 +25,48 @@ Last updated: 2026-04-18
   - `cargo check -p soranet-puzzle-service -p soranet-relay -p soranet-handshake-harness -p sorafs_orchestrator -p iroha_p2p -p iroha_cli --all-targets`
   - `cargo test -p soranet_pq`
 
+## 2026-04-18 Follow-up: IVM bare-domain TLV normalization and opaque asset unregister sync
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/common.rs` now canonicalizes
+  bare `PointerType::DomainId` literals like `wonder` onto
+  `wonder.universal` before Norito encoding, matching the checked-in TLV docs
+  and older IVM test fixtures that still use bare domain labels.
+- `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs` no longer panics when
+  `unregister_domain` scans opaque canonical `AssetDefinitionId`s. The mock now
+  uses `AssetDefinitionId::try_domain()` so only projected asset definitions pin
+  a domain, matching core-world semantics.
+- The affected IVM tests were resynced to the universal-account and opaque-id
+  model:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_register_domain_tlv.rs`
+    adds a regression that bare domain TLV payloads decode to
+    `*.universal`.
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_neg_cases.rs`
+    now explicitly links the subject into the domain before asserting
+    unregister rejection, instead of relying on obsolete implicit
+    account-domain membership.
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_tlv.rs`
+    now asserts the current ABI behavior: opaque asset definition ids still
+    block asset unregister while balances exist, but they do not pin the
+    domain.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib unregister_domain_ignores_opaque_asset_definition_ids -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_account_admin --test wsv_host_register_domain_tlv --test wsv_host_register_account_asset_tlv --test wsv_host_role_admin_tlv --test wsv_host_role_admin_neg --test wsv_host_role_vs_direct_perm --test wsv_host_unregister_tlv --test wsv_host_unregister_neg_cases --test wsv_host_nft_unregister_positive -- --nocapture`
+
+## 2026-04-18 Follow-up: SoraNet handshake harness CLI fixture refresh
+- `/Users/takemiyamakoto/dev/iroha/tools/soranet-handshake-harness/tests/simulate_cli.rs`
+  now uses capability vectors with the required `snnet.suite_list` TLV, matching
+  the current canonical SoraNet handshake fixtures and avoiding the downgrade
+  rejection on simulation startup.
+- The CLI frame assertions now derive expected frame filenames from the emitted
+  `handshake_steps` report, so the test follows the current NK2/NK3 step labels
+  instead of stale `ClientHello`/`RelayHello`/`ClientFinish` names.
+- `/Users/takemiyamakoto/dev/iroha/tools/soranet-handshake-harness/README.md`
+  now shows the same suite-list-capable vectors in the `simulate` example.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p soranet-handshake-harness simulate_writes_frames_and_telemetry -- --nocapture`
+  - `cargo test -p soranet-handshake-harness`
+
 ## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
 - Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,
   a small `integration_tests` refresh tool that regenerates the grouped

@@ -15,9 +15,9 @@ fn simulate_writes_frames_and_telemetry() {
     cmd.args([
         "simulate",
         "--client-hex",
-        "0101000201010102000201010202000200047f100004deadbeef7f110004cafebabe",
+        "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
         "--relay-hex",
-        "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f02010001010202000200047f12000412345678",
+        "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
         "--client-static-sk-hex",
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
         "--relay-static-sk-hex",
@@ -42,12 +42,41 @@ fn simulate_writes_frames_and_telemetry() {
     .assert()
     .success();
 
-    for (role, action) in [
-        ("client", "clienthello"),
-        ("relay", "relayhello"),
-        ("client", "clientfinish"),
-    ] {
-        let filename = format!("{role}_{action}.bin");
+    let report = fs::read_to_string(&json_path).expect("json report content");
+    let report_value: Value = json::from_str(&report).expect("report JSON should parse");
+    let report_obj = report_value
+        .as_object()
+        .expect("report JSON should be an object");
+    let handshake_steps = report_obj
+        .get("handshake_steps")
+        .and_then(Value::as_array)
+        .expect("handshake steps should be an array");
+    assert!(
+        !handshake_steps.is_empty(),
+        "simulation should record handshake steps"
+    );
+    let frame_count = fs::read_dir(&frames_dir)
+        .expect("frames directory should exist")
+        .count();
+    assert_eq!(
+        frame_count,
+        handshake_steps.len(),
+        "frames directory should contain one frame per handshake step"
+    );
+
+    for step in handshake_steps {
+        let step_obj = step
+            .as_object()
+            .expect("handshake step should be an object");
+        let role = step_obj
+            .get("role")
+            .and_then(Value::as_str)
+            .expect("handshake step role");
+        let action = step_obj
+            .get("action")
+            .and_then(Value::as_str)
+            .expect("handshake step action");
+        let filename = format!("{}_{}.bin", role.to_lowercase(), action.to_lowercase());
         let path = frames_dir.join(&filename);
         let bytes = fs::read(&path).unwrap_or_else(|err| {
             panic!("expected frame {path:?} to exist: {err}");
@@ -93,6 +122,5 @@ fn simulate_writes_frames_and_telemetry() {
         "telemetry payload should end with newline"
     );
 
-    let report = fs::read_to_string(&json_path).expect("json report content");
     assert!(report.contains("transcript_hash_hex"));
 }
