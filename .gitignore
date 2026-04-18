@@ -4,6 +4,8 @@ debug
 target
 target*/
 build.log
+*.profraw
+*.profdata
 *.y4m
 *.ivf
 *.yuv
