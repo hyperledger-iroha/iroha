@@ -17728,7 +17728,8 @@ pub mod isi {
                 [0x51; 32],
                 hash_vk(&vk_box),
             );
-            rec.vk_len = 3;
+            rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
             rec.status = ConfidentialStatus::Active;
             rec.key = Some(vk_box.clone());
             rec.gas_schedule_id = Some("stark_default".into());
@@ -17752,7 +17753,8 @@ pub mod isi {
                 [0x52; 32],
                 hash_vk(&vk_box),
             );
-            new_rec.vk_len = 3;
+            new_rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
             new_rec.status = ConfidentialStatus::Active;
             new_rec.key = Some(vk_box);
             new_rec.gas_schedule_id = Some("stark_default".into());
