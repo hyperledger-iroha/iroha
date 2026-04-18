@@ -2,6 +2,16 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Kotodama `NftId` fixtures refreshed to fully qualified literals
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_pointer_roundtrips.rs` now uses canonical `name$domain.dataspace` NFT literals again, matching the current `NftId::from_str` rule that delegates the domain segment to `DomainId::parse_fully_qualified`.
+- The same `NftId` refresh was applied to `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, plus the nearby structured-data filter coverage in `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/parser.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs` so the Kotodama test fixtures consistently use `wonderland.universal` for NFT and RWA ids.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_pointer_roundtrips -- --nocapture`
+  - `cargo test -p ivm --test kotodama_map_helpers ir_lower_ensure_pointer_variants_use_pointer_syscalls -- --nocapture`
+  - `cargo test -p kotodama_lang structured_data_filters_for_core_families -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_details -- --nocapture`
+
 ## 2026-04-17 Follow-up: Kotodama `DomainId` fixtures refreshed to fully qualified literals
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_domain_builtins_corehost.rs` now uses `domain.dataspace` literals again, matching the current `DomainId::parse_fully_qualified` semantic rule for `domain(...)` constructors.
 - The same literal refresh was applied to the nearby Kotodama coverage that still embedded bare domain labels: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields_corehost.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_domain_e2e.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/domain_ops.ko`.

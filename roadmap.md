@@ -1,6 +1,36 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
+
+Latest sync (2026-04-18 Kotodama fully qualified `NftId` fixtures):
+The stale Kotodama fixtures that still used bare `nft_id("name$domain")`
+literals were refreshed to the canonical `name$domain.dataspace` form across
+the affected IVM roundtrip tests, the map-helper pointer constructor coverage,
+and the nearby Kotodama parser/semantic/compiler structured-data-filter tests.
+The same slice also refreshed the companion RWA literals in those
+`kotodama_lang` tests to `hash$domain.dataspace`, keeping the identifier
+fixtures aligned with the current fully qualified domain parser.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_pointer_roundtrips.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/parser.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_pointer_roundtrips -- --nocapture`
+  - `cargo test -p ivm --test kotodama_map_helpers ir_lower_ensure_pointer_variants_use_pointer_syscalls -- --nocapture`
+  - `cargo test -p kotodama_lang structured_data_filters_for_core_families -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_details -- --nocapture`
+- open work after this slice:
+  - audit the remaining non-Kotodama IVM TLV fixtures that still embed bare
+    `NftId` / `DomainId` string payloads and refresh them to the current
+    canonical literal form where those tests now depend on typed parsing
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
 
 Latest sync (2026-04-17 Kotodama fully qualified `DomainId` fixtures):
 The stale Kotodama fixtures that still used bare `domain("label")` literals

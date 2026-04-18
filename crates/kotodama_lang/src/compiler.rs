@@ -1508,7 +1508,7 @@ seiyaku Test {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let nft_id: NftId = "n0$wonderland".parse().unwrap();
+        let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
         let trigger_id: TriggerId = "wake".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
         let key = Name::from_str("meta").unwrap();
@@ -2269,9 +2269,9 @@ seiyaku Test {{
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_literal();
-        let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let nft: NftId = "n0$wonderland.universal".parse().expect("nft");
         let rwa: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
         )
         .parse()
