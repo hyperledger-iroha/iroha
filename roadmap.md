@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 Kotodama zero-arg entrypoint hints and canonical domain fixtures):
+Kotodama manifest generation no longer looks up every public/view entrypoint
+under a synthetic wrapper symbol. The compiler now uses the wrapper name only
+when the entrypoint actually has parameters and therefore actually gets a
+wrapper, which restores state-derived access hints like `state:counter` for
+zero-argument public entrypoints. The IVM Kotodama regressions that still used
+pre-canonical short domain/NFT literals were also refreshed to the current
+`domain.dataspace` and `name$domain.dataspace` forms, and the schema-info
+syscall expectation now matches the compiler's canonical lowering.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang zero_arg_public_entrypoint_retains_scalar_state_hints -- --nocapture`
+  - `cargo test -p ivm --test kotodama -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 AXT golden fixture resync):
 The shared AXT golden vectors are back in sync with the current descriptor
 binding and account encoding. `axt_golden.rs` now embeds the current

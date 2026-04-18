@@ -2,6 +2,15 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: Kotodama zero-arg entrypoint hints and canonical domain fixtures
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now resolves manifest/access-hint IR symbol names to the synthetic `__entrypoint_impl__*` wrapper only when a public/view entrypoint actually has parameters and therefore actually gets a wrapper. Zero-argument public entrypoints now retain their own state-derived access hints instead of dropping them during manifest assembly.
+- The same compiler module now has a focused regression that pins `kotoage fn run()` scalar-state reads to `state:counter`, covering the zero-argument public-entrypoint case that previously slipped past the wrapper-name lookup.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs` was refreshed to use canonical `domain.dataspace` and `name$domain.dataspace` literals, and its schema-info syscall assertion now matches the compiler's canonical `SYSCALL_SCHEMA_INFO` lowering.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang zero_arg_public_entrypoint_retains_scalar_state_hints -- --nocapture`
+  - `cargo test -p ivm --test kotodama -- --nocapture`
+
 ## 2026-04-17 Follow-up: AXT golden fixtures resynced with current handle binding
 - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current descriptor/handle/policy Norito bytes again, including the handle's refreshed descriptor binding and header bytes after the bare-payload binding change.
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_policy.rs` now derives the fixture intent's `from` account from the decoded fixture handle instead of an older hardcoded account literal, so the state-level handle check stays aligned with the canonical account encoding embedded in the golden fixture.

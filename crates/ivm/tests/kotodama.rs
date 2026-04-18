@@ -526,7 +526,7 @@ fn parse_and_type_bounded_map_take_one_ok() {
 fn compile_domain_literal_emits_tlv_domainid() {
     let src = r#"
         fn hajimari() {
-            let d = domain("wonderland");
+            let d = domain("wonderland.universal");
         }
     "#;
     let compiler = Compiler::new();
@@ -542,7 +542,7 @@ fn compile_register_domain_emits_syscall_0x10() {
     use ivm::encoding;
     let src = r#"
         fn hajimari() {
-            register_domain(domain("wonderland"));
+            register_domain(domain("wonderland.universal"));
         }
     "#;
     let compiler = Compiler::new();
@@ -806,7 +806,7 @@ fn pointer_constructors_accept_string_variables() {
     // Use variables bound to string literals; constructors should work
     let src = r#"
         fn main() {
-            let did = "wonderland";
+            let did = "wonderland.universal";
             let aid = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
@@ -1033,7 +1033,7 @@ fn account_id_constructor_accepts_blob() {
 fn name_pass_through_from_name_pointer() {
     let src = r#"
         fn main() {
-            let nm = name("wonderland");
+            let nm = name("wonderland.universal");
             let nm2 = name(nm);
             let aid = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
             transfer_domain(authority(), nm2, aid.account_id());
@@ -1558,7 +1558,7 @@ fn dynamic_range_start1_end2_executes_second_only() {
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland\"), account_id(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\")); nft_transfer_asset(account_id(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\"), nft_id(\"n0$wonderland\"), account_id(\"sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76\")); }";
+    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland.universal\"), account_id(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\")); nft_transfer_asset(account_id(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\"), nft_id(\"n0$wonderland.universal\"), account_id(\"sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76\")); }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -2017,7 +2017,7 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
         fn main() {
             transfer_domain(
                 account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-                domain("wonderland"),
+                domain("wonderland.universal"),
                 authority()
             );
         }
@@ -2993,7 +2993,7 @@ fn vrf_and_pointer_syscalls_present() {
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
     assert!(has(syscalls::SYSCALL_POINTER_TO_NORITO as u8));
     assert!(has(syscalls::SYSCALL_POINTER_FROM_NORITO as u8));
-    assert!(has(syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8));
+    assert!(has(syscalls::SYSCALL_SCHEMA_INFO as u8));
 }
 
 #[test]
