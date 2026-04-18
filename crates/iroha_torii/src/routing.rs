@@ -25348,8 +25348,7 @@ mod repair_query_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str =
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const TEST_AUDITOR_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
     fn report(
         ticket: &str,
@@ -25492,12 +25491,9 @@ mod repair_worker_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str =
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
-    const TEST_WORKER_A_I105: &str =
-        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
-    const TEST_WORKER_B_I105: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const TEST_AUDITOR_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const TEST_WORKER_A_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+    const TEST_WORKER_B_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
     fn report(
         ticket: &str,
@@ -31826,7 +31822,7 @@ mod address_metrics_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn kaigi_sse_accepts_i105_literal() {
         let telemetry = MaybeTelemetry::for_tests();
-        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+        let literal = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
             .expect("i105 literal should parse");
@@ -31994,8 +31990,8 @@ fn committed_transactions_snapshot(
 ///   curl -X POST \
 ///     -H 'Content-Type: application/json' \
 ///     -H 'Accept: application/json' \
-///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"]}, "pagination": {"limit": 50}}' \
-///     http://127.0.0.1:8080/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query
+///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"]}, "pagination": {"limit": 50}}' \
+///     http://127.0.0.1:8080/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
 ///
@@ -34611,8 +34607,7 @@ mod tx_query_integration_smoke {
     use super::*;
     // use tower::ServiceExt; // not needed in this module
 
-    const TEST_ACCOUNT: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
     fn account_with_key() -> (dm::AccountId, KeyPair) {
         let kp = KeyPair::random();
@@ -34707,8 +34702,7 @@ mod tx_query_integration_smoke {
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("authority".into()),
                 norito::json::Value::String(
-                    "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
-                        .into(),
+                    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
                 ),
             )),
             select: None,
@@ -34722,9 +34716,7 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             Arc::new(state),
-            axum::extract::Path(
-                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into(),
-            ),
+            axum::extract::Path("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -37253,7 +37245,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
@@ -37399,7 +37391,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -37443,7 +37435,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -37460,7 +37452,7 @@ mod app_api_integration_tests {
         )]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -37497,7 +37489,7 @@ mod app_api_integration_tests {
         let mut set = Vec::new();
         for _ in 0..300 {
             set.push(norito::json::Value::String(
-                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into(),
+                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
             ));
         }
         let body = json_string(obj(vec![(
@@ -37509,7 +37501,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -37528,7 +37520,7 @@ mod app_api_integration_tests {
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -37572,7 +37564,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -37618,9 +37610,7 @@ mod app_api_integration_tests {
         // For invalid filter tests, the specific account id is irrelevant
         let req = http::Request::builder()
             .method("POST")
-            .uri(
-                "/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/assets/query",
-            )
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/assets/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -37846,9 +37836,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri(
-                "/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/assets/query",
-            )
+            .uri("/v1/accounts/sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE/assets/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -39138,11 +39126,10 @@ mod query_endpoint_tests {
         use iroha_data_model::isi;
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
 
-        let authority: dm::AccountId = dm::AccountId::parse_encoded(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-        )
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("valid account id");
+        let authority: dm::AccountId =
+            dm::AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("valid account id");
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
@@ -51413,8 +51400,7 @@ mod pagination_enforcement_tests {
 
     use super::*;
 
-    const TEST_ACCOUNT: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
     fn test_state() -> Arc<CoreState> {
         Arc::new(State::new_for_testing(
@@ -68012,9 +67998,7 @@ mod adapter_filter_tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val(
-                        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-                    ),
+                    val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
                 ]),
             ),
         ]);

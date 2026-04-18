@@ -37,7 +37,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "metadata": {
                 "key": "value"
               }
@@ -47,7 +47,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
+              "id": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"
               }
@@ -83,7 +83,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
+              "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "metadata": {
                 
               }
@@ -215,25 +215,25 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "sorauロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "source": "sorauﾛ1ｼﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎBMY2FH"
             }
           }
         },
         {
           "Transfer": {
             "Domain": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "wonderland",
-              "source": "sorauロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "source": "sorauﾛ1ｼﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎBMY2FH"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -243,7 +243,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }

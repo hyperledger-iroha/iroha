@@ -9,7 +9,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class SignedIterableQueryBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-    private const string FixtureAccountId = "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53";
+    private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     private const string FixtureCertificateId = "1111111111111111111111111111111111111111111111111111111111111122";
     private const string FixtureOfflineTransferId = "2222222222222222222222222222222222222222222222222222222222222240";

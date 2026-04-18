@@ -10063,8 +10063,7 @@ mod tests {
         };
         let ticket = StreamingTicket {
             ticket_id: demo_hash(0x44),
-            owner: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
-                .to_owned(),
+            owner: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".to_owned(),
             dsid: 7,
             lane_id: 5,
             settlement_bucket: 2_048,
@@ -10277,8 +10276,7 @@ mod tests {
         };
         let ticket = StreamingTicket {
             ticket_id: demo_hash(0x44),
-            owner: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
-                .into(),
+            owner: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
             dsid: 7,
             lane_id: 5,
             settlement_bucket: 2_048,

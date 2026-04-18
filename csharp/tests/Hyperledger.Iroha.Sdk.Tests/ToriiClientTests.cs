@@ -37,7 +37,7 @@ public sealed class ToriiClientTests
         {
             BearerToken = "dev-token",
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")),
         };
 
@@ -573,7 +573,7 @@ public sealed class ToriiClientTests
                   "items": [
                     {
                       "id": "lot$gold#wonderland",
-                      "owned_by": "sorauロ1Ncustodian",
+                      "owned_by": "sorauﾛ1Ncustodian",
                       "quantity": "100",
                       "held_quantity": "5",
                       "primary_reference": "vault-7",
@@ -612,7 +612,7 @@ public sealed class ToriiClientTests
             Content = new StringContent("""
                 {
                   "id": "lot$gold#wonderland",
-                  "owned_by": "sorauロ1Ncustodian",
+                  "owned_by": "sorauﾛ1Ncustodian",
                   "quantity": "100",
                   "held_quantity": "5",
                   "primary_reference": "vault-7",
@@ -917,7 +917,7 @@ public sealed class ToriiClientTests
                   "pagination": { "page": 3, "per_page": 10, "total_pages": 5, "total_items": 48 },
                   "items": [
                     {
-                      "authority": "sorauロ1Nauthority",
+                      "authority": "sorauﾛ1Nauthority",
                       "created_at": "2026-03-29T05:00:00Z",
                       "kind": "Transfer",
                       "box": {
@@ -944,7 +944,7 @@ public sealed class ToriiClientTests
         {
             Page = 3,
             PerPage = 10,
-            Authority = " sorauロ1Nauthority ",
+            Authority = " sorauﾛ1Nauthority ",
             Account = " sorauロ1Naccount ",
             TransactionHash = " tx-ins ",
             TransactionStatus = ToriiExplorerTransactionStatusFilter.Committed,
@@ -972,7 +972,7 @@ public sealed class ToriiClientTests
                   "sampled_at": "2026-03-29T08:00:00Z",
                   "items": [
                     {
-                      "authority": "sorauロ1Nauthority",
+                      "authority": "sorauﾛ1Nauthority",
                       "created_at": "2026-03-29T07:59:00Z",
                       "kind": "Transfer",
                       "box": {
@@ -1014,7 +1014,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent("""
                 {
-                  "authority": "sorauロ1Nauthority",
+                  "authority": "sorauﾛ1Nauthority",
                   "created_at": "2026-03-29T06:00:00Z",
                   "kind": "SetKeyValue",
                   "box": {
@@ -1557,7 +1557,7 @@ public sealed class ToriiClientTests
                     {
                       "kind": "Singular",
                       "value": {
-                        "id": "sorauロ1Nmerchant"
+                        "id": "sorauﾛ1Nmerchant"
                       }
                     }
                     """),
@@ -1568,7 +1568,7 @@ public sealed class ToriiClientTests
         using var response = await client.SubmitSignedQueryAsync(queryBytes, query: "limit=1");
 
         Assert.Equal("Singular", response.RootElement.GetProperty("kind").GetString());
-        Assert.Equal("sorauロ1Nmerchant", response.RootElement.GetProperty("value").GetProperty("id").GetString());
+        Assert.Equal("sorauﾛ1Nmerchant", response.RootElement.GetProperty("value").GetProperty("id").GetString());
     }
 
     [Fact]
@@ -1601,7 +1601,7 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        seenEnvelope = new SignedQueryBuilder("sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+        seenEnvelope = new SignedQueryBuilder("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .FindParameters()
             .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
 
@@ -1986,7 +1986,7 @@ public sealed class ToriiClientTests
                       "opaque_id": "opaque-1",
                       "receipt_hash": "receipt-1",
                       "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "resolved_at_ms": 1710000000000,
                       "expires_at_ms": 1710003600000,
                       "backend": "bfv-programmed-sha3-256-v1",
@@ -1994,7 +1994,7 @@ public sealed class ToriiClientTests
                       "signature_payload_hex": "DEADBEEF",
                       "signature_payload": {
                         "policy_id": "phone#retail",
-                        "account_id": "sorauロ1Nmerchant"
+                        "account_id": "sorauﾛ1Nmerchant"
                       }
                     }
                     """),
@@ -2010,7 +2010,7 @@ public sealed class ToriiClientTests
 
         Assert.Equal("opaque-1", resolved.OpaqueId);
         Assert.Equal("receipt-1", resolved.ReceiptHash);
-        Assert.Equal("sorauロ1Nmerchant", resolved.AccountId);
+        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
         Assert.NotNull(resolved.SignaturePayload);
         Assert.Equal("phone#retail", resolved.SignaturePayload!["policy_id"]!.GetValue<string>());
@@ -2030,7 +2030,7 @@ public sealed class ToriiClientTests
                     {
                       "index": 7,
                       "alias": "merchant@sbp.universal",
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "source": "on_chain"
                     }
                     """),
@@ -2043,7 +2043,7 @@ public sealed class ToriiClientTests
         Assert.NotNull(resolved);
         Assert.Equal((ulong)7, resolved!.Index);
         Assert.Equal("merchant@sbp.universal", resolved.Alias);
-        Assert.Equal("sorauロ1Nmerchant", resolved.AccountId);
+        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal("on_chain", resolved.Source);
     }
 
@@ -2118,7 +2118,7 @@ public sealed class ToriiClientTests
                     {
                       "dataspace_id": 42,
                       "dataspace_alias": "payments",
-                      "accounts": ["sorauロ1Nmerchant", "sorauロ1Nissuer"]
+                      "accounts": ["sorauﾛ1Nmerchant", "sorauロ1Nissuer"]
                     }
                   ]
                 }
@@ -2132,7 +2132,7 @@ public sealed class ToriiClientTests
         Assert.Single(response.Dataspaces);
         Assert.Equal(42, response.Dataspaces[0].DataspaceId);
         Assert.Equal("payments", response.Dataspaces[0].DataspaceAlias);
-        Assert.Equal("sorauロ1Nmerchant", response.Dataspaces[0].Accounts[0]);
+        Assert.Equal("sorauﾛ1Nmerchant", response.Dataspaces[0].Accounts[0]);
         Assert.Contains("/v1/space-directory/uaids/uaid%3A0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", handler.LastRequest!.RequestUri!.AbsoluteUri);
     }
 
@@ -2158,7 +2158,7 @@ public sealed class ToriiClientTests
                         "expired_epoch": 240,
                         "revocation": null
                       },
-                      "accounts": ["sorauロ1Nmerchant"],
+                      "accounts": ["sorauﾛ1Nmerchant"],
                       "manifest": {
                         "version": "V1",
                         "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -2200,8 +2200,8 @@ public sealed class ToriiClientTests
     [Fact]
     public async Task SubmitTransactionAsyncPostsNoritoPayload()
     {
-        var transaction = new TransactionBuilder("00000042", "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+        var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)
@@ -2268,14 +2268,14 @@ public sealed class ToriiClientTests
             Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("merchant@sbp", payload.RootElement.GetProperty("alias").GetString());
-            Assert.Equal("sorauロ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
+            Assert.Equal("sorauﾛ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal("merchant@example.com", payload.RootElement.GetProperty("identity").GetProperty("email").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
             {
                 Content = new StringContent("""
                     {
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                       "tx_hash_hex": "deadbeef",
                       "status": "QUEUED"
@@ -2288,7 +2288,7 @@ public sealed class ToriiClientTests
         var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
         {
             Alias = "merchant@sbp",
-            AccountId = "sorauロ1Nmerchant",
+            AccountId = "sorauﾛ1Nmerchant",
             Identity = new JsonObject
             {
                 ["email"] = "merchant@example.com",
@@ -2296,7 +2296,7 @@ public sealed class ToriiClientTests
             Permissions = ["CanResolveAccountAlias"],
         });
 
-        Assert.Equal("sorauロ1Nmerchant", response.AccountId);
+        Assert.Equal("sorauﾛ1Nmerchant", response.AccountId);
         Assert.Equal("deadbeef", response.TransactionHashHex);
         Assert.Equal("QUEUED", response.Status);
     }
@@ -2335,7 +2335,7 @@ public sealed class ToriiClientTests
     public void FaucetPowComputeChallengeMatchesDeterministicVector()
     {
         var challenge = ToriiAccountFaucetPow.ComputeChallenge(
-            "sorauロ1Nmerchant",
+            "sorauﾛ1Nmerchant",
             68,
             "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef");
 
@@ -2364,7 +2364,7 @@ public sealed class ToriiClientTests
     public void FaucetPowSolveFindsExpectedNonceForDeterministicPuzzle()
     {
         var solution = ToriiAccountFaucetPow.Solve(
-            "sorauロ1Nmerchant",
+            "sorauﾛ1Nmerchant",
             new ToriiAccountFaucetPuzzle
             {
                 Algorithm = "scrypt-leading-zero-bits-v1",
@@ -2394,7 +2394,7 @@ public sealed class ToriiClientTests
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
-            Assert.Equal("sorauロ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
+            Assert.Equal("sorauﾛ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
             Assert.Equal("abcdef", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
 
@@ -2402,9 +2402,9 @@ public sealed class ToriiClientTests
             {
                 Content = new StringContent("""
                     {
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "asset_definition_id": "rose#wonderland",
-                      "asset_id": "rose#wonderland#sorauロ1Nmerchant",
+                      "asset_id": "rose#wonderland#sorauﾛ1Nmerchant",
                       "amount": "100",
                       "tx_hash_hex": "feedface",
                       "status": "QUEUED"
@@ -2416,7 +2416,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
         {
-            AccountId = "sorauロ1Nmerchant",
+            AccountId = "sorauﾛ1Nmerchant",
             PowAnchorHeight = 68,
             PowNonceHex = "abcdef",
         });
@@ -2454,10 +2454,10 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var solution = await client.SolveAccountFaucetAsync("sorauロ1Nmerchant", new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 });
+        var solution = await client.SolveAccountFaucetAsync("sorauﾛ1Nmerchant", new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 });
 
         Assert.Equal("000000000000008c", solution.NonceHex);
-        Assert.Equal("sorauロ1Nmerchant", solution.AccountId);
+        Assert.Equal("sorauﾛ1Nmerchant", solution.AccountId);
         Assert.Equal((ulong)68, solution.AnchorHeight);
     }
 
@@ -2491,7 +2491,7 @@ public sealed class ToriiClientTests
 
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
-            Assert.Equal("sorauロ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
+            Assert.Equal("sorauﾛ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal("000000000000008c", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
             Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
 
@@ -2499,9 +2499,9 @@ public sealed class ToriiClientTests
             {
                 Content = new StringContent("""
                     {
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "asset_definition_id": "rose#wonderland",
-                      "asset_id": "rose#wonderland#sorauロ1Nmerchant",
+                      "asset_id": "rose#wonderland#sorauﾛ1Nmerchant",
                       "amount": "100",
                       "tx_hash_hex": "feedface",
                       "status": "QUEUED"
@@ -2511,7 +2511,7 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.ClaimAccountFaucetAsync("sorauロ1Nmerchant", new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 });
+        var response = await client.ClaimAccountFaucetAsync("sorauﾛ1Nmerchant", new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 });
 
         Assert.Equal(2, requestCount);
         Assert.Equal("feedface", response.TransactionHashHex);
@@ -2533,7 +2533,7 @@ public sealed class ToriiClientTests
             {
                 Content = new StringContent("""
                     {
-                      "account_id": "sorauロ1Nmultisig",
+                      "account_id": "sorauﾛ1Nmultisig",
                       "tx_hash_hex": "",
                       "status": "EXISTS"
                     }
@@ -2551,7 +2551,7 @@ public sealed class ToriiClientTests
             TransactionTtlMilliseconds = 60_000,
         });
 
-        Assert.Equal("sorauロ1Nmultisig", response.AccountId);
+        Assert.Equal("sorauﾛ1Nmultisig", response.AccountId);
         Assert.Equal(string.Empty, response.TransactionHashHex);
         Assert.Equal("EXISTS", response.Status);
     }
@@ -2569,7 +2569,7 @@ public sealed class ToriiClientTests
                 Content = new StringContent("""
                     {
                       "alias": "merchant@sbp.universal",
-                      "account_id": "sorauロ1Nmerchant",
+                      "account_id": "sorauﾛ1Nmerchant",
                       "index": 7,
                       "source": "on_chain"
                     }
@@ -2582,7 +2582,7 @@ public sealed class ToriiClientTests
 
         Assert.NotNull(resolved);
         Assert.Equal("merchant@sbp.universal", resolved!.Alias);
-        Assert.Equal("sorauロ1Nmerchant", resolved.AccountId);
+        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal((long)7, resolved.Index);
         Assert.Equal("on_chain", resolved.Source);
     }
@@ -3062,7 +3062,7 @@ public sealed class ToriiClientTests
             Content = new StringContent("""
                 {
                   "ok": true,
-                  "resolved_multisig_account_id": "sorauロ1Nmultisig",
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
                   "submitted": false,
                   "proposal_id": "aa55",
                   "instructions_hash": "aa55",
@@ -3099,7 +3099,7 @@ public sealed class ToriiClientTests
             Content = new StringContent("""
                 {
                   "ok": true,
-                  "resolved_multisig_account_id": "sorauロ1Nmultisig",
+                  "resolved_multisig_account_id": "sorauﾛ1Nmultisig",
                   "submitted": false,
                   "proposal_id": "aa55",
                   "instructions_hash": "aa55",

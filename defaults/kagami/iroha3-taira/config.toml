@@ -39,13 +39,13 @@ allow_tool_prefixes = ["iroha."]
 
 [torii.onboarding]
 enabled = true
-authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
+authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 allowed_permissions = []
 
 [torii.faucet]
 enabled = true
-authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
+authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 asset_definition_id = "xor#universal"
 amount = "25000"
@@ -68,14 +68,14 @@ identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBE
 identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
 
 [gov]
-citizenship_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
-bond_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
-slash_receiver_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
-viral_incentive_pool_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
-viral_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+citizenship_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+slash_receiver_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+viral_incentive_pool_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+viral_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 
 [gov.sorafs_telemetry]
-submitters = ["testuロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T"]
+submitters = ["testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T"]
 
 [nexus]
 enabled = true
@@ -83,7 +83,7 @@ lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+fee_sink_account_id = "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"

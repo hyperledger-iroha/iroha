@@ -5122,10 +5122,9 @@ mod tests {
 
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
 
-    const TEST_ACCOUNT_I105: &str =
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const TEST_ACCOUNT_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
-        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
     #[test]
     fn sync_request_hash_is_stable_for_reordered_receipts() {

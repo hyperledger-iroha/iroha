@@ -17,66 +17,18 @@ I105_NUMERIC_SENTINEL_PREFIX = "n"
 I105_CHECKSUM_LEN = 6
 BECH32M_CONST = 0x2BC830A3
 DEFAULT_CHAIN_DISCRIMINANT = 0x02F1
+I105_DISCRIMINANT_MAX = 0xFFFF
 CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
 CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
     "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 "
-    "katakana from the Iroha poem. Render and validate them with the intended "
-    "chain discriminant."
+    "half-width katakana from the Iroha poem. Render and validate them with "
+    "the intended chain discriminant."
 )
 
 BASE58_ALPHABET: Tuple[str, ...] = tuple(
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-)
-IROHA_POEM_KANA_FULLWIDTH: Tuple[str, ...] = (
-    "イ",
-    "ロ",
-    "ハ",
-    "ニ",
-    "ホ",
-    "ヘ",
-    "ト",
-    "チ",
-    "リ",
-    "ヌ",
-    "ル",
-    "ヲ",
-    "ワ",
-    "カ",
-    "ヨ",
-    "タ",
-    "レ",
-    "ソ",
-    "ツ",
-    "ネ",
-    "ナ",
-    "ラ",
-    "ム",
-    "ウ",
-    "ヰ",
-    "ノ",
-    "オ",
-    "ク",
-    "ヤ",
-    "マ",
-    "ケ",
-    "フ",
-    "コ",
-    "エ",
-    "テ",
-    "ア",
-    "サ",
-    "キ",
-    "ユ",
-    "メ",
-    "ミ",
-    "シ",
-    "ヱ",
-    "ヒ",
-    "モ",
-    "セ",
-    "ス",
 )
 IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
     "ｲ",
@@ -127,15 +79,9 @@ IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
     "ｾ",
     "ｽ",
 )
-I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
+I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
-I105_INDEX.update(
-    {
-        symbol: len(BASE58_ALPHABET) + idx
-        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
-    }
-)
 
 
 class AccountAddressError(ValueError):
@@ -394,10 +340,11 @@ class AccountAddress:
         return encode_i105_string(self.canonical_bytes(), discriminant=discriminant)
 
     def display_formats(self, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> Mapping[str, object]:
-        i105 = self.to_i105(discriminant)
+        normalized = normalize_i105_discriminant(discriminant)
+        i105 = self.to_i105(normalized)
         return {
             "i105": i105,
-            "chain_discriminant": discriminant,
+            "chain_discriminant": normalized,
             "i105_warning": I105_WARNING,
         }
 
@@ -405,7 +352,22 @@ class AccountAddress:
         return self.to_i105()
 
 
+def normalize_i105_discriminant(
+    discriminant: int, context: str = "i105 chain discriminant"
+) -> int:
+    if isinstance(discriminant, bool) or not isinstance(discriminant, int):
+        raise AccountAddressError(
+            f"{context} must be an integer between 0 and {I105_DISCRIMINANT_MAX}"
+        )
+    if discriminant < 0 or discriminant > I105_DISCRIMINANT_MAX:
+        raise AccountAddressError(
+            f"{context} must be an integer between 0 and {I105_DISCRIMINANT_MAX}"
+        )
+    return discriminant
+
+
 def i105_sentinel_for_discriminant(discriminant: int) -> str:
+    discriminant = normalize_i105_discriminant(discriminant)
     if discriminant == CHAIN_DISCRIMINANT_SORA:
         return I105_SENTINEL_SORA
     if discriminant == CHAIN_DISCRIMINANT_TEST:
@@ -415,7 +377,7 @@ def i105_sentinel_for_discriminant(discriminant: int) -> str:
     return f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}"
 
 
-def i105_discriminant_from_sentinel(encoded: str) -> Optional[int]:
+def parse_i105_sentinel_and_payload(encoded: str) -> Optional[Tuple[int, str]]:
     sentinels = (
         (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
         (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
@@ -423,37 +385,48 @@ def i105_discriminant_from_sentinel(encoded: str) -> Optional[int]:
     )
     for discriminant, sentinel in sentinels:
         if encoded.startswith(sentinel):
-            return discriminant
+            return discriminant, encoded[len(sentinel) :]
     if not encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
         return None
     index = len(I105_NUMERIC_SENTINEL_PREFIX)
-    while index < len(encoded) and encoded[index].isdigit():
+    while index < len(encoded) and "0" <= encoded[index] <= "9":
         index += 1
     if index == len(I105_NUMERIC_SENTINEL_PREFIX):
         return None
     try:
-        return int(encoded[1:index])
+        discriminant = int(encoded[1:index])
     except ValueError:
         return None
+    normalized = normalize_i105_discriminant(
+        discriminant, "i105 chain discriminant sentinel"
+    )
+    return normalized, encoded[index:]
+
+
+def i105_discriminant_from_sentinel(encoded: str) -> Optional[int]:
+    parsed = parse_i105_sentinel_and_payload(encoded)
+    return parsed[0] if parsed is not None else None
 
 
 def strip_i105_sentinel(encoded: str, expected_discriminant: Optional[int] = None) -> str:
     expected = (
-        DEFAULT_CHAIN_DISCRIMINANT
+        None
         if expected_discriminant is None
-        else expected_discriminant
+        else normalize_i105_discriminant(
+            expected_discriminant, "expected i105 chain discriminant"
+        )
     )
-    sentinel = i105_sentinel_for_discriminant(expected)
-    if encoded.startswith(sentinel):
-        return encoded[len(sentinel) :]
-    found = i105_discriminant_from_sentinel(encoded)
-    if found is not None:
+    parsed = parse_i105_sentinel_and_payload(encoded)
+    if parsed is None:
+        raise AccountAddressError(
+            "i105 address is missing the expected chain-discriminant sentinel"
+        )
+    found, payload = parsed
+    if expected is not None and found != expected:
         raise AccountAddressError(
             f"unexpected i105 chain discriminant: expected {expected}, found {found}"
         )
-    raise AccountAddressError(
-        "i105 address is missing the expected chain-discriminant sentinel"
-    )
+    return payload
 
 
 def encode_i105_string(canonical: bytes, *, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> str:

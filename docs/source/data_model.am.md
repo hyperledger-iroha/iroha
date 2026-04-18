@@ -260,7 +260,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components
 iroha ledger asset mint \
   --definition-alias pkr#bankb.sbp \
-  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii

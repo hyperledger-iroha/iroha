@@ -130,7 +130,7 @@ final class AccountAddressTests: XCTestCase {
         )
         XCTAssertTrue(
             payload.contains(where: {
-                "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス".contains($0)
+                "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ".contains($0)
             })
         )
 
@@ -155,10 +155,10 @@ final class AccountAddressTests: XCTestCase {
         }
 
         XCTAssertThrowsError(try AccountAddress.fromI105(noncanonical, expectedPrefix: 753)) { error in
-            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
+            XCTAssertEqual(error as? AccountAddressError, .missingI105Sentinel)
         }
         XCTAssertThrowsError(try AccountAddress.parseEncoded(noncanonical, expectedPrefix: 753)) { error in
-            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
+            XCTAssertEqual(error as? AccountAddressError, .missingI105Sentinel)
         }
     }
 
@@ -222,7 +222,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testI105TooShort() {
-        XCTAssertThrowsError(try AccountAddress.fromI105("soraア")) { error in
+        XCTAssertThrowsError(try AccountAddress.fromI105("soraｱ")) { error in
             guard let addressError = error as? AccountAddressError else {
                 return XCTFail("unexpected error: \(error)")
             }
@@ -242,13 +242,25 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testMixedCanonicalI105LiteralRoundTrips() throws {
-        let literal = "sorauロ1PワdホシヒノNクdチムkiヌ3オモaPBQDTイKqシqオrラカwSQ1フナQU61Y7"
+        let literal = "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
         let address = try AccountAddress.fromI105(literal, expectedPrefix: 753)
         XCTAssertEqual(
             try address.canonicalHex().lowercased(),
             "0x02000120bc717326224e4b4119298e7b1db8133cb27d6cdf6b3e04d75a6d27b29a34c1cf"
         )
         XCTAssertEqual(try address.toI105(networkPrefix: 753), literal)
+    }
+
+    func testRejectsLegacyFullwidthKanaPayload() throws {
+        let literal = "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
+        let legacy = literal.replacingOccurrences(of: "ﾛ", with: "ロ")
+
+        XCTAssertThrowsError(try AccountAddress.fromI105(legacy, expectedPrefix: 753)) { error in
+            guard let addressError = error as? AccountAddressError else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(addressError.code, "ERR_INVALID_I105_CHAR")
+        }
     }
 
     func testUnsupportedAlgorithmRejected() {
@@ -284,7 +296,7 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(formats.networkPrefix, 753)
         XCTAssertEqual(formats.i105, try address.toI105(networkPrefix: 753))
         XCTAssertTrue(formats.i105Warning.contains("canonical I105 alphabet"))
-        XCTAssertTrue(formats.i105Warning.contains("Base58 plus the 47 katakana"))
+        XCTAssertTrue(formats.i105Warning.contains("Base58 plus the 47 half-width katakana"))
     }
 
     private func loadAddressFixture() throws -> Fixture {

@@ -23,6 +23,7 @@ public final class AccountAddressTests {
     mixedI105LiteralRoundTrip();
     i105PrefixMismatchThrows();
     i105RejectsFullwidthSentinel();
+    i105RejectsLegacyFullwidthKana();
     i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
@@ -124,7 +125,7 @@ public final class AccountAddressTests {
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert i105.equals("sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6")
+    assert i105.equals("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
         : "i105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
@@ -136,7 +137,7 @@ public final class AccountAddressTests {
 
   private static void mixedI105LiteralRoundTrip() throws Exception {
     final String literal =
-        "sorauロ1PワdホシヒノNクdチムkiヌ3オモaPBQDTイKqシqオrラカwSQ1フナQU61Y7";
+        "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7";
     final AccountAddress address =
         AccountAddress.fromI105(literal, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert address.canonicalHex().equals(
@@ -171,7 +172,7 @@ public final class AccountAddressTests {
     try {
       AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
-      parseThrew = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
+      parseThrew = ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_I105_SENTINEL;
     }
     assert parseThrew : "fullwidth sentinel literal must be rejected";
 
@@ -180,9 +181,22 @@ public final class AccountAddressTests {
       AccountAddress.fromI105(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       fromI105Threw =
-          ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
+          ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_I105_SENTINEL;
     }
     assert fromI105Threw : "fullwidth sentinel literal must be rejected by fromI105";
+  }
+
+  private static void i105RejectsLegacyFullwidthKana() throws Exception {
+    final String canonical =
+        "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7";
+    final String legacy = canonical.replaceFirst("ﾛ", "ロ");
+    boolean threw = false;
+    try {
+      AccountAddress.fromI105(legacy, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
+    }
+    assert threw : "legacy fullwidth kana literal must be rejected";
   }
 
   private static void singleKeyPayloadExtraction() throws Exception {

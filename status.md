@@ -24,6 +24,33 @@ Last updated: 2026-04-18
   - `cargo test -p kotodama_lang structured_data_filters_for_core_families -- --nocapture`
   - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_details -- --nocapture`
 
+## 2026-04-18 Follow-up: SDK i105 prefix validation fixes
+- Rust and Python strict account-address parsing now auto-detects any valid i105 sentinel when no expected discriminant is supplied, while explicit expected prefixes still reject mismatched `sora`/`test`/`dev`/`n<decimal>` literals.
+- Python SDK and Python Torii client validation now reject numeric i105 discriminants outside the unsigned 16-bit range, including `n65536`, `n70000`, and negative encoder inputs.
+- The JavaScript checked-in `dist` package artifacts were refreshed from `src`, including the missing `curveRegistry`, `sccp`, and browser-connect subpath artifacts, and `dist/address.js` now uses only the half-width i105 alphabet.
+- Focused validation for this slice:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/package_dist.test.js` from `javascript/iroha_js`
+  - `node -e "import('./javascript/iroha_js/dist/index.js').then(() => console.log('dist import ok'))"`
+  - `python3 -m pytest python/iroha_python/tests/test_address_format.py python/iroha_torii_client/tests/test_client.py`
+  - direct Python import smokes for `iroha_python.address` and `iroha_torii_client.client` i105 edge cases
+  - `CARGO_TARGET_DIR=/tmp/iroha-sdk-i105-target cargo test -p iroha_data_model parse_encoded_without_expected_discriminant_accepts_literal_prefix -- --nocapture`
+  - `./target/debug/xtask address-vectors --verify`
+- The stale `ContractInstance` / `ContractInstancesPage` package re-exports were removed from `iroha_python.__init__`; those symbols do not exist in the client module and blocked pytest collection.
+
+## 2026-04-18 Follow-up: I105 half-width kana standardization
+- I105 account-address codecs now use the half-width Iroha-kana alphabet as the canonical base-105 suffix across Rust, Swift, Kotlin, Java, JavaScript, Python, and C#; legacy full-width kana payload aliases are rejected instead of decoded.
+- The ASCII sentinels remain the only network-prefix spellings: `sora` renders Sora Nexus mainnet (`753` / `0x02F1`), `test` renders Taira testnet (`369` / `0x0171`), `dev` renders `0`, and other discriminants use `n<decimal>`. No additional network bytes were added to the i105 account payload.
+- Address fixtures and checked-in i105 literals were refreshed to the half-width canonical spelling, with focused rejection coverage for full-width sentinels and legacy full-width kana payloads.
+
+## 2026-04-18 Follow-up: Sumeragi lock-override regression coverage
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs` now has direct coverage for incoming highest-QC validation when the local locked payload is missing: a newer-view QC is accepted once the candidate block is known, while a same-view QC still waits for the locked payload.
+- The shared locked-QC predicate now has focused unit regressions proving that newer-view progress is checked before local locked-payload availability, and that same-view divergence remains blocked when the locked payload is unavailable.
+- Focused validation for this slice:
+  - `cargo test -p iroha_core --lib highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missing -- --nocapture`
+  - `cargo test -p iroha_core --lib highest_qc_extends_locked -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_satisfies_locked_if_present -- --nocapture`
+
 ## 2026-04-17 Follow-up: Kotodama `DomainId` fixtures refreshed to fully qualified literals
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_domain_builtins_corehost.rs` now uses `domain.dataspace` literals again, matching the current `DomainId::parse_fully_qualified` semantic rule for `domain(...)` constructors.
 - The same literal refresh was applied to the nearby Kotodama coverage that still embedded bare domain labels: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields_corehost.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_domain_e2e.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/domain_ops.ko`.
@@ -633,6 +660,40 @@ Last updated: 2026-04-18
   proxy responses after the 60s route timeout, so the remaining failure appears
   tied to multi-lane consensus/roster convergence rather than the original
   wrong-ingress route resolution.
+
+## 2026-04-18 Follow-up: cross-dataspace Nexus localnets are green again
+- The Sumeragi idle-view path in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now routes only the empty contiguous-frontier `missing_qc` `view == 0`
+  case through unified frontier recovery instead of emitting an immediate
+  direct rotation. The existing pre-reset frontier reanchor guards stay in
+  place, so same-height `missing_qc` rotations remain suppressed while the
+  canonical frontier is still stabilizing.
+- The focused wrong-ingress regression harness in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  now treats bare empty-body routed read timeouts (`408` / `502` / `503` /
+  `504`) as transient for the one-shot app-API reads it uses during setup.
+  The base helpers preserve those responses as `null` JSON instead of failing
+  on an EOF decode, and the direct setup reads retry until they receive a real
+  JSON payload or the existing test timeout expires.
+- Added focused unit coverage for the routed JSON retry gate itself, including
+  the positive empty-body retryable path and the negative cases for decoded
+  JSON error bodies and non-retryable empty statuses.
+- Current verification for the Nexus cross-dataspace slice is green again:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-coreclean cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-extra cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix cargo test -p integration_tests --test nexus_and_streaming routed_json_empty_body_is_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit cargo test -p integration_tests --test nexus_and_streaming routed_json_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+- The cross-dataspace localnet module now passes end to end on the current
+  tree:
+  - `nexus::cross_dataspace_localnet::bounded_observer_request_timeout_slices_remaining_budget`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
+  - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
 
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
@@ -9048,7 +9109,7 @@ Last updated: 2026-04-18
 - Updated the checked-in Taira bundle/config docs and the served
   `dist/taira-localnet/peer{0,1,2,3}.toml` configs to use `[gov]` plus the
   Taira-prefixed telemetry submitter account
-  `testuロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T`.
+  `testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T`.
 - Restarted the served localnet successfully on the rebuilt `target/release/irohad`;
   both `http://127.0.0.1:29080/status` and `https://taira.sora.org/status`
   are healthy again, and the live bundle grep is now clean for
@@ -12688,9 +12749,8 @@ Last updated: 2026-04-18
   so the Python SDK now survives the broader package-level validation rather
   than only the focused RWA slice.
 - The shipped behavior in this slice:
-  - `decode_i105_string(...)` now validates the restored mixed I105 alphabet
-    directly: Base58 plus the 47 katakana from the Iroha poem, with the
-    halfwidth Iroha-kana aliases still accepted on decode;
+  - `decode_i105_string(...)` now validates the canonical I105 alphabet
+    directly: Base58 plus the 47 half-width katakana from the Iroha poem;
   - the governance ZK ballot owner-normalization path once again accepts
     canonical i105 literals generated by the Python address helpers instead of
     rejecting them with a false checksum mismatch;
@@ -12758,7 +12818,7 @@ Last updated: 2026-04-18
   so the first-release identifier contract is stricter and more consistent across
   the core codecs and client SDKs.
 - The shipped behavior in this slice:
-  - canonical account ids are now I105 only across the Rust/Swift/Kotlin/Java/JS/Python account-address helpers, with Base58 plus the 47 Iroha-poem katakana as the canonical alphabet and halfwidth kana aliases accepted on decode;
+  - canonical account ids are now I105 only across the Rust/Swift/Kotlin/Java/JS/Python account-address helpers, with Base58 plus the 47 half-width Iroha-poem katakana as the canonical alphabet;
   - on-chain account aliases remain `name@domain.dataspace` / `name@dataspace`, and the CLI alias validator now enforces that syntax directly instead of mis-validating aliases as bare `Name` values;
   - public asset ids remain canonical unprefixed Base58 `AssetDefinitionId` values, while asset aliases remain `name#domain.dataspace` / `name#dataspace`;
   - the Android `AssetIdDecoder` now matches the asset-holding literal contract (`<base58-asset-definition-id>#<i105-account-id>[#dataspace:<id>]`) instead of silently decoding only the bare definition id; and
@@ -14684,7 +14744,7 @@ Last updated: 2026-04-18
   - result: failed during peer startup, before block 1 and before any meaningful soak progress could be measured.
   - concrete genesis failures from peer stdout:
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`wonderland\`"))`,
-    `InstructionFailed(Find(Account(sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB)))`,
+    `InstructionFailed(Find(Account(sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB)))`,
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`chaosnet\`"))`.
 - NPoS attempt:
   - log:

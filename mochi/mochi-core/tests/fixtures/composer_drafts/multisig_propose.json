@@ -1,12 +1,12 @@
 [
   {
     "kind": "multisig_propose",
-    "account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+    "account": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
     "transaction_ttl_ms": 3600000,
     "instructions": [
       {
         "kind": "mint_asset",
-        "asset": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+        "asset": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
         "quantity": "5"
       }
     ]

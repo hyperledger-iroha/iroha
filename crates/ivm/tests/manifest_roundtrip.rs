@@ -10,8 +10,7 @@ fn contract_manifest_roundtrip_norito() {
         features_bitmap: Some(0b1010_0001),
         access_set_hints: Some(AccessSetHints {
             read_keys: vec![
-                "account:sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
-                    .to_string(),
+                "account:sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
             ],
             write_keys: vec!["asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string()],
         }),

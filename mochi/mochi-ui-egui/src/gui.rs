@@ -143,10 +143,8 @@ const SAMPLE_ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
-const SAMPLE_ALICE_ACCOUNT_ID: &str =
-    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
-const SAMPLE_BOB_ACCOUNT_ID: &str =
-    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB";
+const SAMPLE_ALICE_ACCOUNT_ID: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const SAMPLE_BOB_ACCOUNT_ID: &str = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
@@ -10903,7 +10901,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_policy_json)
                     .desired_rows(4)
-                    .hint_text("{ \"signatories\": { \"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
+                    .hint_text("{ \"signatories\": { \"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
             );
             if !self.composer_multisig_policy_json.trim().is_empty() {
                 match Self::parse_multisig_policy(&self.composer_multisig_policy_json) {
@@ -14529,10 +14527,8 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
-                        .to_owned(),
-                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
-                        .to_owned(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -14667,11 +14663,11 @@ mod tests {
     fn collect_state_json_exports_array() {
         let entries = [
             sample_state_entry(
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 vec![0xAA, 0x01],
             ),
             sample_state_entry(
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
                 vec![0xBB, 0x02],
             ),
         ];
@@ -14684,24 +14680,24 @@ mod tests {
         assert_eq!(array.len(), 2, "expected two exported state entries");
         assert_eq!(
             array[0].get("title").and_then(Value::as_str),
-            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+            Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
         );
         assert_eq!(
             array[1].get("title").and_then(Value::as_str),
-            Some("sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB")
+            Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB")
         );
     }
 
     #[test]
     fn collect_state_norito_exports_hex_dump() {
         let entries = [sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0xAB, 0xCD],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let dump = super::collect_state_norito(&refs).expect("export filtered state to norito");
         assert!(
-            dump.contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            dump.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
             "export should include the entry title"
         );
         let mut parts = dump.split(':');
@@ -14724,7 +14720,7 @@ mod tests {
     #[test]
     fn save_state_json_to_file_writes_filtered_entries() {
         let entries = [sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0x01, 0x02],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
@@ -14737,8 +14733,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state json");
         assert!(
-            written
-                .contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            written.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
             "exported JSON should include entry identifier"
         );
     }
@@ -14755,7 +14750,7 @@ mod tests {
     #[test]
     fn save_state_norito_to_file_writes_filtered_entries() {
         let entries = [sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0x0A, 0x0B],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
@@ -14768,8 +14763,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state norito");
         assert!(
-            written
-                .contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            written.contains("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
             "exported Norito dump should include entry identifier"
         );
     }
@@ -14787,11 +14781,11 @@ mod tests {
     fn state_tab_select_page_updates_entries_and_remaining() {
         let mut tab = super::StateTabState::new(StateQueryKind::Accounts);
         let first = sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0xAA],
         );
         let second = sample_state_entry(
-            "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
+            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
             vec![0xBB],
         );
         tab.pages = vec![
@@ -14809,7 +14803,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"),
             "selecting first page should surface corresponding entries"
         );
         assert_eq!(
@@ -14822,7 +14816,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"),
+            Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"),
             "switching pages should update visible entries"
         );
         assert_eq!(
@@ -14837,12 +14831,12 @@ mod tests {
         let tab = tabs.get_mut(StateQueryKind::Accounts);
         tab.filter.search = "alice".to_owned();
         tab.entries.push(sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0x01],
         ));
         tab.pages.push(StatePageCache {
             entries: vec![sample_state_entry(
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 vec![0x02],
             )],
             remaining: 1,
@@ -14886,8 +14880,7 @@ mod tests {
         let mut filter = super::StateFilter {
             search: "peer".to_owned(),
             domain: "wonderland".to_owned(),
-            owner: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
-                .to_owned(),
+            owner: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
             asset_definition: sample_rose_definition_literal(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);
@@ -14912,11 +14905,11 @@ mod tests {
     #[test]
     fn filter_state_entries_collects_cached_matches() {
         let entry_page0 = sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0xAA],
         );
         let entry_page1 = sample_state_entry(
-            "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
+            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
             vec![0xBB],
         );
         let pages = vec![
@@ -14941,7 +14934,7 @@ mod tests {
         );
         assert!(
             page_indices.is_empty(),
-            "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB is not present on the selected page"
+            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB is not present on the selected page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -14949,16 +14942,15 @@ mod tests {
             "expected a cached match sourced from another page"
         );
         assert_eq!(
-            cached_matches[0].title,
-            "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
-            "cached match should reference the sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB entry"
+            cached_matches[0].title, "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+            "cached match should reference the sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB entry"
         );
     }
 
     #[test]
     fn filter_state_entries_falls_back_to_current_page() {
         let entry_page0 = sample_state_entry(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             vec![0xAC],
         );
         let current_entries = vec![entry_page0.clone()];
@@ -14975,7 +14967,7 @@ mod tests {
         assert_eq!(
             page_indices,
             vec![0],
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D should be matched on the current page"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D should be matched on the current page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -14983,8 +14975,7 @@ mod tests {
             "fallback to current page should return a single match"
         );
         assert_eq!(
-            cached_matches[0].title,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            cached_matches[0].title, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "cached results should include the local page entry"
         );
     }
@@ -14992,12 +14983,12 @@ mod tests {
     #[test]
     fn filter_state_entries_respects_domain_filter() {
         let entry_page0 = sample_state_entry_with_domain(
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "wonderland",
             vec![0xDE, 0x01],
         );
         let entry_page1 = sample_state_entry_with_domain(
-            "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
+            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
             "narnia",
             vec![0xDE, 0x02],
         );

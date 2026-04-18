@@ -449,7 +449,7 @@ impl AccountAddress {
         Ok(address)
     }
 
-    /// Decode the i105 representation against an explicit expected chain
+    /// Decode the i105 representation, optionally enforcing an expected chain
     /// discriminant.
     ///
     /// # Errors
@@ -461,9 +461,10 @@ impl AccountAddress {
         encoded: &str,
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
-        let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
         let (found, canonical) = decode_i105_literal(encoded)?;
-        if found != expected {
+        if let Some(expected) = expected_discriminant
+            && found != expected
+        {
             return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
         }
         Self::from_canonical_bytes(&canonical)
@@ -503,17 +504,21 @@ impl AccountAddress {
         if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
             return Err(AccountAddressError::UnsupportedAddressFormat);
         }
-        let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
         let address =
-            Self::from_i105_for_discriminant(trimmed, Some(expected)).map_err(|err| match err {
-                AccountAddressError::MissingI105Sentinel
-                | AccountAddressError::I105TooShort
-                | AccountAddressError::InvalidI105Char(_)
-                | AccountAddressError::InvalidI105Digit(_) => {
-                    AccountAddressError::UnsupportedAddressFormat
+            Self::from_i105_for_discriminant(trimmed, expected_discriminant).map_err(|err| {
+                match err {
+                    AccountAddressError::MissingI105Sentinel
+                    | AccountAddressError::I105TooShort
+                    | AccountAddressError::InvalidI105Char(_)
+                    | AccountAddressError::InvalidI105Digit(_) => {
+                        AccountAddressError::UnsupportedAddressFormat
+                    }
+                    other => other,
                 }
-                other => other,
             })?;
+        let expected = expected_discriminant
+            .or_else(|| i105_discriminant_from_sentinel(trimmed))
+            .ok_or(AccountAddressError::UnsupportedAddressFormat)?;
         address.ensure_canonical_i105_literal(trimmed, expected)?;
         Ok(address)
     }
@@ -1006,70 +1011,29 @@ fn i105_discriminant_from_sentinel(input: &str) -> Option<u16> {
         if input.starts_with(sentinel) {
             return Some(discriminant);
         }
-        if let Some(fullwidth) = ascii_str_to_fullwidth(sentinel)
-            && input.starts_with(&fullwidth)
-        {
-            return Some(discriminant);
-        }
     }
     i105_discriminant_from_numeric_sentinel(input)
 }
 
 fn i105_discriminant_from_numeric_sentinel(input: &str) -> Option<u16> {
     if let Some(rest) = input.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
-        return parse_i105_numeric_sentinel(rest, false);
-    }
-    if let Some(fullwidth_n) = ascii_char_to_fullwidth('n')
-        && let Some(rest) = input.strip_prefix(fullwidth_n)
-    {
-        return parse_i105_numeric_sentinel(rest, true);
+        return parse_i105_numeric_sentinel(rest);
     }
     None
 }
 
-fn parse_i105_numeric_sentinel(rest: &str, fullwidth: bool) -> Option<u16> {
+fn parse_i105_numeric_sentinel(rest: &str) -> Option<u16> {
     let mut digits = String::new();
     for ch in rest.chars().take(5) {
-        let ascii_digit = if fullwidth {
-            match fullwidth_digit_to_ascii(ch) {
-                Some(digit) => digit,
-                None => break,
-            }
-        } else if ch.is_ascii_digit() {
-            ch
-        } else {
+        if !ch.is_ascii_digit() {
             break;
-        };
-        digits.push(ascii_digit);
+        }
+        digits.push(ch);
     }
     if digits.is_empty() {
         return None;
     }
     digits.parse::<u16>().ok()
-}
-
-fn ascii_char_to_fullwidth(ch: char) -> Option<char> {
-    match ch {
-        '0'..='9' => char::from_u32(ch as u32 - '0' as u32 + 0xFF10),
-        'A'..='Z' => char::from_u32(ch as u32 - 'A' as u32 + 0xFF21),
-        'a'..='z' => char::from_u32(ch as u32 - 'a' as u32 + 0xFF41),
-        _ => None,
-    }
-}
-
-fn ascii_str_to_fullwidth(input: &str) -> Option<String> {
-    let mut output = String::with_capacity(input.len());
-    for ch in input.chars() {
-        output.push(ascii_char_to_fullwidth(ch)?);
-    }
-    Some(output)
-}
-
-fn fullwidth_digit_to_ascii(ch: char) -> Option<char> {
-    match ch {
-        '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32),
-        _ => None,
-    }
 }
 
 /// Stable error codes surfaced by address encoders/decoders.
@@ -1304,10 +1268,10 @@ fn encode_i105_literal(prefix: u16, canonical: &[u8]) -> Result<String, AccountA
     let mut output = i105_sentinel_for_discriminant(prefix);
     output.reserve(output.len() + digits.len() + checksum.len());
     for digit in digits {
-        output.push_str(i105_digit_symbol(digit, false)?);
+        output.push_str(i105_digit_symbol(digit)?);
     }
     for digit in checksum {
-        output.push_str(i105_digit_symbol(digit, false)?);
+        output.push_str(i105_digit_symbol(digit)?);
     }
     Ok(output)
 }
@@ -1318,10 +1282,6 @@ fn decode_i105_literal(input: &str) -> Result<(u16, Vec<u8>), AccountAddressErro
     };
     let payload = input
         .strip_prefix(&i105_sentinel_for_discriminant(discriminant))
-        .or_else(|| {
-            ascii_str_to_fullwidth(&i105_sentinel_for_discriminant(discriminant))
-                .and_then(|fullwidth| input.strip_prefix(&fullwidth))
-        })
         .ok_or(AccountAddressError::MissingI105Sentinel)?;
     let canonical = decode_i105_payload(payload)?;
     Ok((discriminant, canonical))
@@ -1501,7 +1461,7 @@ fn lookup_i105_digit(symbol: &str) -> Option<u8> {
         .find_map(|(candidate, value)| (*candidate == symbol).then_some(*value))
 }
 
-fn i105_digit_symbol(digit: u8, _fullwidth: bool) -> Result<&'static str, AccountAddressError> {
+fn i105_digit_symbol(digit: u8) -> Result<&'static str, AccountAddressError> {
     I105_ALPHABET
         .get(usize::from(digit))
         .copied()
@@ -1515,12 +1475,6 @@ const BASE58_ALPHABET: [&str; 58] = [
     "z",
 ];
 
-const IROHA_POEM_KANA_FULLWIDTH: [&str; 47] = [
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-];
-
 const IROHA_POEM_KANA_HALFWIDTH: [&str; 47] = [
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ",
     "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ",
@@ -1528,25 +1482,18 @@ const IROHA_POEM_KANA_HALFWIDTH: [&str; 47] = [
 ];
 
 static I105_ALPHABET: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + IROHA_POEM_KANA_FULLWIDTH.len());
+    let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + IROHA_POEM_KANA_HALFWIDTH.len());
     table.extend_from_slice(&BASE58_ALPHABET);
-    table.extend_from_slice(&IROHA_POEM_KANA_FULLWIDTH);
+    table.extend_from_slice(&IROHA_POEM_KANA_HALFWIDTH);
     table
 });
 
 static I105_DIGIT_TABLE: LazyLock<Vec<(&'static str, u8)>> = LazyLock::new(|| {
-    let mut table = Vec::with_capacity(usize::from(I105_BASE_U8) * 2);
+    let mut table = Vec::with_capacity(usize::from(I105_BASE_U8));
     for (index, symbol) in I105_ALPHABET.iter().enumerate() {
         table.push((
             *symbol,
             u8::try_from(index).expect("I105 alphabet length fits within u8"),
-        ));
-    }
-    for (index, symbol) in IROHA_POEM_KANA_HALFWIDTH.iter().enumerate() {
-        table.push((
-            *symbol,
-            u8::try_from(BASE58_ALPHABET.len() + index)
-                .expect("I105 alphabet length fits within u8"),
         ));
     }
     table
@@ -1607,25 +1554,38 @@ mod tests {
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
     }
 
+    const LEGACY_IROHA_POEM_KANA_FULLWIDTH: [&str; 47] = [
+        "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ",
+        "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ",
+        "ケ", "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ",
+        "セ", "ス",
+    ];
+
     fn fullwidth_sentinel_literal(canonical: &str) -> String {
-        for sentinel in [I105_SENTINEL_SORA, I105_SENTINEL_TEST, I105_SENTINEL_DEV] {
+        for (sentinel, fullwidth) in [
+            (I105_SENTINEL_SORA, "ｓｏｒａ"),
+            (I105_SENTINEL_TEST, "ｔｅｓｔ"),
+            (I105_SENTINEL_DEV, "ｄｅｖ"),
+        ] {
             if let Some(rest) = canonical.strip_prefix(sentinel) {
-                return format!(
-                    "{}{}",
-                    ascii_str_to_fullwidth(sentinel).expect("ASCII sentinel must widen"),
-                    rest
-                );
+                return format!("{fullwidth}{rest}");
             }
         }
         if let Some(rest) = canonical.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
-            return format!(
-                "{}{}",
-                ascii_str_to_fullwidth(I105_SENTINEL_FALLBACK_PREFIX)
-                    .expect("ASCII sentinel must widen"),
-                rest
-            );
+            return format!("ｎ{rest}");
         }
         canonical.to_owned()
+    }
+
+    fn legacy_fullwidth_payload_literal(canonical: &str) -> String {
+        let mut literal = canonical.to_owned();
+        for (halfwidth, fullwidth) in IROHA_POEM_KANA_HALFWIDTH
+            .iter()
+            .zip(LEGACY_IROHA_POEM_KANA_FULLWIDTH.iter())
+        {
+            literal = literal.replace(halfwidth, fullwidth);
+        }
+        literal
     }
 
     #[cfg(feature = "json")]
@@ -1716,12 +1676,11 @@ mod tests {
     #[test]
     fn iroha_poem_kana_matches_expected_order() {
         const EXPECTED: [&str; 47] = [
-            "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ",
-            "ヨ", "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク",
-            "ヤ", "マ", "ケ", "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ",
-            "ヱ", "ヒ", "モ", "セ", "ス",
+            "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ",
+            "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ",
+            "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
         ];
-        assert_eq!(IROHA_POEM_KANA_FULLWIDTH, EXPECTED);
+        assert_eq!(IROHA_POEM_KANA_HALFWIDTH, EXPECTED);
     }
 
     #[test]
@@ -1730,7 +1689,7 @@ mod tests {
         for symbol in BASE58_ALPHABET {
             assert!(symbols.insert(symbol), "duplicate Base58 symbol {symbol}");
         }
-        for symbol in IROHA_POEM_KANA_FULLWIDTH {
+        for symbol in IROHA_POEM_KANA_HALFWIDTH {
             assert!(
                 symbols.insert(symbol),
                 "duplicate Iroha poem symbol {symbol}"
@@ -1951,6 +1910,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_encoded_without_expected_discriminant_accepts_literal_prefix() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let testnet = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_TEST)
+            .expect("testnet i105");
+
+        let parsed = AccountAddress::parse_encoded(&testnet, None)
+            .expect("omitted expected prefix accepts literal sentinel");
+        assert_eq!(
+            parsed.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+
+        let err = AccountAddress::parse_encoded(&testnet, Some(CHAIN_DISCRIMINANT_SORA))
+            .expect_err("explicit mainnet prefix still rejects testnet literal");
+        assert!(matches!(
+            err,
+            AccountAddressError::UnexpectedNetworkPrefix {
+                expected: CHAIN_DISCRIMINANT_SORA,
+                found: CHAIN_DISCRIMINANT_TEST
+            }
+        ));
+    }
+
+    #[test]
     fn parse_encoded_rejects_fullwidth_sentinel_literals() {
         let account = AccountId::new(ed25519_pk());
         let canonical = AccountAddress::from_account_id(&account)
@@ -1990,7 +1976,7 @@ mod tests {
             payload.chars().any(|ch| {
                 let mut symbol = [0_u8; 4];
                 let encoded = ch.encode_utf8(&mut symbol);
-                IROHA_POEM_KANA_FULLWIDTH
+                IROHA_POEM_KANA_HALFWIDTH
                     .iter()
                     .any(|candidate| *candidate == encoded)
             }),
@@ -2062,24 +2048,25 @@ mod tests {
     }
 
     #[test]
-    fn i105_round_trip_accepts_halfwidth_iroha_kana_inputs() {
+    fn i105_rejects_legacy_fullwidth_iroha_kana_inputs() {
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
-        let mut halfwidth = original
+        let canonical = original
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
             .expect("i105 encode");
-        for (fullwidth, halfwidth_kana) in IROHA_POEM_KANA_FULLWIDTH
-            .iter()
-            .zip(IROHA_POEM_KANA_HALFWIDTH.iter())
-        {
-            halfwidth = halfwidth.replace(fullwidth, halfwidth_kana);
-        }
-        let decoded =
-            AccountAddress::from_i105_for_discriminant(&halfwidth, Some(CHAIN_DISCRIMINANT_SORA))
-                .expect("i105 decode");
+        let fullwidth = legacy_fullwidth_payload_literal(&canonical);
+        assert_ne!(canonical, fullwidth);
+
+        let err =
+            AccountAddress::from_i105_for_discriminant(&fullwidth, Some(CHAIN_DISCRIMINANT_SORA))
+                .expect_err("legacy fullwidth kana must be rejected");
+        assert!(matches!(err, AccountAddressError::InvalidI105Char(_)));
+
+        let parse_err = AccountAddress::parse_encoded(&fullwidth, Some(CHAIN_DISCRIMINANT_SORA))
+            .expect_err("strict parse rejects legacy fullwidth kana");
         assert_eq!(
-            decoded.canonical_bytes().unwrap(),
-            original.canonical_bytes().unwrap()
+            parse_err.code_str(),
+            AccountAddressErrorCode::UnsupportedAddressFormat.as_str()
         );
     }
 
