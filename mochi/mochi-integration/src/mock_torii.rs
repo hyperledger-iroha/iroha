@@ -238,8 +238,7 @@ impl Default for MockToriiData {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                        .to_owned(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],

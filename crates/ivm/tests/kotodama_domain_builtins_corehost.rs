@@ -11,14 +11,15 @@ use ivm::{
 fn kotodama_unregister_domain() {
     // Program unregisters a domain using a constructor
     let src = r#"
-        fn main() { unregister_domain(domain("wonderland")); }
+        fn main() { unregister_domain(domain("wonderland.universal")); }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     // Prepare WSV with the domain present and caller permitted to register domains
     let mut wsv = MockWorldStateView::new();
-    // Use a caller in a different domain to allow unregistering `wonderland` (no accounts in that domain)
+    // Use a caller in a different domain to allow unregistering `wonderland.universal`
+    // (no accounts in that domain).
     let _admin_domain: DomainId =
         iroha_data_model::DomainId::try_new("admin", "universal").expect("domain id");
     let alice: AccountId = AccountId::new(
@@ -43,7 +44,7 @@ fn kotodama_transfer_domain() {
     // Program transfers a domain from `authority()` to bob
     let src = r#"
         fn main() {
-          transfer_domain(authority(), domain("wonderland"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+          transfer_domain(authority(), domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };

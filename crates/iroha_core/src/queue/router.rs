@@ -2268,8 +2268,7 @@ mod tests {
                     dataspace: None,
                     matcher: LaneRoutingMatcher {
                         account: Some(
-                            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
-                                .into(),
+                            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".into(),
                         ),
                         instruction: None,
                         description: None,

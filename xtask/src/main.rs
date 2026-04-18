@@ -5600,12 +5600,8 @@ where
             let mut catalog_path: Option<PathBuf> = None;
             let mut guardrails_path: Option<PathBuf> = None;
             let mut output_dir: Option<PathBuf> = None;
-            let mut payer =
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                    .to_string();
-            let mut treasury =
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                    .to_string();
+            let mut payer = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string();
+            let mut treasury = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string();
             let mut asset = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
             let mut allow_hard_cap = false;
             let mut pending = args.peekable();

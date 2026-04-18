@@ -21,7 +21,7 @@ fn struct_fields_lower_to_syscall_args() {
             struct TransferArgs { domain: DomainId; to: AccountId; }
             fn main() {
                 let args = TransferArgs(
-                    domain("wonderland"),
+                    domain("wonderland.universal"),
                     account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
                 );
                 transfer_domain(authority(), args.domain, args.to);

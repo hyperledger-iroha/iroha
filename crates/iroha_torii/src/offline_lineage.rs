@@ -5122,8 +5122,7 @@ mod tests {
 
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
 
-    const TEST_ACCOUNT_I105: &str =
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const TEST_ACCOUNT_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 

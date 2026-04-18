@@ -1975,11 +1975,10 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     let hints = manifest
         .access_set_hints
         .expect("access_set_hints must be present");
-    let account: AccountId = AccountId::parse_encoded(
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-    )
-    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-    .expect("parse encoded account literal");
+    let account: AccountId =
+        AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("parse encoded account literal");
     let asset_def =
         AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
     assert!(asset_def.is_opaque_canonical());
@@ -3012,8 +3011,7 @@ fn axt_intrinsics_lower_to_syscalls() {
     let handle = axt::AssetHandle {
         scope: vec!["transfer".to_string()],
         subject: axt::HandleSubject {
-            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
-                .to_string(),
+            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
             origin_dsid: Some(dsid),
         },
         budget: axt::HandleBudget {

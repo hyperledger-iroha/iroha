@@ -5220,7 +5220,7 @@ mod tests {
             fn main() {
                 let k = name("cursor");
                 let v = json("{}\n");
-                let d = domain("wonderland");
+                let d = domain("wonderland.universal");
             }
         "#;
         let prog = parse(src).unwrap();
@@ -5240,7 +5240,7 @@ mod tests {
                     if *kind == DataRefKind::Json && value == "{}\n" {
                         saw_json = true;
                     }
-                    if *kind == DataRefKind::Domain && value == "wonderland" {
+                    if *kind == DataRefKind::Domain && value == "wonderland.universal" {
                         saw_domain = true;
                     }
                 }
@@ -5520,7 +5520,7 @@ mod tests {
             seiyaku C {
                 struct TransferArgs { domain: DomainId; to: AccountId; }
                 fn main() {
-                    let args = TransferArgs(domain("wonderland"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+                    let args = TransferArgs(domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
                     transfer_domain(authority(), args.domain, args.to);
                 }
             }

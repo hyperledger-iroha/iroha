@@ -171,8 +171,7 @@ fn default_host_axt_flow_happy_path() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
-                .into(),
+            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -264,8 +263,7 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
 fn handle_subject_roundtrip() {
     let dsid = DataSpaceId::new(11);
     let subject = HandleSubject {
-        account: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-            .to_string(),
+        account: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_string(),
         origin_dsid: Some(dsid),
     };
 

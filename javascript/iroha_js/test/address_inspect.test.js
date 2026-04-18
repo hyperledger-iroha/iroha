@@ -66,7 +66,7 @@ test("inspectAccountId rejects noncanonical fullwidth-sentinel literals", () => 
     () => inspectAccountId(noncanonical),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
   );
 });
 

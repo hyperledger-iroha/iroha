@@ -1978,8 +1978,7 @@ mod tests {
         let context = IsoMessageContext {
             ledger_id: Some("ledger-A".to_string()),
             source_account_id: Some(
-                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-                    .to_string(),
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_string(),
             ),
             ..IsoMessageContext::default()
         };

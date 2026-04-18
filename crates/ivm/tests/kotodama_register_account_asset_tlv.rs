@@ -10,7 +10,7 @@ fn kotodama_register_account_and_unregister_asset() {
     // Program: register domain, then register an account, then register asset and unregister it
     let src = r#"
         fn main() {
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW"));
           register_asset("rose", "ROSE", 0, 1);
           unregister_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));

@@ -26,11 +26,10 @@ fn join_kaigi_accepts_canonical_commitment_literal() {
         DomainId::try_new("wonderland", "universal").expect("domain"),
         Name::from_str("weekly-sync").expect("call name"),
     );
-    let participant = AccountId::parse_encoded(
-        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-    )
-    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-    .expect("account id");
+    let participant =
+        AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("account id");
     let commitment_literal =
         "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";
     let commitment = parse_hash_literal(commitment_literal);

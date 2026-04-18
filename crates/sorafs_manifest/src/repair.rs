@@ -1252,8 +1252,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: Some("auto-generated from PoR pipeline".into()),
@@ -1272,9 +1271,7 @@ mod tests {
         let in_progress = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
             queued_at_unix: 1,
             started_at_unix: 2,
-            repair_agent: Some(
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-            ),
+            repair_agent: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
         });
         assert!(in_progress.validate().is_ok());
 
@@ -1294,8 +1291,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             state: RepairTaskStateV1::Queued(QueuedRepairStateV1 {
                 queued_at_unix: 1,
                 sla_deadline_unix: Some(2),
@@ -1315,8 +1311,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             proposed_penalty_nano: 1_000_000_000,
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),
@@ -1453,16 +1448,14 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: None,
         };
         let envelope = SignedAuditorRequestV1 {
             version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             nonce: 42,
             payload: SignedAuditorRequestPayloadV1::RepairReport(report),
             signature: sample_signature(),
@@ -1475,16 +1468,14 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: None,
         };
         let envelope = SignedAuditorRequestV1 {
             version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account:
-                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
+            auditor_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
             nonce: 7,
             payload: SignedAuditorRequestPayloadV1::RepairReport(report),
             signature: sample_signature(),
@@ -1502,8 +1493,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-500".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-                .into(),
+            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
             idempotency_key: "claim-500".into(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: 1_704_361_700,
@@ -1519,8 +1509,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-501".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-                .into(),
+            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
             idempotency_key: "fail-501".into(),
             action: RepairWorkerActionV1::Fail {
                 failed_at_unix: 1_704_361_800,
@@ -1540,8 +1529,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-502".into()),
             manifest_digest: [0u8; 32],
             provider_id: provider_id(),
-            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-                .into(),
+            worker_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
             idempotency_key: "claim-502".into(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: 1_704_361_900,
@@ -1564,9 +1552,7 @@ mod tests {
             provider_id: provider_id(),
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_704_400_000,
-            actor: Some(
-                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
-            ),
+            actor: Some("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into()),
             message: Some("queued".into()),
         };
         let digest = iroha_crypto::Hash::new(payload.encode());

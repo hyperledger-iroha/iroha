@@ -723,10 +723,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir: output_dir.clone(),
-            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                .to_string(),
-            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                .to_string(),
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
             asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
         })
@@ -810,10 +808,8 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir,
-            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                .to_string(),
-            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                .to_string(),
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
             asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
         });

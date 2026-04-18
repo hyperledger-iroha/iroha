@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSｱ",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSｲ",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {

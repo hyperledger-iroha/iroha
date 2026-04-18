@@ -275,7 +275,7 @@ test("parseEncoded rejects fullwidth-sentinel i105 literals", () => {
     () => AccountAddress.parseEncoded(noncanonical, 753),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
   );
   assert.throws(
     () => decodeI105AccountAddress(noncanonical, { expectDiscriminant: 753 }),

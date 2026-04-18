@@ -3645,8 +3645,7 @@ mod tests {
             op: axt::SpendOp {
                 kind: "transfer".into(),
                 from: authority_str,
-                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-                    .into(),
+                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
                 amount: "5".into(),
             },
         };

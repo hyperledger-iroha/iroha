@@ -39,7 +39,7 @@ fn kotodama_revoke_role_denies_mint() {
     let prog_ok = compile(
         r#"
         fn main() {
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
@@ -82,7 +82,7 @@ fn kotodama_delete_role_prevents_grant() {
     let prog_boot = compile(
         r#"
         fn main() {
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
@@ -122,7 +122,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let boot = compile(
         r#"
         fn main() {
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
@@ -172,7 +172,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let boot = compile(
         r#"
         fn main() {
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
