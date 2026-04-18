@@ -411,14 +411,27 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     let use_commit = !commit_topology.is_empty();
     let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
+        let topology_lane_ids = if use_commit {
+            crate::state::validator_lane_ids_for_peers(world, commit_topology.iter())
+        } else {
+            BTreeSet::new()
+        };
         let local_lane_ids = crate::state::validator_lane_ids_for_peer(world, me);
+        let (lane_scope, local_scope_fallback) = if !topology_lane_ids.is_empty() {
+            (topology_lane_ids, false)
+        } else {
+            (local_lane_ids, true)
+        };
         let all_active_roster = stake_active_validator_roster_from_world(world);
-        let active_roster = if local_lane_ids.is_empty() {
+        let active_roster = if lane_scope.is_empty() {
             all_active_roster
         } else {
             let local_lane_roster =
-                stake_active_validator_roster_for_lanes_from_world(world, &local_lane_ids);
-            if local_lane_roster.len() <= 1 && all_active_roster.len() > local_lane_roster.len() {
+                stake_active_validator_roster_for_lanes_from_world(world, &lane_scope);
+            if local_scope_fallback
+                && local_lane_roster.len() <= 1
+                && all_active_roster.len() > local_lane_roster.len()
+            {
                 iroha_logger::warn!(
                     local_lane_roster_len = local_lane_roster.len(),
                     active_roster_len = all_active_roster.len(),
@@ -1228,6 +1241,109 @@ mod tests {
         assert_eq!(
             roster,
             canonicalize_roster(vec![lane4_local_peer, lane4_peer_b_id])
+        );
+    }
+
+    #[test]
+    fn active_topology_for_npos_prefers_commit_topology_lane_scope_over_local_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let lane4_local = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane4_peer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane3_peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane3_peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+
+        let lane4_local_account = AccountId::new(lane4_local.public_key().clone());
+        let lane4_peer_account = AccountId::new(lane4_peer.public_key().clone());
+        let lane3_account_a = AccountId::new(lane3_peer_a.public_key().clone());
+        let lane3_account_b = AccountId::new(lane3_peer_b.public_key().clone());
+
+        let lane4_local_peer = PeerId::new(lane4_local.public_key().clone());
+        let lane4_peer_id = PeerId::new(lane4_peer.public_key().clone());
+        let lane3_peer_id_a = PeerId::new(lane3_peer_a.public_key().clone());
+        let lane3_peer_id_b = PeerId::new(lane3_peer_b.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (lane_id, account, peer_id, stake) in [
+                (
+                    LaneId::new(3),
+                    lane3_account_a,
+                    lane3_peer_id_a.clone(),
+                    Numeric::new(20, 0),
+                ),
+                (
+                    LaneId::new(3),
+                    lane3_account_b,
+                    lane3_peer_id_b.clone(),
+                    Numeric::new(22, 0),
+                ),
+                (
+                    LaneId::new(4),
+                    lane4_local_account,
+                    lane4_local_peer.clone(),
+                    Numeric::new(30, 0),
+                ),
+                (
+                    LaneId::new(4),
+                    lane4_peer_account,
+                    lane4_peer_id.clone(),
+                    Numeric::new(28, 0),
+                ),
+            ] {
+                block.insert(
+                    (lane_id, account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id,
+                        validator: account.clone(),
+                        peer_id,
+                        stake_account: account,
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![lane3_peer_id_b.clone(), lane3_peer_id_a.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(lane4_local_peer.clone(), 12_200),
+            others: vec![
+                make_peer(lane4_peer_id.clone(), 12_201),
+                make_peer(lane3_peer_id_a.clone(), 12_202),
+                make_peer(lane3_peer_id_b.clone(), 12_203),
+            ]
+            .into_iter()
+            .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(
+            &view,
+            &trusted,
+            &lane4_local_peer,
+            ConsensusMode::Npos,
+        );
+
+        assert_eq!(
+            roster,
+            canonicalize_roster(vec![lane3_peer_id_a, lane3_peer_id_b]),
+            "NPoS live roster must follow the commit-topology lane scope instead of the local peer lane"
         );
     }
 

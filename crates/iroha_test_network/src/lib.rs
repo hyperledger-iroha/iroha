@@ -458,7 +458,8 @@ fn client_status_timeout_env() -> Duration {
 }
 
 fn client_request_timeout_env() -> Duration {
-    // Default 30s; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
+    // Keep the integration-client default aligned with the client library's
+    // routed Torii budget; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS",
         Duration::from_secs(0),
@@ -468,7 +469,7 @@ fn client_request_timeout_env() -> Duration {
     }
     read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS",
-        Duration::from_secs(30),
+        iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
     )
 }
 
@@ -8925,6 +8926,19 @@ mod tests {
             client_status_timeout_env(),
             CLIENT_STATUS_TIMEOUT_DEFAULT,
             "default client status timeout should tolerate slow integration runs",
+        );
+    }
+
+    #[test]
+    fn client_request_timeout_defaults_match_client_config_default() {
+        let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
+        let _secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS");
+        let _ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS");
+
+        assert_eq!(
+            client_request_timeout_env(),
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            "test-network clients should inherit the same routed request budget as normal clients",
         );
     }
 

@@ -25,9 +25,7 @@ use std::{
 
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
-use iroha_crypto::Hash;
-#[cfg(debug_assertions)]
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::da::types::DaRentQuote;
 #[cfg(feature = "telemetry")]
@@ -9008,7 +9006,7 @@ impl Actor {
         //     .p2p_dns_reconnect_success_total
         //     .set(iroha_p2p::network::dns_reconnect_success_count());
 
-        let last_reported_block = {
+        let mut last_reported_block = {
             let mut lock = self.last_reported_block.write().await;
             if lock.is_none() {
                 *lock = self.seed_last_reported_block();
@@ -9036,14 +9034,13 @@ impl Actor {
             value
         };
 
-        let world_view = self.state.world_view();
-
         let start_index = self.last_sync_block;
         {
             let mut inc_txs_accepted = 0;
             let mut inc_txs_rejected = 0;
             let mut inc_blocks = 0;
             let mut inc_blocks_non_empty = 0;
+            let mut corrected_last_report = false;
 
             let mut block_index = start_index;
             while block_index < last_reported_block.height {
@@ -9074,16 +9071,10 @@ impl Actor {
                 }
 
                 if block_index == last_reported_block.height {
-                    // for some reason, using `debug_assert!(..)` doesn't work here
-                    // in release build Rust complains about the absent `.hash` field (feature gated via
-                    // `debug_assertions`), which doesn't make sense - the whole statement should be feature-gated too
-                    #[cfg(debug_assertions)]
-                    assert_eq!(
-                        block.hash(),
-                        last_reported_block.hash,
-                        "BUG: Reported block hash is different (reported {}, actual {})",
-                        last_reported_block.hash,
-                        block.hash()
+                    corrected_last_report |= reconcile_last_reported_block_with_kura(
+                        &mut last_reported_block,
+                        &block.header(),
+                        &self.time_source,
                     );
                     #[allow(clippy::cast_precision_loss)]
                     self.metrics.last_commit_time_ms.set(
@@ -9098,6 +9089,23 @@ impl Actor {
                 }
             }
             self.last_sync_block = block_index;
+
+            if corrected_last_report {
+                let mut lock = self.last_reported_block.write().await;
+                let should_replace = match *lock {
+                    Some(current)
+                        if current.height > last_reported_block.height
+                            || (current.height == last_reported_block.height
+                                && current.hash == last_reported_block.hash) =>
+                    {
+                        false
+                    }
+                    _ => true,
+                };
+                if should_replace {
+                    *lock = Some(last_reported_block);
+                }
+            }
 
             self.metrics
                 .txs
@@ -9122,6 +9130,8 @@ impl Actor {
                 .block_height_non_empty
                 .inc_by(inc_blocks_non_empty);
         }
+
+        let world_view = self.state.world_view();
 
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
@@ -9199,8 +9209,6 @@ fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bo
 
 #[derive(Copy, Clone, Debug)]
 struct BlockCommitReport {
-    /// Only in debug, to ensure consistency
-    #[cfg(debug_assertions)]
     hash: HashOf<BlockHeader>,
     height: usize,
     commit_time: Duration,
@@ -9216,13 +9224,33 @@ impl BlockCommitReport {
             now.checked_sub(created_at).unwrap_or(Duration::ZERO)
         };
         Self {
-            #[cfg(debug_assertions)]
             hash: block_header.hash(),
             height: usize::try_from(block_header.height().get())
                 .expect("block height should fit into usize"),
             commit_time,
         }
     }
+}
+
+fn reconcile_last_reported_block_with_kura(
+    reported: &mut BlockCommitReport,
+    block_header: &BlockHeader,
+    time_source: &TimeSource,
+) -> bool {
+    let actual = BlockCommitReport::new(block_header, time_source);
+    if reported.height == actual.height && reported.hash == actual.hash {
+        return false;
+    }
+
+    iroha_logger::warn!(
+        reported_height = reported.height,
+        reported_hash = %reported.hash,
+        actual_height = actual.height,
+        actual_hash = %actual.hash,
+        "telemetry last reported block diverged from persisted block; using Kura block as authoritative"
+    );
+    *reported = actual;
+    true
 }
 
 /// Start the telemetry service
@@ -9430,6 +9458,71 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
         let report = BlockCommitReport::new(&header, &time_source);
         assert_eq!(report.commit_time, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn reconcile_last_reported_block_keeps_matching_report() {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
+        let mut report = BlockCommitReport::new(&header, &time_source);
+
+        let corrected = reconcile_last_reported_block_with_kura(&mut report, &header, &time_source);
+
+        assert!(!corrected);
+        assert_eq!(report.hash, header.hash());
+        assert_eq!(report.height, 2);
+        assert_eq!(report.commit_time, Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn reconcile_last_reported_block_uses_kura_block_on_hash_mismatch() {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let stale_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
+        let persisted_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 800, 0);
+        let mut report = BlockCommitReport::new(&stale_header, &time_source);
+
+        let corrected =
+            reconcile_last_reported_block_with_kura(&mut report, &persisted_header, &time_source);
+
+        assert!(corrected);
+        assert_eq!(report.hash, persisted_header.hash());
+        assert_eq!(report.height, 2);
+        assert_eq!(report.commit_time, Duration::from_millis(200));
+    }
+
+    #[tokio::test]
+    async fn metrics_sync_reconciles_last_reported_block_without_blocking_runtime() {
+        let sut = SystemUnderTest::new();
+        let block = sut.commit_block(sut.create_block());
+        let header = block.as_ref().header();
+        let stale_header = BlockHeader::new(
+            header.height(),
+            None,
+            None,
+            None,
+            u64::try_from(header.creation_time().as_millis()).expect("time should fit into u64")
+                + 1,
+            0,
+        );
+
+        {
+            let mut lock = sut.telemetry.last_reported_block.write().await;
+            *lock = Some(BlockCommitReport::new(&stale_header, &sut.time_source));
+        }
+
+        sut.force_sync().await;
+
+        let report = sut
+            .telemetry
+            .last_reported_block
+            .read()
+            .await
+            .expect("telemetry sync should preserve a commit report");
+        assert_eq!(report.hash, header.hash());
+        assert_eq!(
+            report.height,
+            usize::try_from(header.height().get()).expect("height should fit into usize")
+        );
     }
 
     #[test]

@@ -143,7 +143,6 @@ pub struct Kura {
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,
     /// Retains the temporary storage directory used by test-only Kura instances.
-    #[cfg(test)]
     _temp_store_dir: Option<tempfile::TempDir>,
 }
 
@@ -631,7 +630,6 @@ impl Kura {
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
-            #[cfg(test)]
             _temp_store_dir: None,
         });
 

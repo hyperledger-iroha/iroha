@@ -4136,6 +4136,27 @@ impl Actor {
         if vote_log.is_empty() {
             return;
         }
+        let mut candidate_signers: BTreeMap<QcVoteKey, BTreeSet<ValidatorIndex>> = BTreeMap::new();
+        for vote in &vote_log {
+            if !matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+                    | crate::sumeragi::consensus::Phase::NewView
+            ) {
+                continue;
+            }
+            candidate_signers
+                .entry((
+                    vote.phase,
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    vote.epoch,
+                ))
+                .or_default()
+                .insert(vote.signer);
+        }
         rebuild_qc_candidates_with(
             vote_log.iter(),
             1,
@@ -4159,12 +4180,13 @@ impl Actor {
                     return;
                 }
                 let topology = super::network_topology::Topology::new(commit_roster);
-                let required = match consensus_mode {
-                    ConsensusMode::Permissioned => topology.min_votes_for_commit(),
-                    ConsensusMode::Npos => 1,
-                };
-                if matches!(consensus_mode, ConsensusMode::Permissioned) && signer_count < required
-                {
+                if !self.qc_rebuild_candidate_may_reach_quorum(
+                    key,
+                    candidate_signers.get(&key),
+                    &topology,
+                    consensus_mode,
+                    signer_count,
+                ) {
                     return;
                 }
                 let cached_before = self.qc_cache.contains_key(&key);
@@ -4196,6 +4218,63 @@ impl Actor {
                 }
             },
         );
+    }
+
+    fn qc_rebuild_candidate_may_reach_quorum(
+        &self,
+        key: QcVoteKey,
+        signers: Option<&BTreeSet<ValidatorIndex>>,
+        topology: &super::network_topology::Topology,
+        consensus_mode: ConsensusMode,
+        signer_count: usize,
+    ) -> bool {
+        let (_, _, height, view, _) = key;
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology =
+            super::topology_for_view(topology, height, view, mode_tag, prf_seed);
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                signer_count >= signature_topology.min_votes_for_commit()
+            }
+            ConsensusMode::Npos => {
+                let Some(signers) = signers else {
+                    return true;
+                };
+                let signer_peers = match signer_peers_for_topology(signers, &signature_topology) {
+                    Ok(peers) => peers,
+                    Err(_) => return true,
+                };
+                let world = self.state.world_view();
+                let active_stake_roster = super::roster::derive_active_topology_for_mode_from_world(
+                    &world,
+                    topology.as_ref(),
+                    height,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                    ConsensusMode::Npos,
+                );
+                let stake_roster = if active_stake_roster.is_empty() {
+                    topology.as_ref().to_vec()
+                } else {
+                    active_stake_roster
+                };
+                let Some(stake_snapshot) = self
+                    .roster_validation_cache
+                    .stake_snapshot_for_roster(stake_roster.as_slice())
+                    .or_else(|| CommitStakeSnapshot::from_roster(&world, stake_roster.as_slice()))
+                else {
+                    return true;
+                };
+                match stake_quorum_reached_for_snapshot(
+                    &stake_snapshot,
+                    stake_roster.as_slice(),
+                    &signer_peers,
+                ) {
+                    Ok(result) => result,
+                    Err(_) => true,
+                }
+            }
+        }
     }
 
     pub(super) fn qc_to_header_ref(

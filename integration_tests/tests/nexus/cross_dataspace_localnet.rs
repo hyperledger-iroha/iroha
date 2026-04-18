@@ -40,7 +40,7 @@ use iroha::{
         peer::PeerId,
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric},
-        transaction::TransactionEntrypoint,
+        transaction::{SignedTransaction, TransactionEntrypoint},
     },
     query::QueryError,
 };
@@ -84,9 +84,9 @@ const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
-const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
-const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
+const OBSERVER_QUERY_TIMEOUT_CAP: Duration = Duration::from_secs(12);
+const OBSERVER_QUERY_TIMEOUT_FLOOR: Duration = Duration::from_secs(2);
 const SETUP_REGISTER_MINT_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
 const SWAP_BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -500,18 +500,19 @@ fn wait_for_height_with_timeout(
 }
 
 fn wait_for_height_with_tick_timeout(
-    client: &Client,
-    tick_submitter: &Client,
+    mut client_factory: impl FnMut() -> Client,
     target_height: u64,
     context: &str,
     timeout_duration: Duration,
-    tick_every_polls: u64,
+    _tick_every_polls: u64,
 ) -> Result<SumeragiStatusWire> {
+    // Keep the waiter read-only. Submitting extra transactions from the observer path perturbs the
+    // queue under test and can turn a slow lane into a saturated one.
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
     while started.elapsed() <= timeout_duration {
+        let client = client_factory();
         match client.get_sumeragi_status_wire() {
             Ok(status) => {
                 last_height = status.commit_qc.height;
@@ -523,12 +524,50 @@ fn wait_for_height_with_tick_timeout(
                 last_error = Some(err.to_string());
             }
         }
-        polls = polls.saturating_add(1);
-        if polls % tick_every_polls == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!("{context} height tick {}", polls / tick_every_polls),
-            ));
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last status query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
+    ))
+}
+
+fn wait_for_height_with_tick_timeout_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    target_height: u64,
+    context: &str,
+    timeout_duration: Duration,
+    _tick_every_polls: u64,
+) -> Result<SumeragiStatusWire> {
+    let started = Instant::now();
+    let mut last_height = 0;
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= timeout_duration {
+        let mut best_status = None;
+        for client in clients_factory() {
+            match client.get_sumeragi_status_wire() {
+                Ok(status) => {
+                    last_height = last_height.max(status.commit_qc.height);
+                    if best_status
+                        .as_ref()
+                        .is_none_or(|best: &SumeragiStatusWire| {
+                            status.commit_qc.height >= best.commit_qc.height
+                        })
+                    {
+                        best_status = Some(status);
+                    }
+                }
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                }
+            }
+        }
+        if let Some(status) = best_status
+            && status.commit_qc.height >= target_height
+        {
+            return Ok(status);
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
@@ -544,10 +583,10 @@ fn wait_for_lane_peers_commit_qc_at_least(
     network: &sandbox::SerializedNetwork,
     lane_index: u32,
     expected_status: &SumeragiStatusWire,
-    tick_submitter: &Client,
+    _tick_submitter: &Client,
     context: &str,
     timeout_duration: Duration,
-    tick_every_polls: u64,
+    _tick_every_polls: u64,
 ) -> Result<()> {
     let start = lane_index as usize * VALIDATORS_PER_LANE;
     let end = start
@@ -560,7 +599,6 @@ fn wait_for_lane_peers_commit_qc_at_least(
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(peers.len());
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
@@ -591,13 +629,6 @@ fn wait_for_lane_peers_commit_qc_at_least(
         if all_match {
             return Ok(());
         }
-        polls = polls.saturating_add(1);
-        if polls % tick_every_polls == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!("{context} lane tick {}", polls / tick_every_polls),
-            ));
-        }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
 
@@ -625,6 +656,40 @@ fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Num
 
 fn render_error_with_debug(err: &(impl core::fmt::Display + core::fmt::Debug)) -> String {
     format!("{err} ({err:?})")
+}
+
+fn bounded_observer_request_timeout(
+    started: Instant,
+    overall_timeout: Duration,
+    remaining_clients: usize,
+) -> Duration {
+    let remaining = overall_timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Duration::from_millis(1);
+    }
+    let divisor = u32::try_from(remaining_clients.max(1)).unwrap_or(u32::MAX);
+    let slice = remaining.checked_div(divisor).unwrap_or(remaining);
+    slice
+        .min(OBSERVER_QUERY_TIMEOUT_CAP)
+        .max(OBSERVER_QUERY_TIMEOUT_FLOOR)
+        .min(remaining)
+}
+
+#[test]
+fn bounded_observer_request_timeout_slices_remaining_budget() {
+    let timeout = bounded_observer_request_timeout(Instant::now(), STATUS_WAIT_TIMEOUT, 4);
+    assert!(
+        timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
+        "observer timeout should respect the per-peer cap"
+    );
+    assert!(
+        timeout >= OBSERVER_QUERY_TIMEOUT_FLOOR,
+        "observer timeout should keep a minimum per-peer slice"
+    );
+    assert!(
+        timeout <= STATUS_WAIT_TIMEOUT,
+        "observer timeout should not exceed the remaining outer budget"
+    );
 }
 
 #[derive(Debug)]
@@ -725,6 +790,13 @@ struct DataspaceCommitmentObservation {
     height: u64,
     elapsed: Duration,
     approval_observed: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RoutedTransactionObservation {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    approved_height: Option<u64>,
 }
 
 async fn wait_for_route_probe_approval(
@@ -828,6 +900,75 @@ async fn wait_for_route_probe_approval(
     })
 }
 
+async fn submit_transaction_with_route_observation(
+    submitter: &Client,
+    transaction: &SignedTransaction,
+    context: &str,
+) -> Result<RoutedTransactionObservation> {
+    let hash = transaction.hash();
+    let mut events = timeout(
+        STATUS_WAIT_TIMEOUT,
+        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+    )
+    .await
+    .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
+
+    sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
+
+    let submitter_for_submit = submitter.clone();
+    let transaction_for_submit = transaction.clone();
+    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+        .await
+        .map_err(|err| eyre!("{context}: route-observed submit task join error: {err}"))?
+        .map_err(|err| eyre!("{context}: failed to submit route-observed transaction: {err}"))?;
+
+    let mut observed = None;
+    let event_poll_deadline = Instant::now() + BLOCKING_CONFIRMATION_TIMEOUT;
+    while Instant::now() <= event_poll_deadline {
+        let Some(next) = timeout(STATUS_POLL_INTERVAL, events.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+            continue;
+        };
+        match event.status() {
+            TransactionStatus::Queued => {
+                observed.get_or_insert(RoutedTransactionObservation {
+                    lane_id: event.lane_id(),
+                    dataspace_id: event.dataspace_id(),
+                    approved_height: None,
+                });
+            }
+            TransactionStatus::Approved => {
+                let approved_height = event.block_height().map(NonZeroU64::get);
+                observed = Some(RoutedTransactionObservation {
+                    lane_id: event.lane_id(),
+                    dataspace_id: event.dataspace_id(),
+                    approved_height,
+                });
+                break;
+            }
+            TransactionStatus::Rejected(reason) => {
+                events.close().await;
+                return Err(eyre!(
+                    "{context}: route-observed transaction rejected: {reason}"
+                ));
+            }
+            TransactionStatus::Expired => {
+                events.close().await;
+                return Err(eyre!("{context}: route-observed transaction expired"));
+            }
+        }
+    }
+
+    events.close().await;
+    observed.ok_or_else(|| eyre!("{context}: timed out observing queued transaction route"))
+}
+
 fn wait_for_expected_balances(
     expectations: &[BalanceExpectation<'_>],
     context: &str,
@@ -852,8 +993,18 @@ fn wait_for_expected_balances_with_timeout(
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
-        for expectation in expectations {
-            let observed = match asset_balance_variants(expectation.client, expectation.asset_id) {
+        let expectation_count = expectations.len();
+        for (index, expectation) in expectations.iter().enumerate() {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectation_count.saturating_sub(index),
+                    ));
+            let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
                     last_error = Some(render_error_with_debug(&err));
@@ -880,7 +1031,7 @@ fn wait_for_expected_balances_with_timeout(
 }
 
 fn wait_for_expected_balances_with_tick_timeout(
-    tick_submitter: &Client,
+    _tick_submitter: &Client,
     expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
@@ -888,12 +1039,21 @@ fn wait_for_expected_balances_with_tick_timeout(
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(expectations.len());
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
-        for expectation in expectations {
-            let observed = match asset_balance_variants(expectation.client, expectation.asset_id) {
+        let expectation_count = expectations.len();
+        for (index, expectation) in expectations.iter().enumerate() {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectation_count.saturating_sub(index),
+                    ));
+            let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
                     last_error = Some(render_error_with_debug(&err));
@@ -909,16 +1069,6 @@ fn wait_for_expected_balances_with_tick_timeout(
         if all_match {
             return Ok(());
         }
-        polls = polls.saturating_add(1);
-        if polls % BALANCE_WAIT_TICK_EVERY_POLLS == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!(
-                    "{context} balance tick {}",
-                    polls / BALANCE_WAIT_TICK_EVERY_POLLS
-                ),
-            ));
-        }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
@@ -926,9 +1076,18 @@ fn wait_for_expected_balances_with_tick_timeout(
         .unwrap_or_default();
     let bucket_context = expectations
         .iter()
-        .map(|expectation| {
-            let matches = expectation
-                .client
+        .enumerate()
+        .map(|(index, expectation)| {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectations.len().saturating_sub(index),
+                    ));
+            let matches = client
                 .query(FindAssets::new())
                 .execute_all()
                 .map(|assets: Vec<Asset>| {
@@ -958,8 +1117,7 @@ fn wait_for_expected_balances_with_tick_timeout(
 }
 
 fn wait_for_account_permissions(
-    client: &Client,
-    tick_submitter: &Client,
+    mut client_factory: impl FnMut() -> Client,
     account_id: &AccountId,
     required_permissions: &[Permission],
     context: &str,
@@ -967,8 +1125,8 @@ fn wait_for_account_permissions(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let client = client_factory();
         let permissions = match client
             .query(FindPermissionsByAccountId::new(account_id.clone()))
             .execute_all()
@@ -976,16 +1134,6 @@ fn wait_for_account_permissions(
             Ok(permissions) => permissions,
             Err(err) => {
                 last_error = Some(render_error_with_debug(&err));
-                polls = polls.saturating_add(1);
-                if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
-                    let _ = tick_submitter.submit(Log::new(
-                        Level::INFO,
-                        format!(
-                            "{context} permission tick {}",
-                            polls / PERMISSION_WAIT_TICK_EVERY_POLLS
-                        ),
-                    ));
-                }
                 thread::sleep(STATUS_POLL_INTERVAL);
                 continue;
             }
@@ -997,15 +1145,64 @@ fn wait_for_account_permissions(
         if all_present {
             return Ok(());
         }
-        polls = polls.saturating_add(1);
-        if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!(
-                    "{context} permission tick {}",
-                    polls / PERMISSION_WAIT_TICK_EVERY_POLLS
-                ),
-            ));
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last permission query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+    ))
+}
+
+fn wait_for_account_permissions_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    account_id: &AccountId,
+    required_permissions: &[Permission],
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = Vec::new();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let mut observed = Vec::new();
+        let mut saw_success = false;
+        let clients = clients_factory();
+        let client_count = clients.len();
+        for (index, mut client) in clients.into_iter().enumerate() {
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        STATUS_WAIT_TIMEOUT,
+                        client_count.saturating_sub(index),
+                    ));
+            match client
+                .query(FindPermissionsByAccountId::new(account_id.clone()))
+                .execute_all()
+            {
+                Ok(permissions) => {
+                    saw_success = true;
+                    for permission in permissions {
+                        if !observed.iter().any(|existing| existing == &permission) {
+                            observed.push(permission);
+                        }
+                    }
+                }
+                Err(err) => {
+                    last_error = Some(render_error_with_debug(&err));
+                }
+            }
+        }
+        if saw_success {
+            last_observed = observed.clone();
+            let all_present = required_permissions
+                .iter()
+                .all(|required| observed.iter().any(|permission| permission == required));
+            if all_present {
+                return Ok(());
+            }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
@@ -1141,27 +1338,55 @@ fn lane_bounded_peer_index(
     status_client: &Client,
     lane_index: u32,
 ) -> usize {
+    lane_bounded_peer_indices(network, status_client, lane_index)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
+}
+
+fn lane_bounded_peer_indices(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    lane_index: u32,
+) -> Vec<usize> {
     let peers = network.peers();
     if peers.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     let lane_index = lane_index as usize;
     let start = lane_index.saturating_mul(VALIDATORS_PER_LANE);
     let end = start.saturating_add(VALIDATORS_PER_LANE).min(peers.len());
     if start >= end {
-        return leader_or_highest_height_peer_index(network, status_client);
+        return vec![leader_or_highest_height_peer_index(network, status_client)];
     }
 
-    (start..end)
-        .max_by_key(|index| {
-            peers[*index]
+    let leader_index = status_client
+        .get_sumeragi_status_wire()
+        .ok()
+        .and_then(|status| usize::try_from(status.leader_index).ok());
+    let mut ranked = (start..end)
+        .map(|index| {
+            let observed_height = peers[index]
                 .client()
                 .get_sumeragi_status_wire()
                 .map(|status| status.commit_qc.height)
-                .unwrap_or(0)
+                .unwrap_or(0);
+            (
+                index,
+                observed_height,
+                leader_index.is_some_and(|leader| leader == index),
+            )
         })
-        .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .2
+            .cmp(&left.2)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.into_iter().map(|(index, _, _)| index).collect()
 }
 
 fn leader_targeted_client_for_lane(
@@ -1173,6 +1398,19 @@ fn leader_targeted_client_for_lane(
 ) -> Client {
     let index = lane_bounded_peer_index(network, status_client, lane_index);
     network.peers()[index].client_for(account_id, private_key.clone())
+}
+
+fn lane_targeted_clients_for_lane(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    account_id: &AccountId,
+    private_key: &PrivateKey,
+    lane_index: u32,
+) -> Vec<Client> {
+    lane_bounded_peer_indices(network, status_client, lane_index)
+        .into_iter()
+        .map(|index| network.peers()[index].client_for(account_id, private_key.clone()))
+        .collect()
 }
 
 fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
@@ -1221,37 +1459,42 @@ enum CommittedTxOutcome {
     Rejected(String),
 }
 
-fn wait_for_committed_tx_outcome(
+fn query_committed_tx_outcome(
     client: &Client,
+    entry_hash: &HashOf<TransactionEntrypoint>,
+) -> core::result::Result<Option<CommittedTxOutcome>, QueryError> {
+    let one = NonZeroU64::new(1).expect("nonzero");
+    let filters = CommittedTxFilters {
+        entry_eq: Some(entry_hash.clone()),
+        ..Default::default()
+    };
+    client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(filters))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()
+        .map(|snapshot| {
+            snapshot.first().map(|tx| match &tx.result().0 {
+                Ok(_) => CommittedTxOutcome::Applied,
+                Err(reason) => CommittedTxOutcome::Rejected(render_rejection_reason(reason)),
+            })
+        })
+}
+
+fn wait_for_committed_tx_outcome(
+    mut client_factory: impl FnMut() -> Client,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<CommittedTxOutcome> {
     let started = Instant::now();
     let mut last_error: Option<String> = None;
-    let one = NonZeroU64::new(1).expect("nonzero");
     while started.elapsed() <= timeout_duration {
-        let filters = CommittedTxFilters {
-            entry_eq: Some(entry_hash.clone()),
-            ..Default::default()
-        };
-        match client
-            .query(FindTransactions::new())
-            .filter(CompoundPredicate::from_filters(filters))
-            .with_pagination(Pagination::new(Some(one), 0))
-            .with_fetch_size(FetchSize::new(Some(one)))
-            .execute_all()
-        {
-            Ok(snapshot) => {
-                if let Some(tx) = snapshot.first() {
-                    return match &tx.result().0 {
-                        Ok(_) => Ok(CommittedTxOutcome::Applied),
-                        Err(reason) => Ok(CommittedTxOutcome::Rejected(render_rejection_reason(
-                            reason,
-                        ))),
-                    };
-                }
-            }
+        let client = client_factory();
+        match query_committed_tx_outcome(&client, &entry_hash) {
+            Ok(Some(outcome)) => return Ok(outcome),
+            Ok(None) => {}
             Err(err) => {
                 last_error = Some(err.to_string());
             }
@@ -1266,13 +1509,75 @@ fn wait_for_committed_tx_outcome(
     ))
 }
 
-fn wait_for_committed_success(
-    client: &Client,
+fn wait_for_committed_tx_outcome_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<CommittedTxOutcome> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= timeout_duration {
+        let clients = clients_factory();
+        let client_count = clients.len();
+        for (index, mut client) in clients.into_iter().enumerate() {
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        client_count.saturating_sub(index),
+                    ));
+            match query_committed_tx_outcome(&client, &entry_hash) {
+                Ok(Some(outcome)) => return Ok(outcome),
+                Ok(None) => {}
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                }
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last tx history query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
+    ))
+}
+
+fn wait_for_committed_success_across_clients(
+    clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
-    match wait_for_committed_tx_outcome(client, entry_hash.clone(), context, timeout_duration)? {
+    match wait_for_committed_tx_outcome_across_clients(
+        clients_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
+        CommittedTxOutcome::Applied => Ok(()),
+        CommittedTxOutcome::Rejected(reason) => Err(eyre!(
+            "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
+        )),
+    }
+}
+
+fn wait_for_committed_success(
+    client_factory: impl FnMut() -> Client,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<()> {
+    match wait_for_committed_tx_outcome(
+        client_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
         CommittedTxOutcome::Applied => Ok(()),
         CommittedTxOutcome::Rejected(reason) => Err(eyre!(
             "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
@@ -1281,12 +1586,36 @@ fn wait_for_committed_success(
 }
 
 fn wait_for_committed_rejection_reason(
-    client: &Client,
+    client_factory: impl FnMut() -> Client,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<String> {
-    match wait_for_committed_tx_outcome(client, entry_hash.clone(), context, timeout_duration)? {
+    match wait_for_committed_tx_outcome(
+        client_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
+        CommittedTxOutcome::Applied => Err(eyre!(
+            "{context}: transaction {entry_hash} committed successfully, expected rejection"
+        )),
+        CommittedTxOutcome::Rejected(reason) => Ok(reason),
+    }
+}
+
+fn wait_for_committed_rejection_reason_across_clients(
+    clients_factory: impl FnMut() -> Vec<Client>,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<String> {
+    match wait_for_committed_tx_outcome_across_clients(
+        clients_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
         CommittedTxOutcome::Applied => Err(eyre!(
             "{context}: transaction {entry_hash} committed successfully, expected rejection"
         )),
@@ -1295,8 +1624,7 @@ fn wait_for_committed_rejection_reason(
 }
 
 fn wait_for_committed_success_or_height_fallback(
-    observer: &Client,
-    tick_submitter: &Client,
+    mut observer_factory: impl FnMut() -> Client,
     entry_hash: HashOf<TransactionEntrypoint>,
     committed_context: &str,
     fallback_context: &str,
@@ -1305,12 +1633,12 @@ fn wait_for_committed_success_or_height_fallback(
     post_barrier_outcome_timeout: Duration,
 ) -> Result<SumeragiStatusWire> {
     match wait_for_committed_success(
-        observer,
+        &mut observer_factory,
         entry_hash.clone(),
         committed_context,
         committed_timeout,
     ) {
-        Ok(()) => observer
+        Ok(()) => observer_factory()
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err)),
         Err(err) => {
@@ -1320,8 +1648,7 @@ fn wait_for_committed_success_or_height_fallback(
             }
             eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
             let barrier_status = wait_for_height_with_tick_timeout(
-                observer,
-                tick_submitter,
+                &mut observer_factory,
                 pre_barrier_height.saturating_add(1),
                 fallback_context,
                 STATUS_WAIT_TIMEOUT,
@@ -1329,14 +1656,72 @@ fn wait_for_committed_success_or_height_fallback(
             )?;
             let post_context = format!("{committed_context} (post-barrier)");
             match wait_for_committed_success(
-                observer,
+                &mut observer_factory,
                 entry_hash,
                 post_context.as_str(),
                 post_barrier_outcome_timeout,
             ) {
-                Ok(()) => observer
+                Ok(()) => observer_factory()
                     .get_sumeragi_status_wire()
                     .map_err(|err| eyre!(err)),
+                Err(post_err) => {
+                    let post_error_text = post_err.to_string();
+                    if is_inconclusive_committed_outcome_error(&post_error_text) {
+                        Ok(barrier_status)
+                    } else {
+                        Err(post_err)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn wait_for_committed_success_or_height_fallback_across_clients(
+    mut observer_factory: impl FnMut() -> Vec<Client>,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    committed_context: &str,
+    fallback_context: &str,
+    pre_barrier_height: u64,
+    committed_timeout: Duration,
+    post_barrier_outcome_timeout: Duration,
+) -> Result<SumeragiStatusWire> {
+    match wait_for_committed_success_across_clients(
+        &mut observer_factory,
+        entry_hash.clone(),
+        committed_context,
+        committed_timeout,
+    ) {
+        Ok(()) => observer_factory()
+            .into_iter()
+            .filter_map(|client| client.get_sumeragi_status_wire().ok())
+            .max_by_key(|status| status.commit_qc.height)
+            .ok_or_else(|| eyre!("{committed_context}: no observer returned a status snapshot")),
+        Err(err) => {
+            let error_text = err.to_string();
+            if !is_inconclusive_committed_outcome_error(&error_text) {
+                return Err(err);
+            }
+            eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
+            let barrier_status = wait_for_height_with_tick_timeout_across_clients(
+                &mut observer_factory,
+                pre_barrier_height.saturating_add(1),
+                fallback_context,
+                STATUS_WAIT_TIMEOUT,
+                SETUP_BARRIER_TICK_EVERY_POLLS,
+            )?;
+            let post_context = format!("{committed_context} (post-barrier)");
+            match wait_for_committed_success_across_clients(
+                &mut observer_factory,
+                entry_hash,
+                post_context.as_str(),
+                post_barrier_outcome_timeout,
+            ) {
+                Ok(()) => observer_factory()
+                    .into_iter()
+                    .filter_map(|client| client.get_sumeragi_status_wire().ok())
+                    .max_by_key(|status| status.commit_qc.height)
+                    .ok_or_else(|| eyre!("{post_context}: no observer returned a status snapshot")),
                 Err(post_err) => {
                     let post_error_text = post_err.to_string();
                     if is_inconclusive_committed_outcome_error(&post_error_text) {
@@ -1789,7 +2174,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         })?;
     }
 
-    let setup_grants_tx = {
+    let (setup_grants_tx, setup_grants_authoritative_lane_index, setup_grants_pre_barrier_height) = {
         let submitter = alice_on_ds1.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let setup_grants_tx = submitter.build_transaction(
@@ -1801,23 +2186,82 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             ))],
             Metadata::default(),
         );
-        submitter.submit_transaction(&setup_grants_tx)?;
-        setup_grants_tx
-    };
-    {
-        let _phase = phase_timings.phase("setup grants: tx committed outcome");
-        let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
-        let setup_grants_pre_barrier_height = alice_on_ds1
+        let nexus_pre_barrier_height = nexus_alice_submitter
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err))?
             .commit_qc
             .height;
-        wait_for_committed_success_or_height_fallback(
-            &alice_on_ds1,
-            &alice_on_ds1,
+        let ds1_pre_barrier_height = alice_on_ds1
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let ds2_pre_barrier_height = alice_on_ds2
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let route_observation = rt.block_on(submit_transaction_with_route_observation(
+            &submitter,
+            &setup_grants_tx,
+            "setup grants route observation",
+        ))?;
+        // A queued event from the ingress listener can still reflect the submitter-side lane even
+        // when the authoritative router forwards the transaction elsewhere. This grant targets a
+        // universal asset definition permission, so the authoritative route is the Nexus lane
+        // unless an Approved event proved a different final route.
+        let authoritative_lane_index = if route_observation.approved_height.is_some() {
+            route_observation.lane_id.as_u32()
+        } else {
+            NEXUS_LANE_INDEX
+        };
+        let pre_barrier_height = match authoritative_lane_index {
+            NEXUS_LANE_INDEX => nexus_pre_barrier_height,
+            DS1_LANE_INDEX => ds1_pre_barrier_height,
+            DS2_LANE_INDEX => ds2_pre_barrier_height,
+            _ => {
+                leader_targeted_client_for_lane(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                    authoritative_lane_index,
+                )
+                .get_sumeragi_status_wire()
+                .map_err(|err| eyre!(err))?
+                .commit_qc
+                .height
+            }
+        };
+        eprintln!(
+            "[setup-grants] observed lane={} dataspace={} approved_height={:?} authoritative_lane={}",
+            route_observation.lane_id.as_u32(),
+            route_observation.dataspace_id.as_u64(),
+            route_observation.approved_height,
+            authoritative_lane_index,
+        );
+        (
+            setup_grants_tx,
+            authoritative_lane_index,
+            pre_barrier_height,
+        )
+    };
+    {
+        let _phase = phase_timings.phase("setup grants: tx committed outcome");
+        let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
+        wait_for_committed_success_or_height_fallback_across_clients(
+            || {
+                lane_targeted_clients_for_lane(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                    setup_grants_authoritative_lane_index,
+                )
+            },
             setup_grants_entry_hash,
-            "setup grants committed outcome on ds1 authoritative observer",
-            "setup grants commit barrier on ds1 authoritative observer",
+            "setup grants committed outcome on authoritative observer",
+            "setup grants commit barrier on authoritative observer",
             setup_grants_pre_barrier_height,
             BLOCKING_CONFIRMATION_TIMEOUT,
             BLOCKING_CONFIRMATION_TIMEOUT,
@@ -1825,15 +2269,21 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     };
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
-        // Commit-QC hashes are lane-local in this 3-lane topology, so the grant transaction's
-        // observed Nexus-lane barrier cannot be compared directly against DS2-lane peers.
-        // Poll the Bob-facing permission view instead; that is the state the swap depends on.
-        wait_for_account_permissions(
-            &nexus_bob_submitter,
-            &nexus_bob_submitter,
+        // Confirm the authoritative Bob-facing view exposed by the observed routed lane before
+        // proceeding to the swap path that depends on it.
+        wait_for_account_permissions_across_clients(
+            || {
+                lane_targeted_clients_for_lane(
+                    &network,
+                    &bob,
+                    &BOB_ID,
+                    BOB_KEYPAIR.private_key(),
+                    setup_grants_authoritative_lane_index,
+                )
+            },
             &BOB_ID,
             &[bob_transfer_ds1_permission.clone()],
-            "grant setup permissions visible on routed bob submitter",
+            "grant setup permissions visible on authoritative bob observer",
         )?;
     }
 
@@ -1871,6 +2321,38 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     }
     let mut swap_outcome_fallbacks = 0usize;
     let mut swap_nonconverged_fallbacks = 0usize;
+    let current_lane_clients = || {
+        (
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
+            ),
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &BOB_ID,
+                BOB_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
+            ),
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                DS2_LANE_INDEX,
+            ),
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &BOB_ID,
+                BOB_KEYPAIR.private_key(),
+                DS2_LANE_INDEX,
+            ),
+        )
+    };
 
     {
         let successful_swap = DvpIsi::new(
@@ -1922,9 +2404,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             match submitter.submit_transaction_blocking(&successful_swap_tx) {
                 Ok(_) => {
                     successful_swap_synced_status = Some(
-                        wait_for_committed_success_or_height_fallback(
-                            &submitter,
-                            &submitter,
+                        wait_for_committed_success_or_height_fallback_across_clients(
+                            || {
+                                lane_targeted_clients_for_lane(
+                                    &network,
+                                    &alice,
+                                    &ALICE_ID,
+                                    ALICE_KEYPAIR.private_key(),
+                                    DS1_LANE_INDEX,
+                                )
+                            },
                             successful_swap_entry_hash.clone(),
                             "successful swap confirmation on ds1 authoritative observer",
                             "successful swap barrier on ds1 authoritative observer (height fallback)",
@@ -1940,9 +2429,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         return Err(err);
                     }
                     swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
-                    match wait_for_committed_success_or_height_fallback(
-                        &submitter,
-                        &submitter,
+                    match wait_for_committed_success_or_height_fallback_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                DS1_LANE_INDEX,
+                            )
+                        },
                         successful_swap_entry_hash,
                         "successful swap confirmation on ds1 authoritative observer",
                         "successful swap barrier on ds1 authoritative observer (height fallback)",
@@ -1962,35 +2458,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 }
             }
         }
-        let alice_on_ds1 = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
-        );
-        let bob_on_ds1 = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &BOB_ID,
-            BOB_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
-        );
-        let alice_on_ds2 = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS2_LANE_INDEX,
-        );
-        let bob_on_ds2 = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &BOB_ID,
-            BOB_KEYPAIR.private_key(),
-            DS2_LANE_INDEX,
-        );
         if let Some(status) = successful_swap_synced_status.as_ref() {
+            let (alice_on_ds1, _, _, bob_on_ds2) = current_lane_clients();
             wait_for_lane_peers_commit_qc_at_least(
                 &network,
                 DS1_LANE_INDEX,
@@ -2000,38 +2469,48 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
             )?;
+            wait_for_lane_peers_commit_qc_at_least(
+                &network,
+                DS2_LANE_INDEX,
+                status,
+                &bob_on_ds2,
+                "successful swap ds2 authoritative sync",
+                STATUS_WAIT_TIMEOUT,
+                SETUP_BARRIER_TICK_EVERY_POLLS,
+            )?;
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
-            let successful_swap_expectations = [
-                BalanceExpectation {
-                    client: &alice_on_ds1,
-                    asset_id: &alice_ds1_asset,
-                    expected: Numeric::from(70_u32),
-                },
-                BalanceExpectation {
-                    client: &bob_on_ds1,
-                    asset_id: &bob_ds1_asset,
-                    expected: Numeric::from(30_u32),
-                },
-                BalanceExpectation {
-                    client: &alice_on_ds2,
-                    asset_id: &alice_ds2_asset,
-                    expected: Numeric::from(45_u32),
-                },
-                BalanceExpectation {
-                    client: &bob_on_ds2,
-                    asset_id: &bob_ds2_asset,
-                    expected: Numeric::from(155_u32),
-                },
-            ];
             let mut balance_wait_result = Ok(());
-            for (tick_submitter, lane_label) in [
-                (&alice_on_ds1, "ds1"),
-                (&bob_on_ds2, "ds2"),
-                (&alice_on_ds1, "ds1"),
-                (&bob_on_ds2, "ds2"),
-            ] {
+            for lane_label in ["ds1", "ds2", "ds1", "ds2"] {
+                let (alice_on_ds1, bob_on_ds1, alice_on_ds2, bob_on_ds2) = current_lane_clients();
+                let successful_swap_expectations = [
+                    BalanceExpectation {
+                        client: &alice_on_ds1,
+                        asset_id: &alice_ds1_asset,
+                        expected: Numeric::from(70_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds1,
+                        asset_id: &bob_ds1_asset,
+                        expected: Numeric::from(30_u32),
+                    },
+                    BalanceExpectation {
+                        client: &alice_on_ds2,
+                        asset_id: &alice_ds2_asset,
+                        expected: Numeric::from(45_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds2,
+                        asset_id: &bob_ds2_asset,
+                        expected: Numeric::from(155_u32),
+                    },
+                ];
+                let tick_submitter = match lane_label {
+                    "ds1" => &alice_on_ds1,
+                    "ds2" => &bob_on_ds2,
+                    _ => unreachable!("lane label should be known"),
+                };
                 match wait_for_expected_balances_with_tick_timeout(
                     tick_submitter,
                     &successful_swap_expectations,
@@ -2053,30 +2532,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             balance_wait_result?;
         }
     }
-
     let soak_iterations = soak_iterations();
-    let soak_baseline = [
-        BalanceExpectation {
-            client: &alice_on_ds1,
-            asset_id: &alice_ds1_asset,
-            expected: Numeric::from(70_u32),
-        },
-        BalanceExpectation {
-            client: &bob_on_ds1,
-            asset_id: &bob_ds1_asset,
-            expected: Numeric::from(30_u32),
-        },
-        BalanceExpectation {
-            client: &alice_on_ds2,
-            asset_id: &alice_ds2_asset,
-            expected: Numeric::from(45_u32),
-        },
-        BalanceExpectation {
-            client: &bob_on_ds2,
-            asset_id: &bob_ds2_asset,
-            expected: Numeric::from(155_u32),
-        },
-    ];
     let mut soak_passes = 0usize;
     let mut soak_iteration_durations = Vec::with_capacity(soak_iterations);
     let mut soak_target_durations = Vec::with_capacity(soak_iterations);
@@ -2090,14 +2546,18 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let _phase = phase_timings.phase(format!(
             "soak {soak_iterations} iterations: paired swap throughput"
         ));
-        let mut soak_submitter = alice_on_ds1.clone();
         for iteration in 0..soak_iterations {
             let iteration_started = Instant::now();
             let mut run_result = Err(eyre!("iteration {} exceeded retry budget", iteration + 1));
             for attempt in 0..SOAK_ITERATION_ATTEMPTS {
                 let attempt_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
                     let retarget_started = Instant::now();
-                    soak_submitter = alice_on_ds1.clone();
+                    let (
+                        soak_submitter,
+                        current_bob_on_ds1,
+                        current_alice_on_ds2,
+                        current_bob_on_ds2,
+                    ) = current_lane_clients();
                     let target_elapsed = retarget_started.elapsed();
                     let forward_swap = DvpIsi::new(
                         format!("soakfwd{iteration}a{attempt}")
@@ -2158,8 +2618,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     soak_submitter.submit_transaction(&soak_swap_tx)?;
                     let submit_elapsed = submit_started.elapsed();
                     let barrier_started = Instant::now();
-                    let _synced_after_paired_swaps = match wait_for_committed_success(
-                        &soak_submitter,
+                    let _synced_after_paired_swaps = match wait_for_committed_success_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                DS1_LANE_INDEX,
+                            )
+                        },
                         soak_swap_entry_hash.clone(),
                         "soak paired swaps confirmation on ds1 authoritative observer",
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
@@ -2178,17 +2646,32 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                     "[soak] committed outcome inconclusive; falling back to height barrier"
                                 );
                             }
-                            match wait_for_height_with_tick_timeout(
-                                &soak_submitter,
-                                &soak_submitter,
+                            match wait_for_height_with_tick_timeout_across_clients(
+                                || {
+                                    lane_targeted_clients_for_lane(
+                                        &network,
+                                        &alice,
+                                        &ALICE_ID,
+                                        ALICE_KEYPAIR.private_key(),
+                                        DS1_LANE_INDEX,
+                                    )
+                                },
                                 pre_barrier_height.saturating_add(1),
                                 "soak paired swaps barrier on ds1 authoritative observer (height fallback)",
                                 SOAK_PHASE_WAIT_TIMEOUT,
                                 SOAK_BARRIER_TICK_EVERY_POLLS,
                             ) {
                                 Ok(status) => status,
-                                Err(height_err) => match wait_for_committed_success(
-                                    &soak_submitter,
+                                Err(height_err) => match wait_for_committed_success_across_clients(
+                                    || {
+                                        lane_targeted_clients_for_lane(
+                                            &network,
+                                            &alice,
+                                            &ALICE_ID,
+                                            ALICE_KEYPAIR.private_key(),
+                                            DS1_LANE_INDEX,
+                                        )
+                                    },
                                     soak_swap_entry_hash.clone(),
                                     "soak paired swaps confirmation on ds1 authoritative observer (post-barrier-timeout)",
                                     SOAK_PHASE_WAIT_TIMEOUT,
@@ -2209,6 +2692,28 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     };
                     let barrier_elapsed = barrier_started.elapsed();
                     let query_started = Instant::now();
+                    let soak_baseline = [
+                        BalanceExpectation {
+                            client: &soak_submitter,
+                            asset_id: &alice_ds1_asset,
+                            expected: Numeric::from(70_u32),
+                        },
+                        BalanceExpectation {
+                            client: &current_bob_on_ds1,
+                            asset_id: &bob_ds1_asset,
+                            expected: Numeric::from(30_u32),
+                        },
+                        BalanceExpectation {
+                            client: &current_alice_on_ds2,
+                            asset_id: &alice_ds2_asset,
+                            expected: Numeric::from(45_u32),
+                        },
+                        BalanceExpectation {
+                            client: &current_bob_on_ds2,
+                            asset_id: &bob_ds2_asset,
+                            expected: Numeric::from(155_u32),
+                        },
+                    ];
                     wait_for_expected_balances_with_timeout(
                         &soak_baseline,
                         "soak iteration net-zero balances",
@@ -2351,8 +2856,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     SettlementAtomicity::AllOrNothing,
                 ),
             );
-            let submitter = alice_on_ds1.clone();
-            let mut submitter = submitter;
+            let mut submitter = leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
+            );
             let failing_swap_tx = submitter
                 .build_transaction([InstructionBox::from(failing_swap)], Metadata::default());
             let entry_hash = failing_swap_tx.hash_as_entrypoint();
@@ -2376,12 +2886,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     if is_inconclusive_blocking_submit_error(&error_text)
                         && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
                     {
-                        if let Ok(committed_reason) = wait_for_committed_rejection_reason(
-                            &submitter,
-                            entry_hash.clone(),
-                            "rollback rejection reason from ds1 authoritative history",
-                            ROLLBACK_HISTORY_RETRY_TIMEOUT,
-                        ) {
+                        if let Ok(committed_reason) =
+                            wait_for_committed_rejection_reason_across_clients(
+                                || {
+                                    lane_targeted_clients_for_lane(
+                                        &network,
+                                        &alice,
+                                        &ALICE_ID,
+                                        ALICE_KEYPAIR.private_key(),
+                                        DS1_LANE_INDEX,
+                                    )
+                                },
+                                entry_hash.clone(),
+                                "rollback rejection reason from ds1 authoritative history",
+                                ROLLBACK_HISTORY_RETRY_TIMEOUT,
+                            )
+                        {
                             failure_text = Some(committed_reason);
                             break;
                         }
@@ -2402,8 +2922,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let entry_hash = last_attempt_entry_hash
                 .ok_or_else(|| eyre!("missing transaction entry hash for rollback fallback"))?;
             eprintln!("[rollback] falling back to committed history lookup for rejection reason");
-            match wait_for_committed_rejection_reason(
-                &alice_on_ds1,
+            match wait_for_committed_rejection_reason_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        DS1_LANE_INDEX,
+                    )
+                },
                 entry_hash,
                 "rollback rejection reason from ds1 authoritative history fallback",
                 ROLLBACK_HISTORY_FALLBACK_TIMEOUT,
@@ -2438,7 +2966,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             SettlementAtomicity::AllOrNothing,
                         ),
                     );
-                    let submitter = alice_on_ds1.clone();
+                    let submitter = leader_targeted_client_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        DS1_LANE_INDEX,
+                    );
                     let fallback_error = submitter
                         .submit_blocking(InstructionBox::from(final_fallback_swap))
                         .expect_err(
@@ -2453,7 +2987,35 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 || failure_text.contains("requires 10000"),
             "unexpected failure message: {failure_text}"
         );
-        wait_for_expected_balances(&soak_baseline, "rollback balances after failing swap")?;
+        let (
+            rollback_alice_on_ds1,
+            rollback_bob_on_ds1,
+            rollback_alice_on_ds2,
+            rollback_bob_on_ds2,
+        ) = current_lane_clients();
+        let rollback_baseline = [
+            BalanceExpectation {
+                client: &rollback_alice_on_ds1,
+                asset_id: &alice_ds1_asset,
+                expected: Numeric::from(70_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_bob_on_ds1,
+                asset_id: &bob_ds1_asset,
+                expected: Numeric::from(30_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_alice_on_ds2,
+                asset_id: &alice_ds2_asset,
+                expected: Numeric::from(45_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_bob_on_ds2,
+                asset_id: &bob_ds2_asset,
+                expected: Numeric::from(155_u32),
+            },
+        ];
+        wait_for_expected_balances(&rollback_baseline, "rollback balances after failing swap")?;
     }
 
     ensure!(

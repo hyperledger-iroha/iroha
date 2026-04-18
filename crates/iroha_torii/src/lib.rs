@@ -2556,7 +2556,10 @@ fn route_timeout_for_path(path: &str) -> Duration {
         "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
             CONTRACT_DEPLOY_ROUTE_TIMEOUT
         }
-        _ => DEFAULT_ROUTE_TIMEOUT,
+        // Keep the outer HTTP timeout at least as large as the internal
+        // read-fanout proxy budget so ingress does not emit a bare 408 while a
+        // Nexus fanout request is still within its allowed route window.
+        _ => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
 
@@ -35498,6 +35501,43 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             super::torii_proxy_request_kind_name(&read_request),
             "read_fanout"
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[test]
+    fn http_route_timeout_covers_read_fanout_proxy_budget() {
+        let fanout_budget = super::torii_proxy_attempt_timeout(
+            &ToriiProxyRequestKindV1::ReadFanout(super::torii_read_fanout_request(
+                ToriiReadEndpointV1::AccountPermissionsGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
+                ToriiReadFanoutMergeV1::List,
+                vec![AccountId::new(KeyPair::random().public_key().clone()).to_string()],
+                None,
+                Vec::new(),
+                ToriiProxyResponseFormatV1::Json,
+            )),
+        );
+        assert!(
+            super::route_timeout_for_path("/v1/accounts/example/permissions") >= fanout_budget,
+            "outer HTTP timeout must not expire before the read-fanout proxy budget"
+        );
+        assert_eq!(
+            super::route_timeout_for_path("/v1/contracts/deploy"),
+            CONTRACT_DEPLOY_ROUTE_TIMEOUT,
+            "deploy-specific timeout should keep its dedicated budget"
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[test]
+    fn client_default_timeout_covers_nexus_fanout_http_budget() {
+        let fanout_http_budget = super::route_timeout_for_path("/v1/accounts/example/permissions");
+        assert!(
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT >= fanout_http_budget,
+            "client default timeout {:?} must cover routed fanout HTTP budget {:?}",
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            fanout_http_budget,
         );
     }
 
