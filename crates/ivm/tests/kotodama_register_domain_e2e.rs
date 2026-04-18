@@ -17,7 +17,7 @@ fn kotodama_register_domain_e2e() {
     // Compile a tiny Kotodama program that registers a domain via typed constructor.
     let src = r#"
         fn main() {
-            register_domain(domain("e2e_domain"));
+            register_domain(domain("e2e_domain.universal"));
         }
     "#;
     let compiler = KotodamaCompiler::new();

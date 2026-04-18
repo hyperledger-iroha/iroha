@@ -11,7 +11,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let src = r#"
         fn main() {
           // Bootstrap domain/account/asset
-          register_domain(domain("default"));
+          register_domain(domain("default.universal"));
           register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           // Create role with mint permission and grant to authority

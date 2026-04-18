@@ -4401,9 +4401,7 @@ impl Actor {
                 view,
                 epoch,
             };
-            if !self.block_known_for_lock(lock.subject_block_hash)
-                && candidate.view <= lock.view
-            {
+            if !self.block_known_for_lock(lock.subject_block_hash) && candidate.view <= lock.view {
                 let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,

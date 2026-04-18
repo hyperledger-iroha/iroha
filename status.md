@@ -2,6 +2,16 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-17 Follow-up: Kotodama `DomainId` fixtures refreshed to fully qualified literals
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_domain_builtins_corehost.rs` now uses `domain.dataspace` literals again, matching the current `DomainId::parse_fully_qualified` semantic rule for `domain(...)` constructors.
+- The same literal refresh was applied to the nearby Kotodama coverage that still embedded bare domain labels: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields_corehost.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_domain_e2e.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/domain_ops.ko`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_domain_builtins_corehost -- --nocapture`
+  - `cargo test -p kotodama_lang lower_pointer_constructors_to_datarefs -- --nocapture`
+  - `cargo test -p kotodama_lang lower_struct_fields_for_transfer_domain -- --nocapture`
+- A broader `cargo test -p ivm kotodama -- --nocapture` pass confirmed the original domain-builtin failure is fixed, then surfaced a separate pre-existing runtime `DecodeError` in `kotodama_register_account_asset_tlv` on the legacy `register_asset(...)` path.
+
 ## 2026-04-17 Follow-up: Kotodama zero-arg entrypoint hints and canonical domain fixtures
 - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now resolves manifest/access-hint IR symbol names to the synthetic `__entrypoint_impl__*` wrapper only when a public/view entrypoint actually has parameters and therefore actually gets a wrapper. Zero-argument public entrypoints now retain their own state-derived access hints instead of dropping them during manifest assembly.
 - The same compiler module now has a focused regression that pins `kotoage fn run()` scalar-state reads to `state:counter`, covering the zero-argument public-entrypoint case that previously slipped past the wrapper-name lookup.
