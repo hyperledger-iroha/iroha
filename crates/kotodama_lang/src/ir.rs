@@ -3178,13 +3178,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     if args.len() > 1 {
                         let _ = lower_expr(ctx, &args[1], vars);
                     }
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Unary {
-                        dest: t,
-                        op: UnaryOp::Not,
-                        operand: cond,
-                    });
-                    ctx.current_instr(Instr::Assert { cond: t });
+                    ctx.current_instr(Instr::Assert { cond });
                     let u = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: u, value: 0 });
                     u
