@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Torii deploy-bundle receipt artifact cleanup
+- `/.gitignore` now ignores
+  `/crates/iroha_torii/storage/torii/contract_deploy_bundles/`, so generated
+  Torii deploy-bundle receipt JSONs from crate-local runs stay out of git.
+- Removed the tracked generated receipt JSONs under
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/storage/torii/contract_deploy_bundles/`.
+  The receipt tests already use `tempdir()` plus `OverrideGuard`, so no checked-in
+  fixture data is required for this path.
+- Validation for this slice:
+  - `git diff --check`
+
 ## 2026-04-18 Follow-up: Nexus autoscale activity gate and canonical manifest fixtures
 - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/autoscale_localnet.rs`
   now keeps one submitted transaction hash per ingress client and treats any
