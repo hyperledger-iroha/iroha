@@ -36,7 +36,10 @@ pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Default timeout for waiting on transaction status updates.
 pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Default timeout for Torii HTTP requests issued by the client.
-pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// This must remain above the Nexus routed/fanout HTTP budget so clients do
+/// not abandon a request while Torii is still within its allowed route window.
+pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(70);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
 /// Default Torii API version header sent by the client.

@@ -1739,7 +1739,13 @@ impl Queue {
             });
         }
         if let Some(status) = manifest_status {
-            if let Some(rules) = status.rules() {
+            // Private/admin-managed manifests still provide authoritative routing and
+            // privacy commitments even when the lane is not governed. Admission
+            // checks that depend on validator authority or governance metadata only
+            // apply when the lane explicitly declares a governance module.
+            if status.governance.is_some()
+                && let Some(rules) = status.rules()
+            {
                 let alias = status.alias.clone();
                 let allows_multisig_envelope_authority =
                     match checked.as_accepted().as_ref().instructions() {
@@ -4301,6 +4307,52 @@ pub mod tests {
                 .get(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn non_governed_manifest_validators_do_not_gate_admission() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(Arc::new(Metrics::default()), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let time_source = TimeSource::new_system();
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        let (other_id, other_keypair) = gen_account_in("wonderland");
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id],
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: None,
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
+        queue
+            .push(other_tx, state.view())
+            .expect("non-governed manifest should not gate transaction authority");
     }
 
     #[test]

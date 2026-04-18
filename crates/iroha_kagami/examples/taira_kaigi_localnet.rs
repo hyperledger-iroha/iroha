@@ -8,12 +8,13 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, ensure},
 };
+use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::{Grant, Mint, Register, SetKeyValue},
+    isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox, SetKeyValue},
     kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
     name::Name,
     nexus::DataSpaceId,
@@ -34,6 +35,9 @@ struct Args {
     /// Base genesis JSON manifest to overlay.
     #[arg(long)]
     genesis: PathBuf,
+    /// Optional peer config used to embed DA proof policies that match the runtime lane config.
+    #[arg(long)]
+    config: Option<PathBuf>,
     /// Output path for the signed genesis `.nrt`.
     #[arg(long)]
     out_file: PathBuf,
@@ -239,28 +243,75 @@ fn append_bootstrap_authority_overlay(
     let authority_account = Account::new(authority.account_id.clone());
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
+    let mut has_account_registration = false;
+    let mut has_fee_funding = false;
+    let mut has_manage_soracloud = false;
+    let mut has_manage_alias = false;
+    let mut has_publish_manifest = false;
 
-    manifest
-        .into_builder()
-        .next_transaction()
-        .append_instruction(Register::account(authority_account))
-        .append_instruction(Mint::asset_numeric(
+    for instruction in manifest.instructions() {
+        if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+            if let RegisterBox::Account(register_account) = register {
+                if register_account.object().id == authority.account_id {
+                    has_account_registration = true;
+                }
+            }
+        }
+        if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
+            if let MintBox::Asset(mint_asset) = mint {
+                if mint_asset.destination() == &authority_fee_asset {
+                    has_fee_funding = true;
+                }
+            }
+        }
+        let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
+            continue;
+        };
+        let GrantBox::Permission(grant_permission) = grant else {
+            continue;
+        };
+        if grant_permission.destination() != &authority.account_id {
+            continue;
+        }
+        let permission = grant_permission.object();
+        if permission == &manage_soracloud {
+            has_manage_soracloud = true;
+        } else if permission == &manage_alias {
+            has_manage_alias = true;
+        } else if permission == &publish_manifest {
+            has_publish_manifest = true;
+        }
+    }
+
+    let mut builder = manifest.into_builder().next_transaction();
+    if !has_account_registration {
+        builder = builder.append_instruction(Register::account(authority_account));
+    }
+    if !has_fee_funding {
+        builder = builder.append_instruction(Mint::asset_numeric(
             authority.fee_amount,
             authority_fee_asset,
-        ))
-        .append_instruction(Grant::account_permission(
+        ));
+    }
+    if !has_manage_soracloud {
+        builder = builder.append_instruction(Grant::account_permission(
             manage_soracloud,
             authority.account_id.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
+        ));
+    }
+    if !has_manage_alias {
+        builder = builder.append_instruction(Grant::account_permission(
             manage_alias,
             authority.account_id.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
+        ));
+    }
+    if !has_publish_manifest {
+        builder = builder.append_instruction(Grant::account_permission(
             publish_manifest,
             authority.account_id.clone(),
-        ))
-        .build_raw()
+        ));
+    }
+    builder.build_raw()
 }
 
 fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> KeyPair {
@@ -288,6 +339,34 @@ fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
         (None, seed) => Ok(derive_localnet_genesis_key_pair(seed.as_deref())),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
+}
+
+fn load_peer_config(config_path: &std::path::Path) -> Result<actual::Root> {
+    let source = TomlSource::from_file(config_path).map_err(|err| {
+        color_eyre::eyre::eyre!(
+            "failed to read peer config at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    actual::Root::from_toml_source(source).map_err(|err| {
+        color_eyre::eyre::eyre!(
+            "failed to parse peer config at {}: {err}",
+            config_path.display()
+        )
+    })
+}
+
+fn resolve_da_proof_policies(
+    config_path: Option<&std::path::Path>,
+) -> Result<Option<iroha_data_model::da::commitment::DaProofPolicyBundle>> {
+    let Some(config_path) = config_path else {
+        return Ok(None);
+    };
+
+    let config = load_peer_config(config_path)?;
+    Ok(Some(iroha_core::da::proof_policy_bundle(
+        &config.nexus.lane_config,
+    )))
 }
 
 fn ensure_expected_genesis_public_key(
@@ -351,8 +430,9 @@ fn run(args: &Args) -> Result<()> {
         &genesis_key_pair,
         args.expected_genesis_public_key.as_deref(),
     )?;
+    let da_proof_policies = resolve_da_proof_policies(args.config.as_deref())?;
     let signed = manifest
-        .build_and_sign(&genesis_key_pair)
+        .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)
         .wrap_err("failed to sign Kaigi overlay genesis")?;
 
     let framed = signed
@@ -471,6 +551,71 @@ mod tests {
             overlaid.instructions().count(),
             5,
             "overlay should append register/mint/grant bootstrap instructions"
+        );
+    }
+
+    #[test]
+    fn bootstrap_authority_overlay_skips_existing_bootstrap_seed() {
+        let manifest = GenesisBuilder::new_without_executor(
+            "iroha:test:bootstrap-taira".parse().expect("chain id"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_chain_discriminant(369);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+        let bootstrap = BootstrapAuthority {
+            account_id: AccountId::parse_encoded(
+                "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+            )
+            .map(ParsedAccountId::into_account_id)
+            .expect("bootstrap account"),
+            linked_domain: DomainId::try_new("nexus", "universal").expect("domain"),
+            fee_asset_id: AssetDefinitionId::from_str("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                .expect("asset id"),
+            fee_amount: 25_000,
+        };
+        let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
+        let manage_alias: Permission = CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }
+        .into();
+        let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: DataSpaceId::UNIVERSAL,
+        }
+        .into();
+        let authority_fee_asset =
+            AssetId::new(bootstrap.fee_asset_id.clone(), bootstrap.account_id.clone());
+
+        let seeded = manifest
+            .into_builder()
+            .next_transaction()
+            .append_instruction(Register::account(Account::new(
+                bootstrap.account_id.clone(),
+            )))
+            .append_instruction(Mint::asset_numeric(
+                bootstrap.fee_amount,
+                authority_fee_asset,
+            ))
+            .append_instruction(Grant::account_permission(
+                manage_soracloud,
+                bootstrap.account_id.clone(),
+            ))
+            .append_instruction(Grant::account_permission(
+                manage_alias,
+                bootstrap.account_id.clone(),
+            ))
+            .append_instruction(Grant::account_permission(
+                publish_manifest,
+                bootstrap.account_id.clone(),
+            ))
+            .build_raw();
+        let seeded_instruction_count = seeded.instructions().count();
+
+        let overlaid = append_bootstrap_authority_overlay(seeded, &bootstrap);
+        assert_eq!(
+            overlaid.instructions().count(),
+            seeded_instruction_count,
+            "overlay should skip bootstrap instructions that are already present in the manifest"
         );
     }
 

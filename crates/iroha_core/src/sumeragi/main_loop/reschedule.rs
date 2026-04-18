@@ -151,6 +151,26 @@ pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
 }
 
 impl Actor {
+    fn advance_view_after_completed_quorum_reschedule(
+        &mut self,
+        height: u64,
+        view: u64,
+        cause: ViewChangeCause,
+        now: Instant,
+    ) {
+        if self.frontier_slot_is_exact_height(height) {
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnViewAdvanceRequested {
+                    cause,
+                    requested_view: view,
+                },
+            );
+            return;
+        }
+        self.trigger_view_change_with_cause(height, view, cause);
+    }
+
     pub(super) fn reschedule_stale_pending_blocks(
         &mut self,
         tick_deadline: Option<Instant>,
@@ -1399,6 +1419,8 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        let frontier_slot_owner_was_active =
+            contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
         if contiguous_frontier {
             let _ = self.handle_frontier_slot_event(
                 now,
@@ -1411,10 +1433,9 @@ impl Actor {
         }
         let same_slot_vote_backed_evidence =
             contiguous_frontier && self.slot_has_vote_backed_consensus_evidence(height, view);
-        let frontier_slot_owner_active =
-            contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
-        let effective_has_reschedule_votes =
-            has_reschedule_votes || same_slot_vote_backed_evidence || frontier_slot_owner_active;
+        let effective_has_reschedule_votes = has_reschedule_votes
+            || same_slot_vote_backed_evidence
+            || frontier_slot_owner_was_active;
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = !effective_has_reschedule_votes;
@@ -1427,7 +1448,7 @@ impl Actor {
         let rotate_authoritative_frontier_immediately = contiguous_frontier
             && effective_has_reschedule_votes
             && authoritative_payload_present
-            && !frontier_slot_owner_active;
+            && !frontier_slot_owner_was_active;
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -1493,7 +1514,7 @@ impl Actor {
             && !rotate_authoritative_frontier_immediately;
         let handoff_zero_vote_frontier_owner = contiguous_frontier
             && drop_pending
-            && !frontier_slot_owner_active
+            && !frontier_slot_owner_was_active
             && self.seed_frontier_slot_from_same_height_evidence(
                 height,
                 view,
@@ -1573,7 +1594,16 @@ impl Actor {
                     drop_pending,
                     "no actionable quorum retransmit targets remain for contiguous frontier block; rotating view deterministically"
                 );
-                self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+                if rotate_authoritative_frontier_immediately {
+                    self.advance_view_after_completed_quorum_reschedule(
+                        height,
+                        view,
+                        direct_view_change_cause,
+                        now,
+                    );
+                } else {
+                    self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+                }
                 return true;
             }
             return false;
@@ -1755,7 +1785,7 @@ impl Actor {
             requested_missing_block_fetch = rebroadcast.missing_block_fetch,
             drop_pending,
             same_slot_vote_backed_evidence,
-            frontier_slot_owner_active,
+            frontier_slot_owner_active = frontier_slot_owner_was_active,
             effective_has_reschedule_votes,
             handoff_frontier_quorum_timeout_owner,
             frontier_recovery_advance = ?frontier_recovery_advance,
@@ -1767,7 +1797,24 @@ impl Actor {
             rotate_immediately = rotate_authoritative_frontier_immediately,
             "commit quorum missing past timeout; rescheduling block for reassembly"
         );
-        if rotate_zero_vote_frontier_immediately {
+        if rotate_authoritative_frontier_immediately {
+            info!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "payload-backed contiguous frontier quorum timeout completed recovery work; rotating view deterministically"
+            );
+            self.advance_view_after_completed_quorum_reschedule(
+                height,
+                view,
+                direct_view_change_cause,
+                now,
+            );
+        } else if rotate_zero_vote_frontier_immediately {
             self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
         }
         true

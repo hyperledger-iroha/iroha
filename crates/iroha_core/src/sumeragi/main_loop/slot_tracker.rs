@@ -169,6 +169,7 @@ pub(super) enum FrontierSlotEvent {
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct FrontierSlotActions {
     pub(super) fetch_block_body: bool,
+    pub(super) fetch_block_body_urgent: bool,
     pub(super) enter_deep_catchup: Option<&'static str>,
     pub(super) request_commit_pipeline_for: Option<HashOf<BlockHeader>>,
     pub(super) request_view_change: Option<(u64, u64, ViewChangeCause)>,
@@ -739,6 +740,7 @@ impl FrontierSlot {
                     } else {
                         self.repair_state.quorum_timeout_rebroadcasted = true;
                         actions.fetch_block_body = true;
+                        actions.fetch_block_body_urgent = true;
                     }
                 } else if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {
                     self.repair_state.last_reason = Some("frontier_stall_reset");
@@ -778,6 +780,7 @@ impl FrontierSlot {
                         self.repair_state.quorum_timeout_rebroadcasted = true;
                         if frontier_waiting_for_body {
                             actions.fetch_block_body = true;
+                            actions.fetch_block_body_urgent = true;
                         }
                     }
                 }

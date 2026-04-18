@@ -163,6 +163,7 @@ parking_lot = { workspace = true, features = ["deadlock_detection"] }
 derive_more = { workspace = true }
 nonzero_ext = { workspace = true }
 hex = { workspace = true }
+tempfile = { workspace = true }
 blake3 = "1.8.2"
 curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }
@@ -184,7 +185,6 @@ iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 
 hex = { workspace = true }
-tempfile = { workspace = true }
 expect-test = { workspace = true }
 rcgen = "0.14.5"
 
