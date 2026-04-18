@@ -220,7 +220,9 @@ public-input binding, and the STARK guardrail split where `max_proof_bytes`
 applies to the inner native envelope instead of the outer wrapper. The latest
 coverage pass also pins AIR Merkle-path limits, FRI round-value limits, final
 FRI Merkle-path tampering, outer schema tampering, and inner AIR circuit-id
-tampering.
+tampering. The newest tests also pin query-count and query-chunk limits, zero
+LDE domain rejection, folded/final FRI value tampering, VK-hash tampering,
+missing STARK VK rejection, and inner STARK parameter tampering.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -251,6 +253,9 @@ tampering.
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri_merkle_path -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
@@ -258,6 +263,7 @@ tampering.
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark stark_prover_tests -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`

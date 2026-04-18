@@ -1537,6 +1537,51 @@ mod tests {
     }
 
     #[test]
+    fn verify_limits_reject_query_count_limit() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let query_count = proof.queries.len();
+        assert!(query_count > 0, "proof must carry sampled queries");
+        let mut limits = VerifyLimits::default();
+        limits.max_queries = query_count - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_queries",
+                actual,
+                max
+            } if actual == query_count && max + 1 == query_count
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_query_chunks() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let chunk_len = proof
+            .queries
+            .first()
+            .expect("expected sampled query")
+            .chunk_values
+            .len();
+        assert!(chunk_len > 0, "query chunk must carry values");
+        let mut limits = VerifyLimits::default();
+        limits.max_query_chunk_values = chunk_len - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_chunk_values",
+                actual,
+                max
+            } if actual == chunk_len && max + 1 == chunk_len
+        ));
+    }
+
+    #[test]
     fn verify_limits_reject_oversized_air_merkle_paths() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1603,6 +1648,52 @@ mod tests {
         *sibling = sibling.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_zero_lde_domain_size() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.lde_domain_size = 0;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::QueryIndexOutOfRange { index: 0, len: 0 }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_fri_folded_value() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let round = proof
+            .fri_queries
+            .first_mut()
+            .and_then(|query| query.rounds.first_mut())
+            .expect("expected FRI round opening");
+        round.folded_value = round.folded_value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::QueryMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_final_fri_value() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let value = proof
+            .fri_queries
+            .first_mut()
+            .and_then(|query| query.final_values.first_mut())
+            .expect("expected final FRI values");
+        *value = value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::QueryMismatch { .. } | Error::QueryMerklePathMismatch { .. }
+        ));
     }
 
     #[test]
