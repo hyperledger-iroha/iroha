@@ -2,6 +2,15 @@
 
 Last updated: 2026-04-17
 
+## 2026-04-17 Follow-up: AXT golden fixtures resynced with current handle binding
+- `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current descriptor/handle/policy Norito bytes again, including the handle's refreshed descriptor binding and header bytes after the bare-payload binding change.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_policy.rs` now derives the fixture intent's `from` account from the decoded fixture handle instead of an older hardcoded account literal, so the state-level handle check stays aligned with the canonical account encoding embedded in the golden fixture.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=/tmp/iroha-axt-golden-target cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ivm-core-host-policy-target cargo test -p ivm --test core_host_policy core_host_enforces_fixture_snapshot_fields -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
+
 ## 2026-04-17 Follow-up: `SYSCALL_NAME_DECODE` reserved-delimiter regression test corrected
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_name_decode_syscall.rs` now exercises `SYSCALL_NAME_DECODE` with `alice@banka` for the reserved-delimiter rejection path. The previous fixture used `not-a-norito-name`, but hyphens are valid `Name` characters and are already accepted across `iroha_data_model`.
 - This keeps the IVM regression aligned with the repository's documented `Name` rules, which only reserve `@`, `#`, and `$`.

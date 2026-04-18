@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-17
 
+Latest sync (2026-04-17 AXT golden fixture resync):
+The shared AXT golden vectors are back in sync with the current descriptor
+binding and account encoding. `axt_golden.rs` now embeds the current
+descriptor/handle/policy Norito bytes again, and the `ivm`
+`core_host_enforces_fixture_snapshot_fields` regression now derives the
+fixture intent's `from` account from the decoded fixture handle so the state
+validation path matches the canonical account string stored in the handle.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/core_host_policy.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `CARGO_TARGET_DIR=/tmp/iroha-axt-golden-target cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ivm-core-host-policy-target cargo test -p ivm --test core_host_policy core_host_enforces_fixture_snapshot_fields -- --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
+
 Latest sync (2026-04-17 plain `cargo bench` benchmark selection):
 Criterion is now a dev-dependency for the workspace crates that already ship
 Criterion benchmarks, and plain `cargo bench` now discovers those benchmark
