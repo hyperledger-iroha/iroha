@@ -1201,11 +1201,9 @@ impl Actor {
                         .then_some((owner_hash, entry_view))
                 }),
         );
-        let incoming_payload_present = self.frontier_block_materialized_locally(incoming_hash);
         for (hash, old_view) in superseded {
-            let retain_payload = !incoming_payload_present
-                && self
-                    .pending
+            let retain_payload =
+                self.pending
                     .pending_blocks
                     .get(&hash)
                     .is_some_and(|pending| {
