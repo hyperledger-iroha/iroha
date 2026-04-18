@@ -2298,7 +2298,15 @@ impl Actor {
                 None,
             );
             let mut recovery_targets = Vec::new();
+            let aborted_pending_without_commit_evidence = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .is_some_and(|pending| pending.is_retry_aborted())
+                && !has_commit_evidence
+                && !cached_frontier_qc;
             let payload_materialized = creation_result.is_ok()
+                && !aborted_pending_without_commit_evidence
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(&block, None);
             if creation_result.is_ok() {
                 let mut roster = self

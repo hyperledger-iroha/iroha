@@ -132,6 +132,34 @@ def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
     assert parsed.to_i105(0x02F1) == literal
 
 
+def test_i105_parse_without_expected_discriminant_accepts_literal_prefix() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x0171)
+
+    parsed = AccountAddress.parse_encoded(literal)
+
+    assert literal.startswith("test")
+    assert parsed.to_i105(0x0171) == literal
+    assert AccountAddress.from_i105(literal).to_i105(0x0171) == literal
+    with pytest.raises(AccountAddressError, match="unexpected i105 chain discriminant"):
+        AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
+
+
+def test_i105_numeric_discriminant_must_fit_u16() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    valid = address.to_i105(0xFFFF)
+    payload = address.to_i105(0x02F1).removeprefix("sora")
+
+    assert valid.startswith("n65535")
+    assert AccountAddress.parse_encoded(valid).to_i105(0xFFFF) == valid
+    for discriminant in (-1, 0x10000, 70000):
+        with pytest.raises(AccountAddressError, match="between 0 and 65535"):
+            address.to_i105(discriminant)
+    for literal in (f"n65536{payload}", f"n70000{payload}"):
+        with pytest.raises(AccountAddressError, match="between 0 and 65535"):
+            AccountAddress.parse_encoded(literal)
+
+
 def test_i105_rejects_fullwidth_sentinel_literal() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x02F1)

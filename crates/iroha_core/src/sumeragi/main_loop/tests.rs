@@ -18437,7 +18437,7 @@ async fn finalize_pending_block_uses_cached_vote_roster_for_commit_job() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
     actor.cache_vote_roster(placeholder_hash, height, view, cached_roster.clone());
     let expected_commit_topology =
-        actor.roster_for_vote_with_mode(placeholder_hash, height, view, consensus_mode);
+        super::roster::canonicalize_roster_for_mode(cached_roster.clone(), consensus_mode);
     assert_ne!(
         expected_commit_topology, live_roster,
         "test setup requires a cached vote roster that differs from the live roster"
@@ -75552,6 +75552,197 @@ async fn missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitte
             .missing_qc_total,
         1,
         "exactly one missing_qc rotation should be counted after window advance"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_qc_view_zero_reanchor_suppression_rotates_after_window_advance() {
+    use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _view_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    actor.config.recovery.rotate_after_reacquire_exhausted = true;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let height = committed_height.saturating_add(1);
+    let current_view = 0u64;
+    actor.highest_qc = Some(sample_qc_ref(height.saturating_add(2), 0));
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let elapsed = timeout
+        .saturating_add(availability_timeout)
+        .saturating_add(missing_qc_window)
+        .saturating_add(Duration::from_millis(1));
+    let start = now.checked_sub(elapsed).unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.frontier_recovery = None;
+    actor.frontier_slot = None;
+
+    let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
+    actor.subsystems.propose.last_missing_qc_timeout_trigger =
+        Some(super::CachedSlotTimeoutTrigger {
+            height,
+            view: current_view.saturating_sub(1),
+            at: now
+                .checked_sub(hard_cap.saturating_add(Duration::from_millis(1)))
+                .unwrap_or(now),
+            streak: 1,
+        });
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x97; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        missing_hash,
+        MissingBlockRequest {
+            height,
+            view: current_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: start,
+            last_requested: start,
+            last_dependency_progress: start,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    assert!(
+        actor.frontier_catchup_has_unresolved_dependency(height),
+        "setup should expose unresolved contiguous frontier dependency"
+    );
+
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height: height,
+        local_height_at_entry: committed_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: None,
+        last_reanchor_emit_at: Some(now),
+        last_far_ahead_replay_window_index: None,
+    });
+    let qc_head_height = actor
+        .highest_qc
+        .or(actor.latest_committed_qc())
+        .map_or(height, |qc| qc.height.max(height));
+    assert!(
+        qc_head_height > height,
+        "setup should keep QC head ahead of the contiguous frontier"
+    );
+    let dependency_progress =
+        actor.frontier_catchup_unresolved_dependency_progress_at_height(height);
+    actor.mark_canonical_frontier_reanchor_window_emitted(
+        height,
+        height,
+        0,
+        now,
+        dependency_progress,
+    );
+
+    actor.missing_qc_height_stall = Some(super::MissingQcHeightStallState {
+        height,
+        dependency_height: height,
+        committed_height,
+        entered_at: now,
+        last_window_at: now,
+        windows_without_commit_progress: super::MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_rotation_window_index: Some(0),
+        last_reacquire_window_index: None,
+    });
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "view-zero missing_qc should stay suppressed while the in-window canonical frontier reanchor remains unresolved"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "suppression should keep the contiguous frontier pinned to view zero"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "suppression should not count a missing_qc rotation"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppression should not install a forced frontier view on the first idle tick"
+    );
+
+    let later = now
+        .checked_add(actor.missing_qc_height_stall_window())
+        .and_then(|at| at.checked_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let before_handoff = super::status::snapshot();
+    assert!(
+        actor.force_view_change_if_idle(later),
+        "once the shared reanchor window advances, the same view-zero missing_qc should be allowed to rotate directly"
+    );
+    let after_handoff = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "view should advance once the shared reanchor suppression window expires"
+    );
+    assert_eq!(
+        after_handoff.view_change_causes.missing_qc_total,
+        before_handoff
+            .view_change_causes
+            .missing_qc_total
+            .saturating_add(1),
+        "rotation after the shared window advances should count exactly one direct missing_qc view-change"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();

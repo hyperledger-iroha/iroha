@@ -10,13 +10,49 @@ Last updated: 2026-04-18
   - `cargo bench -p iroha_core --bench isi_gas_calibration -- --warm-up-time 0.1 --measurement-time 0.1 --sample-size 10`
   - `cargo test -p iroha_core calibration_bench_gas_snapshot -- --nocapture`
 
+## 2026-04-18 Follow-up: Kotodama asset registration now requires explicit `AssetDefinitionId` pointers
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now treat `register_asset(...)` and `create_new_asset(...)` as pointer-ABI asset-definition operations instead of legacy bare-name calls. The compiler now publishes `AssetDefinitionId` TLVs for `SYSCALL_REGISTER_ASSET`, matching the current `WsvHost` and `CoreHost` ABI surface that rejects `Name` TLVs for asset registration.
+- The affected Kotodama coverage and examples were refreshed to pass explicit asset-definition constructors: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`, and `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_register_account_asset_tlv -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_register_asset -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_create_new_asset_builtin -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
+- Follow-up verification also surfaced separate pre-existing red coverage in `cargo test -p ivm --test kotodama_role_builtins -- --nocapture` (`grant_role`, `grant_permission`, `authority()`, and the role-bootstrap mint path), which is outside the explicit-asset registration fix.
+
+## 2026-04-18 Follow-up: Kotodama `NftId` fixtures refreshed to fully qualified literals
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_pointer_roundtrips.rs` now uses canonical `name$domain.dataspace` NFT literals again, matching the current `NftId::from_str` rule that delegates the domain segment to `DomainId::parse_fully_qualified`.
+- The same `NftId` refresh was applied to `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, plus the nearby structured-data filter coverage in `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/parser.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs` so the Kotodama test fixtures consistently use `wonderland.universal` for NFT and RWA ids.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_pointer_roundtrips -- --nocapture`
+  - `cargo test -p ivm --test kotodama_map_helpers ir_lower_ensure_pointer_variants_use_pointer_syscalls -- --nocapture`
+  - `cargo test -p kotodama_lang structured_data_filters_for_core_families -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_details -- --nocapture`
+
+## 2026-04-18 Follow-up: SDK i105 prefix validation fixes
+- Rust and Python strict account-address parsing now auto-detects any valid i105 sentinel when no expected discriminant is supplied, while explicit expected prefixes still reject mismatched `sora`/`test`/`dev`/`n<decimal>` literals.
+- Python SDK and Python Torii client validation now reject numeric i105 discriminants outside the unsigned 16-bit range, including `n65536`, `n70000`, and negative encoder inputs.
+- The JavaScript checked-in `dist` package artifacts were refreshed from `src`, including the missing `curveRegistry`, `sccp`, and browser-connect subpath artifacts, and `dist/address.js` now uses only the half-width i105 alphabet.
+- Focused validation for this slice:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/package_dist.test.js` from `javascript/iroha_js`
+  - `node -e "import('./javascript/iroha_js/dist/index.js').then(() => console.log('dist import ok'))"`
+  - `python3 -m pytest python/iroha_python/tests/test_address_format.py python/iroha_torii_client/tests/test_client.py`
+  - direct Python import smokes for `iroha_python.address` and `iroha_torii_client.client` i105 edge cases
+  - `CARGO_TARGET_DIR=/tmp/iroha-sdk-i105-target cargo test -p iroha_data_model parse_encoded_without_expected_discriminant_accepts_literal_prefix -- --nocapture`
+  - `./target/debug/xtask address-vectors --verify`
+- The stale `ContractInstance` / `ContractInstancesPage` package re-exports were removed from `iroha_python.__init__`; those symbols do not exist in the client module and blocked pytest collection.
+
 ## 2026-04-18 Follow-up: I105 half-width kana standardization
 - I105 account-address codecs now use the half-width Iroha-kana alphabet as the canonical base-105 suffix across Rust, Swift, Kotlin, Java, JavaScript, Python, and C#; legacy full-width kana payload aliases are rejected instead of decoded.
 - The ASCII sentinels remain the only network-prefix spellings: `sora` renders Sora Nexus mainnet (`753` / `0x02F1`), `test` renders Taira testnet (`369` / `0x0171`), `dev` renders `0`, and other discriminants use `n<decimal>`. No additional network bytes were added to the i105 account payload.
 - Address fixtures and checked-in i105 literals were refreshed to the half-width canonical spelling, with focused rejection coverage for full-width sentinels and legacy full-width kana payloads.
 
 ## 2026-04-18 Follow-up: Sumeragi lock-override regression coverage
-- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs` now has direct coverage for incoming highest-QC validation when the local locked payload is missing: a newer-view QC is accepted once the candidate block is known, while a same-view QC still waits for the locked payload.
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs` now has direct coverage for incoming highest-QC validation when the local locked payload is missing: a newer-view QC is accepted once the candidate block is known, while a same-view QC still waits for the locked payload.
 - The shared locked-QC predicate now has focused unit regressions proving that newer-view progress is checked before local locked-payload availability, and that same-view divergence remains blocked when the locked payload is unavailable.
 - Focused validation for this slice:
   - `cargo test -p iroha_core --lib highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missing -- --nocapture`
@@ -648,17 +684,46 @@ Last updated: 2026-04-18
   The base helpers preserve those responses as `null` JSON instead of failing
   on an EOF decode, and the direct setup reads retry until they receive a real
   JSON payload or the existing test timeout expires.
+- Added focused unit coverage for the routed JSON retry gate itself, including
+  the positive empty-body retryable path and the negative cases for decoded
+  JSON error bodies and non-retryable empty statuses.
+- Added a focused Sumeragi regression in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  covering the `view == 0` interaction with an already-emitted canonical
+  frontier reanchor window: the first idle tick stays suppressed, and once the
+  shared window advances the round records exactly one direct `MissingQc`
+  rotation.
+- Added focused helper coverage in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs`
+  for proof-record payload decoding, including the minimal JSON object shape,
+  Norito payload decoding, and rejection of unknown status strings.
 - Current verification for the Nexus cross-dataspace slice is green again:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-coreclean cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-extra cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-more cargo test -p iroha_core --lib missing_qc_view_zero_reanchor_suppression_rotates_after_window_advance -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix cargo test -p integration_tests --test nexus_and_streaming routed_json_empty_body_is_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit cargo test -p integration_tests --test nexus_and_streaming routed_json_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-extra-unit IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark cargo test -p integration_tests --features zk-stark --test nexus_and_streaming decode_proof_record_payload -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark cargo test -p integration_tests --features zk-stark --test nexus_and_streaming parse_proof_status_from_json_rejects_unknown_status_strings -- --nocapture`
 - The cross-dataspace localnet module now passes end to end on the current
   tree:
   - `nexus::cross_dataspace_localnet::bounded_observer_request_timeout_slices_remaining_budget`
   - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
   - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
   - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+- Additional STARK-enabled cross-dataspace localnet coverage is currently red:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --features zk-stark --test nexus_and_streaming nexus::cross_dataspace_zk_stark_localnet:: -- --test-threads=1 --nocapture`
+  - Result on the current tree: `stark_cross_dataspace_verifyproof_rejection_without_payload_leak`
+    passed, but `stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak`,
+    `stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak`, and
+    `stark_cross_dataspace_verifyproof_validity_without_payload_leak` all timed out in
+    `wait_for_proof_record_status` at
+    `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs:1019`
+    with the last error `proof record not found yet`.
 
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
