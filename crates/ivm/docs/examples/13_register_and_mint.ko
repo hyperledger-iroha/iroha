@@ -3,7 +3,7 @@ seiyaku RegisterAndMint {
   #[access(read="*", write="*")]
   kotoage fn register_and_mint() permission(AssetManager) {
     // name, symbol, quantity (precision or supply depending on host), mintable flag
-    let asset = asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     let symbol = "ROSE";
     let qty = 1000;      // interpretation depends on data model (example only)
     let mintable = 1;    // 1 = mintable, 0 = fixed
