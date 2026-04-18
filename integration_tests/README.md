@@ -24,6 +24,8 @@ This crate hosts cross-component tests for Iroha.
 ## Fixtures
 - IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
+- Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:
+  `cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.

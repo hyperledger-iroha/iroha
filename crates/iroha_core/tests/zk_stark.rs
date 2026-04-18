@@ -926,6 +926,17 @@ fn stark_rejects_unbound_air_composition_root() {
 }
 
 #[test]
+fn stark_rejects_tampered_air_trace_root() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof.air.as_mut().expect("AIR section").trace_root[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR trace root must authenticate sampled trace rows"
+    );
+}
+
+#[test]
 fn stark_rejects_tampered_air_public_digest() {
     let mut env = build_sample_air_composition_envelope();
     env.proof.air.as_mut().expect("AIR section").public_digest[0] ^= 0x01;
@@ -933,6 +944,18 @@ fn stark_rejects_tampered_air_public_digest() {
     assert!(
         !verify_stark_fri_envelope(&bytes),
         "AIR public digest must remain bound to sampled rows and composition openings"
+    );
+}
+
+#[test]
+fn stark_rejects_air_trace_width_mismatch() {
+    let mut env = build_sample_air_composition_envelope();
+    let air = env.proof.air.as_mut().expect("AIR section");
+    air.trace_width = air.trace_width.saturating_add(1);
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR trace width must match the V1 AIR layout"
     );
 }
 
