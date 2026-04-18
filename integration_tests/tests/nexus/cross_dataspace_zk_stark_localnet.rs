@@ -5,7 +5,7 @@
 
 use super::localnet_npos::npos_override_transactions;
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
 
 use base64::Engine as _;
 use eyre::{Result, ensure, eyre};
@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
+    crypto::HashOf,
     data_model::{
         Level,
         account::{Account, AccountId},
@@ -36,12 +37,23 @@ use iroha::{
             ProofAttachment, ProofId, ProofRecord, ProofStatus, VerifyingKeyBox, VerifyingKeyId,
             VerifyingKeyRecord,
         },
+        transaction::TransactionEntrypoint,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     },
+    query::QueryError,
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_data_model::{
+    prelude::QueryBuilderExt,
+    query::{
+        CommittedTxFilters,
+        dsl::CompoundPredicate,
+        parameters::{FetchSize, Pagination},
+        transaction::prelude::FindTransactions,
+    },
+};
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -117,6 +129,83 @@ fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
 enum RouteProbeOutcome {
     Approved,
     Rejected(String),
+}
+
+enum CommittedTxOutcome {
+    Applied,
+    Rejected(String),
+}
+
+fn render_rejection_reason(
+    reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
+) -> String {
+    let display = reason.to_string();
+    let debug = format!("{reason:?}");
+    if display == debug {
+        display
+    } else {
+        format!("{display}; details: {debug}")
+    }
+}
+
+fn query_committed_tx_outcome(
+    client: &Client,
+    entry_hash: &HashOf<TransactionEntrypoint>,
+) -> core::result::Result<Option<CommittedTxOutcome>, QueryError> {
+    let one = NonZeroU64::new(1).expect("nonzero");
+    let filters = CommittedTxFilters {
+        entry_eq: Some(entry_hash.clone()),
+        ..Default::default()
+    };
+    client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(filters))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()
+        .map(|snapshot| {
+            snapshot.first().map(|tx| match &tx.result().0 {
+                Ok(_) => CommittedTxOutcome::Applied,
+                Err(reason) => CommittedTxOutcome::Rejected(render_rejection_reason(reason)),
+            })
+        })
+}
+
+async fn wait_for_committed_success(
+    client: &Client,
+    entry_hash: HashOf<TransactionEntrypoint>,
+    context: &str,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
+    let mut last_error: Option<String> = None;
+    loop {
+        let mut polling_client = client.clone();
+        polling_client.torii_request_timeout = polling_client
+            .torii_request_timeout
+            .min(PROOF_FETCH_HTTP_TIMEOUT);
+        match query_committed_tx_outcome(&polling_client, &entry_hash) {
+            Ok(Some(CommittedTxOutcome::Applied)) => return Ok(()),
+            Ok(Some(CommittedTxOutcome::Rejected(reason))) => {
+                return Err(eyre!(
+                    "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
+                ));
+            }
+            Ok(None) => {}
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last tx history query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
+    ))
 }
 
 fn has_test_network_feature(feature: &str) -> bool {
@@ -506,9 +595,10 @@ async fn wait_for_route_probe_approval(
     expected_lane_id: LaneId,
     expected_dataspace_id: DataSpaceId,
     context: &str,
-) -> Result<()> {
+) -> Result<HashOf<TransactionEntrypoint>> {
     let transaction = submitter.build_transaction([instruction], Metadata::default());
     let hash = transaction.hash();
+    let entry_hash = transaction.hash_as_entrypoint();
 
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
@@ -597,7 +687,7 @@ async fn wait_for_route_probe_approval(
 
     events.close().await;
     match outcome {
-        RouteProbeOutcome::Approved => Ok(()),
+        RouteProbeOutcome::Approved => Ok(entry_hash),
         RouteProbeOutcome::Rejected(reason) => Err(eyre!(
             "{context}: route probe transaction rejected: {reason}"
         )),
@@ -744,7 +834,7 @@ async fn register_stark_vk(
     record.max_proof_bytes = 8 * 1024 * 1024;
     record.key = Some(vk_box);
 
-    wait_for_route_probe_approval(
+    let entry_hash = wait_for_route_probe_approval(
         client,
         InstructionBox::from(
             iroha_data_model::isi::verifying_keys::RegisterVerifyingKey { id: vk_id, record },
@@ -752,6 +842,12 @@ async fn register_stark_vk(
         LaneId::new(DS1_LANE_INDEX),
         DataSpaceId::new(DS1_ID_U64),
         "register stark verifying key via ds1",
+    )
+    .await?;
+    wait_for_committed_success(
+        client,
+        entry_hash,
+        "commit stark verifying key registration via ds1",
     )
     .await?;
     Ok(())
@@ -788,12 +884,18 @@ fn proof_id_for_attachment(attachment: &ProofAttachment) -> ProofId {
 
 async fn grant_manage_verifying_keys_permission(client: &Client) -> Result<()> {
     let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
-    wait_for_route_probe_approval(
+    let entry_hash = wait_for_route_probe_approval(
         client,
         InstructionBox::from(Grant::account_permission(manage_vk, ALICE_ID.clone())),
         LaneId::new(DS1_LANE_INDEX),
         DataSpaceId::new(DS1_ID_U64),
         "grant manage verifying keys via ds1",
+    )
+    .await?;
+    wait_for_committed_success(
+        client,
+        entry_hash,
+        "commit manage verifying keys grant via ds1",
     )
     .await?;
     Ok(())
@@ -1149,12 +1251,18 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
     let marker = proof_marker(&attachment.proof.bytes);
 
-    wait_for_route_probe_approval(
+    let verifyproof_entry_hash = wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(VerifyProof::new(attachment.clone())),
         LaneId::new(DS1_LANE_INDEX),
         DataSpaceId::new(DS1_ID_U64),
         "verifyproof submit ds1",
+    )
+    .await?;
+    wait_for_committed_success(
+        &alice,
+        verifyproof_entry_hash,
+        "commit verifyproof submit ds1",
     )
     .await?;
     network.ensure_blocks(2).await?;
@@ -1276,12 +1384,18 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
     let marker = proof_marker(&attachment.proof.bytes);
 
-    wait_for_route_probe_approval(
+    let verifyproof_entry_hash = wait_for_route_probe_approval(
         &bob,
         InstructionBox::from(VerifyProof::new(attachment.clone())),
         LaneId::new(DS2_LANE_INDEX),
         DataSpaceId::new(DS2_ID_U64),
         "verifyproof submit ds2",
+    )
+    .await?;
+    wait_for_committed_success(
+        &bob,
+        verifyproof_entry_hash,
+        "commit verifyproof submit ds2",
     )
     .await?;
     network.ensure_blocks(2).await?;
@@ -1561,12 +1675,18 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     let tampered_attachment = tamper_stark_attachment_inner_envelope(&valid_attachment)?;
     let marker = proof_marker(&tampered_attachment.proof.bytes);
 
-    wait_for_route_probe_approval(
+    let verifyproof_entry_hash = wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(VerifyProof::new(tampered_attachment.clone())),
         LaneId::new(DS1_LANE_INDEX),
         DataSpaceId::new(DS1_ID_U64),
         "verifyproof submit ds1 tampered payload",
+    )
+    .await?;
+    wait_for_committed_success(
+        &alice,
+        verifyproof_entry_hash,
+        "commit verifyproof submit ds1 tampered payload",
     )
     .await?;
     network.ensure_blocks(2).await?;
