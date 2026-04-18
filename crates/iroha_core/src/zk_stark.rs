@@ -10,7 +10,7 @@
 //! The wire format is defined with Norito. The proof envelope carries params, Merkle
 //! roots, and query decommitments. Verification replays the transcript and checks:
 //! - Merkle openings for each queried value
-//! - The fold relation `z = y0 + r*y1` for each round and query
+//! - The domain-aware fold relation for `(x, -x)` openings in each round and query
 //! - Optional composition leaf constraints when `comp_root` is present
 //!
 //! Size and structural limits are enforced to reject oversized or malformed payloads
@@ -27,6 +27,7 @@ use crate::json_macros::{JsonDeserialize, JsonSerialize};
 /// Goldilocks prime modulus p = 2^64 - 2^32 + 1
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
 const MOD_P_U64: u64 = MOD_P as u64;
+const GOLDILOCKS_GENERATOR: u64 = 7;
 
 /// Supported hash selector for the STARK envelope.
 pub const STARK_HASH_SHA256_V1: u8 = 1;
@@ -108,7 +109,6 @@ impl Fq {
         Self(0)
     }
 
-    #[cfg(test)]
     fn one() -> Self {
         Self(1)
     }
@@ -121,7 +121,6 @@ impl Fq {
         Self(x as u64)
     }
 
-    #[cfg(test)]
     fn sub(self, rhs: Self) -> Self {
         let a = self.0 as u128;
         let b = rhs.0 as u128;
@@ -134,7 +133,6 @@ impl Fq {
         Self::reduce(x)
     }
 
-    #[cfg(test)]
     fn pow(self, mut e: u128) -> Self {
         let mut base = self;
         let mut acc = Self::one();
@@ -148,7 +146,6 @@ impl Fq {
         acc
     }
 
-    #[cfg(test)]
     fn inv(self) -> Option<Self> {
         if self.0 == 0 {
             return None;
@@ -164,6 +161,28 @@ impl Fq {
     fn reduce(v: u128) -> Self {
         Self((v % MOD_P) as u64)
     }
+}
+
+fn two_inv() -> Fq {
+    // (p + 1) / 2 for the odd Goldilocks prime.
+    Fq(((MOD_P + 1) / 2) as u64)
+}
+
+fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
+    if layer_domain < 2 || !layer_domain.is_power_of_two() || pair_index >= layer_domain / 2 {
+        return None;
+    }
+    let layer_domain = u128::try_from(layer_domain).ok()?;
+    let exponent = (MOD_P - 1) / layer_domain;
+    let root = Fq::new(GOLDILOCKS_GENERATOR).pow(exponent);
+    Some(root.pow(pair_index as u128))
+}
+
+fn fri_fold_pair(y0: Fq, y1: Fq, beta: Fq, x: Fq) -> Option<Fq> {
+    let inv_2x = x.mul(Fq::from_canonical_u64(2)?).inv()?;
+    let even = y0.add(y1).mul(two_inv());
+    let odd = y0.sub(y1).mul(inv_2x);
+    Some(even.add(beta.mul(odd)))
 }
 
 fn u64_to_digest_le(val: u64) -> [u8; 32] {
@@ -799,7 +818,11 @@ pub struct FoldDecommitV1 {
     pub path_y0: MerklePath,
     /// Merkle path for y1 in layer k
     pub path_y1: MerklePath,
-    /// Folded value at layer k+1: z = y0 + r_k * y1, with Merkle path into root[k+1]
+    /// Folded value at layer k+1, with Merkle path into root[k+1].
+    ///
+    /// Current V1 semantics interpret the two adjacent openings as evaluations at
+    /// `(x, -x)` and require
+    /// `z = (y0 + y1) / 2 + r_k * (y0 - y1) / (2x)`.
     pub z: u64,
     /// Merkle path for the folded value z in the next layer (k+1)
     pub path_z: MerklePath,
@@ -1142,7 +1165,14 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
                 Some(v) => v,
                 None => return false,
             };
-            let zr = y0.add(r_k.mul(y1));
+            let x = match domain_x_for_pair(layer_domain, expected_j) {
+                Some(v) => v,
+                None => return false,
+            };
+            let zr = match fri_fold_pair(y0, y1, r_k, x) {
+                Some(v) => v,
+                None => return false,
+            };
             if zr != z {
                 return false;
             }

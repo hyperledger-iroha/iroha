@@ -958,6 +958,8 @@ pub struct BackendArtifact {
     pub fri_betas: Vec<u64>,
     /// Sampled query openings into the evaluation domain.
     pub query_openings: Vec<(u32, u64)>,
+    /// Full LDE leaf chunks containing each queried evaluation.
+    pub query_chunks: Vec<Vec<u64>>,
     /// Merkle authentication paths for each queried evaluation chunk.
     pub query_paths: Vec<Vec<u64>>,
 }
@@ -1002,9 +1004,47 @@ pub fn hash_lde_leaves(evaluations: &[u64], arity: u32) -> Result<Vec<u64>> {
     Ok(leaves)
 }
 
+/// Hash one LDE leaf chunk using the same domain as [`hash_lde_leaves`].
+///
+/// # Errors
+/// Returns an error if the leaf index cannot be represented as a field limb.
+pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<u64> {
+    let index =
+        u64::try_from(leaf_index).map_err(|_| Error::QueryIndexOverflow { index: leaf_index })?;
+    let mut limbs = Vec::with_capacity(values.len() + 1);
+    limbs.push(index);
+    limbs.extend(values.iter().copied());
+    hash_with_domain(LDE_LEAF_DOMAIN, &limbs)
+}
+
 /// Return the chunk size (number of evaluations per leaf hash) for the given FRI arity.
 pub fn lde_chunk_size(arity: u32) -> usize {
     usize::try_from(arity.saturating_mul(8).max(1)).expect("FRI chunk size fits usize")
+}
+
+/// Open the full LDE leaf chunks that contain the supplied query indices.
+///
+/// # Errors
+/// Returns an error when any query index is outside the evaluation domain.
+pub fn open_query_chunks(
+    evaluations: &[u64],
+    query_indices: &[usize],
+    arity: u32,
+) -> Result<Vec<Vec<u64>>> {
+    let chunk_size = lde_chunk_size(arity).max(1);
+    let mut chunks = Vec::with_capacity(query_indices.len());
+    for &query_index in query_indices {
+        if query_index >= evaluations.len() {
+            return Err(Error::QueryIndexOutOfRange {
+                index: query_index,
+                len: evaluations.len(),
+            });
+        }
+        let start = (query_index / chunk_size) * chunk_size;
+        let end = start.saturating_add(chunk_size).min(evaluations.len());
+        chunks.push(evaluations[start..end].to_vec());
+    }
+    Ok(chunks)
 }
 
 /// Compute Merkle authentication paths for the supplied query indices over the provided leaf set.
@@ -1069,16 +1109,30 @@ pub fn merkle_paths_for_queries(
     Ok(paths)
 }
 
+/// Verify a Merkle authentication path over FASTPQ Poseidon field leaves.
+///
+/// # Errors
+/// Returns an error if an internal node hash cannot be computed.
+pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64]) -> Result<bool> {
+    let mut current = leaf;
+    let mut index = leaf_index;
+    for &sibling in path {
+        current = if index.is_multiple_of(2) {
+            merkle_node_hash(current, sibling)
+        } else {
+            merkle_node_hash(sibling, current)
+        };
+        index /= 2;
+    }
+    Ok(current == root)
+}
+
 fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
     }
     let mut levels = Vec::new();
     let mut current = leaves.to_vec();
-    if current.len() == 1 {
-        levels.push(current);
-        return Ok(levels);
-    }
     loop {
         if current.len() % 2 == 1 {
             let last = *current.last().expect("non-empty Merkle level");
@@ -1087,7 +1141,7 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
         levels.push(current.clone());
         let mut next = Vec::with_capacity(current.len() / 2);
         for pair in current.chunks(2) {
-            next.push(hash_with_domain(TRACE_NODE_DOMAIN, &[pair[0], pair[1]])?);
+            next.push(merkle_node_hash(pair[0], pair[1]));
         }
         if next.len() == 1 {
             levels.push(next.clone());
@@ -1096,6 +1150,24 @@ fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
         current = next;
     }
     Ok(levels)
+}
+
+fn merkle_node_hash(left: u64, right: u64) -> u64 {
+    let mut sponge = PoseidonSponge::new();
+    sponge.absorb(domain_seed(TRACE_NODE_DOMAIN));
+    sponge.absorb(left);
+    sponge.absorb(right);
+    sponge.squeeze()
+}
+
+fn domain_seed(domain: &[u8]) -> u64 {
+    let digest = Hash::new(domain);
+    let bytes = digest.as_ref();
+    let mut chunk = [0u8; 8];
+    chunk.copy_from_slice(&bytes[..8]);
+    let raw = u64::from_le_bytes(chunk);
+    let reduced = u128::from(raw) % u128::from(GOLDILOCKS_MODULUS);
+    u64::try_from(reduced).expect("modulus reduction fits u64")
 }
 
 /// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
@@ -1462,6 +1534,8 @@ impl Backend for StarkBackend {
             &mut transcript,
         );
         let query_openings = open_queries(&lde_values, &query_indices)?;
+        let query_chunks =
+            open_query_chunks(&lde_values, &query_indices, self.config.params.fri.arity)?;
         let query_paths = merkle_paths_for_queries(
             &lde_hashes,
             &query_indices,
@@ -1485,6 +1559,7 @@ impl Backend for StarkBackend {
             fri_layers,
             fri_betas,
             query_openings,
+            query_chunks,
             query_paths,
         })
     }
@@ -1654,6 +1729,37 @@ mod tests {
             err,
             Error::QueryIndexOutOfRange { index: 4, len: 4 }
         ));
+    }
+
+    #[test]
+    fn merkle_paths_verify_against_lookup_root_for_single_leaf() {
+        let evaluations = vec![42u64];
+        let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
+        let root = merkle_root(&leaves);
+        let paths =
+            merkle_paths_for_queries(&leaves, &[0], 8, evaluations.len()).expect("query path");
+        let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
+        let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
+
+        assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
+    }
+
+    #[test]
+    fn merkle_paths_verify_against_lookup_root_for_odd_leaf_count() {
+        let chunk_size = lde_chunk_size(8);
+        let evaluations = (0..(chunk_size * 3 - 1))
+            .map(|idx| u64::try_from(idx).expect("index fits u64"))
+            .collect::<Vec<_>>();
+        let query_index = evaluations.len() - 1;
+        let leaf_index = query_index / chunk_size;
+        let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
+        let root = merkle_root(&leaves);
+        let paths =
+            merkle_paths_for_queries(&leaves, &[query_index], 8, evaluations.len()).expect("path");
+        let chunks = open_query_chunks(&evaluations, &[query_index], 8).expect("chunk");
+        let leaf = hash_lde_chunk(leaf_index, &chunks[0]).expect("leaf hash");
+
+        assert!(verify_merkle_path(root, leaf, leaf_index, &paths[0]).expect("path verifies"));
     }
 
     #[test]

@@ -7783,6 +7783,8 @@ impl Default for Halo2 {
 pub struct Stark {
     /// Enable native STARK verification (requires `zk-stark` build feature).
     pub enabled: bool,
+    /// Maximum accepted outer STARK OpenVerifyEnvelope length (bytes).
+    pub max_envelope_bytes: usize,
     /// Maximum accepted proof payload length (bytes).
     pub max_proof_bytes: usize,
 }
@@ -7791,6 +7793,7 @@ impl Default for Stark {
     fn default() -> Self {
         Self {
             enabled: crate::parameters::defaults::zk::stark::ENABLED,
+            max_envelope_bytes: crate::parameters::defaults::zk::stark::MAX_ENVELOPE_BYTES,
             max_proof_bytes: crate::parameters::defaults::zk::stark::MAX_PROOF_BYTES,
         }
     }
