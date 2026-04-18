@@ -1194,6 +1194,7 @@ impl Actor {
         incoming_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        incoming_materialized_before_supersede: bool,
     ) {
         if height != self.committed_height_snapshot().saturating_add(1) {
             return;
@@ -1226,7 +1227,7 @@ impl Actor {
                 .get(&hash)
                 .is_some_and(|pending| {
                     self.should_retain_superseded_contiguous_frontier_payload(
-                        incoming_hash,
+                        incoming_materialized_before_supersede,
                         hash,
                         pending,
                     )
@@ -1286,12 +1287,12 @@ impl Actor {
 
     fn should_retain_superseded_contiguous_frontier_payload(
         &self,
-        incoming_hash: HashOf<BlockHeader>,
+        incoming_materialized_before_supersede: bool,
         block_hash: HashOf<BlockHeader>,
         pending: &PendingBlock,
     ) -> bool {
         if !self.runtime_da_enabled()
-            || self.frontier_block_materialized_locally(incoming_hash)
+            || incoming_materialized_before_supersede
             || matches!(pending.validation_status, ValidationStatus::Invalid)
             || self.kura.get_block_height_by_hash(block_hash).is_some()
         {
@@ -1906,6 +1907,8 @@ impl Actor {
         let height = header.height().get();
         let view = header.view_change_index();
         let session_key = Self::session_key(&block_hash, height, view);
+        let incoming_materialized_before_supersede =
+            self.frontier_block_materialized_locally(block_hash);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let committed_hash = self.state.latest_block_hash_fast();
         let missing_request = self
@@ -3743,7 +3746,12 @@ impl Actor {
         }
         if !stale_payload_only {
             if authoritative_recovery_supersede {
-                self.drop_superseded_contiguous_frontier_owner_state(block_hash, height, view);
+                self.drop_superseded_contiguous_frontier_owner_state(
+                    block_hash,
+                    height,
+                    view,
+                    incoming_materialized_before_supersede,
+                );
             }
             if let Some(hint) = inline_hint {
                 self.subsystems.propose.proposal_cache.insert_hint(hint);
