@@ -2,6 +2,14 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: ISI gas calibration asset definition fixture
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/benches/isi_gas_calibration.rs` now builds the shared `xor` asset definition fixture with an explicit human-facing name before registration, matching the current asset-definition invariant and preventing the `RegisterAssetDef` benchmark warm-up panic.
+- The same named fixture is reused by the `MintAsset` and `TransferAsset` setup paths so all asset-dependent ISI gas calibration cases register valid definitions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo bench -p iroha_core --bench isi_gas_calibration -- --warm-up-time 0.1 --measurement-time 0.1 --sample-size 10`
+  - `cargo test -p iroha_core calibration_bench_gas_snapshot -- --nocapture`
+
 ## 2026-04-18 Follow-up: I105 half-width kana standardization
 - I105 account-address codecs now use the half-width Iroha-kana alphabet as the canonical base-105 suffix across Rust, Swift, Kotlin, Java, JavaScript, Python, and C#; legacy full-width kana payload aliases are rejected instead of decoded.
 - The ASCII sentinels remain the only network-prefix spellings: `sora` renders Sora Nexus mainnet (`753` / `0x02F1`), `test` renders Taira testnet (`369` / `0x0171`), `dev` renders `0`, and other discriminants use `n<decimal>`. No additional network bytes were added to the i105 account payload.
