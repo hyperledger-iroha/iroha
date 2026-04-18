@@ -877,7 +877,7 @@ mod tests {
         let temp = TempDir::new()?;
         let config_path = temp.path().join("gar_controller.json");
         let output_dir = temp.path().join("out");
-        let operator = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+        let operator = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
         let config_json = format!(
             r#"{{
   "base_subject": "soranet.gar",
@@ -987,7 +987,7 @@ mod tests {
         let temp = TempDir::new()?;
         let config_path = temp.path().join("gar_controller.json");
         let output_dir = temp.path().join("out");
-        let operator = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+        let operator = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
         let config_json = format!(
             r#"{{
   "base_subject": "soranet.gar",

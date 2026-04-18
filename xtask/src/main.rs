@@ -5601,10 +5601,10 @@ where
             let mut guardrails_path: Option<PathBuf> = None;
             let mut output_dir: Option<PathBuf> = None;
             let mut payer =
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                     .to_string();
             let mut treasury =
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                     .to_string();
             let mut asset = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
             let mut allow_hard_cap = false;

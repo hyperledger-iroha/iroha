@@ -133,7 +133,7 @@ binding 上限、日次予算、deny-list を設定する。プロモーショ�
 
 これらのフィクスチャは正準ハッシュ表記（`hash:...#...`）、大文字署名、
 決定論的 ed25519 キーから導出した i105 プロバイダ ID（例:
-`sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D`）を
+`sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D`）を
 使用する。
 
 社会/PII を含むフィードでは、`ObservationValue::from_hash`, `from_keyed_hash`,

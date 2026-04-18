@@ -13333,7 +13333,7 @@ mod tests {
         LazyLock::new(|| std::sync::Mutex::new(()));
 
     const TEST_ACCOUNT_I105: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     fn sample_tool(name: &str, method: Method) -> ToolSpec {

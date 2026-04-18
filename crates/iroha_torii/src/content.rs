@@ -851,7 +851,7 @@ mod tests {
             file_hash: [5; 32],
         };
         let creator = AccountId::parse_encoded(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
         .map(|parsed| parsed.into_account_id())
         .expect("valid account id");

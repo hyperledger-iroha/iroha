@@ -1227,7 +1227,7 @@ mod committed_tx_predicate_tests {
             MerkleProof::from_audit_path(0, vec![]);
 
         let authority = account::AccountId::parse_encoded(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
         .expect("valid authority")
         .into_account_id();

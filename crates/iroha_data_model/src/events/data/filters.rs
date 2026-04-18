@@ -1893,7 +1893,7 @@ mod tests {
         };
 
         let controller = AccountId::parse_encoded(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
         .map(crate::account::ParsedAccountId::into_account_id)
         .unwrap();

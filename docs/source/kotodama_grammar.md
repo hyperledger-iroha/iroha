@@ -141,7 +141,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```

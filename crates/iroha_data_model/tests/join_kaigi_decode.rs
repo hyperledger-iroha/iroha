@@ -15,7 +15,7 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         "kaigi".parse::<Name>().expect("call name"),
     );
     let participant = AccountId::parse_encoded(
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
     )
     .expect("participant account id")
     .into_account_id();

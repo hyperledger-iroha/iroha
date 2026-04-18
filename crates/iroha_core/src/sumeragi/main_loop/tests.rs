@@ -118081,6 +118081,65 @@ async fn highest_qc_extends_locked_accepts_divergent_newer_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missing() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+    let candidate_block = sample_block(2, 3, None);
+    let candidate_hash = candidate_block.hash();
+    actor
+        .kura
+        .store_block(candidate_block)
+        .expect("store candidate block");
+
+    let lock = QcHeaderRef {
+        height: 1,
+        view: 2,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock should be missing locally"
+    );
+    assert!(
+        actor.block_known_for_lock(candidate_hash),
+        "candidate block must be available before checking the highest QC"
+    );
+
+    let newer_view_highest = QcHeaderRef {
+        height: 2,
+        view: 3,
+        epoch: actor.epoch_for_height(2),
+        subject_block_hash: candidate_hash,
+        phase: Phase::Prepare,
+    };
+    assert!(
+        actor.highest_qc_extends_locked(newer_view_highest),
+        "newer-view highest QC should override an older missing lock payload"
+    );
+
+    let same_view_highest = QcHeaderRef {
+        view: lock.view,
+        ..newer_view_highest
+    };
+    assert!(
+        !actor.highest_qc_extends_locked(same_view_highest),
+        "same-view highest QC must still wait for the locked payload"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn highest_qc_extends_locked_rejects_divergent_same_view() {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
@@ -118243,6 +118302,30 @@ fn qc_extends_locked_allows_when_locked_block_missing_locally() {
     let locked = sample_qc_ref(5, 1);
     let highest = sample_qc_ref(6, 2);
     assert!(!super::qc_extends_locked_if_present(
+        Some(locked),
+        highest,
+        |_hash, _height| None,
+        |_hash| false
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_if_present_accepts_newer_view_before_locked_payload_lookup() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 2);
+    assert!(super::qc_satisfies_locked_if_present(
+        Some(locked),
+        highest,
+        |_hash, _height| None,
+        |_hash| false
+    ));
+}
+
+#[test]
+fn qc_satisfies_locked_if_present_rejects_same_view_when_locked_payload_missing() {
+    let locked = sample_qc_ref(5, 1);
+    let highest = sample_qc_ref(6, 1);
+    assert!(!super::qc_satisfies_locked_if_present(
         Some(locked),
         highest,
         |_hash, _height| None,

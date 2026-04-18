@@ -413,9 +413,9 @@ index 000000000..5bf6678d6
 +    // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
 +    // These use canonical I105 account ids and an owner-qualified asset-holding id
 +    final String sender =
-+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
++        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 +    final String receiver =
-+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
++        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 +    final String asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + sender;
 +
 +    // tx_id must have LSB=1 (this is the hash from Rust test)

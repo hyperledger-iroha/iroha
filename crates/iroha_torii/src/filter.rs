@@ -411,7 +411,7 @@ mod tests {
         let expr = FilterExpr::Eq(
             FieldPath("id".into()),
             Value::from(
-                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             ),
         );
         let value = filter_expr_to_value(&expr);
@@ -422,7 +422,7 @@ mod tests {
                 arr(vec![
                     val("id"),
                     val(
-                        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+                        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                     ),
                 ]),
             ),
@@ -447,7 +447,7 @@ mod tests {
                             arr(vec![
                                 val("authority"),
                                 val(
-                                    "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+                                    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                                 ),
                             ]),
                         ),

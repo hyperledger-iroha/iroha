@@ -62,7 +62,7 @@ public final class SubscriptionToriiClientTests {
 
   private static void listPlansParsesResponse() {
     final String providerId =
-        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     final RecordingExecutor executor = new RecordingExecutor();
     executor.enqueue(
         200,
@@ -130,7 +130,7 @@ public final class SubscriptionToriiClientTests {
             client
                 .createSubscriptionPlan(
                     SubscriptionPlanCreateRequest.builder()
-                        .authority("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+                        .authority("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
                         .planId("aws_compute#commerce")
                         .plan(plan)
                         .build())
@@ -151,7 +151,7 @@ public final class SubscriptionToriiClientTests {
             client
                 .createSubscriptionPlan(
                     SubscriptionPlanCreateRequest.builder()
-                        .authority("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+                        .authority("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
                         .planId("aws_compute#commerce")
                         .plan(plan)
                         .build())
@@ -161,7 +161,7 @@ public final class SubscriptionToriiClientTests {
   private static void planJsonBuilderParses() {
     final SubscriptionPlanCreateRequest request =
         SubscriptionPlanCreateRequest.builder()
-            .authority("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+            .authority("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
             .planId("aws_compute#commerce")
             .planJson("{\"kind\":\"fixed\",\"bill_for\":{\"value\":null}}")
             .build();
@@ -176,9 +176,9 @@ public final class SubscriptionToriiClientTests {
 
   private static void listSubscriptionsParsesResponse() {
     final String ownedBy =
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     final String providerId =
-        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     final RecordingExecutor executor = new RecordingExecutor();
     executor.enqueue(
         200,
@@ -245,7 +245,7 @@ public final class SubscriptionToriiClientTests {
             client
                 .createSubscription(
                     SubscriptionCreateRequest.builder()
-                        .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+                        .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
                         .subscriptionId("sub-1$subscriptions")
                         .planId("aws_compute#commerce")
                         .billingTriggerId("sub-1$subscriptions#billing")
@@ -305,11 +305,11 @@ public final class SubscriptionToriiClientTests {
     final String subscriptionId = "sub-1$subscriptions";
     final SubscriptionActionRequest baseRequest =
         SubscriptionActionRequest.builder()
-            .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+            .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             .build();
     final SubscriptionActionRequest chargeRequest =
         SubscriptionActionRequest.builder()
-            .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+            .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             .chargeAtMs(1_700_000_000_000L)
             .build();
     assertServerSideSigningRemoved(
@@ -334,7 +334,7 @@ public final class SubscriptionToriiClientTests {
                 .recordSubscriptionUsage(
                     subscriptionId,
                     SubscriptionUsageRequest.builder()
-                        .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+                        .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
                         .unitKey("compute_ms")
                         .delta("3600000")
                         .usageTriggerId("sub-1$subscriptions#usage")
@@ -354,7 +354,7 @@ public final class SubscriptionToriiClientTests {
   private static void usageRequestRejectsInvalidDelta() {
     try {
       SubscriptionUsageRequest.builder()
-          .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+          .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
           .unitKey("compute_ms")
           .delta("-1")
           .build();
@@ -364,7 +364,7 @@ public final class SubscriptionToriiClientTests {
     }
     try {
       SubscriptionUsageRequest.builder()
-          .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+          .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
           .unitKey("compute_ms")
           .delta("invalid")
           .build();
@@ -374,7 +374,7 @@ public final class SubscriptionToriiClientTests {
     }
     final SubscriptionUsageRequest request =
         SubscriptionUsageRequest.builder()
-            .authority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+            .authority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             .unitKey("compute_ms")
             .delta("12.5")
             .build();

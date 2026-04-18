@@ -171,7 +171,8 @@ public struct AccountAddress {
         do {
             return try parseEncodedSwiftOnly(trimmed, expectedPrefix: expectedPrefix)
         } catch {
-            if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
+            if parseI105SentinelAndPayload(trimmed) != nil,
+               let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
                 literal: trimmed,
                 expectedPrefix: expectedPrefix
             ) {
@@ -192,7 +193,8 @@ public struct AccountAddress {
         do {
             return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
         } catch {
-            if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
+            if parseI105SentinelAndPayload(trimmed) != nil,
+               let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
                 literal: trimmed,
                 expectedPrefix: expectedPrefix
             ) {
@@ -319,7 +321,7 @@ public struct AccountAddress {
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let i105WarningMessage =
-        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. " +
+        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. " +
         "Render and validate them with the intended chain discriminant."
 }
 
@@ -862,11 +864,6 @@ private enum CurveId: UInt8 {
 // MARK: - Encoding helpers
 
 private let base58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").map(String.init)
-private let irohaPoemKanaFullwidth: [String] = [
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-]
 private let irohaPoemKanaHalfwidth: [String] = [
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
@@ -875,7 +872,7 @@ private let irohaPoemKanaHalfwidth: [String] = [
 private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
-private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaFullwidth
+private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaHalfwidth
 private let compressedChecksumLength = 6
 private let compressedBase = compressedAlphabet.count
 private let i105DiscriminantSora: UInt16 = 0x02F1
@@ -885,23 +882,18 @@ private let i105SentinelSora = "sora"
 private let i105SentinelTest = "test"
 private let i105SentinelDev = "dev"
 private let i105SentinelNumericPrefix = "n"
-private let i105SentinelSoraFullwidth = "ｓｏｒａ"
-private let i105SentinelTestFullwidth = "ｔｅｓｔ"
-private let i105SentinelDevFullwidth = "ｄｅｖ"
-private let i105SentinelNumericPrefixFullwidth = "ｎ"
 
 private func lookupI105Digit(_ symbol: String) -> Int? {
     if let canonical = compressedAlphabet.firstIndex(of: symbol) {
         return canonical
     }
-    if let halfwidth = irohaPoemKanaHalfwidth.firstIndex(of: symbol) {
-        return base58Alphabet.count + halfwidth
-    }
     return nil
 }
 
 private func ensureCanonicalI105Literal(_ literal: String, address: AccountAddress) throws {
-    guard let (discriminant, _) = parseI105SentinelAndPayload(literal) else { return }
+    guard let (discriminant, _) = parseI105SentinelAndPayload(literal) else {
+        throw AccountAddressError.unsupportedAddressFormat
+    }
     let canonical = try address.toI105(networkPrefix: discriminant)
     guard canonical == literal else { throw AccountAddressError.unsupportedAddressFormat }
 }
@@ -1025,27 +1017,16 @@ private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substrin
     if encoded.hasPrefix(i105SentinelSora) {
         return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSora.count))
     }
-    if encoded.hasPrefix(i105SentinelSoraFullwidth) {
-        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSoraFullwidth.count))
-    }
     if encoded.hasPrefix(i105SentinelTest) {
         return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTest.count))
     }
-    if encoded.hasPrefix(i105SentinelTestFullwidth) {
-        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTestFullwidth.count))
-    }
     if encoded.hasPrefix(i105SentinelDev) {
         return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDev.count))
-    }
-    if encoded.hasPrefix(i105SentinelDevFullwidth) {
-        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDevFullwidth.count))
     }
 
     let tail: Substring
     if encoded.hasPrefix(i105SentinelNumericPrefix) {
         tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
-    } else if encoded.hasPrefix(i105SentinelNumericPrefixFullwidth) {
-        tail = encoded.dropFirst(i105SentinelNumericPrefixFullwidth.count)
     } else {
         return nil
     }
@@ -1068,9 +1049,6 @@ private func asciiDigit(from character: Character) -> Character? {
     switch scalar.value {
     case 0x30...0x39:
         return character
-    case 0xFF10...0xFF19:
-        let ascii = scalar.value - 0xFEE0
-        return Character(UnicodeScalar(ascii)!)
     default:
         return nil
     }

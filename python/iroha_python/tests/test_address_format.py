@@ -8,7 +8,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from iroha_python import ToriiClient, account_query_envelope, asset_holders_query_envelope
-from iroha_python.address import AccountAddress
+from iroha_python.address import AccountAddress, AccountAddressError
 
 
 class StubResponse(requests.Response):
@@ -120,7 +120,7 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
     assert "canonical_i105" not in body
 
 
-def test_i105_roundtrip_uses_mixed_base58_and_iroha_poem_alphabet() -> None:
+def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x02F1)
 
@@ -128,8 +128,31 @@ def test_i105_roundtrip_uses_mixed_base58_and_iroha_poem_alphabet() -> None:
 
     payload = literal.removeprefix("sora")
     assert any(ch.isascii() and ch.isalnum() for ch in payload)
-    assert any(ch in "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス" for ch in payload)
+    assert any(ch in "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ" for ch in payload)
     assert parsed.to_i105(0x02F1) == literal
+
+
+def test_i105_rejects_fullwidth_sentinel_literal() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+    noncanonical = literal.replace("sora", "ｓｏｒａ", 1)
+
+    with pytest.raises(AccountAddressError, match="missing the expected"):
+        AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
+
+
+def test_i105_rejects_legacy_fullwidth_kana_payload() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+    legacy = literal
+    for halfwidth, fullwidth in (("ﾛ", "ロ"), ("ﾊ", "ハ"), ("ﾆ", "ニ"), ("ﾎ", "ホ")):
+        if halfwidth in legacy:
+            legacy = legacy.replace(halfwidth, fullwidth, 1)
+            break
+    assert legacy != literal
+
+    with pytest.raises(AccountAddressError, match="invalid i105 alphabet symbol"):
+        AccountAddress.parse_encoded(legacy, expected_discriminant=0x02F1)
 
 
 def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:

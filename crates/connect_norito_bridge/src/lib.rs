@@ -12863,7 +12863,7 @@ mod tests {
         map.insert(
             "owner".to_owned(),
             JsonValue::from(
-                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             ),
         );
         let mut value = JsonValue::Object(map);
@@ -12890,7 +12890,7 @@ mod tests {
         map.insert(
             "owner".to_owned(),
             JsonValue::from(
-                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             ),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));

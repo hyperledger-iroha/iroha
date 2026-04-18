@@ -294,7 +294,7 @@ mod tests {
     use super::*;
 
     const ALICE_ID_STR: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     #[test]
     fn predicate_roundtrip_canonicalises_order() {
         let bob_id = crate::account::AccountId::new(

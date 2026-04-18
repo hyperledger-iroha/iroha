@@ -83,7 +83,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 
 - i105 literals use the `i105` alphabet and the Bech32m checksum described in
   the Account Structure RFC (§2.2, `docs/account_structure.md:124`).
-- The canonical I105 representation appends the half-width イロハ poem to
+- The canonical I105 representation appends the half-width Iroha poem to
   the same alphabet (`docs/account_structure.md:125`) so IME/Kana inputs can be
   rendered deterministically across locales.
 - All domain labels (for both Local selectors and Global registry entries) run

@@ -23,12 +23,8 @@ public final class AccountAddress {
   private static final String I105_SENTINEL_TEST = "test";
   private static final String I105_SENTINEL_DEV = "dev";
   private static final String I105_SENTINEL_NUMERIC_PREFIX = "n";
-  private static final String I105_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ";
-  private static final String I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
-  private static final String I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
-  private static final String I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
   private static final String I105_WARNING =
-      "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. "
+      "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. "
           + "Render and validate them with the intended chain discriminant.";
 
   private static final String[] BASE58_ALPHABET = {
@@ -36,11 +32,6 @@ public final class AccountAddress {
       "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c",
       "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
       "w", "x", "y", "z"
-  };
-  private static final String[] IROHA_POEM_KANA_FULLWIDTH = {
-      "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-      "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-      "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス"
   };
   private static final String[] IROHA_POEM_KANA_HALFWIDTH = {
       "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
@@ -57,14 +48,14 @@ public final class AccountAddress {
 
   static {
     configureCurveSupport(CurveSupportConfig.ed25519Only());
-    I105_ALPHABET = new String[BASE58_ALPHABET.length + IROHA_POEM_KANA_FULLWIDTH.length];
+    I105_ALPHABET = new String[BASE58_ALPHABET.length + IROHA_POEM_KANA_HALFWIDTH.length];
     System.arraycopy(BASE58_ALPHABET, 0, I105_ALPHABET, 0, BASE58_ALPHABET.length);
     System.arraycopy(
-        IROHA_POEM_KANA_FULLWIDTH,
+        IROHA_POEM_KANA_HALFWIDTH,
         0,
         I105_ALPHABET,
         BASE58_ALPHABET.length,
-        IROHA_POEM_KANA_FULLWIDTH.length);
+        IROHA_POEM_KANA_HALFWIDTH.length);
     I105_BASE = I105_ALPHABET.length;
   }
 
@@ -964,11 +955,6 @@ public final class AccountAddress {
         return Integer.valueOf(i);
       }
     }
-    for (int i = 0; i < IROHA_POEM_KANA_HALFWIDTH.length; i++) {
-      if (IROHA_POEM_KANA_HALFWIDTH[i].equals(symbol)) {
-        return Integer.valueOf(BASE58_ALPHABET.length + i);
-      }
-    }
     return null;
   }
 
@@ -997,19 +983,18 @@ public final class AccountAddress {
 
   private static I105SentinelPayload parseI105SentinelAndPayload(final String encoded)
       throws AccountAddressException {
-    if (encoded.startsWith(I105_SENTINEL_SORA) || encoded.startsWith(I105_SENTINEL_SORA_FULLWIDTH)) {
+    if (encoded.startsWith(I105_SENTINEL_SORA)) {
       return new I105SentinelPayload(
           DEFAULT_I105_DISCRIMINANT,
           encoded.substring(I105_SENTINEL_SORA.length()));
     }
-    if (encoded.startsWith(I105_SENTINEL_TEST) || encoded.startsWith(I105_SENTINEL_TEST_FULLWIDTH)) {
+    if (encoded.startsWith(I105_SENTINEL_TEST)) {
       return new I105SentinelPayload(0x0171, encoded.substring(I105_SENTINEL_TEST.length()));
     }
-    if (encoded.startsWith(I105_SENTINEL_DEV) || encoded.startsWith(I105_SENTINEL_DEV_FULLWIDTH)) {
+    if (encoded.startsWith(I105_SENTINEL_DEV)) {
       return new I105SentinelPayload(0x0000, encoded.substring(I105_SENTINEL_DEV.length()));
     }
-    if (!encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX)
-        && !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH)) {
+    if (!encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX)) {
       return null;
     }
     final String tail = encoded.substring(I105_SENTINEL_NUMERIC_PREFIX.length());
@@ -1042,9 +1027,6 @@ public final class AccountAddress {
   private static Character toAsciiDigit(final char value) {
     if (value >= '0' && value <= '9') {
       return value;
-    }
-    if (value >= '０' && value <= '９') {
-      return (char) (value - '０' + '0');
     }
     return null;
   }
