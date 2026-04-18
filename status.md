@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
+- Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,
+  a small `integration_tests` refresh tool that regenerates the grouped
+  `nexus_and_streaming` Norito instruction fixtures and the shared streaming
+  golden snapshots from the same Rust encoders the tests assert against.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/README.md` now documents
+  the refresh command:
+  `cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`.
+- Refreshed stale Norito instruction fixtures under
+  `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/`:
+  - `burn_asset_numeric.json`
+  - `burn_asset_fractional.json`
+  - `mint_asset_numeric.json`
+  - `burn_trigger_repetitions.json`
+- Refreshed the shared streaming snapshot goldens under
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/fixtures/norito_streaming/rans/`:
+  - `baseline.json`
+  - `bundled.json`
+- The refreshed streaming snapshots now match the current canonical encoder
+  output again (`3975` bytes each instead of the stale `9138`-byte payloads).
+- Added focused unit coverage in the new refresh bin for:
+  - canonical instruction `encoded_hex` generation; and
+  - baseline snapshot emission of the expected top-level fields.
+- Focused validation completed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --bin refresh_nexus_streaming_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming norito_burn_fixture:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming snapshot_matches_golden_fixture -- --nocapture`
+  - `git diff --check -- integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs integration_tests/README.md fixtures/norito_instructions/burn_asset_numeric.json fixtures/norito_instructions/burn_asset_fractional.json fixtures/norito_instructions/mint_asset_numeric.json fixtures/norito_instructions/burn_trigger_repetitions.json integration_tests/fixtures/norito_streaming/rans/baseline.json integration_tests/fixtures/norito_streaming/rans/bundled.json`
+
 ## 2026-04-18 Follow-up: syscall policy unknown-number test resynced
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/syscalls_policy.rs` no longer hard-codes `0x80` as an unknown syscall number. That value is now part of the ABI v1 surface as `JSON_GET_ASSET_DEFINITION_ID`, so the regression test now derives truly unknown numbers from gaps in `abi_syscall_list()` and from values beyond the 8-bit surface.
 - The same test crate now starts with an inner doc comment to satisfy the workspace documentation rule for integration tests.
