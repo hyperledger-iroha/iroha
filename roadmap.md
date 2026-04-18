@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 `NftId` bare-domain parser compatibility):
+`NftId::from_str` now accepts both `name$domain` and `name$domain.dataspace`
+literals again. Bare domains canonicalize to `domain.universal`, while
+malformed dotted literals still fail closed instead of falling back. This
+closes the `pointer_tlv` parse panic on `rose$wonderland` and brings the parser
+back in line with the existing IVM/Kotodama/docs fixtures that still use bare
+NFT-domain literals.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nft.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model nft_id -- --nocapture`
+  - `cargo test -p iroha_data_model domain_literal -- --nocapture`
+  - `cargo test -p ivm --test pointer_tlv validate_known_types_ok -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
 Latest sync (2026-04-18 Halo2 IPA diagnostic verifier resource hardening):
 The standalone Halo2 IPA poly-open helper now has bounded resource behavior:
 `OpenVerifyEnvelope` decoding accepts explicit `max_k` and transcript-label
