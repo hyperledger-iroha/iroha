@@ -111,7 +111,7 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
             r#"asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")"#,
         ),
         ("DomainId", r#"domain("wonderland.universal")"#),
-        ("NftId", r#"nft_id("rose:uuid:0123$wonderland")"#),
+        ("NftId", r#"nft_id("rose:uuid:0123$wonderland.universal")"#),
     ];
     for (ty, ctor) in cases {
         let src = format!(

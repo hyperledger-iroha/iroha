@@ -7821,9 +7821,9 @@ mod tests {
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_literal();
-        let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let nft: NftId = "n0$wonderland.universal".parse().expect("nft");
         let rwa: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
         )
         .parse()
