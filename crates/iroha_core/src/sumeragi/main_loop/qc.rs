@@ -1503,6 +1503,7 @@ impl Actor {
         view: u64,
         now: Instant,
     ) {
+        let window_nanos = self.frontier_recovery_window().as_nanos().max(1);
         if let Some(state) = self
             .frontier_recovery
             .as_mut()
@@ -1510,6 +1511,9 @@ impl Actor {
         {
             state.last_cause = "missing_payload";
             state.last_view = state.last_view.max(view);
+            let elapsed_windows =
+                now.saturating_duration_since(state.last_progress_at).as_nanos() / window_nanos;
+            state.no_progress_windows = u32::try_from(elapsed_windows).unwrap_or(u32::MAX);
             state.last_action_at = Some(now);
             return;
         }
@@ -2297,16 +2301,24 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
-            if self.frontier_slot.as_ref().is_some_and(|slot| {
+            let exact_frontier_slot_matches = self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.block_hash == block_hash
                     && slot.height == stats_snapshot.height
                     && slot.view == stats_snapshot.view
-            }) && self.frontier_slot_is_exact_height(stats_snapshot.height)
+            }) && self.frontier_slot_is_exact_height(stats_snapshot.height);
+            if exact_frontier_slot_matches
             {
-                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
-                self.clear_missing_block_view_change(&block_hash);
-                progress = true;
-                continue;
+                if self.frontier_recovery_exists_at_height(stats_snapshot.height) {
+                    if self.frontier_recovery_owns_height_window(stats_snapshot.height, now) {
+                        progress = true;
+                        continue;
+                    }
+                } else {
+                    self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                    self.clear_missing_block_view_change(&block_hash);
+                    progress = true;
+                    continue;
+                }
             }
             let local_height = self.committed_height_snapshot();
             let frontier_height = local_height.saturating_add(1);
@@ -2480,7 +2492,7 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            if stats_snapshot.height == frontier_height {
+            if stats_snapshot.height == frontier_height && !exact_frontier_slot_matches {
                 let routed = if let Some(topology) = topology.as_ref() {
                     self.handle_frontier_body_gap_with_topology(
                         block_hash,
@@ -2878,6 +2890,9 @@ impl Actor {
                     if fresh_same_slot_fetch {
                         let seeded =
                             self.seed_frontier_recovery_for_missing_payload(height, view, now);
+                        if !frontier_window_owned {
+                            self.ensure_missing_payload_frontier_recovery_state(height, view, now);
+                        }
                         debug!(
                             height,
                             view,
