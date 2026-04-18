@@ -15,7 +15,7 @@ use iroha::{
     client::Client,
     crypto::HashOf,
     data_model::{
-        Level,
+        Level, ValidationFail,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         da::commitment::DaProofPolicyBundle,
@@ -37,6 +37,7 @@ use iroha::{
             ProofAttachment, ProofId, ProofRecord, ProofStatus, VerifyingKeyBox, VerifyingKeyId,
             VerifyingKeyRecord,
         },
+        query::proof::prelude::FindProofRecordById,
         transaction::TransactionEntrypoint,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     },
@@ -50,6 +51,7 @@ use iroha_data_model::{
     query::{
         CommittedTxFilters,
         dsl::CompoundPredicate,
+        error::QueryExecutionFail,
         parameters::{FetchSize, Pagination},
         transaction::prelude::FindTransactions,
     },
@@ -877,7 +879,7 @@ fn build_stark_attachment(
 
 fn proof_id_for_attachment(attachment: &ProofAttachment) -> ProofId {
     ProofId {
-        backend: attachment.proof.backend.clone(),
+        backend: attachment.backend.clone(),
         proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
     }
 }
@@ -1065,7 +1067,7 @@ async fn fetch_proof_record_payload(
             .expect("torii_url must be a base URL");
         segments.clear();
         let proof_id_string = proof_id.to_string();
-        segments.extend(["v2", "proofs", proof_id_string.as_str()]);
+        segments.extend(["v1", "proofs", proof_id_string.as_str()]);
     }
 
     let response = HttpClient::builder()
@@ -1083,6 +1085,23 @@ async fn fetch_proof_record_payload(
     let payload = response.bytes().await?.to_vec();
     let record = decode_proof_record_payload(&payload)?;
     Ok(Some((record, payload)))
+}
+
+fn query_proof_record_via_signed_query(
+    observer: &Client,
+    proof_id: &ProofId,
+) -> Result<Option<ProofRecord>> {
+    let mut client = observer.clone();
+    client.torii_request_timeout = client.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
+    match client.query_single(FindProofRecordById {
+        id: proof_id.clone(),
+    }) {
+        Ok(record) => Ok(Some(record)),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
+            Ok(None)
+        }
+        Err(err) => Err(eyre!(err)),
+    }
 }
 
 async fn wait_for_proof_record_status(
@@ -1118,8 +1137,17 @@ async fn wait_for_proof_record_status(
             let error_suffix = last_error
                 .map(|err| format!("; last error: {err}"))
                 .unwrap_or_default();
+            let signed_query_suffix = match query_proof_record_via_signed_query(observer, proof_id)
+            {
+                Ok(Some(record)) => format!(
+                    "; signed query observed status {:?} for {}",
+                    record.status, record.id
+                ),
+                Ok(None) => "; signed query also did not find the proof record".to_owned(),
+                Err(err) => format!("; signed query error: {err}"),
+            };
             return Err(eyre!(
-                "{context}: timed out waiting for proof status {expected_status:?}{status_suffix}{error_suffix}"
+                "{context}: timed out waiting for proof status {expected_status:?}{status_suffix}{error_suffix}{signed_query_suffix}"
             ));
         }
         sleep(STATUS_POLL_INTERVAL).await;

@@ -346,7 +346,7 @@ fn build_genesis_for_mode(
     resolved_vrf_seed: Option<[u8; 32]>,
     build_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
-    match mode {
+    let genesis = match mode {
         Mode::Default => generate_default(
             builder,
             genesis_public_key,
@@ -376,7 +376,48 @@ fn build_genesis_for_mode(
             resolved_vrf_seed,
             build_line,
         ),
+    }?;
+
+    Ok(apply_npos_crypto_overrides(
+        genesis,
+        consensus_mode,
+        next_consensus_mode,
+    ))
+}
+
+fn apply_npos_crypto_overrides(
+    genesis: RawGenesisTransaction,
+    consensus_mode: SumeragiConsensusMode,
+    next_consensus_mode: Option<SumeragiConsensusMode>,
+) -> RawGenesisTransaction {
+    let npos_bootstrap = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    if !npos_bootstrap {
+        return genesis;
     }
+
+    let mut crypto = genesis.crypto().clone();
+    if !crypto
+        .allowed_signing
+        .iter()
+        .any(|algo| matches!(algo, Algorithm::BlsNormal))
+    {
+        crypto.allowed_signing.push(Algorithm::BlsNormal);
+    }
+    crypto.allowed_signing.sort();
+    crypto.allowed_signing.dedup();
+    crypto.allowed_curve_ids = crypto
+        .allowed_signing
+        .iter()
+        .filter_map(|algo| {
+            iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
+        })
+        .map(iroha_data_model::account::curve::CurveId::as_u8)
+        .collect();
+    crypto.allowed_curve_ids.sort_unstable();
+    crypto.allowed_curve_ids.dedup();
+
+    genesis.into_builder().with_crypto(crypto).build_raw()
 }
 
 fn format_profile_summary(
@@ -1239,6 +1280,46 @@ mod helper_tests {
         assert_eq!(
             manifest.consensus_mode(),
             Some(SumeragiConsensusMode::Permissioned)
+        );
+    }
+
+    #[test]
+    fn build_genesis_for_mode_enables_bls_crypto_for_npos() {
+        let builder = GenesisBuilder::new_without_executor(
+            ChainId::from("mode-build-npos"),
+            PathBuf::from("."),
+        );
+        let manifest = build_genesis_for_mode(
+            Mode::Default,
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            None,
+            None,
+            BuildLine::Iroha3,
+        )
+        .expect("npos manifest should build");
+
+        assert!(
+            manifest
+                .crypto()
+                .allowed_signing
+                .iter()
+                .any(|algo| matches!(algo, Algorithm::BlsNormal)),
+            "npos manifests must advertise bls_normal in allowed_signing"
+        );
+        let bls_curve =
+            iroha_data_model::account::curve::CurveId::try_from_algorithm(Algorithm::BlsNormal)
+                .expect("bls curve id");
+        assert!(
+            manifest
+                .crypto()
+                .allowed_curve_ids
+                .contains(&bls_curve.as_u8()),
+            "npos manifests must advertise the bls curve id"
         );
     }
 

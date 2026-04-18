@@ -86,7 +86,10 @@ Successful fanout responses keep these counters so operators can see partial
 route degradation even when another dataspace supplied the requested result.
 Typed singleton reads such as `GET /v1/proofs/{id}` now use the same routed
 fanout path, but they preserve the canonical Norito payload after merging
-matching dataspace results.
+matching dataspace results. When every candidate dataspace misses the same
+proof id, the routed path now normalizes that miss back to `404 Not Found`
+instead of surfacing the executor's internal
+`QueryExecutionFail::Conversion("ProofRecord not found")` shape as `400`.
 
 ## Migration Notes
 

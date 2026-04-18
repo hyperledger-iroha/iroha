@@ -15714,11 +15714,7 @@ async fn execute_torii_read_request_locally(
             let Ok(proof_id) = torii_proxy_path_arg(&request, 0, "proof_id") else {
                 return torii_proxy_path_arg(&request, 0, "proof_id").unwrap_err();
             };
-            finish_torii_read_result(
-                routing::handle_get_proof_record(app.state.clone(), AxPath(proof_id)).await,
-                routing_decision,
-                routed_by,
-            )
+            execute_torii_proof_record_get_query(app, proof_id, routing_decision, routed_by).await
         }
         ToriiReadEndpointV1::AccountsList => {
             let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
@@ -16149,6 +16145,136 @@ async fn execute_torii_read_for_route(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn torii_internal_query_authority(
+    app: &SharedAppState,
+    routing_decision: RoutingDecision,
+) -> Option<AccountId> {
+    let view = app.state.world_view();
+    for (account_id, _) in view.accounts().iter() {
+        if torii_target_account_routes(app.as_ref(), account_id)
+            .ok()
+            .is_some_and(|routes| routes.contains(&routing_decision))
+        {
+            return Some(account_id.clone());
+        }
+    }
+    view.accounts()
+        .iter()
+        .next()
+        .map(|(account_id, _)| account_id.clone())
+}
+
+#[cfg(feature = "app_api")]
+fn torii_validation_fail_is_missing_proof_record(fail: &iroha_data_model::ValidationFail) -> bool {
+    matches!(
+        fail,
+        iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+        ) if message == "ProofRecord not found"
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn normalize_torii_proof_record_query_response(response: Response) -> Response {
+    if response.status() != StatusCode::BAD_REQUEST {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let body = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(body) => body,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_proxy_response",
+                format!("failed to read proof query error response: {error}"),
+            );
+        }
+    };
+
+    let validation = match norito::decode_from_bytes::<iroha_data_model::ValidationFail>(&body) {
+        Ok(validation) => validation,
+        Err(_) => {
+            return Response::from_parts(parts, Body::from(body));
+        }
+    };
+
+    if torii_validation_fail_is_missing_proof_record(&validation) {
+        return (
+            StatusCode::NOT_FOUND,
+            utils::NoritoBody(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            )),
+        )
+            .into_response();
+    }
+
+    Response::from_parts(parts, Body::from(body))
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_proof_record_get_query(
+    app: &SharedAppState,
+    proof_id: String,
+    routing_decision: RoutingDecision,
+    routed_by: &'static str,
+) -> Response {
+    use iroha_data_model::proof::ProofId;
+    use iroha_data_model::query::{
+        QueryRequest, SingularQueryOutputBox, prelude::SingularQueryBox,
+        proof::prelude::FindProofRecordById,
+    };
+
+    let raw_proof_id = proof_id;
+    let proof_id = match raw_proof_id.parse::<ProofId>() {
+        Ok(proof_id) => proof_id,
+        Err(error) => {
+            let mut response = torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof_id",
+                format!("failed to parse proof id `{raw_proof_id}`: {error}"),
+            );
+            insert_routing_headers(&mut response, routing_decision, routed_by);
+            return response;
+        }
+    };
+    let Some(authority) = torii_internal_query_authority(app, routing_decision) else {
+        return finish_torii_read_result(
+            routing::handle_get_proof_record(app.state.clone(), AxPath(raw_proof_id)).await,
+            routing_decision,
+            routed_by,
+        );
+    };
+    let request =
+        QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
+            id: proof_id,
+        }))
+        .with_authority(authority);
+
+    let mut response =
+        match execute_torii_verified_query_exhaustive_for_route(app, request, routing_decision)
+            .await
+        {
+            Ok(iroha_data_model::query::QueryResponse::Singular(
+                SingularQueryOutputBox::ProofRecord(record),
+            )) => crate::utils::NoritoBody(record).into_response(),
+            Ok(iroha_data_model::query::QueryResponse::Singular(_)) => torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_proxy_response",
+                "internal proof query returned an unexpected singular variant",
+            ),
+            Ok(iroha_data_model::query::QueryResponse::Iterable(_)) => torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_proxy_response",
+                "internal proof query returned an unexpected iterable variant",
+            ),
+            Err(response) => normalize_torii_proof_record_query_response(response).await,
+        };
+    insert_routing_headers(&mut response, routing_decision, routed_by);
+    response
+}
+
 fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'static str {
     if !routes.is_empty()
         && routes
@@ -16252,6 +16378,12 @@ async fn resolve_torii_proof_record_for_routes(
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
+
+    if let Ok(record) =
+        routing::handle_get_proof_record(app.state.clone(), AxPath(proof_id.clone())).await
+    {
+        payloads.push(record.0);
+    }
 
     for _ in &routes {
         diagnostics.record_attempt();
@@ -50399,6 +50531,41 @@ mod tests {
             .to_bytes();
         let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
         assert_eq!(record.id.to_string(), id);
+    }
+
+    #[tokio::test]
+    async fn proof_record_get_returns_not_found_when_all_routes_miss() {
+        let mut app = mk_app_state_for_tests();
+        crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
+        let missing_id = ProofId {
+            backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+            proof_hash: [0x73; 32],
+        }
+        .to_string();
+
+        let response = handler_proof_record_get(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path(missing_id),
+        )
+        .await
+        .expect("proof handler should return a response")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let validation: ValidationFail =
+            norito::decode_from_bytes(&body).expect("validation fail payload");
+        assert!(matches!(
+            validation,
+            ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            )
+        ));
     }
 
     #[tokio::test]
