@@ -285,6 +285,26 @@ fn numeric_alias_to_int_overflow_rejected() {
 }
 
 #[test]
+fn assert_builtin_obeys_truthiness() {
+    let compiler = Compiler::new();
+
+    let pass = compiler
+        .compile_source("fn main() { assert(true); }")
+        .expect("compile passing assert");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&pass).expect("load passing assert");
+    vm.run().expect("assert(true) should not abort");
+
+    let fail = compiler
+        .compile_source("fn main() { assert(false); }")
+        .expect("compile failing assert");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&fail).expect("load failing assert");
+    let err = vm.run().expect_err("assert(false) should abort");
+    assert!(matches!(err, ivm::VMError::AssertionFailed));
+}
+
+#[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
     let mut src = String::from("fn main() {");
