@@ -261,7 +261,14 @@ fn encode_domain_id_payload(payload: &[u8]) -> Vec<u8> {
     }
 
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
-    let domain = DomainId::parse_fully_qualified(raw)
-        .unwrap_or_else(|err| panic!("DomainId literal `{raw}` failed to parse: {err}"));
+    // Older IVM pointer-TLV tests still pass bare domain labels. Canonicalize
+    // those onto the universal dataspace so the helper matches the checked-in
+    // TLV examples and existing fixture usage.
+    let domain = if raw.contains('.') {
+        DomainId::parse_fully_qualified(raw)
+    } else {
+        DomainId::try_new(raw, "universal")
+    }
+    .unwrap_or_else(|err| panic!("DomainId literal `{raw}` failed to parse: {err}"));
     norito::to_bytes(&domain).expect("encode payload")
 }
