@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 root `ivm.md` pointer type doc sync):
+The workspace-root `ivm.md` generated pointer-type table now includes the
+Soracloud ABI rows again (`SoracloudRequest` / `SoracloudResponse`), bringing
+the root doc back in sync with `ivm::render_pointer_types_markdown_table()`
+and the already-correct crate-local pointer ABI doc.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/ivm.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test pointer_types_doc_generated_ivm_md -- --nocapture`
+  - `cargo test -p ivm --test pointer_types_doc_generated -- --nocapture`
+- open work after this slice:
+  - rerun broader `cargo test -p ivm` / workspace validation during a longer
+    clean window
+
 Latest sync (2026-04-18 `NftId` bare-domain parser compatibility):
 `NftId::from_str` now accepts both `name$domain` and `name$domain.dataspace`
 literals again. Bare domains canonicalize to `domain.universal`, while

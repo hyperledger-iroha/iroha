@@ -2,6 +2,13 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: root `ivm.md` pointer type table resynced
+- `/home/mtakemiya/dev/iroha/ivm.md` now matches `ivm::render_pointer_types_markdown_table()` again, restoring the generated pointer-type block for the Soracloud ABI entries `SoracloudRequest` (`0x000E`) and `SoracloudResponse` (`0x000F`).
+- This clears the focused `crates/ivm/tests/pointer_types_doc_generated_ivm_md.rs` regression without changing any ABI logic; the underlying enum IDs and rendered markdown were already correct in code and crate-local docs.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test pointer_types_doc_generated_ivm_md -- --nocapture`
+  - `cargo test -p ivm --test pointer_types_doc_generated -- --nocapture`
+
 ## 2026-04-18 Follow-up: `NftId` bare-domain parser compatibility restored
 - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nft.rs` now accepts both `name$domain` and `name$domain.dataspace` NFT literals again. Bare domain literals are canonicalized to the `universal` dataspace, while malformed dotted literals remain rejected instead of silently falling back.
 - The same module now has focused parser regressions covering bare-domain canonicalization, fully qualified domains, and invalid multi-dot domain literals so this compatibility path stays pinned in-tree.

@@ -24,5 +24,6 @@ Related docs:
 | 0x000B | AxtDescriptor | OK |
 | 0x000C | AssetHandle | OK |
 | 0x000D | ProofBlob | OK |
+| 0x000E | SoracloudRequest | OK |
+| 0x000F | SoracloudResponse | OK |
 <!-- END GENERATED POINTER TYPES -->
-
