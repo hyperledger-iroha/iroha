@@ -612,6 +612,33 @@ Last updated: 2026-04-18
   tied to multi-lane consensus/roster convergence rather than the original
   wrong-ingress route resolution.
 
+## 2026-04-18 Follow-up: cross-dataspace Nexus localnets are green again
+- The Sumeragi idle-view path in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now routes only the empty contiguous-frontier `missing_qc` `view == 0`
+  case through unified frontier recovery instead of emitting an immediate
+  direct rotation. The existing pre-reset frontier reanchor guards stay in
+  place, so same-height `missing_qc` rotations remain suppressed while the
+  canonical frontier is still stabilizing.
+- The focused wrong-ingress regression harness in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  now treats bare empty-body routed read timeouts (`408` / `502` / `503` /
+  `504`) as transient for the one-shot app-API reads it uses during setup.
+  The base helpers preserve those responses as `null` JSON instead of failing
+  on an EOF decode, and the direct setup reads retry until they receive a real
+  JSON payload or the existing test timeout expires.
+- Current verification for the Nexus cross-dataspace slice is green again:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-coreclean cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix cargo test -p integration_tests --test nexus_and_streaming routed_json_empty_body_is_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-wrongfix IROHA_NEXUS_CROSS_SOAK_ITERATIONS=3 NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet:: -- --test-threads=1 --nocapture`
+- The cross-dataspace localnet module now passes end to end on the current
+  tree:
+  - `nexus::cross_dataspace_localnet::bounded_observer_request_timeout_slices_remaining_budget`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
+  - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as
   `0x`-prefixed canonical EIP-55 addresses instead of accepting arbitrary
