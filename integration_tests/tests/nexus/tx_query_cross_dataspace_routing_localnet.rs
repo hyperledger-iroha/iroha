@@ -51,6 +51,7 @@ use iroha_torii::{
 };
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
+use tokio::time::sleep;
 use toml::{Table, Value as TomlValue};
 
 const NEXUS_ALIAS: &str = "nexus";
@@ -589,6 +590,22 @@ fn routed_response_context(
     )
 }
 
+fn routed_json_empty_body_is_transient(status: HttpStatusCode, body: &[u8]) -> bool {
+    body.is_empty()
+        && matches!(
+            status,
+            HttpStatusCode::REQUEST_TIMEOUT
+                | HttpStatusCode::BAD_GATEWAY
+                | HttpStatusCode::SERVICE_UNAVAILABLE
+                | HttpStatusCode::GATEWAY_TIMEOUT
+        )
+}
+
+fn routed_json_response_is_transient(response: &RoutedJsonResponse) -> bool {
+    response.body.is_null()
+        && routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes())
+}
+
 fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
@@ -648,8 +665,12 @@ async fn torii_json_get(
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
     let response_context = routed_response_context(status, &headers, path_segments, query_pairs);
-    let json_body = norito::json::from_slice(&body)
-        .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?;
+    let json_body = if routed_json_empty_body_is_transient(status, &body) {
+        JsonValue::Null
+    } else {
+        norito::json::from_slice(&body)
+            .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
+    };
 
     Ok(RoutedJsonResponse {
         status,
@@ -713,8 +734,12 @@ async fn torii_json_get_as_account(
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
     let response_context = routed_response_context(status, &headers, path_segments, query_pairs);
-    let json_body = norito::json::from_slice(&body)
-        .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?;
+    let json_body = if routed_json_empty_body_is_transient(status, &body) {
+        JsonValue::Null
+    } else {
+        norito::json::from_slice(&body)
+            .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
+    };
 
     Ok(RoutedJsonResponse {
         status,
@@ -724,6 +749,69 @@ async fn torii_json_get_as_account(
         route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
+}
+
+async fn wait_for_torii_json_get(
+    client: &Client,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+    context: &str,
+) -> Result<RoutedJsonResponse> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match torii_json_get(client, path_segments, query_pairs).await {
+            Ok(response) if !routed_json_response_is_transient(&response) => return Ok(response),
+            Ok(response) => {
+                last_error = Some(format!(
+                    "transient routed JSON response status {} body `{}`",
+                    response.status, response.body_text
+                ));
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last routed JSON error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for routed JSON response{suffix}"
+    ))
+}
+
+async fn wait_for_torii_json_get_as_account(
+    client: &Client,
+    account: &AccountId,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+    context: &str,
+) -> Result<RoutedJsonResponse> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match torii_json_get_as_account(client, account, path_segments, query_pairs).await {
+            Ok(response) if !routed_json_response_is_transient(&response) => return Ok(response),
+            Ok(response) => {
+                last_error = Some(format!(
+                    "transient routed JSON response status {} body `{}`",
+                    response.status, response.body_text
+                ));
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last routed JSON error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for routed JSON response{suffix}"
+    ))
 }
 
 async fn submit_transaction_raw(
@@ -1175,10 +1263,11 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob signed query through ds1 ingress did not route to ds2"
     );
 
-    let alice_account = rt.block_on(torii_json_get(
+    let alice_account = rt.block_on(wait_for_torii_json_get(
         &alice_via_ds2,
         &["v1".to_owned(), "accounts".to_owned(), ALICE_ID.to_string()],
         &[],
+        "alice account GET through ds2 ingress",
     ))?;
     ensure!(
         alice_account.status == HttpStatusCode::OK,
@@ -1199,7 +1288,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "alice account GET through ds2 ingress did not return alice's canonical account id"
     );
 
-    let alice_assets = rt.block_on(torii_json_get_as_account(
+    let alice_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &alice_via_ds2,
         &ALICE_ID,
         &[
@@ -1209,6 +1298,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "assets".to_owned(),
         ],
         &[],
+        "alice assets query through ds2 ingress",
     ))?;
     ensure!(
         alice_assets.status == HttpStatusCode::OK,
@@ -1226,7 +1316,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "alice assets query through ds2 ingress did not include ds1 asset definition"
     );
 
-    let bob_assets = rt.block_on(torii_json_get_as_account(
+    let bob_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
         &[
@@ -1236,6 +1326,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "assets".to_owned(),
         ],
         &[],
+        "bob assets query through ds1 ingress",
     ))?;
     ensure!(
         bob_assets.status == HttpStatusCode::OK,
@@ -1253,7 +1344,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob assets query through ds1 ingress did not include ds2 asset definition"
     );
 
-    let alice_assets_hidden_from_bob = rt.block_on(torii_json_get_as_account(
+    let alice_assets_hidden_from_bob = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
         &[
@@ -1263,6 +1354,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "assets".to_owned(),
         ],
         &[],
+        "alice assets query as bob through ds1 ingress",
     ))?;
     ensure!(
         alice_assets_hidden_from_bob.status == HttpStatusCode::OK,
@@ -1301,7 +1393,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         }],
     };
 
-    let manifests_before = rt.block_on(torii_json_get(
+    let manifests_before = rt.block_on(wait_for_torii_json_get(
         &bob_via_ds1,
         &[
             "v1".to_owned(),
@@ -1314,6 +1406,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "dataspace".to_owned(),
             ds2_dataspace_id.as_u64().to_string(),
         )],
+        "initial manifests read through ds1 ingress",
     ))?;
     ensure!(
         manifests_before.status == HttpStatusCode::OK,
@@ -1337,7 +1430,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "manifest should not exist before publish"
     );
 
-    let bob_manifest_permissions_api_before = rt.block_on(torii_json_get_as_account(
+    let bob_manifest_permissions_api_before = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
         &[
@@ -1347,6 +1440,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "permissions".to_owned(),
         ],
         &[],
+        "bob manifest permissions query through ds1 ingress",
     ))?;
     ensure!(
         bob_manifest_permissions_api_before.status == HttpStatusCode::OK,
@@ -1394,4 +1488,34 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     ))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::routed_json_empty_body_is_transient;
+    use reqwest::StatusCode as HttpStatusCode;
+
+    #[test]
+    fn routed_json_empty_body_is_transient_for_empty_timeout_statuses() {
+        assert!(routed_json_empty_body_is_transient(
+            HttpStatusCode::REQUEST_TIMEOUT,
+            b""
+        ));
+        assert!(routed_json_empty_body_is_transient(
+            HttpStatusCode::GATEWAY_TIMEOUT,
+            b""
+        ));
+    }
+
+    #[test]
+    fn routed_json_empty_body_is_not_transient_for_non_empty_or_success_statuses() {
+        assert!(!routed_json_empty_body_is_transient(
+            HttpStatusCode::REQUEST_TIMEOUT,
+            br#"{"error":"timeout"}"#
+        ));
+        assert!(!routed_json_empty_body_is_transient(
+            HttpStatusCode::OK,
+            b""
+        ));
+    }
 }
