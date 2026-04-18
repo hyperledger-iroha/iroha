@@ -32277,7 +32277,10 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
-                if !proposal_seen && matches!(direct_cause, ViewChangeCause::MissingQc) {
+                if !proposal_seen
+                    && current_view == 0
+                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                {
                     debug!(
                         height,
                         view = current_view,
@@ -32291,7 +32294,7 @@ impl Actor {
                             current_view,
                             proposal_seen,
                             false,
-                            true,
+                            false,
                             now,
                         ),
                         FrontierRecoveryAdvance::Rotate
