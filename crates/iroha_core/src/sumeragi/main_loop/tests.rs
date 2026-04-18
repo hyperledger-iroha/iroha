@@ -15751,9 +15751,6 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
-        eprintln!("test last={:?}", pending_after.last_quorum_reschedule);
-    }
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
@@ -23540,6 +23537,7 @@ fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
 async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
@@ -23548,7 +23546,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     let epoch = actor.epoch_for_height(height);
     actor.reset_collector_state();
 
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     let emitted = actor.emit_precommit_vote(
         block_hash,
@@ -23606,15 +23604,14 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
         .iter()
         .cloned()
         .collect();
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -24084,7 +24081,7 @@ async fn qc_broadcast_targets_snapshot_roster() {
         );
     }
 
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
     actor.try_form_qc_from_votes(
         Phase::Commit,
         block_hash,
@@ -24099,18 +24096,14 @@ async fn qc_broadcast_targets_snapshot_roster() {
         .filter(|peer| *peer != &local_peer)
         .cloned()
         .collect();
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::Qc(qc) if qc.subject_block_hash == block_hash
-                ) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("CommitCert"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -116579,6 +116572,7 @@ async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
 async fn commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     actor.relay_backpressure.disable_for_tests();
 
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
@@ -116660,19 +116654,18 @@ async fn commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets(
         .propose
         .collectors_contacted
         .insert(collector_decoy);
-    let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();

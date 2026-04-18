@@ -15454,7 +15454,11 @@ impl Actor {
         if !slot_routed {
             return false;
         }
-        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+        if !(self.frontier_recovery_exists_at_height(height)
+            && self.frontier_recovery_owns_height_window(height, now))
+        {
+            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+        }
         self.clear_missing_block_view_change(&block_hash);
         let frontier_slot_can_fetch = self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height
@@ -26621,13 +26625,21 @@ impl Actor {
                 seeded_state.last_cause = recovery_reason;
                 self.frontier_recovery = Some(seeded_state);
             }
-            let allow_rotation = can_trigger_view_change
+            let base_allow_rotation = can_trigger_view_change
                 && !view_change_already_triggered
                 && !self
                     .phase_tracker
                     .current_view(height)
                     .is_some_and(|current| current > view)
                 && budget.escalated_view != Some(view);
+            let stall_rotation_window_available = !hard_cap_due
+                || !base_allow_rotation
+                || self.try_reserve_missing_qc_height_stall_rotation_window(
+                    height,
+                    ViewChangeCause::MissingPayload,
+                    now,
+                );
+            let allow_rotation = base_allow_rotation && stall_rotation_window_available;
             let recovery_action = self.advance_frontier_recovery(
                 recovery_reason,
                 height,
@@ -32238,8 +32250,7 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
-                if pre_reset_frontier_reanchor_unresolved_in_window
-                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                if matches!(direct_cause, ViewChangeCause::MissingQc)
                     && !self.try_reserve_missing_qc_height_stall_rotation_window(
                         height,
                         direct_cause,
@@ -32250,7 +32261,8 @@ impl Actor {
                         height,
                         view = current_view,
                         committed_height,
-                        "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                        pre_reset_frontier_reanchor_unresolved_in_window,
+                        "suppressing repeated same-height missing_qc idle view-change in the current stall window"
                     );
                     return false;
                 }
@@ -32388,8 +32400,7 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
-            if pre_reset_frontier_reanchor_unresolved_in_window
-                && matches!(direct_cause, ViewChangeCause::MissingQc)
+            if matches!(direct_cause, ViewChangeCause::MissingQc)
                 && !self.try_reserve_missing_qc_height_stall_rotation_window(
                     height,
                     direct_cause,
@@ -32400,7 +32411,8 @@ impl Actor {
                     height,
                     view = current_view,
                     committed_height,
-                    "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                    pre_reset_frontier_reanchor_unresolved_in_window,
+                    "suppressing repeated same-height missing_qc idle view-change in the current stall window"
                 );
                 return false;
             }
