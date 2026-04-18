@@ -1107,6 +1107,75 @@ mod tests {
         batch
     }
 
+    fn sample_proof_with_size(rows: usize) -> (TransitionBatch, Proof) {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(rows);
+        let proof = prover.prove(&batch).unwrap();
+        (batch, proof)
+    }
+
+    fn assert_verify_rejects<F, M>(
+        batch: &TransitionBatch,
+        proof: &Proof,
+        mutate: F,
+        matches_err: M,
+    ) where
+        F: FnOnce(&mut Proof),
+        M: FnOnce(&Error) -> bool,
+    {
+        let mut tampered = proof.clone();
+        mutate(&mut tampered);
+        let err = verify(batch, &tampered).unwrap_err();
+        assert!(matches_err(&err), "unexpected verifier error: {err:?}");
+    }
+
+    fn sample_backend_artifact() -> BackendArtifact {
+        BackendArtifact {
+            parameter: "fastpq-lane-balanced".to_owned(),
+            trace_rows: 1,
+            trace_root: 11,
+            air_trace_root: 12,
+            air_composition_root: 13,
+            lookup_root: 14,
+            lde_domain_size: 1,
+            lookup_grand_product: 15,
+            lookup_challenge: 16,
+            alphas: vec![17, 18],
+            fri_arity: 2,
+            fri_blowup: 2,
+            fri_layers: vec![19],
+            fri_betas: Vec::new(),
+            query_openings: vec![(0, 20)],
+            query_chunks: vec![vec![20]],
+            query_paths: vec![Vec::new()],
+            air_openings: vec![AirConstraintOpening {
+                index: 0,
+                current_row: Vec::new(),
+                next_row: Vec::new(),
+                current_row_path: Vec::new(),
+                next_row_path: Vec::new(),
+                composition_value: 21,
+                composition_path: Vec::new(),
+            }],
+            fri_query_openings: vec![FriQueryOpening {
+                initial_index: 0,
+                rounds: Vec::new(),
+                final_index: 0,
+                final_values: vec![21],
+                final_merkle_path: Vec::new(),
+            }],
+        }
+    }
+
+    fn materialise_sample_artifact(artifact: BackendArtifact) -> Result<Proof> {
+        materialise_proof(
+            Hash::new(b"materialise-proof-test"),
+            PublicIO::default(),
+            artifact,
+            7,
+        )
+    }
+
     #[test]
     fn public_io_falls_back_to_derived_inputs() {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -1155,6 +1224,123 @@ mod tests {
             Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
                 .expect("prover");
         assert_eq!(prover.backend.execution_mode(), ExecutionMode::Cpu);
+    }
+
+    #[test]
+    fn materialise_proof_maps_backend_artifact_fields() {
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        assert_eq!(proof.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(proof.params_version, 7);
+        assert_eq!(proof.parameter, "fastpq-lane-balanced");
+        assert_eq!(proof.trace_root, field_norito::core::to_bytes(11));
+        assert_eq!(proof.air_trace_root, field_norito::core::to_bytes(12));
+        assert_eq!(proof.air_composition_root, field_norito::core::to_bytes(13));
+        assert_eq!(proof.lookup_root, field_norito::core::to_bytes(14));
+        assert_eq!(proof.lde_domain_size, 1);
+        assert_eq!(proof.lookup_grand_product, 15);
+        assert_eq!(proof.lookup_challenge, 16);
+        assert_eq!(proof.alphas, vec![17, 18]);
+        assert_eq!(proof.betas, Vec::<u64>::new());
+        assert_eq!(proof.fri_layers, vec![field_norito::core::to_bytes(19)]);
+        assert_eq!(proof.queries.len(), 1);
+        assert_eq!(proof.queries[0].index, 0);
+        assert_eq!(proof.queries[0].value, 20);
+        assert_eq!(proof.queries[0].chunk_values, vec![20]);
+        assert_eq!(proof.air_openings.len(), 1);
+        assert_eq!(proof.fri_queries.len(), 1);
+    }
+
+    #[test]
+    fn materialise_proof_rejects_backend_artifact_count_mismatches() {
+        let mut artifact = sample_backend_artifact();
+        artifact.query_chunks.clear();
+        let err = materialise_sample_artifact(artifact).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::QueryCountMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+
+        let mut artifact = sample_backend_artifact();
+        artifact.query_paths.clear();
+        let err = materialise_sample_artifact(artifact).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::QueryCountMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+
+        let mut artifact = sample_backend_artifact();
+        artifact.fri_query_openings.clear();
+        let err = materialise_sample_artifact(artifact).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::QueryCountMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+
+        let mut artifact = sample_backend_artifact();
+        artifact.air_openings.clear();
+        let err = materialise_sample_artifact(artifact).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirOpeningCountMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_bad_protocol_and_parameter_metadata() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.protocol_version = PROTOCOL_VERSION.wrapping_add(1),
+            |err| matches!(err, Error::UnsupportedProtocolVersion { version } if *version == PROTOCOL_VERSION + 1),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.parameter = "does-not-exist".to_owned(),
+            |err| matches!(err, Error::UnknownParameter(parameter) if parameter == "does-not-exist"),
+        );
+    }
+
+    #[test]
+    fn verify_rejects_malformed_commitment_root_encodings() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.trace_root[8] = 1,
+            |err| matches!(err, Error::TraceRootMismatch),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.lookup_root[8] = 1,
+            |err| matches!(err, Error::LookupRootMismatch),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.air_trace_root[8] = 1,
+            |err| matches!(err, Error::AirTraceRootMismatch),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.air_composition_root[8] = 1,
+            |err| matches!(err, Error::AirCompositionRootMismatch),
+        );
     }
 
     #[test]
@@ -1335,6 +1521,37 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_empty_and_malformed_fri_layer_roots() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| tampered.fri_layers.clear(),
+            |err| {
+                matches!(
+                    err,
+                    Error::FriLayerLengthMismatch {
+                        expected: 1,
+                        actual: 0
+                    }
+                )
+            },
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let root = tampered
+                    .fri_layers
+                    .last_mut()
+                    .expect("expected terminal FRI root");
+                root[8] = 1;
+            },
+            |err| matches!(err, Error::FriLayerMismatch { .. }),
+        );
+    }
+
+    #[test]
     fn verify_rejects_fri_layer_mutation() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1371,6 +1588,69 @@ mod tests {
         proof.queries.pop();
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryCountMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_fri_and_air_vector_count_mismatches() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered.fri_queries.pop();
+            },
+            |err| {
+                matches!(
+                    err,
+                    Error::QueryCountMismatch {
+                        expected,
+                        actual
+                    } if *expected == proof.queries.len() && *actual + 1 == *expected
+                )
+            },
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let extra = tampered
+                    .fri_queries
+                    .first()
+                    .expect("expected sampled FRI query")
+                    .clone();
+                tampered.fri_queries.push(extra);
+            },
+            |err| {
+                matches!(
+                    err,
+                    Error::QueryCountMismatch {
+                        expected,
+                        actual
+                    } if *expected == proof.queries.len() && *actual == *expected + 1
+                )
+            },
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let extra = tampered
+                    .air_openings
+                    .first()
+                    .expect("expected sampled AIR opening")
+                    .clone();
+                tampered.air_openings.push(extra);
+            },
+            |err| {
+                matches!(
+                    err,
+                    Error::AirOpeningCountMismatch {
+                        expected,
+                        actual
+                    } if *expected == proof.queries.len() && *actual == *expected + 1
+                )
+            },
+        );
     }
 
     #[test]
@@ -1424,6 +1704,62 @@ mod tests {
         *sibling = sibling.wrapping_add(1);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_malformed_query_and_air_openings() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let query = tampered
+                    .queries
+                    .first_mut()
+                    .expect("expected sampled query");
+                query.index = query.index.wrapping_add(1);
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .queries
+                    .first_mut()
+                    .expect("expected sampled query")
+                    .chunk_values
+                    .clear();
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .air_openings
+                    .first_mut()
+                    .expect("expected sampled AIR opening")
+                    .current_row
+                    .pop();
+            },
+            |err| matches!(err, Error::AirOpeningMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .air_openings
+                    .first_mut()
+                    .expect("expected sampled AIR opening")
+                    .next_row
+                    .pop();
+            },
+            |err| matches!(err, Error::AirOpeningMismatch { index: 0 }),
+        );
     }
 
     #[test]
@@ -1484,6 +1820,20 @@ mod tests {
                 actual
             } if actual == AIR_COMPOSITION_ALPHA_COUNT + 1
         ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_air_challenge_values() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let alpha = tampered.alphas.first_mut().expect("expected AIR challenge");
+                *alpha = alpha.wrapping_add(1);
+            },
+            |err| matches!(err, Error::FriChallengeMismatch { round: 0 }),
+        );
     }
 
     #[test]
@@ -1905,6 +2255,114 @@ mod tests {
             err,
             Error::QueryMismatch { .. } | Error::QueryMerklePathMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn verify_rejects_malformed_fri_query_chain() {
+        let (batch, proof) = sample_proof_with_size(32);
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let query = tampered
+                    .fri_queries
+                    .first_mut()
+                    .expect("expected FRI query opening");
+                query.initial_index = query.initial_index.wrapping_add(1);
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let round = tampered
+                    .fri_queries
+                    .first_mut()
+                    .and_then(|query| query.rounds.first_mut())
+                    .expect("expected FRI round opening");
+                round.round = round.round.wrapping_add(1);
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let round = tampered
+                    .fri_queries
+                    .first_mut()
+                    .and_then(|query| query.rounds.first_mut())
+                    .expect("expected FRI round opening");
+                round.index = round.index.wrapping_add(1);
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .fri_queries
+                    .first_mut()
+                    .and_then(|query| query.rounds.first_mut())
+                    .expect("expected FRI round opening")
+                    .values
+                    .clear();
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .fri_queries
+                    .first_mut()
+                    .expect("expected FRI query opening")
+                    .rounds
+                    .pop();
+            },
+            |err| matches!(err, Error::FriChallengeLengthMismatch { .. }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                let query = tampered
+                    .fri_queries
+                    .first_mut()
+                    .expect("expected FRI query opening");
+                query.final_index = query.final_index.wrapping_add(1);
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+        assert_verify_rejects(
+            &batch,
+            &proof,
+            |tampered| {
+                tampered
+                    .fri_queries
+                    .first_mut()
+                    .expect("expected FRI query opening")
+                    .final_values
+                    .clear();
+            },
+            |err| matches!(err, Error::QueryMismatch { index: 0 }),
+        );
+    }
+
+    #[test]
+    fn verify_fri_query_chain_rejects_zero_arity() {
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values: vec![1],
+            final_merkle_path: Vec::new(),
+        };
+        let err = verify_fri_query_chain(0, 0, 1, &fri_query, &[], &[], 0).unwrap_err();
+        assert!(matches!(err, Error::FriArity(0)));
     }
 
     #[test]

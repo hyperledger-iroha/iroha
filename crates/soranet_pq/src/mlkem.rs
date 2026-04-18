@@ -1,6 +1,5 @@
 use core::{fmt, str::FromStr};
 
-use rand_core::RngCore;
 use pqcrypto_mlkem::{mlkem512 as kyber512, mlkem768 as kyber768, mlkem1024 as kyber1024};
 use pqcrypto_traits::{
     Error as PqError,
@@ -9,6 +8,7 @@ use pqcrypto_traits::{
         SharedSecret as KemSharedSecret,
     },
 };
+use rand_core::RngCore;
 use thiserror::Error;
 use zeroize::Zeroizing;
 

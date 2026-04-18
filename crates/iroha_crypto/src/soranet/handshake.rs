@@ -28,8 +28,8 @@ use sha3::{
 use soranet_pq::{
     HedgedRngSeed, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
     decapsulate_mlkem, encapsulate_mlkem_from_os, generate_mlkem_keypair,
-    generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata,
-    validate_mlkem_ciphertext, validate_mlkem_public_key,
+    generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata, validate_mlkem_ciphertext,
+    validate_mlkem_public_key,
 };
 use tempfile::TempDir;
 use thiserror::Error;

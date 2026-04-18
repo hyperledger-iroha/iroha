@@ -345,7 +345,7 @@ pub fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Toke
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::generate_mldsa_keypair;
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
 
     use super::*;

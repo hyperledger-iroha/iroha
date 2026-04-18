@@ -3819,7 +3819,7 @@ mod tests {
     #[test]
     fn token_config_merges_inline_and_file_revocations() {
         use iroha_crypto::soranet::token::compute_issuer_fingerprint;
-        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("generate keypair");
         let issuer_hex = hex::encode(keypair.public_key());

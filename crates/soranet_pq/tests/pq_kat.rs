@@ -56,9 +56,8 @@ fn mldsa_vectors_verify_and_resign() {
             HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
             b"pq-kat:mldsa:sign",
         );
-        let regenerated =
-            sign_mldsa(suite, &secret_key, &[], &message, &mut sign_rng)
-                .expect("fixture signing succeeds");
+        let regenerated = sign_mldsa(suite, &secret_key, &[], &message, &mut sign_rng)
+            .expect("fixture signing succeeds");
         verify_mldsa(suite, &public_key, &[], &message, regenerated.as_bytes())
             .expect("regenerated signature verifies");
     }

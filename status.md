@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: SoraNet PQ hedged RNG boundary hardening
+- SoraNet PQ key-generation and signing/encapsulation call sites now use the
+  explicit hedged-RNG API or fallible `_from_os` convenience helpers instead of
+  assuming an infallible hidden OS RNG path.
+- ML-DSA signatures are verified through the context-aware API, and the checked
+  ML-DSA KAT signatures in
+  `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/soranet_pq/pq_kat.json`
+  and
+  `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/tests/fixtures/pq_vectors.json`
+  were refreshed to match that behavior.
+- The remaining pqcrypto backend limitation is explicit: the 0.1.x bindings
+  still do not expose the seeded ML-KEM/ML-DSA derand hooks needed for complete
+  RNG injection, so code and docs keep the local pure-Rust scalar backend as
+  the outstanding replacement step.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo check -p soranet_pq`
+  - `cargo check -p soranet_pq --all-targets`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo check -p soranet-puzzle-service -p soranet-relay -p soranet-handshake-harness -p sorafs_orchestrator -p iroha_p2p -p iroha_cli --all-targets`
+  - `cargo test -p soranet_pq`
+
 ## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
 - Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,
   a small `integration_tests` refresh tool that regenerates the grouped
@@ -184,7 +207,7 @@ Last updated: 2026-04-18
 - FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries the committed LDE domain size, query chunks, Merkle authentication paths, sampled AIR openings, and per-round FRI openings.
 - ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
 - Follow-up gap closure: the STARK VK update regression now seeds a valid encoded V1 STARK verifying key before exercising the mixed-case curve rejection, and the Nexus compile-only integration target no longer carries unused single-client helper wrappers.
-- Coverage follow-up: FASTPQ now explicitly tests transition-count and batch-byte guardrails, FRI layer-count limits, extra AIR/FRI query vectors, extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR/query/FRI Merkle-path and query-count limits, query-chunk limits, FRI round/final-value limits, zero LDE domain-size rejection, folded/final FRI value tampering, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/VK-hash/missing-VK/inner-parameter/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
+- Coverage follow-up: FASTPQ now explicitly tests backend-artifact materialisation mapping and count mismatches, malformed commitment-root encodings, transition-count and batch-byte guardrails, FRI layer-count limits, extra AIR/FRI query vectors, unsupported protocol/unknown proof-parameter rejection, malformed FRI layer roots, malformed query/AIR/FRI opening shapes, AIR challenge value rejection, zero FRI arity rejection, extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR/query/FRI Merkle-path and query-count limits, query-chunk limits, FRI round/final-value limits, zero LDE domain-size rejection, folded/final FRI value tampering, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/VK-hash/missing-VK/inner-parameter/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
