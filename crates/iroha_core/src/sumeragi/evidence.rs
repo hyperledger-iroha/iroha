@@ -125,13 +125,9 @@ fn canonical_vote_pair(v1: &Vote, v2: &Vote) -> (Vote, Vote) {
     }
 }
 
-/// Check for a double-vote: same (phase,height,view,epoch,signer) on different block hashes.
+/// Check for a double-vote: same validator at the same height/epoch on conflicting blocks.
 pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
-    if v1.height == v2.height
-        && v1.view == v2.view
-        && v1.epoch == v2.epoch
-        && v1.signer == v2.signer
-    {
+    if v1.height == v2.height && v1.epoch == v2.epoch && v1.signer == v2.signer {
         let conflicts = if v1.block_hash != v2.block_hash {
             true
         } else if v1.phase == Phase::Commit && v2.phase == Phase::Commit {
@@ -396,7 +392,7 @@ pub enum EvidenceValidationError {
     PhaseMismatch,
     /// Double-vote evidence carries votes for different block heights.
     HeightMismatch,
-    /// Double-vote evidence carries votes for different views.
+    /// Double-vote evidence carries views that are not valid for the configured evidence policy.
     ViewMismatch,
     /// Double-vote evidence carries votes for different epochs.
     EpochMismatch,
@@ -437,7 +433,7 @@ impl std::fmt::Display for EvidenceValidationError {
             KindPayloadMismatch => "evidence kind does not match payload variant",
             PhaseMismatch => "double-vote evidence phases must match",
             HeightMismatch => "double-vote evidence heights must match",
-            ViewMismatch => "double-vote evidence views must match",
+            ViewMismatch => "double-vote evidence views are incompatible",
             EpochMismatch => "double-vote evidence epochs must match",
             SignerMismatch => "double-vote evidence signers must match",
             BlockHashMatch => "double-vote evidence must reference distinct block hashes",
@@ -548,9 +544,6 @@ fn validate_double_vote(
     };
     if v1.height != v2.height {
         return Err(EvidenceValidationError::HeightMismatch);
-    }
-    if v1.view != v2.view {
-        return Err(EvidenceValidationError::ViewMismatch);
     }
     if v1.epoch != v2.epoch {
         return Err(EvidenceValidationError::EpochMismatch);
@@ -705,6 +698,27 @@ mod tests {
                 .iter()
                 .find(|kp| kp.public_key() == peer.public_key())
                 .expect("signer keypair must exist for view-aligned topology")
+        }
+
+        fn signer_index_for_keypair_at_view(
+            &self,
+            keypair: &KeyPair,
+            height: u64,
+            view: u64,
+        ) -> u32 {
+            let rotated = super::super::main_loop::topology_for_view(
+                &self.topology,
+                height,
+                view,
+                self.mode_tag,
+                Some(self.prf_seed),
+            );
+            let index = rotated
+                .as_ref()
+                .iter()
+                .position(|peer| peer.public_key() == keypair.public_key())
+                .expect("keypair must be present in view-aligned topology");
+            u32::try_from(index).expect("signer index fits u32")
         }
 
         fn sign_vote(&self, vote: &mut Vote) {
@@ -1152,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn double_vote_requires_matching_height_and_view() {
+    fn double_vote_requires_matching_height_and_epoch() {
         let ctx = test_context();
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x20; 32],
@@ -1180,10 +1194,19 @@ mod tests {
         ctx.sign_vote(&mut v2);
         assert!(
             check_double_vote(&v1, &v2).is_none(),
-            "height/view mismatch must not produce double-vote evidence"
+            "height mismatch must not produce double-vote evidence"
         );
 
-        // Restore height/view but change epoch to confirm epoch mismatch rejects evidence too.
+        v2.height = v1.height;
+        v2.view = v1.view.saturating_add(1);
+        v2.epoch = v1.epoch;
+        ctx.sign_vote(&mut v2);
+        assert!(
+            check_double_vote(&v1, &v2).is_some(),
+            "cross-view votes by the same signer at one height are still double-vote evidence"
+        );
+
+        // Restore view but change epoch to confirm epoch mismatch rejects evidence too.
         v2.height = v1.height;
         v2.view = v1.view;
         v2.epoch = 1;
@@ -1329,6 +1352,43 @@ mod tests {
         v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0x44; 32]),
         );
+        ctx.sign_vote(&mut v1);
+        ctx.sign_vote(&mut v2);
+
+        let ev = Evidence {
+            kind: EvidenceKind::DoubleCommit,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        assert!(validate_evidence(&ev, &context).is_ok());
+    }
+
+    #[test]
+    fn validate_double_vote_accepts_cross_view_same_signer_peer() {
+        let ctx = test_context();
+        let context = ctx.validation_context();
+        let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x46; 32],
+        ));
+        let zero_root = zero_state_root();
+        let mut v1 = Vote {
+            phase: Phase::Commit,
+            block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 15,
+            view: 2,
+            epoch: 0,
+            highest_qc: None,
+            signer: 3,
+            bls_sig: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.view = v1.view.saturating_add(1);
+        v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x47; 32]),
+        );
+        let signer_keypair = ctx.signer_keypair_for_view(v1.signer, v1.height, v1.view);
+        v2.signer = ctx.signer_index_for_keypair_at_view(signer_keypair, v2.height, v2.view);
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
 
@@ -1676,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_record_rejects_view_mismatch_mutation() {
+    fn persist_record_rejects_cross_view_different_signer_peer_mutation() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let evidence = double_vote_with(&ctx, |_, v2| {
@@ -1685,7 +1745,7 @@ mod tests {
         assert_invalid_evidence_rejected(
             &context,
             &evidence,
-            EvidenceValidationError::ViewMismatch,
+            EvidenceValidationError::SignerMismatch,
         );
     }
 
@@ -2087,7 +2147,7 @@ mod tests {
             ),
             (
                 |_, v2| v2.view = v2.view.saturating_add(1),
-                EvidenceValidationError::ViewMismatch,
+                EvidenceValidationError::SignerMismatch,
             ),
             (
                 |v1, v2| {
@@ -2205,7 +2265,7 @@ mod tests {
                         assert_invalid_evidence_rejected(
                             &context,
                             &evidence,
-                            EvidenceValidationError::ViewMismatch,
+                            EvidenceValidationError::SignerMismatch,
                         );
                     }
                 }
@@ -2672,7 +2732,7 @@ mod tests {
             ),
             (
                 "conflicting view",
-                EvidenceValidationError::ViewMismatch,
+                EvidenceValidationError::SignerMismatch,
                 roundtrip_case_conflicting_view,
             ),
             (

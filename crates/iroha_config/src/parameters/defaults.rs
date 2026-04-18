@@ -2820,7 +2820,7 @@ pub mod sumeragi {
     /// Multiplier for DA commit-quorum timeout.
     pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Multiplier for availability timeout in DA mode.
-    pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 1;
+    pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.
     pub const DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 100;
     /// Default interval between kura persistence retry attempts (milliseconds).

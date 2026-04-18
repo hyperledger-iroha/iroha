@@ -18941,18 +18941,32 @@ impl State {
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
-            bindings.retain(|binding| {
-                peer_has_live_consensus_key(world, &binding.peer_id, block_height)
-            });
-            bindings.sort_by(|lhs, rhs| {
-                lhs.validator
-                    .cmp(&rhs.validator)
-                    .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
-            });
-            bindings.dedup_by(|lhs, rhs| lhs.peer_id == rhs.peer_id);
-            return bindings
+            if !bindings.is_empty() {
+                bindings.retain(|binding| {
+                    peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                });
+                bindings.sort_by(|lhs, rhs| {
+                    lhs.validator
+                        .cmp(&rhs.validator)
+                        .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
+                });
+                bindings.dedup_by(|lhs, rhs| lhs.peer_id == rhs.peer_id);
+                return bindings
+                    .into_iter()
+                    .map(|binding| binding.peer_id)
+                    .collect();
+            }
+        }
+
+        if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
+            validators.sort();
+            validators.dedup();
+            return validators
                 .into_iter()
-                .map(|binding| binding.peer_id)
+                .filter_map(|validator| {
+                    let peer = PeerId::new(validator.try_signatory()?.clone());
+                    peer_has_live_consensus_key(world, &peer, block_height).then_some(peer)
+                })
                 .collect();
         }
 

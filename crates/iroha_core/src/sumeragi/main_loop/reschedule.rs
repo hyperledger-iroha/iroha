@@ -112,7 +112,7 @@ fn retransmit_cooldown_multiplier(pressure_score: u8) -> u32 {
 
 pub(super) fn near_quorum_payload_timeout(rebroadcast_cooldown: Duration) -> Duration {
     super::saturating_mul_duration(rebroadcast_cooldown, 2)
-        .clamp(Duration::from_millis(400), Duration::from_millis(2_000))
+        .clamp(Duration::from_millis(200), Duration::from_millis(2_000))
 }
 
 pub(super) fn contiguous_frontier_vote_backed_resend_window(
@@ -587,6 +587,7 @@ impl Actor {
                     pending.height,
                     pending.view,
                     now,
+                    false,
                 );
             let same_height_rbc_sender_activity_active = contiguous_frontier
                 && self
@@ -619,10 +620,45 @@ impl Actor {
                                 now,
                             )
                     });
+            let same_height_missing_block_recovery_backlog_active = contiguous_frontier
+                && (queue_depths.block_payload_rx > 0
+                    || queue_depths.rbc_chunk_rx > 0
+                    || queue_depths.block_rx > 0)
+                && self
+                    .pending
+                    .missing_block_requests
+                    .iter()
+                    .any(|(missing_hash, request)| {
+                        request.height == pending.height
+                            && matches!(
+                                request.phase,
+                                crate::sumeragi::consensus::Phase::Prepare
+                                    | crate::sumeragi::consensus::Phase::Commit
+                            )
+                            && self.missing_block_request_has_actionable_dependency(
+                                *missing_hash,
+                                request,
+                                committed_height,
+                                now,
+                            )
+                    });
+            let same_height_quorum_timeout_owner_active = contiguous_frontier
+                && self.frontier_recovery.as_ref().is_some_and(|state| {
+                    state.frontier_height == pending.height
+                        && state.last_cause == "quorum_timeout"
+                        && (state.last_action_at.is_some()
+                            || state.last_dependency_progress_at.is_some())
+                        && now.saturating_duration_since(state.entered_at)
+                            < self
+                                .frontier_recovery_window()
+                                .max(Duration::from_millis(1))
+                });
             let same_height_actionable_progress_active = same_height_dependency_backlog_active
                 || same_height_vote_backed_work_active
                 || same_height_rbc_sender_activity_active
-                || same_height_fresh_missing_block_request;
+                || same_height_fresh_missing_block_request
+                || same_height_missing_block_recovery_backlog_active
+                || same_height_quorum_timeout_owner_active;
             if near_commit_quorum
                 && missing_local_data
                 && !quorum_reached
@@ -723,6 +759,35 @@ impl Actor {
                     && same_height_actionable_progress_active
                     && progress_stall_age < zero_vote_backlog_deadline
                 {
+                    let same_slot_ingress_active = self.frontier_recovery_same_slot_ingress_active(
+                        pending.height,
+                        pending.view,
+                        now,
+                        queue_depths,
+                    );
+                    if contiguous_frontier
+                        && self.frontier_recovery.is_none()
+                        && (same_height_missing_block_recovery_backlog_active
+                            || same_height_dependency_backlog_active
+                            || same_slot_ingress_active)
+                    {
+                        self.frontier_recovery = Some(super::FrontierRecoveryState {
+                            frontier_height: pending.height,
+                            phase: super::FrontierRecoveryPhase::CatchUp,
+                            entered_at: now,
+                            last_progress_at: now,
+                            last_dependency_progress_at:
+                                (same_height_missing_block_recovery_backlog_active
+                                    || same_height_dependency_backlog_active)
+                                    .then_some(now),
+                            last_action_at: None,
+                            no_progress_windows: 0,
+                            cleanup_done: false,
+                            last_view: pending.view,
+                            last_rotation_view: None,
+                            last_cause: "quorum_timeout",
+                        });
+                    }
                     debug!(
                         height = pending.height,
                         view = pending.view,
@@ -739,6 +804,37 @@ impl Actor {
                         consensus_rx_depth = queue_depths.consensus_rx,
                         "deferring quorum reschedule: zero-vote block still has same-height recovery progress in flight"
                     );
+                    continue;
+                }
+                let same_slot_ingress_active = contiguous_frontier
+                    && !has_votes
+                    && self.frontier_recovery_same_slot_ingress_active(
+                        pending.height,
+                        pending.view,
+                        now,
+                        queue_depths,
+                    );
+                let availability_ingress_active =
+                    queue_depths.block_payload_rx > 0 || queue_depths.rbc_chunk_rx > 0;
+                if same_slot_ingress_active
+                    && (availability_ingress_active
+                        || progress_stall_age < zero_vote_backlog_deadline)
+                {
+                    if self.frontier_recovery.is_none() {
+                        self.frontier_recovery = Some(super::FrontierRecoveryState {
+                            frontier_height: pending.height,
+                            phase: super::FrontierRecoveryPhase::CatchUp,
+                            entered_at: now,
+                            last_progress_at: now,
+                            last_dependency_progress_at: None,
+                            last_action_at: None,
+                            no_progress_windows: 0,
+                            cleanup_done: false,
+                            last_view: pending.view,
+                            last_rotation_view: None,
+                            last_cause: "quorum_timeout",
+                        });
+                    }
                     continue;
                 }
                 if has_votes
@@ -1345,6 +1441,10 @@ impl Actor {
         let commit_vote_count = vote_count;
         let reschedule_vote_count = precommit_vote_count.max(commit_vote_count);
         let has_reschedule_votes = reschedule_vote_count > 0;
+        let frontier_height = u64::try_from(state_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let contiguous_frontier = height == frontier_height;
         let progress_age = pending.progress_age(now);
         let last_reschedule_ms = pending
             .last_quorum_reschedule
@@ -1375,6 +1475,18 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if local_only_commit_topology && pending.local_commit_vote_emitted() {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                progress_age_ms = progress_age.as_millis(),
+                "deferring quorum reschedule: local-only commit topology already emitted its local vote"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         let zero_vote_progress_window = reschedule_backoff.max(Duration::from_millis(1));
         let zero_vote_fast_reschedule_allowed = self.config.pacemaker.da_fast_reschedule
             && self.runtime_da_enabled()
@@ -1384,6 +1496,7 @@ impl Actor {
                 &pending,
             );
         if no_commit_evidence
+            && pending.last_quorum_reschedule.is_none()
             && progress_age < zero_vote_progress_window
             && !zero_vote_fast_reschedule_allowed
         {
@@ -1401,10 +1514,6 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        let frontier_height = u64::try_from(state_height)
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        let contiguous_frontier = height == frontier_height;
         let passive_frontier_catchup_owner =
             contiguous_frontier && self.frontier_slot_passive_catchup_owns_height(height);
         if passive_frontier_catchup_owner {
@@ -1419,26 +1528,56 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if contiguous_frontier
+            && vote_count == 0
+            && !pending.local_commit_vote_emitted()
+            && !keep_commit_qc
+            && self.seed_frontier_slot_from_same_height_evidence(
+                height,
+                view,
+                now,
+                "quorum_timeout",
+                false,
+            )
+        {
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         let frontier_slot_owner_was_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
-        if contiguous_frontier {
-            let _ = self.handle_frontier_slot_event(
+        let same_slot_vote_backed_evidence = contiguous_frontier
+            && !keep_commit_qc
+            && self.slot_has_vote_backed_consensus_evidence(height, view);
+        let manifest_gate_pending =
+            matches!(pending.last_gate, Some(GateReason::ManifestGuard { .. }));
+        if contiguous_frontier
+            && !has_reschedule_votes
+            && !frontier_slot_owner_was_active
+            && !keep_commit_qc
+            && self.seed_frontier_slot_from_same_height_evidence(
+                height,
+                view,
                 now,
-                super::FrontierSlotEvent::OnBodyAvailable {
-                    block_hash,
-                    view,
-                    sender: None,
-                },
-            );
+                "quorum_timeout",
+                false,
+            )
+        {
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
         }
-        let same_slot_vote_backed_evidence =
-            contiguous_frontier && self.slot_has_vote_backed_consensus_evidence(height, view);
         let effective_has_reschedule_votes = has_reschedule_votes
             || same_slot_vote_backed_evidence
-            || frontier_slot_owner_was_active;
+            || frontier_slot_owner_was_active
+            || manifest_gate_pending;
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = !effective_has_reschedule_votes;
+        #[cfg(test)]
+        if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+            eprintln!(
+                "inner {block_hash} keep_qc={keep_commit_qc} manifest={manifest_gate_pending} has={has_reschedule_votes} same={same_slot_vote_backed_evidence} owner={frontier_slot_owner_was_active} drop={drop_pending}"
+            );
+        }
         let authoritative_payload_present = !drop_pending
             && Self::payload_available_for_da(
                 &self.subsystems.da_rbc.rbc.sessions,
@@ -1452,10 +1591,15 @@ impl Actor {
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
+        let authoritative_payload_can_bypass_reassembly = authoritative_payload_present
+            && queue_depths.block_payload_rx == 0
+            && queue_depths.block_rx == 0
+            && !self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
         let vote_backed_frontier_same_height_recovery_active = contiguous_frontier
             && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately
+            && !authoritative_payload_can_bypass_reassembly
             && self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
         let vote_backed_frontier_window_owned = contiguous_frontier
             && effective_has_reschedule_votes
@@ -1507,6 +1651,16 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if contiguous_frontier {
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash,
+                    view,
+                    sender: None,
+                },
+            );
+        }
         let rotate_zero_vote_frontier_immediately = contiguous_frontier && drop_pending;
         let handoff_frontier_quorum_timeout_owner = contiguous_frontier
             && effective_has_reschedule_votes
@@ -1514,6 +1668,7 @@ impl Actor {
             && !rotate_authoritative_frontier_immediately;
         let handoff_zero_vote_frontier_owner = contiguous_frontier
             && drop_pending
+            && !keep_commit_qc
             && !frontier_slot_owner_was_active
             && self.seed_frontier_slot_from_same_height_evidence(
                 height,
@@ -1556,6 +1711,10 @@ impl Actor {
                 )
                 .is_empty()
         {
+            #[cfg(test)]
+            if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+                eprintln!("noop targets empty {block_hash}");
+            }
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =
@@ -1662,6 +1821,17 @@ impl Actor {
             || rebroadcast.block_sync
             || rebroadcast.block
             || rebroadcast.missing_block_fetch;
+        #[cfg(test)]
+        if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+            eprintln!(
+                "action {block_hash} action={action_taken} drop={drop_pending} requeued={requeued} emitted={emitted_local_vote} local={} votes={} block={} sync={} fetch={}",
+                rebroadcast.local_vote,
+                rebroadcast.votes,
+                rebroadcast.block,
+                rebroadcast.block_sync,
+                rebroadcast.missing_block_fetch
+            );
+        }
         if !action_taken {
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
@@ -2193,7 +2363,7 @@ mod tests {
     fn near_quorum_payload_timeout_clamps_to_expected_window() {
         assert_eq!(
             near_quorum_payload_timeout(Duration::from_millis(50)),
-            Duration::from_millis(400)
+            Duration::from_millis(200)
         );
         assert_eq!(
             near_quorum_payload_timeout(Duration::from_millis(300)),

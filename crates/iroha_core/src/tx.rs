@@ -3212,6 +3212,15 @@ fn extract_lane_identity_metadata(
 ) -> Result<(Option<UniversalAccountId>, Vec<String>), TransactionRejectionReason> {
     extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(
         |err| match err {
+            LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace } => {
+                reject_lane_policy(
+                    lane_alias,
+                    format!(
+                        "UAID {uaid} is not bound to dataspace {}",
+                        dataspace.as_u64()
+                    ),
+                )
+            }
             LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => reject_lane_policy(
                 lane_alias,
                 format!(
@@ -4182,7 +4191,9 @@ pub mod tests {
             GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
         },
         kura::Kura,
-        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        nexus::space_directory::{
+            SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        },
         query::store::LiveQueryStore,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, StateBlock, StateReadOnly, World},
@@ -4244,23 +4255,35 @@ pub mod tests {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             world.space_directory_manifests.insert(uaid, set);
+            if manifest_active {
+                let mut bindings = UaidDataspaceBindings::default();
+                bindings.bind_account(dataspace, authority.clone());
+                world.uaid_dataspaces.insert(uaid, bindings);
+            }
         }
 
         (world, authority)
     }
 
     #[test]
-    fn lane_identity_allows_global_uaid_without_dataspace_manifest() {
+    fn lane_identity_rejects_uaid_without_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-no-manifest"));
         let dataspace = TestDataSpaceId::new(7);
         let (world, authority) = world_with_uaid_account(uaid, dataspace, false, true);
         let world_view = world.view();
 
-        let (observed, tags) =
+        let err =
             super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
-                .expect("global UAID routing should not require dataspace manifest");
-        assert_eq!(observed, Some(uaid));
-        assert!(tags.is_empty(), "no manifest tags expected");
+                .expect_err("UAID routing must require a dataspace binding");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("not bound to dataspace"),
+                    "expected missing binding rejection message, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
     }
 
     #[test]
