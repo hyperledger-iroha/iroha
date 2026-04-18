@@ -4766,7 +4766,7 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::RegisterAsset {
-                            name,
+                            asset,
                             symbol,
                             quantity,
                             mintable,
@@ -4775,12 +4775,12 @@ impl Compiler {
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
-                            if let Some(name_str) = string_map.get(&(func_idx, *name)) {
-                                let key_name = DataKey(DataKind::Name, name_str.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 10, key_name);
+                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
+                                let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_asset);
                             } else {
-                                let r_name = src_reg(name, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_name, 0)?);
+                                let r_asset = src_reg(asset, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_asset, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             let r_symbol = src_reg(symbol, scratch1, &mut code)?;
@@ -4796,17 +4796,22 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::CreateNewAsset {
-                            name,
+                            asset,
                             symbol,
                             quantity,
                             account,
                             mintable,
                         } => {
-                            let r_name = src_reg(name, scratch1, &mut code)?;
                             let r_symbol = src_reg(symbol, scratch2, &mut code)?;
                             let r_qty = src_reg(quantity, scratchd, &mut code)?;
                             let r_mint = src_reg(mintable, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, r_name, 0)?);
+                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
+                                let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key_asset);
+                            } else {
+                                let r_asset = src_reg(asset, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_asset, 0)?);
+                            }
                             push_word(&mut code, encode_addi(11, r_symbol, 0)?);
                             push_word(&mut code, encode_addi(12, r_qty, 0)?);
                             push_word(&mut code, encode_addi(13, r_mint, 0)?);
@@ -4816,10 +4821,14 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let r_acc = src_reg(account, scratch1, &mut code)?;
-                            let r_name = src_reg(name, scratch2, &mut code)?;
-                            let r_qty = src_reg(quantity, scratchd, &mut code)?;
                             push_word(&mut code, encode_addi(10, r_acc, 0)?);
-                            push_word(&mut code, encode_addi(11, r_name, 0)?);
+                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
+                                let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, key_asset);
+                            } else {
+                                let r_asset = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_asset, 0)?);
+                            }
                             push_word(&mut code, encode_addi(12, r_qty, 0)?);
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,

@@ -257,14 +257,14 @@ pub enum Instr {
     },
     /// Register an asset definition with additional metadata.
     RegisterAsset {
-        name: Temp,
+        asset: Temp,
         symbol: Temp,
         quantity: Temp,
         mintable: Temp,
     },
     /// Helper builtin combining registration and mint into one operation.
     CreateNewAsset {
-        name: Temp,
+        asset: Temp,
         symbol: Temp,
         quantity: Temp,
         account: Temp,
@@ -4550,12 +4550,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "register_asset" => {
-                    let name = lower_expr(ctx, &args[0], vars);
+                    let asset = lower_expr(ctx, &args[0], vars);
                     let symbol = lower_expr(ctx, &args[1], vars);
                     let qty = lower_expr_as_numeric(ctx, &args[2], vars);
                     let mint = lower_expr(ctx, &args[3], vars);
                     ctx.current_instr(Instr::RegisterAsset {
-                        name,
+                        asset,
                         symbol,
                         quantity: qty,
                         mintable: mint,
@@ -4565,13 +4565,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "create_new_asset" => {
-                    let name = lower_expr(ctx, &args[0], vars);
+                    let asset = lower_expr(ctx, &args[0], vars);
                     let symbol = lower_expr(ctx, &args[1], vars);
                     let qty = lower_expr_as_numeric(ctx, &args[2], vars);
                     let account = lower_expr(ctx, &args[3], vars);
                     let mint = lower_expr(ctx, &args[4], vars);
                     ctx.current_instr(Instr::CreateNewAsset {
-                        name,
+                        asset,
                         symbol,
                         quantity: qty,
                         account,

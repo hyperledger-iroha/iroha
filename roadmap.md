@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Kotodama explicit `AssetDefinitionId` registration):
+Kotodama no longer lowers `register_asset(...)` and `create_new_asset(...)`
+through a bare `Name` pointer for `SYSCALL_REGISTER_ASSET`. The language now
+requires an explicit `AssetDefinitionId` in those builtins, the compiler
+publishes `AssetDefinitionId` TLVs to match the current host ABI, and the
+affected IVM tests/examples were refreshed to call `asset_definition(...)`
+explicitly. This closes the `kotodama_register_account_asset_tlv`
+`DecodeError` regression that was left open after the earlier domain-fixture
+refresh.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_register_account_asset_tlv -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_register_asset -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_create_new_asset_builtin -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
+- open work after this slice:
+  - investigate the separate `kotodama_role_builtins` failures still present in
+    the runtime account/authority path (`grant_role`, `grant_permission`,
+    `authority()`, and the role-bootstrap mint flow)
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
 Latest sync (2026-04-18 Kotodama fully qualified `NftId` fixtures):
 The stale Kotodama fixtures that still used bare `nft_id("name$domain")`
 literals were refreshed to the canonical `name$domain.dataspace` form across
@@ -59,8 +97,6 @@ literal validation rules.
   - `cargo test -p kotodama_lang lower_pointer_constructors_to_datarefs -- --nocapture`
   - `cargo test -p kotodama_lang lower_struct_fields_for_transfer_domain -- --nocapture`
 - open work after this slice:
-  - investigate the separate `register_asset(...)` / `SYSCALL_REGISTER_ASSET`
-    runtime `DecodeError` still exposed by `cargo test -p ivm kotodama -- --nocapture`
   - run the full `cargo test --workspace` and strict clippy pass during a
     longer clean validation window
 

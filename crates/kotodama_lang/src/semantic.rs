@@ -5168,13 +5168,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "register_asset" => {
                     if arg_typed.len() != 4
-                        || arg_typed[0].ty != Type::String
+                        || arg_typed[0].ty != Type::AssetDefinitionId
                         || arg_typed[1].ty != Type::String
                         || !is_int_like(&arg_typed[2].ty)
                         || !is_int_like(&arg_typed[3].ty)
                     {
                         return Err(SemanticError {
-                            message: "register_asset expects string, string, int, int".into(),
+                            message: "register_asset expects (AssetDefinitionId, string, int, int)"
+                                .into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -5187,15 +5188,16 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "create_new_asset" => {
                     if arg_typed.len() != 5
-                        || arg_typed[0].ty != Type::String
+                        || arg_typed[0].ty != Type::AssetDefinitionId
                         || arg_typed[1].ty != Type::String
                         || !is_int_like(&arg_typed[2].ty)
-                        || !is_int_like(&arg_typed[3].ty)
+                        || arg_typed[3].ty != Type::AccountId
                         || !is_int_like(&arg_typed[4].ty)
                     {
                         return Err(SemanticError {
-                            message: "create_new_asset expects string, string, int, int, int"
-                                .into(),
+                            message:
+                                "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
+                                    .into(),
                         });
                     }
                     Ok(TypedExpr {

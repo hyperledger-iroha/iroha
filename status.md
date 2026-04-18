@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Kotodama asset registration now requires explicit `AssetDefinitionId` pointers
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now treat `register_asset(...)` and `create_new_asset(...)` as pointer-ABI asset-definition operations instead of legacy bare-name calls. The compiler now publishes `AssetDefinitionId` TLVs for `SYSCALL_REGISTER_ASSET`, matching the current `WsvHost` and `CoreHost` ABI surface that rejects `Name` TLVs for asset registration.
+- The affected Kotodama coverage and examples were refreshed to pass explicit asset-definition constructors: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`, and `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_register_account_asset_tlv -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_register_asset -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_create_new_asset_builtin -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
+- Follow-up verification also surfaced separate pre-existing red coverage in `cargo test -p ivm --test kotodama_role_builtins -- --nocapture` (`grant_role`, `grant_permission`, `authority()`, and the role-bootstrap mint path), which is outside the explicit-asset registration fix.
+
 ## 2026-04-18 Follow-up: Kotodama `NftId` fixtures refreshed to fully qualified literals
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_pointer_roundtrips.rs` now uses canonical `name$domain.dataspace` NFT literals again, matching the current `NftId::from_str` rule that delegates the domain segment to `DomainId::parse_fully_qualified`.
 - The same `NftId` refresh was applied to `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`, plus the nearby structured-data filter coverage in `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/parser.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs` so the Kotodama test fixtures consistently use `wonderland.universal` for NFT and RWA ids.

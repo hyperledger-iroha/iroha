@@ -21,7 +21,8 @@ fn loop_mfc(from_account: AccountId, to_account: AccountId) {
 #[access(read="*", write="*")]
 fn main(from: AccountId, to: AccountId) { // `to` is optional and defaults to `from`
     // Register the asset definition before minting any tokens.
-    register_asset("makoto_free_cash", "MFC", 0, 1);
+    let mfc = mfc_asset();
+    register_asset(mfc, "MFC", 0, 1);
     let mfc = mfc_asset();
     mint_asset(from, mfc, 1337);
     let dest = to; // caller may omit `to` by passing the same account
