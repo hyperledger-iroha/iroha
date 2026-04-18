@@ -303,7 +303,13 @@ root encodings, malformed query/AIR/FRI opening shapes, and direct zero-arity
 FRI query-chain rejection. The newest proof-module coverage also pins backend
 artifact materialisation field mapping, backend artifact count mismatches,
 malformed trace/lookup/AIR root encodings, AIR challenge value rejection, and
-default-limit AIR/FRI vector-count mismatches.
+default-limit AIR/FRI vector-count mismatches. The latest helper coverage pins
+explicit public-input root preservation, direct `PublicIO` mismatch errors,
+permission-root/transaction-set hash domain separation, grant/revoke permission
+hash sorting and id-length rejection, batch-size accounting for metadata and
+role payloads, field-Norito non-canonical tail rejection, terminal FRI
+query-chain success/failure without fold rounds, and Goldilocks modular folding
+wraparound.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
