@@ -43,9 +43,12 @@ fn large_world() -> World {
     let accounts = account_ids
         .into_iter()
         .map(|id| Account::new(id).build(&authority));
-    let asset_definitions = asset_definition_ids
-        .into_iter()
-        .map(|id| AssetDefinition::numeric(id).build(&authority));
+    let asset_definitions = asset_definition_ids.into_iter().map(|id| {
+        let name = id.name().to_string();
+        AssetDefinition::numeric(id)
+            .with_name(name)
+            .build(&authority)
+    });
 
     World::with(domains, accounts, asset_definitions)
 }

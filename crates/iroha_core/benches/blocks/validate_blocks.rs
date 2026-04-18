@@ -78,7 +78,13 @@ impl StateValidateBlocks {
         let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
         let alice_id = (*ALICE_ID).clone();
         let alice_keypair = (*ALICE_KEYPAIR).clone();
-        let state = build_state(rt, &alice_id, alice_keypair.private_key());
+        let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
+        let (domain_ids, _, _) = generate_ids(
+            BENCH_DOMAINS,
+            BENCH_ACCOUNTS_PER_DOMAIN,
+            BENCH_ASSETS_PER_DOMAIN,
+        );
+        seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
         let instructions = instruction_batches().to_vec();
 
         Self {

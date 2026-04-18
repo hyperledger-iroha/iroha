@@ -17,12 +17,13 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId,
-    account::Account,
+    account::{Account, AccountAddress},
     asset::{AssetDefinition, AssetDefinitionId},
     domain::Domain,
     isi::{InstructionBox, Log},
     parameter::TransactionParameters,
     prelude::*,
+    sns::{NameControllerV1, NameRecordV1},
     transaction::IvmBytecode,
 };
 use iroha_executor_data_model::permission::{
@@ -114,7 +115,8 @@ pub fn populate_state(
     }
 
     for asset_definition_id in asset_definitions {
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string());
         instructions.push(Register::asset_definition(asset_definition).into());
         let can_unregister_asset_definition = Grant::account_permission(
             CanUnregisterAssetDefinition {
@@ -224,7 +226,8 @@ pub fn restore_every_nth(
             .enumerate()
         {
             if k % nth == 0 || i % nth == 0 {
-                let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+                let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(asset_definition_id.name().to_string());
                 instructions.push(Register::asset_definition(asset_definition).into());
             }
         }
@@ -322,6 +325,31 @@ pub fn build_state(
     state
 }
 
+/// Seed active SNS domain-name leases for synthetic benchmark domains.
+pub fn seed_domain_name_leases(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
+    for domain_id in domains {
+        let selector =
+            iroha_core::sns::selector_for_domain(domain_id).expect("benchmark domain id is valid");
+        let address =
+            AccountAddress::from_account_id(owner_id).expect("benchmark owner id is addressable");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner_id.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        state.world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+}
+
 fn construct_domain_id(i: usize) -> DomainId {
     DomainId::try_new(format!("non_inlinable_domain_name_{i}"), "universal").unwrap()
 }
@@ -334,14 +362,12 @@ fn generate_account_id(seed: u128) -> AccountId {
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
-    use iroha_crypto::KeyPair;
-    #[allow(unused_imports)]
-    use iroha_data_model::prelude::AccountId;
+    use iroha_data_model::peer::PeerId;
     #[allow(unused_imports)]
     use tokio::runtime::Runtime;
 
     #[allow(unused_imports)]
-    use super::build_state;
+    use super::*;
 
     #[test]
     fn build_state_succeeds_without_executor_bytecode() {
@@ -355,6 +381,36 @@ mod tests {
         let view = state.view();
         assert_eq!(view.height(), 1);
         assert!(view.latest_block().is_some());
+    }
+
+    #[test]
+    fn seed_domain_name_leases_makes_generated_domains_registrable() {
+        let rt = Runtime::new().unwrap();
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let mut state = build_state(rt.handle(), &account_id, keypair.private_key());
+        let (domain_ids, account_ids, asset_definition_ids) = generate_ids(1, 0, 0);
+
+        seed_domain_name_leases(&mut state, &domain_ids, &account_id);
+
+        let (peer_public_key, peer_private_key) =
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let topology = Topology::new(vec![PeerId::new(peer_public_key)]);
+        let (block, _) = create_block(
+            &state,
+            populate_state(
+                &domain_ids,
+                &account_ids,
+                &asset_definition_ids,
+                &account_id,
+            ),
+            account_id.clone(),
+            keypair.private_key(),
+            &topology,
+            &peer_private_key,
+        );
+
+        assert_eq!(block.as_ref().errors().count(), 0);
     }
 }
 
