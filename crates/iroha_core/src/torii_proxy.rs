@@ -67,6 +67,8 @@ pub enum ToriiReadEndpointV1 {
     AccountTransactionsQuery,
     /// `GET /v1/pipeline/transactions/status`
     PipelineTransactionStatusGet,
+    /// `GET /v1/proofs/{id}`
+    ProofRecordGet,
     /// `GET /v1/accounts`
     AccountsList,
     /// `POST /v1/accounts/query`

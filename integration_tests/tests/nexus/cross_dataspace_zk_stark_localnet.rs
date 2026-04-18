@@ -1601,3 +1601,64 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProofId, STARK_BACKEND, decode_proof_record_payload, parse_proof_status_from_json,
+    };
+    use iroha::data_model::proof::{ProofRecord, ProofStatus};
+
+    fn sample_proof_id() -> ProofId {
+        ProofId {
+            backend: STARK_BACKEND.into(),
+            proof_hash: [0xAB; 32],
+        }
+    }
+
+    #[test]
+    fn decode_proof_record_payload_accepts_minimal_json_object_shape() {
+        let payload = format!(
+            r#"{{
+                "id": {{
+                    "backend": "{backend}",
+                    "proof_hash": "{proof_hash}"
+                }},
+                "status": "Rejected"
+            }}"#,
+            backend = STARK_BACKEND,
+            proof_hash = hex::encode([0xAB; 32]),
+        );
+
+        let record = decode_proof_record_payload(payload.as_bytes()).expect("decode JSON payload");
+
+        assert_eq!(record.id, sample_proof_id());
+        assert_eq!(record.status, ProofStatus::Rejected);
+    }
+
+    #[test]
+    fn decode_proof_record_payload_accepts_norito_record_payload() {
+        let record = ProofRecord {
+            id: sample_proof_id(),
+            vk_ref: None,
+            vk_commitment: None,
+            status: ProofStatus::Verified,
+            verified_at_height: None,
+            bridge: None,
+        };
+        let payload = norito::to_bytes(&record).expect("encode norito proof record");
+
+        let decoded = decode_proof_record_payload(&payload).expect("decode norito payload");
+
+        assert_eq!(decoded.id, record.id);
+        assert_eq!(decoded.status, ProofStatus::Verified);
+    }
+
+    #[test]
+    fn parse_proof_status_from_json_rejects_unknown_status_strings() {
+        let value =
+            norito::json::from_str::<norito::json::Value>(r#""PendingApproval""#).expect("json");
+
+        assert!(parse_proof_status_from_json(&value).is_none());
+    }
+}

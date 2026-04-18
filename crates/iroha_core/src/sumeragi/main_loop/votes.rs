@@ -1593,7 +1593,7 @@ impl Actor {
         let now = Instant::now();
         let contiguous_height = committed_height.saturating_add(1);
         let canonical_frontier_evidence_present =
-            self.committed_edge_conflict_owner_has_local_evidence(contiguous_height);
+            self.committed_edge_conflict_owner_has_canonical_frontier_evidence(contiguous_height);
         let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
         let active_frontier_view = self
             .phase_tracker
