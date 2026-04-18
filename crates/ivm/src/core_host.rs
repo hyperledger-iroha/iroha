@@ -2391,8 +2391,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Return the domainless account subject so contracts can compare
                 // authority() against AccountId literals and stored AccountId state.
-                const ACCOUNT: &str =
-                    "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+                const ACCOUNT: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
                 let authority = AccountId::parse_encoded(ACCOUNT)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| VMError::NoritoInvalid)?;

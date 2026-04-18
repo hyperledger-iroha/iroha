@@ -9797,20 +9797,16 @@ mod tests {
         super::reset_nexus_economics_for_tests();
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
-            payer_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
-                .to_owned(),
+            payer_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
             amount: Numeric::from(10_u32),
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
-            payer_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-                .to_owned(),
+            payer_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
-                .to_owned(),
-            authority_id: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
-                .to_owned(),
+            sponsor_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
+            authority_id: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".to_owned(),
         });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);

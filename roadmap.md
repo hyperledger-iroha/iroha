@@ -22,6 +22,38 @@ strict structural-only validation.
   - run full `cargo test --workspace` and strict clippy during a longer clean
     validation window
 
+Latest sync (2026-04-17 Kotodama fully qualified `DomainId` fixtures):
+The stale Kotodama fixtures that still used bare `domain("label")` literals
+were refreshed to the canonical `domain.dataspace` form across the affected
+IVM integration tests, Kotodama IR unit coverage, and the `domain_ops.ko`
+sample. This fixes the current `DomainId::parse_fully_qualified` semantic
+failure in `kotodama_domain_builtins_corehost` without loosening the compiler's
+literal validation rules.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_domain_builtins_corehost.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_struct_fields_corehost.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_domain_e2e.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/domain_ops.ko`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_domain_builtins_corehost -- --nocapture`
+  - `cargo test -p kotodama_lang lower_pointer_constructors_to_datarefs -- --nocapture`
+  - `cargo test -p kotodama_lang lower_struct_fields_for_transfer_domain -- --nocapture`
+- open work after this slice:
+  - investigate the separate `register_asset(...)` / `SYSCALL_REGISTER_ASSET`
+    runtime `DecodeError` still exposed by `cargo test -p ivm kotodama -- --nocapture`
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
 Latest sync (2026-04-17 Kotodama zero-arg entrypoint hints and canonical domain fixtures):
 Kotodama manifest generation no longer looks up every public/view entrypoint
 under a synthetic wrapper symbol. The compiler now uses the wrapper name only

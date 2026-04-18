@@ -6261,8 +6261,7 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-                        .to_owned(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -8965,9 +8964,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_domains_page(ExplorerDomainsQuery {
                 page: Some(1),
                 per_page: Some(10),
-                owned_by: Some(
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-                ),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
             .expect("page");
@@ -9006,9 +9003,7 @@ state_tiered_cold_entries 2
                 page: Some(2),
                 per_page: Some(5),
                 domain: Some("sora".into()),
-                owned_by: Some(
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-                ),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
             .expect("page");
@@ -9044,9 +9039,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_assets_page(ExplorerAssetsQuery {
                 page: Some(1),
                 per_page: Some(50),
-                owned_by: Some(
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-                ),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 definition: Some("usd#sora".into()),
             })
             .await
@@ -9086,9 +9079,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_nfts_page(ExplorerNftsQuery {
                 page: Some(3),
                 per_page: Some(5),
-                owned_by: Some(
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-                ),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 domain: Some("gallery".into()),
             })
             .await
@@ -9231,9 +9222,7 @@ state_tiered_cold_entries 2
         let page = client
             .list_triggers(TriggerListQuery {
                 namespace: Some(" core ".into()),
-                authority: Some(
-                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
-                ),
+                authority: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 limit: Some(5),
                 offset: Some(10),
             })

@@ -410,9 +410,7 @@ mod tests {
     fn filter_expr_serialization_matches_expected_value() {
         let expr = FilterExpr::Eq(
             FieldPath("id".into()),
-            Value::from(
-                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-            ),
+            Value::from("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
         );
         let value = filter_expr_to_value(&expr);
         let expected = obj(vec![
@@ -421,9 +419,7 @@ mod tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val(
-                        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                    ),
+                    val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
                 ]),
             ),
         ]);
@@ -446,9 +442,7 @@ mod tests {
                             "args",
                             arr(vec![
                                 val("authority"),
-                                val(
-                                    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                                ),
+                                val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
                             ]),
                         ),
                     ]),

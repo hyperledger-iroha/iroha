@@ -641,9 +641,7 @@ mod tests {
             provider_id: [0x22; 32],
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_700_000_111,
-            actor: Some(
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            ),
+            actor: Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into()),
             message: Some("queued".into()),
         };
         let digest = iroha_crypto::Hash::new(payload.encode());
@@ -716,8 +714,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-902".into()),
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
-            auditor_account:
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             proposed_penalty_nano: 50_000,
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),

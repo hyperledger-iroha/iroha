@@ -4,7 +4,7 @@ seiyaku DomainOps {
   #[access(read="*", write="*")]
   kotoage fn run() permission(Admin) {
     // Register a new domain by id
-    let domain_id = domain!("wonder");
+    let domain_id = domain!("wonder.universal");
     register_domain(domain_id);
 
     // Transfer domain ownership from the current authority (demo no-op self transfer).
