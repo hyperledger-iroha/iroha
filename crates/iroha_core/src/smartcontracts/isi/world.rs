@@ -17679,6 +17679,7 @@ pub mod isi {
             );
         }
 
+        #[cfg(feature = "zk-stark")]
         #[test]
         fn update_vk_rejects_mixed_case_stark_curve() {
             let kura = Kura::blank_kura_for_testing();
