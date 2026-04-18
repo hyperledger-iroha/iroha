@@ -22,7 +22,7 @@ use norito::{
 };
 use rand::RngCore;
 use sha3::{Digest, Sha3_256};
-use soranet_pq::{MlKemSuite, decapsulate_mlkem, encapsulate_mlkem};
+use soranet_pq::{MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os};
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -1329,7 +1329,7 @@ impl StreamingSession {
             .validate_public_key(public_bytes.as_slice())
             .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
         let (shared_secret, ciphertext) =
-            encapsulate_mlkem(self.kem_suite, public_bytes.as_slice())
+            encapsulate_mlkem_from_os(self.kem_suite, public_bytes.as_slice())
                 .map_err(|_| HandshakeError::InvalidKyberPublicKey)?;
         debug_assert_eq!(
             shared_secret.as_bytes().len(),

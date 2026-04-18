@@ -12,7 +12,10 @@ use core::{fmt, str::FromStr};
 use hkdf::Hkdf;
 use rand::{CryptoRng, RngCore};
 use sha3::{Digest, Sha3_256};
-use soranet_pq::{MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair};
+use soranet_pq::{
+    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair,
+    hedged_chacha20_rng,
+};
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -327,7 +330,13 @@ impl HybridKeyPair {
         let mut x25519_bytes = Zeroizing::new([0_u8; 32]);
         rng.fill_bytes(x25519_bytes.as_mut());
         let x25519_secret = StaticSecret::from(*x25519_bytes);
-        let kem_pair = generate_mlkem_keypair(HYBRID_KEM_SUITE);
+        let mut kem_seed = [0_u8; 32];
+        rng.fill_bytes(&mut kem_seed);
+        let mut kem_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy(kem_seed),
+            b"iroha-crypto:hybrid:keypair",
+        );
+        let kem_pair = generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng);
         let secret =
             HybridSecretKey::from_bytes(x25519_secret.to_bytes(), kem_pair.secret_key.as_slice())
                 .expect("generated ML-KEM secret must be valid");
@@ -483,8 +492,14 @@ where
                 return Err(HybridError::InvalidX25519SharedSecret);
             }
 
+            let mut kem_seed = [0_u8; 32];
+            rng.fill_bytes(&mut kem_seed);
+            let mut kem_rng = hedged_chacha20_rng(
+                HedgedRngSeed::from_entropy(kem_seed),
+                b"iroha-crypto:hybrid:encapsulate",
+            );
             let (kyber_shared, kyber_ciphertext) =
-                encapsulate_mlkem(HYBRID_KEM_SUITE, recipient.kyber_bytes())
+                encapsulate_mlkem(HYBRID_KEM_SUITE, recipient.kyber_bytes(), &mut kem_rng)
                     .map_err(|_| HybridError::InvalidKyberPublicKey)?;
             debug_assert_eq!(
                 kyber_ciphertext.as_bytes().len(),

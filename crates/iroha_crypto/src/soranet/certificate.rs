@@ -15,7 +15,7 @@ use std::{
 
 use blake3::Hasher as Blake3;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
+use soranet_pq::{MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
 use crate::soranet::handshake::HandshakeSuite;
@@ -596,10 +596,12 @@ impl RelayCertificateV2 {
         let ed25519_signature: Signature = ed25519_signing_key.sign(&digest);
 
         let mldsa_digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
-        let mldsa_signature = sign_mldsa(MlDsaSuite::MlDsa65, mldsa_secret_key, &mldsa_digest)
-            .map_err(|err| {
+        let mldsa_signature =
+            sign_mldsa_from_os(MlDsaSuite::MlDsa65, mldsa_secret_key, &[], &mldsa_digest).map_err(
+                |err| {
                 CertificateError::SignatureFailure(format!("ML-DSA signing failed: {err}"))
-            })?;
+                },
+            )?;
 
         Ok(RelayCertificateBundleV2 {
             certificate: self,
@@ -773,9 +775,13 @@ impl RelayCertificateBundleV2 {
         match (&self.signatures.mldsa65, phase) {
             (Some(bytes), _) => {
                 let digest = compute_signing_digest(SRC_V2_MLDSA_DOMAIN, &payload);
-                verify_mldsa(MlDsaSuite::MlDsa65, mldsa_public, &digest, bytes).map_err(|err| {
-                    CertificateError::SignatureFailure(format!("ML-DSA verify failed: {err}"))
-                })?;
+                verify_mldsa(MlDsaSuite::MlDsa65, mldsa_public, &[], &digest, bytes).map_err(
+                    |err| {
+                        CertificateError::SignatureFailure(format!(
+                            "ML-DSA verify failed: {err}"
+                        ))
+                    },
+                )?;
             }
             (None, CertificateValidationPhase::Phase1AllowSingle) => {}
             (None, CertificateValidationPhase::Phase2PreferDual) => {
@@ -1407,7 +1413,7 @@ impl<'a> CborDecoder<'a> {
 mod tests {
     use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os};
 
     use super::*;
 
@@ -1595,7 +1601,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = VerifyingKey::from(&signing_key);
 
-        let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
 
         let bundle = certificate
@@ -1626,7 +1632,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = VerifyingKey::from(&signing_key);
 
-        let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
 
         let mut bundle = certificate

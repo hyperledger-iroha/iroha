@@ -145,10 +145,6 @@ impl MlDsaError {
     fn bad_encoding(kind: &'static str, err: PqError) -> Self {
         MlDsaError::BadEncoding(Box::new(MlDsaEncodingError { kind, source: err }))
     }
-
-    fn key_generation_failed(suite: MlDsaSuite, status: i32) -> Self {
-        MlDsaError::KeyGenerationFailed { suite, status }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Error)]
