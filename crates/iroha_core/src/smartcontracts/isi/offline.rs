@@ -159,15 +159,67 @@ const KM_ORIGIN_GENERATED: u32 = 0;
 const KM_VERIFIED_BOOT_STATE_VERIFIED: u32 = 0;
 
 #[cfg(feature = "zk-stark")]
-fn verify_recursive_stark_envelope(_proof: &[u8]) -> bool {
-    // Aggregate offline STARK proofs remain unavailable in V1 because the
-    // current envelope does not carry verifier-owned AIR openings.
-    false
+fn verify_recursive_stark_envelope(proof: &[u8]) -> bool {
+    let Ok(envelope) = norito::decode_from_bytes::<crate::zk_stark::StarkVerifyEnvelopeV1>(proof)
+    else {
+        return false;
+    };
+    let expected_terms =
+        offline_stark_binding_terms(&envelope.params.domain_tag, &envelope.transcript_label);
+    let Ok(expected_digest) = crate::zk_stark::stark_air_public_digest_from_composition(
+        OFFLINE_STARK_BINDING_CONSTANT,
+        OFFLINE_STARK_BINDING_Z_COEFF,
+        &expected_terms,
+    ) else {
+        return false;
+    };
+    let Some(air) = envelope.proof.air.as_ref() else {
+        return false;
+    };
+    if air.public_digest != expected_digest {
+        return false;
+    }
+    crate::zk_stark::verify_stark_fri_envelope(proof)
 }
 
 #[cfg(not(feature = "zk-stark"))]
 fn verify_recursive_stark_envelope(_proof: &[u8]) -> bool {
     false
+}
+
+#[cfg(feature = "zk-stark")]
+const OFFLINE_STARK_BINDING_CONSTANT: u64 = 23;
+#[cfg(feature = "zk-stark")]
+const OFFLINE_STARK_BINDING_Z_COEFF: u64 = 29;
+#[cfg(feature = "zk-stark")]
+const OFFLINE_STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+
+#[cfg(feature = "zk-stark")]
+fn offline_stark_binding_terms(
+    domain_tag: &str,
+    transcript_label: &str,
+) -> Vec<crate::zk_stark::StarkCompositionTermV1> {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:offline:stark-binding-air:v1");
+    preimage.extend_from_slice(&(domain_tag.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(domain_tag.as_bytes());
+    preimage.extend_from_slice(&(transcript_label.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(transcript_label.as_bytes());
+    let digest = Sha256::digest(&preimage);
+    digest
+        .chunks_exact(8)
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(chunk);
+            crate::zk_stark::StarkCompositionTermV1 {
+                wire_index: idx as u32,
+                value: (u128::from(u64::from_le_bytes(word)) % OFFLINE_STARK_GOLDILOCKS_MODULUS)
+                    as u64,
+                coeff: (idx as u64) + 31,
+            }
+        })
+        .collect()
 }
 
 fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExecutionError {

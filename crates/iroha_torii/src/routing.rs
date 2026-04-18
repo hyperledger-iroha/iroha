@@ -7360,6 +7360,101 @@ pub async fn handle_v1_zk_submit_proof(
 }
 
 #[cfg(feature = "zk-verify-batch")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ZkVerifyBatchLimits {
+    pub(crate) open: iroha_zkp_halo2::OpenVerifyLimits,
+    pub(crate) max_batch: usize,
+    pub(crate) max_envelope_bytes: usize,
+    pub(crate) enforce_transcript_label_ascii: bool,
+}
+
+#[cfg(feature = "zk-verify-batch")]
+impl ZkVerifyBatchLimits {
+    pub(crate) const fn unbounded() -> Self {
+        Self {
+            open: iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
+            max_batch: usize::MAX,
+            max_envelope_bytes: usize::MAX,
+            enforce_transcript_label_ascii: false,
+        }
+    }
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn verify_batch_limit_rejected(
+    reason: &'static str,
+    max: usize,
+    actual: usize,
+) -> Result<Response> {
+    let payload = json_object(vec![
+        json_entry("ok", false),
+        json_entry("statuses", Value::Array(Vec::new())),
+        json_entry("error", reason),
+        json_entry("max", max as u64),
+        json_entry("actual", actual as u64),
+    ]);
+    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn envelope_allowed_for_diagnostics(
+    env: &iroha_zkp_halo2::OpenVerifyEnvelope,
+    encoded_len: usize,
+    limits: ZkVerifyBatchLimits,
+) -> bool {
+    if encoded_len > limits.max_envelope_bytes {
+        return false;
+    }
+    if limits.enforce_transcript_label_ascii && !env.transcript_label.is_ascii() {
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn verify_batch_statuses(
+    envs: &[iroha_zkp_halo2::OpenVerifyEnvelope],
+    encoded_lens: &[usize],
+    limits: ZkVerifyBatchLimits,
+) -> Vec<bool> {
+    envs.iter()
+        .zip(encoded_lens.iter().copied())
+        .map(|(env, encoded_len)| {
+            if !envelope_allowed_for_diagnostics(env, encoded_len, limits) {
+                return false;
+            }
+            let results = iroha_zkp_halo2::batch::verify_open_batch_with_limits(
+                std::slice::from_ref(env),
+                &iroha_zkp_halo2::batch::BatchOptions::default(),
+                limits.open,
+            );
+            matches!(results.first(), Some(Ok(true)))
+        })
+        .collect()
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn render_zk_verify_batch_response(ok: bool, statuses_json: Value) -> Result<Response> {
+    let payload = json_object(vec![
+        json_entry("ok", ok),
+        json_entry("statuses", statuses_json),
+    ]);
+    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "zk-verify-batch")]
 /// POST /v1/zk/verify-batch — verify a batch of standalone native IPA
 /// polynomial-opening envelopes and return JSON
 /// `{ "ok": true, "statuses": [true|false, ...] }`.
@@ -7376,7 +7471,16 @@ pub async fn handle_v1_zk_submit_proof(
 pub async fn handle_v1_zk_verify_batch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
-) -> Result<impl IntoResponse> {
+) -> Result<Response> {
+    handle_v1_zk_verify_batch_with_limits(headers, body, ZkVerifyBatchLimits::unbounded()).await
+}
+
+#[cfg(feature = "zk-verify-batch")]
+pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    limits: ZkVerifyBatchLimits,
+) -> Result<Response> {
     let ct = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -7387,8 +7491,18 @@ pub async fn handle_v1_zk_verify_batch(
         if let Ok(envs) =
             norito::decode_from_bytes::<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>>(&body)
         {
-            let results = iroha_zkp_halo2::batch::verify_open_batch(&envs);
-            let statuses: Vec<bool> = results.into_iter().map(|r| matches!(r, Ok(true))).collect();
+            if envs.len() > limits.max_batch {
+                return verify_batch_limit_rejected(
+                    "batch_too_large",
+                    limits.max_batch,
+                    envs.len(),
+                );
+            }
+            let encoded_lens: Vec<usize> = envs
+                .iter()
+                .map(|env| norito::to_bytes(env).map_or(usize::MAX, |bytes| bytes.len()))
+                .collect();
+            let statuses = verify_batch_statuses(&envs, &encoded_lens, limits);
             statuses_json = bools_to_json_array(&statuses);
             ok = true;
         }
@@ -7396,42 +7510,40 @@ pub async fn handle_v1_zk_verify_batch(
         // JSON: accept array of base64-encoded Norito envelopes.
         if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
             if let Some(arr) = v.as_array() {
-                let mut envs = Vec::with_capacity(arr.len());
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        if let Ok(bytes) =
+                if arr.len() > limits.max_batch {
+                    return verify_batch_limit_rejected(
+                        "batch_too_large",
+                        limits.max_batch,
+                        arr.len(),
+                    );
+                }
+                let statuses: Vec<bool> = arr
+                    .iter()
+                    .map(|item| {
+                        let Some(s) = item.as_str() else {
+                            return false;
+                        };
+                        let Ok(bytes) =
                             base64::engine::general_purpose::STANDARD.decode(s.as_bytes())
-                        {
-                            if let Ok(env) = norito::decode_from_bytes::<
-                                iroha_zkp_halo2::OpenVerifyEnvelope,
-                            >(&bytes)
-                            {
-                                envs.push(env);
-                            }
-                        }
-                    }
-                }
-                if !envs.is_empty() {
-                    let results = iroha_zkp_halo2::batch::verify_open_batch(&envs);
-                    let statuses: Vec<bool> =
-                        results.into_iter().map(|r| matches!(r, Ok(true))).collect();
-                    statuses_json = bools_to_json_array(&statuses);
-                    ok = true;
-                }
+                        else {
+                            return false;
+                        };
+                        let encoded_len = bytes.len();
+                        let Ok(env) = norito::decode_from_bytes::<
+                            iroha_zkp_halo2::OpenVerifyEnvelope,
+                        >(&bytes) else {
+                            return false;
+                        };
+                        let results = verify_batch_statuses(&[env], &[encoded_len], limits);
+                        results.first().copied().unwrap_or(false)
+                    })
+                    .collect();
+                statuses_json = bools_to_json_array(&statuses);
+                ok = true;
             }
         }
     }
-    let payload = json_object(vec![
-        json_entry("ok", ok),
-        json_entry("statuses", statuses_json),
-    ]);
-    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    render_zk_verify_batch_response(ok, statuses_json)
 }
 
 #[cfg(feature = "app_api")]

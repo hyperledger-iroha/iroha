@@ -68,7 +68,7 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 - Composition polynomials: for each constraint `C_j`, form `F_j(X) = C_j(X) / Z_N(X)` with degree margins listed below.
 - Lookup argument (permissions): sample `γ` from transcript. Trace product `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}`. Table product `T = ∏_j (table_perm_j - γ)`. Boundary constraint: `Z_final / T = 1`.
 - DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
-- V1 replay verification is capped by `fastpq_prover::VerifyLimits` and authenticates sampled LDE query chunks against Merkle paths rooted at `lookup_root`. Per-round FRI openings and AIR composition openings are still required before verification can become fully logarithmic.
+- V1 verification authenticates sampled LDE query chunks against `lookup_root`, requires the exact V1 AIR composition challenge count, samples row-major AIR trace openings against `air_trace_root`, checks sampled AIR composition openings against `air_composition_root`, and verifies per-round FRI openings under `fri_layers`. The FRI base layer is now the AIR composition evaluation vector, so sampled constraints are recomputed from opened current/next rows and then bound to the corresponding FRI opening without rebuilding the LDE or folding the full trace.
 - Proof object (Norito-encoded):
   ```
   Proof {
@@ -77,11 +77,16 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       parameter_set: String,
       public_io: PublicIO,
       trace_root: [u8; 32],
+      air_trace_root: [u8; 32],
+      air_composition_root: [u8; 32],
       lookup_root: [u8; 32],
+      lde_domain_size: u32,
       fri_layers: Vec<[u8; 32]>,
       alphas: Vec<Field>,
       betas: Vec<Field>,
       queries: Vec<QueryOpening>,
+      air_openings: Vec<AirConstraintOpening>,
+      fri_queries: Vec<FriQueryOpening>,
   }
 
   QueryOpening {
@@ -90,12 +95,29 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       chunk_values: Vec<Field>,
       merkle_path: Vec<Field>,
   }
+
+  FriQueryOpening {
+      initial_index: u32,
+      rounds: Vec<FriRoundOpening>,
+      final_index: u32,
+      final_values: Vec<Field>,
+      final_merkle_path: Vec<Field>,
+  }
+
+  AirConstraintOpening {
+      index: u32,
+      current_row: Vec<Field>,
+      next_row: Vec<Field>,
+      current_row_path: Vec<Field>,
+      next_row_path: Vec<Field>,
+      composition_value: Field,
+      composition_path: Vec<Field>,
+  }
   ```
-- V1 replay verifier mirrors the prover only inside `VerifyLimits`; it binds
-  sampled query chunks to `lookup_root`, but the production replacement must
-  verify per-round FRI openings and AIR composition openings without rebuilding
-  the full trace. Keep large 1k/5k/20k-row traces in prover and benchmark
-  regression suites, not node-facing verification, until that verifier lands.
+- Node-facing V1 verification no longer runs trace rebuild, LDE derivation, or
+  full recursive folding. `VerifyLimits` caps proof material, query counts, path
+  depth, and payload size; large 1k/5k/20k-row traces remain in prover and
+  benchmark regression suites.
 
 ### Degree Accounting
 | Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |
@@ -116,9 +138,10 @@ Padding rows are handled through `s_active`; dummy rows extend the trace to `N_t
   1. BLAKE2b absorb `protocol_version`, `params_version`, `parameter_set`, `public_io`, and Poseidon2 commit tag (`fastpq:v1:init`).
   2. Absorb `trace_root`, `lookup_root` (`fastpq:v1:roots`).
   3. Derive lookup challenge `γ` (`fastpq:v1:gamma`).
-  4. Derive composition challenges `α_j` (`fastpq:v1:alpha_j`).
-  5. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
-  6. Derive query indices (`fastpq:v1:query_index`).
+  4. Derive exactly two V1 composition challenges `α_j` (`fastpq:v1:alpha_j`).
+  5. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
+  6. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
+  7. Derive query indices (`fastpq:v1:query_index`).
 
   Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. Golden transcript fixture: `tests/fixtures/transcript_v1.json`.
 - **Versioning:** `protocol_version = 1`, `params_version` matches `fastpq_isi` parameter set.
