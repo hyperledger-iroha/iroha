@@ -1592,21 +1592,30 @@ impl Actor {
         self.clear_sidecar_mismatch_for_height(highest.height);
         let now = Instant::now();
         let contiguous_height = committed_height.saturating_add(1);
+        let canonical_frontier_evidence_present =
+            self.committed_edge_conflict_owner_has_local_evidence(contiguous_height);
         let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
         let active_frontier_view = self
             .phase_tracker
             .current_view(contiguous_height)
             .unwrap_or(0);
-        let new_view_entries_before = self.subsystems.propose.new_view_tracker.entries.len();
-        self.subsystems
-            .propose
-            .new_view_tracker
-            .entries
-            .retain(|(entry_height, _), _| *entry_height < contiguous_height);
-        let new_view_entries_removed = new_view_entries_before
-            .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
-        let frontier_new_view_votes_removed =
-            self.clear_new_view_vote_history_at_or_above_height(contiguous_height);
+        let (new_view_entries_removed, frontier_new_view_votes_removed) =
+            if canonical_frontier_evidence_present {
+                (0, 0)
+            } else {
+                let new_view_entries_before =
+                    self.subsystems.propose.new_view_tracker.entries.len();
+                self.subsystems
+                    .propose
+                    .new_view_tracker
+                    .entries
+                    .retain(|(entry_height, _), _| *entry_height < contiguous_height);
+                (
+                    new_view_entries_before
+                        .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len()),
+                    self.clear_new_view_vote_history_at_or_above_height(contiguous_height),
+                )
+            };
         let (
             frontier_pending_removed,
             frontier_missing_removed,
@@ -1615,7 +1624,11 @@ impl Actor {
             frontier_hints_removed,
             frontier_proposals_removed,
             frontier_seen_removed,
-        ) = self.prune_consensus_state_for_missing_block_height(contiguous_height);
+        ) = if canonical_frontier_evidence_present {
+            (0, 0, 0, 0, 0, 0, 0)
+        } else {
+            self.prune_consensus_state_for_missing_block_height(contiguous_height)
+        };
         if frontier_missing_removed > 0 {
             super::status::inc_missing_request_pruned_stale_height(
                 u64::try_from(frontier_missing_removed).unwrap_or(u64::MAX),
@@ -1633,14 +1646,21 @@ impl Actor {
                 u64::try_from(evicted_total).unwrap_or(u64::MAX),
             );
         }
-        self.clear_missing_block_recovery_for_height(contiguous_height, now);
-        self.clear_sidecar_mismatch_for_height(contiguous_height);
-        self.clear_consensus_recovery_for_round(contiguous_height, active_frontier_view);
-        let frontier_state_cleared =
-            self.force_clear_frontier_reanchor_state_for_height(contiguous_height, now);
-        let frontier_cooldowns_cleared =
-            self.clear_range_pull_escalation_cooldowns_for_height(contiguous_height);
-        let phase_tracker_clamped = if self
+        let (frontier_state_cleared, frontier_cooldowns_cleared) =
+            if canonical_frontier_evidence_present {
+                (false, 0)
+            } else {
+                self.clear_missing_block_recovery_for_height(contiguous_height, now);
+                self.clear_sidecar_mismatch_for_height(contiguous_height);
+                self.clear_consensus_recovery_for_round(contiguous_height, active_frontier_view);
+                (
+                    self.force_clear_frontier_reanchor_state_for_height(contiguous_height, now),
+                    self.clear_range_pull_escalation_cooldowns_for_height(contiguous_height),
+                )
+            };
+        let phase_tracker_clamped = if canonical_frontier_evidence_present {
+            false
+        } else if self
             .phase_tracker
             .round_height
             .is_some_and(|round_height| round_height > contiguous_height)
@@ -1654,11 +1674,12 @@ impl Actor {
         } else {
             false
         };
-        let forced_view_reset = self
-            .subsystems
-            .propose
-            .forced_view_after_timeout
-            .is_some_and(|(height, _)| height >= contiguous_height);
+        let forced_view_reset = !canonical_frontier_evidence_present
+            && self
+                .subsystems
+                .propose
+                .forced_view_after_timeout
+                .is_some_and(|(height, _)| height >= contiguous_height);
         if forced_view_reset {
             self.subsystems.propose.forced_view_after_timeout = None;
         }
@@ -1671,8 +1692,9 @@ impl Actor {
             self.frontier_catchup_has_unresolved_dependency(contiguous_height);
         let (contiguous_consensus_mode, _, _) =
             self.consensus_context_for_height(contiguous_height);
-        let committed_edge_owner_required = actionable_frontier_dependency
-            || matches!(contiguous_consensus_mode, ConsensusMode::Npos);
+        let committed_edge_owner_required = !canonical_frontier_evidence_present
+            && (actionable_frontier_dependency
+                || matches!(contiguous_consensus_mode, ConsensusMode::Npos));
         let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
             highest.height,
             "highest_qc_committed_conflict",

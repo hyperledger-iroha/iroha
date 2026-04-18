@@ -25,11 +25,21 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     ToriiClient,
     decode_pdp_commitment_header,
 )
+from iroha_torii_client.client import _decode_i105_string  # noqa: E402
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+
+
+def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
+    payload = CANONICAL_OWNER.removeprefix("sora")
+
+    assert _decode_i105_string(f"n65535{payload}")
+    for literal in (f"n65536{payload}", f"n70000{payload}"):
+        with pytest.raises(ValueError, match="unsigned 16-bit"):
+            _decode_i105_string(literal)
 
 
 class StubResponse(requests.Response):
