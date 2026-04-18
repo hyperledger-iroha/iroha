@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: SoraNet PQ derand backend wiring
+- `crates/soranet_pq` now consumes caller-provided hedged RNG output for
+  ML-KEM key generation, ML-KEM encapsulation, ML-DSA key generation, and
+  ML-DSA signing. The wrapper calls PQClean derandomized hooks directly where
+  pqcrypto 0.1.x does not expose RNG injection, so the documented hedged
+  randomness path is no longer dead code.
+- ML-DSA context length is checked before signing and verification, and the C
+  FFI maps an overlong FIPS 204 context to a length error instead of falling
+  through to backend encoding.
+- The older `iroha_crypto` seeded ML-DSA-65 helper now uses drop-based
+  zeroization for polynomial and seed buffers, while keeping the legacy HKDF
+  label stable for existing seeded keys.
+- Focused validation for this slice:
+  - `cargo test -p soranet_pq mlkem -- --nocapture`
+  - `cargo test -p soranet_pq mldsa -- --nocapture`
+
 ## 2026-04-18 Follow-up: IVM query-envelope linked-domain test resync
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_execute_query_envelope.rs`
   now seeds multi-domain account visibility through explicit

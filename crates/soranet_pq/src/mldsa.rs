@@ -1,9 +1,9 @@
-use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
+use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
 use pqcrypto_traits::{
     Error as PqError,
     sign::{
         DetachedSignature as PrimitiveDetachedSignature, PublicKey as PrimitivePublicKey,
-        SecretKey as PrimitiveSecretKey, VerificationError,
+        VerificationError,
     },
 };
 use rand_core::RngCore;
@@ -21,14 +21,14 @@ mod backend;
 /// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
 pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
 
-/// Supported ML-DSA (Dilithium) parameter sets.
+/// Supported ML-DSA parameter sets.
 #[derive(Clone, Copy, Debug)]
 pub enum MlDsaSuite {
-    /// ML-DSA-44 (Dilithium2).
+    /// ML-DSA-44.
     MlDsa44,
-    /// ML-DSA-65 (Dilithium3).
+    /// ML-DSA-65.
     MlDsa65,
-    /// ML-DSA-87 (Dilithium5).
+    /// ML-DSA-87.
     MlDsa87,
 }
 
@@ -58,9 +58,9 @@ impl MlDsaSuite {
     #[must_use]
     pub fn public_key_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => dilithium2::public_key_bytes(),
-            MlDsaSuite::MlDsa65 => dilithium3::public_key_bytes(),
-            MlDsaSuite::MlDsa87 => dilithium5::public_key_bytes(),
+            MlDsaSuite::MlDsa44 => mldsa44::public_key_bytes(),
+            MlDsaSuite::MlDsa65 => mldsa65::public_key_bytes(),
+            MlDsaSuite::MlDsa87 => mldsa87::public_key_bytes(),
         }
     }
 
@@ -68,9 +68,9 @@ impl MlDsaSuite {
     #[must_use]
     pub fn secret_key_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => dilithium2::secret_key_bytes(),
-            MlDsaSuite::MlDsa65 => dilithium3::secret_key_bytes(),
-            MlDsaSuite::MlDsa87 => dilithium5::secret_key_bytes(),
+            MlDsaSuite::MlDsa44 => mldsa44::secret_key_bytes(),
+            MlDsaSuite::MlDsa65 => mldsa65::secret_key_bytes(),
+            MlDsaSuite::MlDsa87 => mldsa87::secret_key_bytes(),
         }
     }
 
@@ -78,9 +78,33 @@ impl MlDsaSuite {
     #[must_use]
     pub fn signature_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => dilithium2::signature_bytes(),
-            MlDsaSuite::MlDsa65 => dilithium3::signature_bytes(),
-            MlDsaSuite::MlDsa87 => dilithium5::signature_bytes(),
+            MlDsaSuite::MlDsa44 => mldsa44::signature_bytes(),
+            MlDsaSuite::MlDsa65 => mldsa65::signature_bytes(),
+            MlDsaSuite::MlDsa87 => mldsa87::signature_bytes(),
+        }
+    }
+
+    const fn public_key_kind(self) -> &'static str {
+        match self {
+            MlDsaSuite::MlDsa44 => "ML-DSA-44 public key",
+            MlDsaSuite::MlDsa65 => "ML-DSA-65 public key",
+            MlDsaSuite::MlDsa87 => "ML-DSA-87 public key",
+        }
+    }
+
+    const fn secret_key_kind(self) -> &'static str {
+        match self {
+            MlDsaSuite::MlDsa44 => "ML-DSA-44 secret key",
+            MlDsaSuite::MlDsa65 => "ML-DSA-65 secret key",
+            MlDsaSuite::MlDsa87 => "ML-DSA-87 secret key",
+        }
+    }
+
+    const fn signature_kind(self) -> &'static str {
+        match self {
+            MlDsaSuite::MlDsa44 => "ML-DSA-44 signature",
+            MlDsaSuite::MlDsa65 => "ML-DSA-65 signature",
+            MlDsaSuite::MlDsa87 => "ML-DSA-87 signature",
         }
     }
 }
@@ -160,6 +184,37 @@ impl MlDsaError {
     }
 }
 
+fn validate_mldsa_public_key_len(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    validate_mldsa_len(suite.public_key_kind(), bytes.len(), suite.public_key_len())
+}
+
+fn validate_mldsa_secret_key_len(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    validate_mldsa_len(suite.secret_key_kind(), bytes.len(), suite.secret_key_len())
+}
+
+fn validate_mldsa_signature_len(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    validate_mldsa_len(suite.signature_kind(), bytes.len(), suite.signature_len())
+}
+
+fn validate_mldsa_len(
+    kind: &'static str,
+    actual: usize,
+    expected: usize,
+) -> Result<(), MlDsaError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(MlDsaError::bad_encoding(
+            kind,
+            PqError::BadLength {
+                name: kind,
+                actual,
+                expected,
+            },
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Error)]
 #[error("invalid {kind} encoding: {source}")]
 pub struct MlDsaEncodingError {
@@ -170,7 +225,7 @@ pub struct MlDsaEncodingError {
     source: PqError,
 }
 
-/// Generate a Dilithium (ML-DSA) keypair.
+/// Generate an ML-DSA keypair.
 ///
 /// # Errors
 ///
@@ -197,10 +252,6 @@ pub fn generate_mldsa_keypair_from_os(suite: MlDsaSuite) -> Result<MlDsaKeyPair,
 
 /// Deterministically generate an ML-DSA keypair from explicit seed material.
 ///
-/// The current backend accepts the explicit seed through the public API but
-/// cannot yet inject it into ML-DSA internals. See the TODO in
-/// [`generate_mldsa_keypair`].
-///
 /// # Errors
 /// Returns backend encoding errors.
 pub fn generate_mldsa_keypair_from_seed(
@@ -210,43 +261,6 @@ pub fn generate_mldsa_keypair_from_seed(
 ) -> Result<MlDsaKeyPair, MlDsaError> {
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     generate_mldsa_keypair(suite, &mut rng)
-}
-
-fn generate_dilithium2_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    let (pk, sk) = dilithium2::keypair();
-    finalize_keypair(pk, sk, dilithium2::secret_key_bytes())
-}
-
-fn generate_dilithium3_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    let (pk, sk) = dilithium3::keypair();
-    finalize_keypair(pk, sk, dilithium3::secret_key_bytes())
-}
-
-fn generate_dilithium5_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    let (pk, sk) = dilithium5::keypair();
-    finalize_keypair(pk, sk, dilithium5::secret_key_bytes())
-}
-
-fn finalize_keypair<P, S>(pk: P, mut sk: S, secret_len: usize) -> Result<MlDsaKeyPair, MlDsaError>
-where
-    P: PrimitivePublicKey,
-    S: PrimitiveSecretKey + Copy,
-{
-    let public_key = pk.as_bytes().to_vec();
-    let secret_bytes = Zeroizing::new(sk.as_bytes().to_vec());
-    zero_secret(&mut sk, secret_len);
-    Ok(MlDsaKeyPair {
-        public_key,
-        secret_key: secret_bytes,
-    })
-}
-
-fn zero_secret<S>(secret: &mut S, secret_len: usize)
-where
-    S: PrimitiveSecretKey + Copy,
-{
-    let zero = Zeroizing::new(vec![0u8; secret_len]);
-    *secret = S::from_bytes(&zero).expect("zero-valued secret key must match expected length");
 }
 
 /// Create a detached signature over `message` using the provided secret key.
@@ -291,29 +305,34 @@ pub fn verify_mldsa(
     message: &[u8],
     signature: &[u8],
 ) -> Result<(), MlDsaError> {
+    if context.len() > ML_DSA_CONTEXT_MAX_LEN {
+        return Err(MlDsaError::ContextTooLong { len: context.len() });
+    }
+    validate_mldsa_public_key_len(suite, public_key)?;
+    validate_mldsa_signature_len(suite, signature)?;
     match suite {
         MlDsaSuite::MlDsa44 => {
-            let pk = dilithium2::PublicKey::from_bytes(public_key)
+            let pk = mldsa44::PublicKey::from_bytes(public_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 public key", err))?;
-            let sig = dilithium2::DetachedSignature::from_bytes(signature)
+            let sig = mldsa44::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 signature", err))?;
-            dilithium2::verify_detached_signature_ctx(&sig, message, context, &pk)
+            mldsa44::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa65 => {
-            let pk = dilithium3::PublicKey::from_bytes(public_key)
+            let pk = mldsa65::PublicKey::from_bytes(public_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 public key", err))?;
-            let sig = dilithium3::DetachedSignature::from_bytes(signature)
+            let sig = mldsa65::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 signature", err))?;
-            dilithium3::verify_detached_signature_ctx(&sig, message, context, &pk)
+            mldsa65::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa87 => {
-            let pk = dilithium5::PublicKey::from_bytes(public_key)
+            let pk = mldsa87::PublicKey::from_bytes(public_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 public key", err))?;
-            let sig = dilithium5::DetachedSignature::from_bytes(signature)
+            let sig = mldsa87::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 signature", err))?;
-            dilithium5::verify_detached_signature_ctx(&sig, message, context, &pk)
+            mldsa87::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
     }
@@ -321,6 +340,8 @@ pub fn verify_mldsa(
 
 #[cfg(test)]
 mod tests {
+    use crate::hedged_chacha20_rng;
+
     use super::*;
 
     fn signed_roundtrip(suite: MlDsaSuite) {
@@ -361,6 +382,68 @@ mod tests {
     #[test]
     fn roundtrip_87() {
         signed_roundtrip(MlDsaSuite::MlDsa87);
+    }
+
+    #[test]
+    fn seeded_keypair_is_deterministic() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let seed = HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0xD0); 32]);
+            let first = generate_mldsa_keypair_from_seed(suite, seed.clone(), b"seeded-keygen")
+                .expect("seeded keypair generation should succeed");
+            let second = generate_mldsa_keypair_from_seed(suite, seed, b"seeded-keygen")
+                .expect("seeded keypair generation should succeed");
+
+            assert_eq!(first.public_key(), second.public_key());
+            assert_eq!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn context_length_is_checked_before_sign_and_verify() {
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x87; 32]),
+            b"mldsa-context-limit-keypair",
+        );
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x88; 32]),
+            b"mldsa-context-limit-sign",
+        );
+        let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44, &mut rng)
+            .expect("ML-DSA keypair generation should succeed");
+        let context = vec![0u8; ML_DSA_CONTEXT_MAX_LEN + 1];
+        let sign_err = sign_mldsa(
+            MlDsaSuite::MlDsa44,
+            kp.secret_key(),
+            &context,
+            b"message",
+            &mut sign_rng,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            sign_err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+
+        let verify_err = verify_mldsa(
+            MlDsaSuite::MlDsa44,
+            kp.public_key(),
+            &context,
+            b"message",
+            &[0u8; 1],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            verify_err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
     }
 
     #[test]

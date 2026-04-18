@@ -1,13 +1,13 @@
-//! End-to-end multihash roundtrip tests for `MlDsa` (Dilithium3) keys.
+//! End-to-end multihash roundtrip tests for `MlDsa` / ML-DSA-65 keys.
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-use pqcrypto_mldsa::mldsa65 as dilithium;
+use pqcrypto_mldsa::mldsa65;
 use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
 #[test]
 fn mldsa_public_key_multihash_roundtrip() {
     let kp = KeyPair::from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa);
-    let pk = dilithium::PublicKey::from_bytes(kp.public_key().to_bytes().1)
+    let pk = mldsa65::PublicKey::from_bytes(kp.public_key().to_bytes().1)
         .expect("seeded ML-DSA public key");
     let pubkey = PublicKey::from_bytes(iroha_crypto::Algorithm::MlDsa, pk.as_bytes())
         .expect("mldsa pk from bytes");
@@ -23,7 +23,7 @@ fn mldsa_public_key_multihash_roundtrip() {
 #[test]
 fn mldsa_private_key_multihash_roundtrip_exposed() {
     let kp = KeyPair::from_seed(b"iroha:ml-dsa:multihash:sk".to_vec(), Algorithm::MlDsa);
-    let sk = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
+    let sk = mldsa65::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
         .expect("seeded ML-DSA secret key");
     let prikey =
         iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::MlDsa, sk.as_bytes())

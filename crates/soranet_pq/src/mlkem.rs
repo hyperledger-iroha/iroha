@@ -1,5 +1,6 @@
 use core::{fmt, str::FromStr};
 
+use pqcrypto_mlkem as _;
 use pqcrypto_traits::Error as PqError;
 use rand_core::RngCore;
 use thiserror::Error;

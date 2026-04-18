@@ -32,6 +32,7 @@ fn mldsa_suite_from_id(id: c_uint) -> Result<MlDsaSuite, c_int> {
 fn map_mldsa_error(err: &MlDsaError) -> c_int {
     match err {
         MlDsaError::BadEncoding(_) => ERR_ENCODING,
+        MlDsaError::ContextTooLong { .. } => ERR_LENGTH_MISMATCH,
         MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
         MlDsaError::KeyGenerationFailed { .. } | MlDsaError::Rng(_) => ERR_KEYGEN,
     }
@@ -520,5 +521,8 @@ mod tests {
             status: -1,
         };
         assert_eq!(map_mldsa_error(&keygen), ERR_KEYGEN);
+
+        let context = MlDsaError::ContextTooLong { len: 256 };
+        assert_eq!(map_mldsa_error(&context), ERR_LENGTH_MISMATCH);
     }
 }

@@ -1,7 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
-pub mod dilithium3 {
+pub mod mldsa65 {
     use core::{
+        array,
         convert::TryFrom,
         ptr::{addr_of, addr_of_mut},
     };
@@ -9,7 +10,7 @@ pub mod dilithium3 {
     use hkdf::Hkdf;
     use pqcrypto_mldsa::ffi;
     use sha2::Sha512;
-    use zeroize::{Zeroize, Zeroizing};
+    use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
     use crate::{Algorithm, Error, PrivateKey, PublicKey};
 
@@ -21,10 +22,11 @@ pub mod dilithium3 {
     const K: usize = 6;
 
     const HKDF_SALT: &[u8] = b"iroha:ml-dsa:keygen:v1";
+    // Preserve the original domain label so existing seeded ML-DSA keys remain stable.
     const HKDF_INFO: &[u8] = b"iroha:ml-dsa:dilithium3:keypair";
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Poly {
         coeffs: [i32; N],
     }
@@ -36,7 +38,7 @@ pub mod dilithium3 {
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Polyvecl {
         vec: [Poly; L],
     }
@@ -44,13 +46,13 @@ pub mod dilithium3 {
     impl Default for Polyvecl {
         fn default() -> Self {
             Self {
-                vec: [Poly::default(); L],
+                vec: array::from_fn(|_| Poly::default()),
             }
         }
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Polyveck {
         vec: [Poly; K],
     }
@@ -58,16 +60,14 @@ pub mod dilithium3 {
     impl Default for Polyveck {
         fn default() -> Self {
             Self {
-                vec: [Poly::default(); K],
+                vec: array::from_fn(|_| Poly::default()),
             }
         }
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
-        let mut seed_material = derive_seed_material(seed);
-        let result = keypair_from_seed_material(&seed_material);
-        seed_material.zeroize();
-        result
+        let seed_material = Zeroizing::new(derive_seed_material(seed));
+        keypair_from_seed_material(&seed_material)
     }
 
     #[allow(unsafe_code)]
@@ -106,7 +106,7 @@ pub mod dilithium3 {
             PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
         }
 
-        let mut s1hat = s1;
+        let mut s1hat = s1.clone();
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }
@@ -193,7 +193,7 @@ pub mod dilithium3 {
             );
         }
 
-        let mut s1hat = s1;
+        let mut s1hat = s1.clone();
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }

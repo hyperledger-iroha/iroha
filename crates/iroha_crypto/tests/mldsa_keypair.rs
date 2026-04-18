@@ -2,16 +2,16 @@
 
 mod mldsa_tests {
     use iroha_crypto::{Algorithm, Error, KeyPair, PrivateKey, PublicKey, Signature};
-    use pqcrypto_mldsa::mldsa65 as dilithium;
+    use pqcrypto_mldsa::mldsa65;
     use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
-    fn seeded_pair(label: &[u8]) -> (dilithium::PublicKey, dilithium::SecretKey) {
+    fn seeded_pair(label: &[u8]) -> (mldsa65::PublicKey, mldsa65::SecretKey) {
         let kp = KeyPair::from_seed(label.to_vec(), Algorithm::MlDsa);
         let pk_bytes = kp.public_key().to_bytes().1;
         let sk_bytes = kp.private_key().to_bytes().1;
-        let pk = dilithium::PublicKey::from_bytes(pk_bytes)
+        let pk = mldsa65::PublicKey::from_bytes(pk_bytes)
             .expect("seeded ML-DSA public key bytes should decode");
-        let sk = dilithium::SecretKey::from_bytes(&sk_bytes)
+        let sk = mldsa65::SecretKey::from_bytes(&sk_bytes)
             .expect("seeded ML-DSA secret key bytes should decode");
         (pk, sk)
     }

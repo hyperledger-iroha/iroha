@@ -74,10 +74,11 @@ The core SoraNet handshake and CID blinding helpers (`iroha_crypto::soranet`)
 now consume these utilities directly, so downstream crates inherit the same
 implementations without linking PQClean bindings themselves.
 
-The current backend still contains TODO-marked pqcrypto calls where the 0.1.x
-bindings do not expose seeded ML-KEM/ML-DSA derand hooks. The public API now
-threads hedged RNG state through those boundaries so the local pure-Rust scalar
-backend can replace those calls without changing call sites again.
+The current backend uses the pqcrypto/PQClean FIPS implementations and calls
+the PQClean derandomized hooks directly where the Rust wrappers do not expose
+RNG injection. The public API already threads hedged RNG state through those
+boundaries, so a local scalar or hardware-accelerated backend can replace the
+PQClean calls without changing call sites again.
 
 ## Validation checklist
 
