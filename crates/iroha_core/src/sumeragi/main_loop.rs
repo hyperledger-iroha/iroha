@@ -5279,110 +5279,38 @@ impl Actor {
             return true;
         }
 
-        let candidate_count = self.same_height_commit_vote_signer_count_at_or_before_view(
-            height,
-            view,
-            epoch,
-            candidate_hash,
-        );
-        let strongest_conflict = self
-            .strongest_conflicting_same_height_commit_vote_count_at_or_before_view(
-                height,
-                view,
-                epoch,
-                candidate_hash,
-            );
-
-        strongest_conflict > 0 && strongest_conflict >= candidate_count.max(1)
-    }
-
-    fn same_height_commit_vote_signer_count_at_or_before_view(
-        &self,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> usize {
-        let mut signers = BTreeSet::new();
-        self.collect_same_height_commit_vote_signers_at_or_before_view(
-            height,
-            view,
-            epoch,
-            |vote| {
-                if vote.block_hash == block_hash {
-                    signers.insert(vote.signer);
-                }
-            },
-        );
-        signers.len()
-    }
-
-    fn strongest_conflicting_same_height_commit_vote_count_at_or_before_view(
-        &self,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        candidate_hash: HashOf<BlockHeader>,
-    ) -> usize {
-        let mut signers_by_hash = BTreeMap::new();
-        self.collect_same_height_commit_vote_signers_at_or_before_view(
-            height,
-            view,
-            epoch,
-            |vote| {
-                if vote.block_hash != candidate_hash {
-                    signers_by_hash
-                        .entry(vote.block_hash)
-                        .or_insert_with(BTreeSet::new)
-                        .insert(vote.signer);
-                }
-            },
-        );
-        signers_by_hash
-            .values()
-            .map(BTreeSet::len)
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn collect_same_height_commit_vote_signers_at_or_before_view(
-        &self,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        mut collect: impl FnMut(&crate::sumeragi::consensus::Vote),
-    ) {
-        let matches_vote = |vote: &crate::sumeragi::consensus::Vote| {
-            vote.phase == crate::sumeragi::consensus::Phase::Commit
-                && vote.height == height
+        let local_peer = self.common_config.peer.id();
+        let local_conflicting_vote = |vote: &crate::sumeragi::consensus::Vote| {
+            matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote.height == height
                 && vote.view <= view
                 && vote.epoch == epoch
+                && vote.block_hash != candidate_hash
+                && self.vote_signer_peer(vote).as_ref() == Some(local_peer)
         };
 
-        for vote in self.stored_votes().filter(|vote| matches_vote(vote)) {
-            collect(vote);
-        }
-        for vote in self
-            .subsystems
-            .vote_verify
-            .pending_validation
-            .values()
-            .filter(|vote| matches_vote(vote))
-        {
-            collect(vote);
-        }
-        for inflight in self.subsystems.vote_verify.inflight.values() {
-            let vote = &inflight.vote;
-            if matches_vote(vote) {
-                collect(vote);
-            }
-        }
-        for pending in self.subsystems.vote_verify.pending.values() {
-            let vote = &pending.vote;
-            if matches_vote(vote) {
-                collect(vote);
-            }
-        }
+        self.stored_votes().any(local_conflicting_vote)
+            || self
+                .subsystems
+                .vote_verify
+                .pending_validation
+                .values()
+                .any(local_conflicting_vote)
+            || self
+                .subsystems
+                .vote_verify
+                .inflight
+                .values()
+                .any(|inflight| local_conflicting_vote(&inflight.vote))
+            || self
+                .subsystems
+                .vote_verify
+                .pending
+                .values()
+                .any(|pending| local_conflicting_vote(&pending.vote))
     }
 
     fn should_defer_tip_precommit_for_same_height_conflict(
@@ -6468,12 +6396,36 @@ impl Actor {
         &self,
         frontier_height: u64,
         view: u64,
-        _now: Instant,
+        now: Instant,
     ) -> bool {
         if frontier_height != self.committed_height_snapshot().saturating_add(1) {
             return false;
         }
-        self.phase_tracker.current_view(frontier_height) == Some(view)
+        if self.phase_tracker.current_view(frontier_height) != Some(view) {
+            return false;
+        }
+
+        // Quorum-timeout cleanup should only keep same-height state when the current
+        // contiguous-frontier owner still has concrete same-slot recovery evidence.
+        // Merely matching the live view is not enough; otherwise a stale pending block can
+        // survive repeated timeout cleanup cycles and keep the frontier wedged indefinitely.
+        self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
+            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
+                frontier_height,
+                view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_vote_backed_recovery_active(
+                frontier_height,
+                view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_reassembly_active(
+                frontier_height,
+                view,
+                now,
+                super::status::worker_queue_depth_snapshot(),
+            )
     }
 
     fn suppress_quorum_view_change_while_frontier_repair_active(
@@ -6514,6 +6466,16 @@ impl Actor {
                 "suppressing quorum view change while committed-anchor catch-up owns the contiguous frontier"
             );
             return true;
+        }
+
+        let slot_requested_direct_view_advance = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.view == view
+                && slot.active_view > view
+                && slot.timers.last_view_advance_at.is_some()
+        });
+        if slot_requested_direct_view_advance && self.slot_has_authoritative_payload(height, view) {
+            return false;
         }
 
         if self.slot_has_authoritative_payload(height, view) {
@@ -11010,6 +10972,7 @@ enum BlockSyncRosterSource {
     ValidatorCheckpointHint,
     QcHistory,
     ValidatorCheckpointHistory,
+    PrecommitSignerHistory,
     RosterSidecar,
     PreviousBlockEvidence,
     CommitRosterJournal,
@@ -11024,11 +10987,25 @@ impl BlockSyncRosterSource {
             Self::ValidatorCheckpointHint => "validator_checkpoint_hint",
             Self::QcHistory => "commit_qc_history",
             Self::ValidatorCheckpointHistory => "validator_checkpoint_history",
+            Self::PrecommitSignerHistory => "precommit_signer_history",
             Self::RosterSidecar => "roster_sidecar",
             Self::PreviousBlockEvidence => "previous_block_evidence",
             Self::CommitRosterJournal => "commit_roster_journal",
             Self::CommitTopologySnapshot => "commit_topology_snapshot",
         }
+    }
+
+    const fn allows_local_genesis_stub(self) -> bool {
+        matches!(
+            self,
+            Self::QcHistory
+                | Self::ValidatorCheckpointHistory
+                | Self::PrecommitSignerHistory
+                | Self::RosterSidecar
+                | Self::PreviousBlockEvidence
+                | Self::CommitRosterJournal
+                | Self::CommitTopologySnapshot
+        )
     }
 }
 
@@ -11284,7 +11261,7 @@ fn selection_from_roster_artifacts(
     roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
     let expected_epoch = roster_cache.expected_epoch(block_height, consensus_mode);
-    let allow_genesis_stub = matches!(source, BlockSyncRosterSource::CommitRosterJournal)
+    let allow_genesis_stub = source.allows_local_genesis_stub()
         && block_height == 1
         && block_view.is_none_or(|view| view == 0);
     let mut cert_inputs: Option<RosterValidationInputs> = None;
@@ -11516,6 +11493,112 @@ fn roster_artifact_selection_view(
         .or(block_view)
 }
 
+fn selection_from_precommit_signer_history_record(
+    record: &super::status::PrecommitSignerRecord,
+    consensus_mode: ConsensusMode,
+    block_hash: HashOf<BlockHeader>,
+) -> Option<BlockSyncRosterSelection> {
+    let roster = record.validator_set.clone();
+    let roster_len = roster.len();
+    if roster_len == 0 {
+        warn!(
+            block = %block_hash,
+            height = record.height,
+            view = record.view,
+            "dropping precommit-signer-history roster fallback: empty validator set"
+        );
+        return None;
+    }
+    if record.roster_len != roster_len {
+        warn!(
+            block = %block_hash,
+            height = record.height,
+            view = record.view,
+            expected = record.roster_len,
+            actual = roster_len,
+            "dropping precommit-signer-history roster fallback: roster length mismatch"
+        );
+        return None;
+    }
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signer_peers = match signer_peers_for_topology(&record.signers, &topology) {
+        Ok(peers) => peers,
+        Err(err) => {
+            warn!(
+                ?err,
+                block = %block_hash,
+                height = record.height,
+                view = record.view,
+                "dropping precommit-signer-history roster fallback: invalid signer indices"
+            );
+            return None;
+        }
+    };
+    let stake_snapshot = match consensus_mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            let Some(snapshot) = record
+                .stake_snapshot
+                .as_ref()
+                .filter(|snapshot| snapshot.matches_roster(&roster))
+            else {
+                warn!(
+                    block = %block_hash,
+                    height = record.height,
+                    view = record.view,
+                    "dropping precommit-signer-history roster fallback: missing aligned stake snapshot"
+                );
+                return None;
+            };
+            match stake_quorum_reached_for_snapshot(snapshot, &roster, &signer_peers) {
+                Ok(true) => Some(snapshot.clone()),
+                Ok(false) => {
+                    warn!(
+                        block = %block_hash,
+                        height = record.height,
+                        view = record.view,
+                        signers = record.signers.len(),
+                        roster_len,
+                        "dropping precommit-signer-history roster fallback: stake quorum missing"
+                    );
+                    return None;
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        block = %block_hash,
+                        height = record.height,
+                        view = record.view,
+                        "dropping precommit-signer-history roster fallback: stake snapshot invalid"
+                    );
+                    return None;
+                }
+            }
+        }
+    };
+    if matches!(consensus_mode, ConsensusMode::Permissioned) {
+        let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
+        if record.signers.len() < required {
+            warn!(
+                block = %block_hash,
+                height = record.height,
+                view = record.view,
+                votes = record.signers.len(),
+                required,
+                "dropping precommit-signer-history roster fallback: commit quorum missing"
+            );
+            return None;
+        }
+    }
+    Some(BlockSyncRosterSelection {
+        roster,
+        source: BlockSyncRosterSource::PrecommitSignerHistory,
+        commit_qc: None,
+        checkpoint: None,
+        stake_snapshot,
+    })
+}
+
 fn block_sync_history_roster_for_block(
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
@@ -11528,6 +11611,20 @@ fn block_sync_history_roster_for_block(
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
         ConsensusMode::Npos => NPOS_TAG,
     };
+    let exact_precommit_record = super::status::precommit_signer_history()
+        .into_iter()
+        .filter(|record| {
+            record.block_hash == block_hash
+                && record.height == block_height
+                && block_view.is_none_or(|view| view == record.view)
+                && record.mode_tag.as_str() == mode_tag
+        })
+        .filter(|record| {
+            let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
+            record.epoch == expected_epoch
+        })
+        .max_by(|a, b| a.view.cmp(&b.view));
+    let mut cert_source = BlockSyncRosterSource::QcHistory;
     let mut cert = super::status::commit_qc_history()
         .into_iter()
         .filter(|cert| cert.subject_block_hash == block_hash && cert.height <= block_height)
@@ -11535,23 +11632,12 @@ fn block_sync_history_roster_for_block(
     let checkpoint = super::status::validator_checkpoint_history()
         .into_iter()
         .filter(|chk| chk.block_hash == block_hash && chk.height <= block_height)
-        .max_by(|a, b| a.height.cmp(&b.height));
+        .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)));
 
-    if cert.is_none() {
-        let record = super::status::precommit_signer_history()
-            .into_iter()
-            .filter(|record| {
-                record.block_hash == block_hash
-                    && record.height <= block_height
-                    && block_view.is_none_or(|view| view == record.view)
-                    && record.mode_tag.as_str() == mode_tag
-            })
-            .filter(|record| {
-                let expected_epoch = roster_cache.expected_epoch(record.height, consensus_mode);
-                record.epoch == expected_epoch
-            })
-            .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)));
-        if let Some(record) = record {
+    if let Some(record) = exact_precommit_record.as_ref() {
+        if cert.as_ref().is_none_or(|cert| {
+            cert.height < block_height || cert.aggregate.bls_aggregate_signature.is_empty()
+        }) {
             cert = derive_block_sync_qc_from_signers(
                 block_hash,
                 record.height,
@@ -11566,6 +11652,18 @@ fn block_sync_history_roster_for_block(
                 &record.signers,
                 record.bls_aggregate_signature.clone(),
             );
+            if cert.is_some() {
+                cert_source = BlockSyncRosterSource::PrecommitSignerHistory;
+            } else if checkpoint
+                .as_ref()
+                .is_none_or(|checkpoint| checkpoint.height < block_height)
+            {
+                return selection_from_precommit_signer_history_record(
+                    record,
+                    consensus_mode,
+                    block_hash,
+                );
+            }
         }
     }
 
@@ -11574,7 +11672,7 @@ fn block_sync_history_roster_for_block(
     }
 
     let source = if cert.is_some() {
-        BlockSyncRosterSource::QcHistory
+        cert_source
     } else {
         BlockSyncRosterSource::ValidatorCheckpointHistory
     };
@@ -11596,7 +11694,9 @@ fn block_sync_history_roster_for_block(
     selection_from_roster_artifacts(
         cert.as_ref(),
         checkpoint,
-        None,
+        exact_precommit_record
+            .as_ref()
+            .and_then(|record| record.stake_snapshot.as_ref()),
         block_hash,
         roster_height,
         roster_view,
@@ -11606,6 +11706,11 @@ fn block_sync_history_roster_for_block(
         mode_tag,
         roster_cache,
     )
+    .or_else(|| {
+        exact_precommit_record.as_ref().and_then(|record| {
+            selection_from_precommit_signer_history_record(record, consensus_mode, block_hash)
+        })
+    })
 }
 
 fn persisted_roster_for_block(
@@ -14452,9 +14557,10 @@ impl Actor {
         {
             if inflight.pending.aborted
                 || matches!(
-                inflight.pending.validation_status,
-                ValidationStatus::Invalid
-            ) {
+                    inflight.pending.validation_status,
+                    ValidationStatus::Invalid
+                )
+            {
                 return None;
             }
             let payload_bytes = self::proposals::block_payload_bytes(&inflight.pending.block);
@@ -15037,7 +15143,14 @@ impl Actor {
                 None,
             );
         }
-        if actions.fetch_block_body && self.emit_frontier_block_body_fetch(now) {
+        let fetched_frontier_body = if actions.fetch_block_body_urgent {
+            self.emit_frontier_block_body_fetch_urgent(now)
+        } else if actions.fetch_block_body {
+            self.emit_frontier_block_body_fetch(now)
+        } else {
+            false
+        };
+        if fetched_frontier_body {
             advance = FrontierRecoveryAdvance::CatchUp;
         }
         if let Some(reason) = actions.enter_deep_catchup
@@ -15327,9 +15440,7 @@ impl Actor {
         exact_fetch_armed: bool,
         now: Instant,
     ) -> bool {
-        if !self.frontier_slot_is_exact_height(height)
-            || self.frontier_block_materialized_locally(block_hash)
-        {
+        if self.frontier_block_materialized_locally(block_hash) {
             return false;
         }
         let (leader, voters) =
@@ -20363,7 +20474,7 @@ impl Actor {
                 return Ok(None);
             }
 
-            let computed_root = session.chunk_root();
+            let computed_root = session.computed_chunk_root();
             match (session.expected_chunk_root, computed_root) {
                 (Some(expected_root), Some(computed_root)) => {
                     if computed_root != expected_root {
@@ -22296,7 +22407,7 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
-        let _required = self.rbc_deliver_quorum(&topology);
+        let required = self.rbc_deliver_quorum(&topology);
         let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
         if !authoritative_known_payload {
             let force_authoritative_body_fetch =
@@ -22351,7 +22462,7 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
-        if let Some(computed_root) = session.chunk_root() {
+        if let Some(computed_root) = session.computed_chunk_root() {
             if let Some(expected_root) = session.expected_chunk_root {
                 if expected_root != computed_root {
                     session.invalid = true;
@@ -22376,6 +22487,49 @@ impl Actor {
             } else {
                 session.expected_chunk_root = Some(computed_root);
             }
+        }
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+        let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+        let missing_ready_peers = Self::rbc_missing_ready_peers(&session, &signature_topology);
+        if ready_count < required {
+            let should_log = self.should_emit_rbc_deliver_deferral(
+                key,
+                now,
+                ready_count,
+                received_chunks,
+                total_chunks,
+                self.rebroadcast_cooldown()
+                    .max(RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR),
+            );
+            if should_log {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_source = ?roster_source,
+                    roster_len,
+                    ready = ready_count,
+                    required,
+                    missing_ready = missing_ready_peers.len(),
+                    received = received_chunks,
+                    total = total_chunks,
+                    "deferring RBC DELIVER: READY quorum not reached"
+                );
+            }
+            let _ = self.rescue_rbc_missing_ready_peers(
+                key,
+                &session,
+                missing_ready_peers.as_slice(),
+                ready_count,
+            );
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                self.update_rbc_status_entry(key, &updated, false);
+                self.persist_rbc_session(key, &updated);
+            }
+            self.publish_rbc_backlog_snapshot();
+            return Ok(());
         }
 
         let deliver = if let Some(deliver) = self.build_rbc_deliver(key, &session) {
@@ -22410,9 +22564,6 @@ impl Actor {
             .iter()
             .map(|entry| entry.sender)
             .collect();
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
-        let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
-        let missing_ready_peers = Self::rbc_missing_ready_peers(&session, &signature_topology);
         let deliver_sender = deliver.sender;
         let ready_repair_sent = self.rescue_rbc_missing_ready_peers(
             key,
@@ -23185,12 +23336,38 @@ impl Actor {
             && self
                 .cached_commit_qc_for_block(block_hash, request.height, request.view)
                 .is_none()
+            && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+                request.height,
+                request.view,
+            )
             && !self.missing_block_request_is_non_actionable_dependency(
                 block_hash,
                 request,
                 committed_height,
                 now,
             )
+    }
+
+    fn known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+
+        let roster = self.effective_commit_topology();
+        if roster.is_empty() {
+            return false;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let required = topology.min_votes_for_view_change();
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .highest_quorum_view_for_height(height, required, topology.as_ref())
+            .is_some_and(|higher_view| higher_view > view)
     }
 
     fn missing_commit_qc_repair_active_for_round(
@@ -28383,7 +28560,8 @@ impl Actor {
                 );
             }
         }
-        let canonical_payload_available = self.authoritative_block_payload_available(canonical_hash);
+        let canonical_payload_available =
+            self.authoritative_block_payload_available(canonical_hash);
         if !canonical_payload_available {
             let _ = self.maybe_escalate_missing_block_height_recovery(
                 canonical_hash,
@@ -28590,9 +28768,9 @@ impl Actor {
                         committed_height,
                         reason,
                     );
-                let frontier_sidecar_hint_confirmed =
-                    self.block_payload_available_locally(meta.block_hash)
-                        || Self::frontier_sidecar_hint_can_override_stall_gate(reason);
+                let frontier_sidecar_hint_confirmed = self
+                    .block_payload_available_locally(meta.block_hash)
+                    || Self::frontier_sidecar_hint_can_override_stall_gate(reason);
                 let retargeted_frontier_sidecar = allow_frontier_sidecar_retarget
                     && frontier_sidecar_hint_confirmed
                     && self.retarget_missing_block_request_to_canonical_hash(
@@ -28882,17 +29060,25 @@ impl Actor {
         let committed_height = self.committed_height_snapshot();
         let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
+        let commit_topology = self.state.commit_topology_snapshot();
+        let topology_lane_ids = if commit_topology.is_empty() {
+            BTreeSet::new()
+        } else {
+            crate::state::validator_lane_ids_for_peers(&world, commit_topology.iter())
+        };
         let local_lane_ids =
             crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id());
         let candidates = match consensus_mode {
             ConsensusMode::Npos => {
-                if local_lane_ids.is_empty() {
+                let lane_scope = if topology_lane_ids.is_empty() {
+                    &local_lane_ids
+                } else {
+                    &topology_lane_ids
+                };
+                if lane_scope.is_empty() {
                     roster::stake_active_validator_roster_from_world(&world)
                 } else {
-                    roster::stake_active_validator_roster_for_lanes_from_world(
-                        &world,
-                        &local_lane_ids,
-                    )
+                    roster::stake_active_validator_roster_for_lanes_from_world(&world, lane_scope)
                 }
             }
             ConsensusMode::Permissioned => self.trusted_topology(),
@@ -35335,6 +35521,15 @@ impl RbcSession {
     }
 
     pub(crate) fn chunk_root(&self) -> Option<Hash> {
+        if self.total_chunks == 0 {
+            return self.expected_chunk_root;
+        }
+        let digests = self.all_chunk_digests()?;
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
+        tree.root().map(Hash::from)
+    }
+
+    pub(crate) fn computed_chunk_root(&self) -> Option<Hash> {
         if self.total_chunks == 0 {
             return self.expected_chunk_root;
         }

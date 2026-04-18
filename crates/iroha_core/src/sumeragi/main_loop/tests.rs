@@ -14993,6 +14993,105 @@ async fn quorum_reschedule_rebroadcasts_votes_to_all_missing_targets() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_rotates_payload_backed_frontier_after_retransmit() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    actor.vote_log.insert(
+        (Phase::Commit, height, view, epoch, local_idx),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: local_idx,
+            bls_sig: Vec::new(),
+        },
+    );
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let inactive_slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    );
+    actor.frontier_slot = Some(inactive_slot);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "test requires the frontier round to start at the pending block view",
+    );
+    assert!(
+        !actor.frontier_slot_has_active_owner_state_for_view(height, view),
+        "test requires no active frontier owner so the immediate-rotation path is eligible",
+    );
+    assert!(
+        actor.frontier_slot.is_some(),
+        "test requires an exact frontier slot so the slot FSM would otherwise swallow a generic quorum-timeout trigger",
+    );
+
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    assert!(
+        actor.reschedule_pending_quorum_block(
+            pending,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            min_votes_for_commit,
+            /*vote_count*/ 1,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            None,
+            now,
+        ),
+        "payload-backed vote recovery should still take reschedule action",
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view.saturating_add(1)),
+        "payload-backed contiguous-frontier retransmit should rotate the round immediately after recovery work; forced={:?} slot={:?}",
+        actor.subsystems.propose.forced_view_after_timeout,
+        actor.frontier_slot.as_ref().map(|slot| (
+            slot.view,
+            slot.active_view,
+            slot.mode,
+            slot.phase,
+            slot.timers.last_view_advance_at.is_some(),
+            slot.repair_state.quorum_timeout_rebroadcasted,
+        )),
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -16200,6 +16299,12 @@ async fn commit_pipeline_defers_higher_view_precommit_while_lower_view_vote_vali
     let higher_hash = insert_validated_pending(actor, higher_block.clone());
     let epoch = actor.epoch_for_height(height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let lower_signature_topology =
+        super::topology_for_view(&topology, height, lower_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&lower_signature_topology)
+        .expect("local signer present in lower-view topology");
     let lower_vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash: lower_block.hash(),
@@ -16209,7 +16314,7 @@ async fn commit_pipeline_defers_higher_view_precommit_while_lower_view_vote_vali
         view: lower_view,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer: local_signer,
         bls_sig: Vec::new(),
     };
     actor
@@ -16278,6 +16383,12 @@ async fn commit_pipeline_defers_higher_view_precommit_when_lower_view_vote_is_ca
     let higher_hash = insert_validated_pending(actor, higher_block.clone());
     let epoch = actor.epoch_for_height(height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let lower_signature_topology =
+        super::topology_for_view(&topology, height, lower_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&lower_signature_topology)
+        .expect("local signer present in lower-view topology");
     let lower_vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash: lower_block.hash(),
@@ -16287,7 +16398,7 @@ async fn commit_pipeline_defers_higher_view_precommit_when_lower_view_vote_is_ca
         view: lower_view,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer: local_signer,
         bls_sig: Vec::new(),
     };
     actor.vote_log.insert(
@@ -16343,6 +16454,12 @@ async fn event_driven_precommit_defers_higher_view_when_lower_view_vote_is_cache
     let epoch = actor.epoch_for_height(height);
     let topology = actor.effective_commit_topology();
     let signature_topology = super::network_topology::Topology::new(topology.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let lower_signature_topology =
+        super::topology_for_view(&signature_topology, height, lower_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&lower_signature_topology)
+        .expect("local signer present in lower-view topology");
     let lower_vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash: lower_block.hash(),
@@ -16352,7 +16469,7 @@ async fn event_driven_precommit_defers_higher_view_when_lower_view_vote_is_cache
         view: lower_view,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer: local_signer,
         bls_sig: Vec::new(),
     };
     actor.vote_log.insert(
@@ -16392,6 +16509,205 @@ async fn event_driven_precommit_defers_higher_view_when_lower_view_vote_is_cache
             .local_precommit_vote_for(height, higher_view, epoch, &signature_topology)
             .is_none(),
         "the local validator must not add a second vote to a competing higher-view branch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_allows_higher_view_precommit_when_only_remote_lower_view_vote_is_cached() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let state_view = actor.state.view();
+    let parent_hash = state_view.latest_block_hash();
+    let height = u64::try_from(state_view.height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    drop(state_view);
+
+    let lower_view = 0_u64;
+    let higher_view = 1_u64;
+    let lower_block = sample_block(height, lower_view, parent_hash);
+    let higher_block = sample_block(height, higher_view, parent_hash);
+    let higher_hash = insert_validated_pending(actor, higher_block.clone());
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let higher_signature_topology =
+        super::topology_for_view(&topology, height, higher_view, mode_tag, prf_seed);
+
+    let make_vote = |block_hash, view, signer| crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signer = (0..topology.as_ref().len())
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .find(|signer| {
+            let vote = make_vote(lower_block.hash(), lower_view, *signer);
+            actor.vote_signer_peer(&vote).as_ref() != Some(&local_peer)
+        })
+        .expect("test needs a remote lower-view signer");
+
+    let lower_vote = make_vote(lower_block.hash(), lower_view, remote_signer);
+    actor.vote_log.insert(
+        (
+            lower_vote.phase,
+            lower_vote.height,
+            lower_vote.view,
+            lower_vote.epoch,
+            lower_vote.signer,
+        ),
+        lower_vote,
+    );
+
+    assert!(
+        actor
+            .local_conflicting_slot_vote(height, epoch, higher_hash)
+            .is_none(),
+        "fixture must avoid seeding a local same-height conflict",
+    );
+    assert!(
+        !actor.should_defer_tip_precommit_for_same_height_conflict(
+            higher_hash,
+            height,
+            higher_view,
+            epoch,
+        ),
+        "remote lower-view evidence alone should not stall seeding the recovery branch",
+    );
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&higher_hash)
+        .expect("higher-view pending retained");
+    assert!(
+        pending.local_commit_vote_emitted(),
+        "the commit pipeline should let a non-conflicting validator seed the higher-view branch",
+    );
+    assert!(
+        actor
+            .local_precommit_vote_for(height, higher_view, epoch, &higher_signature_topology)
+            .is_some(),
+        "the local validator should emit the higher-view precommit when only remote lower-view votes exist",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn event_driven_precommit_allows_higher_view_when_only_remote_lower_view_vote_is_cached() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let state_view = actor.state.view();
+    let parent_hash = state_view.latest_block_hash();
+    let height = u64::try_from(state_view.height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    drop(state_view);
+
+    let lower_view = 0_u64;
+    let higher_view = 1_u64;
+    let lower_block = sample_block(height, lower_view, parent_hash);
+    let higher_block = sample_block(height, higher_view, parent_hash);
+    let higher_hash = insert_validated_pending(actor, higher_block.clone());
+    let epoch = actor.epoch_for_height(height);
+    let topology = actor.effective_commit_topology();
+    let topology_ref = super::network_topology::Topology::new(topology.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let higher_signature_topology =
+        super::topology_for_view(&topology_ref, height, higher_view, mode_tag, prf_seed);
+
+    let make_vote = |block_hash, view, signer| crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_signer = (0..topology.len())
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .find(|signer| {
+            let vote = make_vote(lower_block.hash(), lower_view, *signer);
+            actor.vote_signer_peer(&vote).as_ref() != Some(&local_peer)
+        })
+        .expect("test needs a remote lower-view signer");
+
+    let lower_vote = make_vote(lower_block.hash(), lower_view, remote_signer);
+    actor.vote_log.insert(
+        (
+            lower_vote.phase,
+            lower_vote.height,
+            lower_vote.view,
+            lower_vote.epoch,
+            lower_vote.signer,
+        ),
+        lower_vote,
+    );
+
+    assert!(
+        actor
+            .local_conflicting_slot_vote(height, epoch, higher_hash)
+            .is_none(),
+        "fixture must avoid seeding a local same-height conflict",
+    );
+    assert!(
+        !actor.should_defer_tip_precommit_for_same_height_conflict(
+            higher_hash,
+            height,
+            higher_view,
+            epoch,
+        ),
+        "event-driven precommit should ignore remote-only lower-view conflicts",
+    );
+
+    let emitted = actor.maybe_emit_local_commit_vote_for_pending_event(
+        higher_hash,
+        height,
+        higher_view,
+        &topology,
+        "test_commit_vote_accepted",
+    );
+
+    assert!(
+        emitted,
+        "the fast path should let a validator without local conflict seed the higher-view branch",
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&higher_hash)
+        .expect("higher-view pending retained");
+    assert!(
+        pending.local_commit_vote_emitted(),
+        "the pending block should record the emitted local precommit",
+    );
+    assert!(
+        actor
+            .local_precommit_vote_for(height, higher_view, epoch, &higher_signature_topology)
+            .is_some(),
+        "the local validator should record the higher-view precommit",
     );
 
     harness.shutdown.send();
@@ -22552,6 +22868,75 @@ async fn retry_known_block_commit_qc_requests_clears_request_when_commit_roster_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_known_block_commit_qc_requests_clears_request_when_higher_new_view_quorum_supersedes_the_round()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let higher_view = view.saturating_add(1);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    actor.kura.store_block(block).expect("store block");
+
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_view_change();
+    let epoch = actor.epoch_for_height(height);
+    let highest_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        height: height.saturating_sub(1),
+        view,
+        epoch,
+    };
+    for peer in topology.as_ref().iter().take(required) {
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            higher_view,
+            peer.clone(),
+            highest_qc,
+        );
+    }
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "retry loop should clear known-block commit-QC repair once a higher NEW_VIEW quorum supersedes the round",
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "higher NEW_VIEW quorum should retire the stale known-block commit-QC request",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn known_block_commit_qc_recovery_respects_retry_backoff() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -24342,6 +24727,140 @@ async fn rebuild_qcs_from_cached_votes_uses_new_view_roster_for_new_view_phase()
     assert_eq!(
         rebuilt.validator_set, new_view_roster,
         "NewView QC rebuild must use the NewView roster path instead of generic vote replay"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebuild_qcs_from_cached_votes_skips_npos_candidates_without_stake_quorum() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::reset_qc_rebuild_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(actor.state.as_ref()));
+    let block = sample_block(2, 0, parent);
+    let block_hash = block.hash();
+    let height = 2_u64;
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    assert!(commit_topology.len() >= 4, "test requires 4 trusted peers");
+    {
+        let mut block = actor.state.world.public_lane_validators.block();
+        let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
+        for key in existing {
+            block.remove(key);
+        }
+        for (idx, peer) in commit_topology.iter().take(2).enumerate() {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let lane_id = LaneId::new(u32::try_from(idx + 1).expect("lane index fits u32"));
+            let record = PublicLaneValidatorRecord {
+                lane_id,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+        block.commit();
+    }
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert!(
+        matches!(consensus_mode, ConsensusMode::Npos),
+        "test expects NPoS consensus"
+    );
+    let active_topology = actor.effective_commit_topology();
+    assert_eq!(
+        active_topology.len(),
+        2,
+        "active topology should be constrained to active validators"
+    );
+    let topology = super::network_topology::Topology::new(active_topology.clone());
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+
+    let signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
+    assert_eq!(signers.len(), 1, "test expects exactly one cached signer");
+    let signer_peers = super::signer_peers_for_topology(&signers, &signature_topology)
+        .expect("vote signers should map to peers");
+    assert!(
+        !super::stake_snapshot::stake_quorum_reached_for_world(
+            &actor.state.world_view(),
+            &active_topology,
+            &signer_peers,
+        )
+        .expect("stake quorum check should evaluate"),
+        "single cached signer must not satisfy NPoS stake quorum"
+    );
+
+    actor.rebuild_qcs_from_cached_votes(&actor.effective_commit_topology());
+
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.qc_rebuild_attempts_total, 0,
+        "NPoS replay should not attempt QC rebuild when cached votes cannot meet stake quorum"
+    );
+    assert_eq!(snapshot.qc_rebuild_successes_total, 0);
+
+    let key = (Phase::Commit, block_hash, height, view, epoch);
+    assert!(
+        !actor.qc_cache.contains_key(&key),
+        "stake-insufficient NPoS replay must not cache a QC"
+    );
+    assert!(
+        !actor.deferred_qcs.contains_key(&key),
+        "stake-insufficient NPoS replay must not defer a QC"
     );
 
     harness.shutdown.send();
@@ -30434,8 +30953,9 @@ async fn handle_rbc_ready_requests_missing_block_on_stash_cap_drop() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
+async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
     let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
     let height = u64::try_from(harness.actor.state.view().height())
         .expect("height fits u64")
         .saturating_add(1);
@@ -30486,6 +31006,7 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
     let signature = Signature::new(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
+    let _ = take_background_log(&background_log);
     harness
         .actor
         .handle_rbc_ready(ready)
@@ -30500,25 +31021,64 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
         .get(&key)
         .expect("pending stash");
     assert_eq!(pending.ready.len(), 1);
-
-    let request = harness
-        .actor
-        .pending
-        .missing_block_requests
-        .get(&key.0)
-        .is_none();
     assert!(
-        request,
-        "exact-frontier READY before INIT should not create a generic missing-block request"
+        !harness
+            .actor
+            .pending
+            .missing_block_requests
+            .contains_key(&key.0),
+        "exact frontier READY-before-INIT recovery must stay out of generic missing-block tracking"
     );
     let frontier_slot = harness
         .actor
         .frontier_slot
         .as_ref()
-        .expect("exact-frontier READY before INIT should arm frontier body repair");
+        .expect("READY-before-INIT on the exact frontier should arm exact body repair");
     assert_eq!(frontier_slot.block_hash, key.0);
     assert_eq!(frontier_slot.height, key.1);
     assert_eq!(frontier_slot.view, key.2);
+    assert!(
+        frontier_slot.exact_fetch_armed,
+        "READY-before-INIT must arm exact FetchBlockBody recovery"
+    );
+    assert!(
+        !frontier_slot.body_present,
+        "READY-before-INIT should still treat the authoritative body as missing"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("FetchPendingBlock")
+                    && entry.msg_kind != Some("FetchBlockBody")
+            }),
+        "exact frontier READY-before-INIT recovery should respect ingress grace before fetching"
+    );
+    let grace = harness.actor.authoritative_body_ingress_fetch_grace();
+    let slot = harness
+        .actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot retained for exact repair");
+    let observed_at = Instant::now()
+        .checked_sub(grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or_else(Instant::now);
+    slot.timers.observed_at = observed_at;
+    slot.observed_at = observed_at;
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        harness
+            .actor
+            .retry_frontier_block_body_fetch(Instant::now()),
+        "exact frontier READY-before-INIT recovery should emit FetchBlockBody once ingress grace expires"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "exact frontier READY-before-INIT recovery must switch to FetchBlockBody after grace"
+    );
 
     harness.shutdown.send();
 }
@@ -37612,28 +38172,97 @@ async fn maybe_emit_rbc_deliver_accepts_derived_roster() {
 
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 1..required {
+        assert!(session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![u8::try_from(idx).expect("index fits u8")]
+        ));
+    }
 
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let background_log = attach_background_log(actor);
 
     let _ = harness.background_rx.try_iter().count();
-    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    let _ = take_background_log(&background_log);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
     actor
         .maybe_emit_rbc_deliver(key)
         .expect("maybe emit deliver");
-    assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "exact frontier delivery should retire live RBC state after local BlockCreated recovery"
-    );
-    let summary = actor
+    let init_delivered_live = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .is_some_and(|session| session.deliver_signature.is_some());
+    let init_delivered_retained = actor
         .subsystems
         .da_rbc
         .rbc
         .status_handle
         .get(&key)
-        .expect("DELIVER should retain an operator-facing RBC summary");
+        .is_some_and(|summary| summary.delivered && !summary.invalid);
+    let init_entries = take_background_log(&background_log);
     assert!(
-        summary.delivered && !summary.invalid,
+        init_delivered_live || init_delivered_retained,
+        "derived roster availability should allow DELIVER"
+    );
+    assert!(
+        init_entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        }),
+        "DELIVER should broadcast once the derived roster is available"
+    );
+
+    let second_view = view.saturating_add(1);
+    let second_block = sample_block(height, second_view, parent);
+    let second_key = Actor::session_key(&second_block.hash(), height, second_view);
+    let second_payload = super::proposals::block_payload_bytes(&second_block).to_vec();
+    let second_payload_hash = Hash::new(&second_payload);
+    let mut second_session = Actor::build_rbc_session_from_payload(
+        &second_payload,
+        second_payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("second session");
+    second_session.test_set_block_header_and_signature(&second_block);
+    second_session.sent_ready = true;
+    assert!(second_session.record_ready(0, vec![0xAA]));
+    for idx in 1..required {
+        assert!(second_session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![u8::try_from(idx).expect("index fits u8")]
+        ));
+    }
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(second_key, second_session);
+
+    let _ = take_background_log(&background_log);
+    actor.record_rbc_session_roster(second_key, roster.clone(), super::RbcRosterSource::Derived);
+    actor
+        .maybe_emit_rbc_deliver(second_key)
+        .expect("maybe emit deliver");
+    let stored = actor.subsystems.da_rbc.rbc.status_handle.get(&second_key);
+    assert!(
+        stored.is_some_and(|summary| summary.delivered && !summary.invalid),
         "derived roster should allow DELIVER"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        }),
+        "derived roster DELIVER should still broadcast"
     );
 
     harness.shutdown.send();
@@ -37667,6 +38296,15 @@ async fn maybe_emit_rbc_deliver_keeps_near_tip_runtime_until_deliver_broadcasts(
     );
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 1..required {
+        assert!(session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![u8::try_from(idx).expect("index fits u8")]
+        ));
+    }
 
     let missing_idx = session
         .chunks
@@ -37685,20 +38323,23 @@ async fn maybe_emit_rbc_deliver_keeps_near_tip_runtime_until_deliver_broadcasts(
     actor
         .maybe_emit_rbc_deliver(key)
         .expect("maybe emit deliver");
-    assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "near-tip locally known blocks should retire live RBC state after DELIVER and local BlockCreated recovery",
-    );
-    let summary = actor
+    let live_delivered = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .is_some_and(|session| session.delivered);
+    let retained_delivered = actor
         .subsystems
         .da_rbc
         .rbc
         .status_handle
         .get(&key)
-        .expect("DELIVER should retain an operator-facing RBC summary");
+        .is_some_and(|summary| summary.delivered && !summary.invalid);
     assert!(
-        summary.delivered && !summary.invalid,
-        "near-tip locally known blocks should record DELIVER before cleanup",
+        live_delivered || retained_delivered,
+        "near-tip locally known blocks should make DELIVER observable before cleanup",
     );
     let entries = take_background_log(&background_log);
     assert!(
@@ -37751,7 +38392,7 @@ async fn maybe_emit_rbc_deliver_prefers_ready_repair_after_ready_quorum() {
         .expect("local sender");
     session.record_ready(local_idx, vec![0xAA]);
     for (idx, _peer) in signature_topology.as_ref().iter().enumerate() {
-        if session.ready_signatures.len() >= required.saturating_sub(1).max(1) {
+        if session.ready_signatures.len() >= required {
             break;
         }
         let idx = u32::try_from(idx).expect("sender fits u32");
@@ -37788,19 +38429,22 @@ async fn maybe_emit_rbc_deliver_prefers_ready_repair_after_ready_quorum() {
         .maybe_emit_rbc_deliver(key)
         .expect("maybe emit deliver");
 
-    assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "exact frontier delivery should retire live RBC state after local BlockCreated recovery"
-    );
-    let summary = actor
+    let live_delivered = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .is_some_and(|session| session.delivered);
+    let retained_delivered = actor
         .subsystems
         .da_rbc
         .rbc
         .status_handle
         .get(&key)
-        .expect("DELIVER should retain an operator-facing RBC summary");
+        .is_some_and(|summary| summary.delivered && !summary.invalid);
     assert!(
-        summary.delivered && !summary.invalid,
+        live_delivered || retained_delivered,
         "deliver should be recorded"
     );
 
@@ -38051,16 +38695,28 @@ async fn maybe_emit_rbc_deliver_missing_payload_on_exact_frontier_arms_body_repa
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
     let mut harness = test_actor_harness(4).await;
-    let key = session_key();
-    let payload = vec![0xAB; 2048];
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
     let payload_hash = Hash::new(&payload);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+    session.sent_ready = true;
 
-    let roster = harness.actor.effective_commit_topology();
+    let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let required = harness.actor.rbc_deliver_quorum(&topology);
+    let required = actor.rbc_deliver_quorum(&topology);
     assert!(required > 0, "ready quorum should be non-zero");
     for idx in 0..required {
         session.record_ready(
@@ -38070,43 +38726,50 @@ async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
     }
     session.sent_ready = true;
 
-    session.expected_chunk_root = Some(Hash::prehashed([0xEE; 32]));
-    assert!(
-        session.chunk_root().is_some(),
-        "precondition: session should have a computed chunk root"
-    );
+    let computed_chunk_root = session
+        .chunk_root()
+        .expect("precondition: session should have a computed chunk root");
+    let mut mismatched_root_bytes = *computed_chunk_root.as_ref();
+    mismatched_root_bytes[0] ^= 0xFF;
+    let mismatched_root = Hash::prehashed(mismatched_root_bytes);
+    session.expected_chunk_root = Some(mismatched_root);
     assert_ne!(
         session.expected_chunk_root,
-        session.chunk_root(),
+        Some(computed_chunk_root),
         "precondition: chunk root mismatch should be present"
     );
 
-    harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
-    harness
-        .actor
-        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Init);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
-    harness
-        .actor
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    actor
         .maybe_emit_rbc_deliver(key)
         .expect("maybe emit deliver");
-    let stored = harness
-        .actor
+    let live_invalid = actor
         .subsystems
         .da_rbc
         .rbc
         .sessions
         .get(&key)
-        .expect("session");
-    assert!(stored.is_invalid());
-    assert!(!stored.delivered);
-    assert!(stored.deliver_signature.is_none());
+        .is_some_and(|session| session.is_invalid());
+    let retained_invalid = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .is_some_and(|summary| summary.invalid);
+    assert!(live_invalid || retained_invalid);
+    let entries = take_background_log(&background_log);
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        }),
+        "chunk-root mismatch must not broadcast DELIVER"
+    );
 
     harness.shutdown.send();
 }
@@ -42112,6 +42775,208 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
     assert_eq!(
         commit_qc.aggregate.bls_aggregate_signature,
         aggregate_signature
+    );
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+}
+
+#[test]
+fn block_sync_selection_falls_back_to_exact_precommit_signer_history() {
+    use crate::sumeragi::status;
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_precommit_signer_history_for_tests();
+
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7087");
+    let mut pops = BTreeMap::new();
+    pops.insert(me_peer.id().public_key().clone(), me_pop);
+    let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
+
+    let height = 8;
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("non-zero height"),
+        prev_block_hash: None,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
+        creation_time_ms: 0,
+        view_change_index: 0,
+        confidential_features: None,
+    };
+    let block_hash = header.hash();
+    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block = SignedBlock::presigned(block_sig, header, Vec::new());
+    let roster = vec![me_peer.id().clone()];
+    let signers = BTreeSet::from([ValidatorIndex::try_from(0_u32).expect("signer index fits")]);
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+
+    let mut commit_qc = qc_with_bitmap(
+        &state.chain_id,
+        block_hash,
+        height,
+        0,
+        0,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &super::network_topology::Topology::new(roster.clone()),
+        &keypairs,
+    );
+    commit_qc.aggregate.bls_aggregate_signature.clear();
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        0,
+        block_hash,
+        zero_state_root(),
+        zero_state_root(),
+        roster.clone(),
+        signers_bitmap,
+        Vec::new(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    status::record_commit_qc(commit_qc);
+    status::record_validator_checkpoint(checkpoint);
+    status::record_precommit_signers(status::PrecommitSignerRecord {
+        block_hash,
+        height,
+        view: 0,
+        epoch: 0,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        signers,
+        bls_aggregate_signature: Vec::new(),
+        roster_len: roster.len(),
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        validator_set: roster.clone(),
+        stake_snapshot: None,
+    });
+
+    let selection = select_block_sync_roster(
+        &block,
+        block_hash,
+        height,
+        None,
+        None,
+        None,
+        &state,
+        &trusted,
+        me_peer.id(),
+        PERMISSIONED_TAG,
+        false,
+    )
+    .expect("exact precommit signer history should provide a local roster fallback");
+
+    assert_eq!(
+        selection.source,
+        BlockSyncRosterSource::PrecommitSignerHistory
+    );
+    assert_eq!(selection.roster, roster);
+    assert!(selection.commit_qc.is_none());
+    assert!(selection.checkpoint.is_none());
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+}
+
+#[test]
+fn block_sync_selection_rejects_precommit_signer_history_without_commit_quorum() {
+    use crate::sumeragi::status;
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_precommit_signer_history_for_tests();
+
+    let peers_with_keys = [
+        bls_peer("127.0.0.1:7088"),
+        bls_peer("127.0.0.1:7089"),
+        bls_peer("127.0.0.1:7090"),
+        bls_peer("127.0.0.1:7091"),
+    ];
+    let me_peer = peers_with_keys[0].0.clone();
+    let mut pops = BTreeMap::new();
+    let mut peers = Vec::new();
+    let mut keypairs = Vec::new();
+    let mut others = Vec::new();
+    for (idx, (peer, pop, kp)) in peers_with_keys.into_iter().enumerate() {
+        pops.insert(peer.id().public_key().clone(), pop);
+        peers.push(peer.id().clone());
+        keypairs.push(kp);
+        if idx != 0 {
+            others.push(peer);
+        }
+    }
+    let trusted = trusted_with_pops(me_peer.clone(), others, pops);
+    let state = state_with_peers_and_keys(&peers, &keypairs);
+
+    let height = 9;
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("non-zero height"),
+        prev_block_hash: None,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
+        creation_time_ms: 0,
+        view_change_index: 0,
+        confidential_features: None,
+    };
+    let block_hash = header.hash();
+    let block_sig = BlockSignature::new(
+        0,
+        SignatureOf::from_hash(keypairs[0].private_key(), block_hash),
+    );
+    let block = SignedBlock::presigned(block_sig, header, Vec::new());
+    let signers: BTreeSet<_> = [0_u32, 1_u32]
+        .into_iter()
+        .map(|idx| ValidatorIndex::try_from(idx).expect("signer index fits"))
+        .collect();
+    status::record_precommit_signers(status::PrecommitSignerRecord {
+        block_hash,
+        height,
+        view: 0,
+        epoch: 0,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        signers,
+        bls_aggregate_signature: Vec::new(),
+        roster_len: peers.len(),
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        validator_set: peers.clone(),
+        stake_snapshot: None,
+    });
+
+    let selection = select_block_sync_roster(
+        &block,
+        block_hash,
+        height,
+        None,
+        None,
+        None,
+        &state,
+        &trusted,
+        me_peer.id(),
+        PERMISSIONED_TAG,
+        false,
+    );
+
+    assert!(
+        selection.is_none(),
+        "precommit signer history must still satisfy commit quorum before being used"
     );
 
     status::reset_precommit_signer_history_for_tests();
@@ -47779,7 +48644,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
 fn block_sync_update_omits_roster_artifacts_without_metadata() {
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
@@ -47815,7 +48680,7 @@ fn block_sync_update_certified_builder_skips_uncertified_roster_fallback() {
 
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let kura = Kura::blank_kura_for_testing();
 
     let (me_peer, me_pop, kp) = bls_peer("127.0.0.1:7097");
     let mut pops = BTreeMap::new();
@@ -48743,7 +49608,7 @@ fn validate_commit_qc_roster_falls_back_without_stake_snapshot() {
 
 #[test]
 fn stake_quorum_reached_for_peers_requires_two_thirds() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
@@ -48823,7 +49688,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
 
 #[test]
 fn stake_quorum_reached_for_peers_falls_back_without_stake_records() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
@@ -48858,7 +49723,7 @@ fn stake_quorum_reached_for_peers_falls_back_without_stake_records() {
 
 #[test]
 fn validate_commit_qc_roster_requires_stake_quorum() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
@@ -49056,6 +49921,125 @@ fn validate_checkpoint_roster_accepts_genesis_stub_when_allowed() {
     )
     .expect("genesis stub checkpoint should be accepted when allowed");
     assert_eq!(roster, vec![peer]);
+}
+
+#[test]
+fn selection_from_roster_artifacts_accepts_unsigned_genesis_roster_sidecar() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let keypairs = vec![kp.clone()];
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
+    let roster_cache = roster_cache_for_state(&state, EPOCH_LENGTH_BLOCKS);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+    let roster = vec![peer.clone()];
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0],
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let checkpoint = ValidatorSetCheckpoint::new(
+        1,
+        0,
+        block_hash,
+        commit_qc.parent_state_root,
+        commit_qc.post_state_root,
+        roster.clone(),
+        vec![0],
+        Vec::new(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+
+    let selection = super::selection_from_roster_artifacts(
+        Some(&commit_qc),
+        Some(&checkpoint),
+        None,
+        block_hash,
+        1,
+        Some(0),
+        super::BlockSyncRosterSource::RosterSidecar,
+        ConsensusMode::Permissioned,
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        &roster_cache,
+    )
+    .expect("local roster sidecar genesis stub should be accepted");
+
+    assert_eq!(
+        selection.source,
+        super::BlockSyncRosterSource::RosterSidecar
+    );
+    assert_eq!(selection.roster, roster);
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
+    assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
+}
+
+#[test]
+fn selection_from_roster_artifacts_rejects_unsigned_genesis_qc_hint() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let keypairs = vec![kp.clone()];
+    let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
+    let roster_cache = roster_cache_for_state(&state, EPOCH_LENGTH_BLOCKS);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0],
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+
+    let selection = super::selection_from_roster_artifacts(
+        Some(&commit_qc),
+        None,
+        None,
+        block_hash,
+        1,
+        Some(0),
+        super::BlockSyncRosterSource::QcHint,
+        ConsensusMode::Permissioned,
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        &roster_cache,
+    );
+
+    assert!(
+        selection.is_none(),
+        "unsigned external genesis QC hints must remain untrusted"
+    );
 }
 
 #[test]
@@ -56301,8 +57285,11 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
         "permissioned candidate source should clamp live-key filtering to the committed horizon"
     );
 
-    let npos_lane_ids =
-        crate::state::validator_lane_ids_for_peer(&world, actor.common_config.peer.id());
+    let npos_lane_ids = if commit_topology.is_empty() {
+        crate::state::validator_lane_ids_for_peer(&world, actor.common_config.peer.id())
+    } else {
+        crate::state::validator_lane_ids_for_peers(&world, commit_topology.iter())
+    };
     let npos_candidates = if npos_lane_ids.is_empty() {
         super::roster::stake_active_validator_roster_from_world(&world)
     } else {
@@ -84812,11 +85799,11 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_uses_locked_qc_when_incoming_highest_qc_regresses() {
+async fn pacemaker_uses_locked_qc_when_selected_highest_qc_regresses() {
     use std::borrow::Cow;
 
     let _guard = super::status::qc_status_test_guard();
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
@@ -84844,31 +85831,22 @@ async fn assemble_proposal_uses_locked_qc_when_incoming_highest_qc_regresses() {
 
     let height = locked_qc.height.saturating_add(1);
     let view = 0u64;
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
-    let assembled = actor
-        .assemble_and_broadcast_proposal(
-            height,
-            view,
-            sample_qc_ref(0, 0),
-            &mut topology,
-            usize::try_from(local_idx).expect("leader index fits usize"),
-            local_idx,
-            None,
-            Instant::now(),
-        )
-        .expect("proposal assembly should succeed");
+    actor.subsystems.propose.new_view_tracker.record(
+        height,
+        view,
+        actor.common_config.peer.id().clone(),
+        sample_qc_ref(0, 0),
+    );
+    let proposed = actor.on_pacemaker_propose_ready(Instant::now());
 
     assert!(
-        assembled,
-        "proposal assembly should continue with the locked QC when the incoming highest QC regresses"
+        proposed,
+        "pacemaker should continue with the locked QC when the selected highest QC regresses"
     );
     assert_eq!(
-        actor.highest_qc,
-        Some(locked_qc),
-        "proposal path should promote the locked QC into highest QC state"
+        actor.highest_qc.map(|qc| qc.height).unwrap_or_default(),
+        height,
+        "successful proposal assembly should advance highest QC to the newly assembled block"
     );
     assert!(
         actor
@@ -84876,7 +85854,7 @@ async fn assemble_proposal_uses_locked_qc_when_incoming_highest_qc_regresses() {
             .pending_blocks
             .values()
             .any(|pending| pending.height == height && pending.view == view && !pending.aborted),
-        "proposal assembly should create a pending block for the locked-QC branch"
+        "pacemaker should create a pending block for the locked-QC branch"
     );
 
     super::status::set_locked_qc(0, 0, None);
@@ -96118,6 +97096,115 @@ async fn frontier_quorum_timeout_cleanup_preserves_live_authoritative_slot_state
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_quorum_timeout_cleanup_prunes_stale_same_view_frontier_state_without_live_evidence()
+ {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let descendant_height = frontier_height.saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(frontier_height, now);
+    let view = actor
+        .phase_tracker
+        .current_view(frontier_height)
+        .unwrap_or(0);
+    let parent = actor.state.latest_block_hash_fast();
+    let frontier_block = sample_block(frontier_height, view, parent);
+    let frontier_hash = frontier_block.hash();
+    let frontier_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&frontier_block));
+
+    actor.note_authoritative_slot_owner(frontier_height, view, frontier_hash);
+    actor.note_proposal_seen(frontier_height, view, frontier_payload_hash);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(sample_hint(frontier_hash, frontier_height, view, parent));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(sample_proposal(
+            parent.unwrap_or(frontier_hash),
+            frontier_height,
+            view,
+        ));
+    actor.pending.pending_blocks.insert(
+        frontier_hash,
+        PendingBlock::new(frontier_block, frontier_payload_hash, frontier_height, view),
+    );
+    assert!(
+        !actor.slot_has_vote_backed_consensus_evidence(frontier_height, view),
+        "test setup requires the same-view frontier owner to be stale rather than vote-backed",
+    );
+
+    let stale = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
+    let descendant_hash = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xE9,
+        descendant_height,
+        1,
+        stale,
+        stale,
+    );
+    actor.note_authoritative_slot_owner(descendant_height, view, descendant_hash);
+
+    actor.apply_frontier_recovery_cleanup(frontier_height, view, now, "quorum_timeout");
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&frontier_hash),
+        "quorum-timeout cleanup must evict stale same-view frontier payloads that no longer have live recovery evidence",
+    );
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(frontier_height, view),
+        None,
+        "quorum-timeout cleanup must clear stale authoritative frontier ownership when the live-view slot no longer has recovery evidence",
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(frontier_height, view)
+            .is_none(),
+        "quorum-timeout cleanup must prune stale same-view hint metadata once the frontier owner is no longer live",
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(frontier_height, view)
+            .is_none(),
+        "quorum-timeout cleanup must prune stale same-view proposal metadata once the frontier owner is no longer live",
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(frontier_height, view)),
+        "quorum-timeout cleanup must clear the stale same-view proposal marker so the frontier can re-form deterministically",
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&descendant_hash),
+        "quorum-timeout cleanup should still prune descendant missing-request state above the frontier",
+    );
+    assert!(
+        actor
+            .authoritative_slot_owner_hash(descendant_height, view)
+            .is_none(),
+        "quorum-timeout cleanup should still prune descendant authoritative-slot state above the frontier",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontier_owner() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -107270,20 +108357,29 @@ async fn maybe_emit_rbc_deliver_prefers_targeted_ready_rescue_when_subset_skips_
         .maybe_emit_rbc_deliver(key)
         .expect("emit DELIVER deferral");
 
-    assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "authoritative local payload should retire live RBC state after DELIVER and local BlockCreated recovery"
-    );
-    let summary = actor
+    let stored = actor
         .subsystems
         .da_rbc
         .rbc
-        .status_handle
+        .sessions
         .get(&key)
-        .expect("DELIVER should retain an operator-facing RBC summary");
+        .expect("READY-quorum deferral should keep the live RBC session");
     assert!(
-        summary.delivered && !summary.invalid,
-        "authoritative local payload should emit DELIVER before cleanup"
+        !stored.delivered,
+        "authoritative local payload should wait for READY quorum before DELIVER"
+    );
+    assert!(
+        stored.deliver_signature.is_none(),
+        "READY repair should not record a local DELIVER before quorum"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .contains_key(&key),
+        "READY-quorum deferral should be tracked for throttling"
     );
 
     let entries = take_background_log(&background_log);
@@ -107327,20 +108423,35 @@ async fn maybe_emit_rbc_deliver_prefers_targeted_ready_rescue_when_subset_skips_
             _ => None,
         })
         .collect();
-    assert_eq!(deliver_broadcasts, 1, "expected DELIVER broadcast");
     assert_eq!(
-        targeted_payload_peers, expected_targets,
-        "missing-READY peers should receive targeted payload repair with the READY set"
+        deliver_broadcasts, 0,
+        "DELIVER must not broadcast before READY quorum"
     );
     assert_eq!(
-        targeted_ready_peers, expected_targets,
-        "missing-READY peers should receive targeted READY repair before targeted DELIVER"
+        targeted_payload_peers,
+        BTreeSet::new(),
+        "authoritative local payload should not trigger targeted payload rescue"
+    );
+    assert_eq!(
+        targeted_ready_peers,
+        BTreeSet::new(),
+        "frontier READY-quorum deferral should stay passive until DELIVER is allowed"
     );
     assert_eq!(
         targeted_deliver_peers,
         BTreeSet::new(),
-        "targeted DELIVER should remain a fallback once READY repair is available"
+        "targeted DELIVER should not bypass the READY quorum gate"
     );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key),
+        "passive frontier deferral should not refresh READY rescue cooldowns"
+    );
+
     harness.shutdown.send();
 }
 
