@@ -17702,10 +17702,24 @@ pub mod isi {
             let exec = Executor::default();
             let backend = "stark/fri/sha256-goldilocks";
             let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
-            let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+            let circuit_id = "stark/fri/sha256-goldilocks:update-curve";
+            let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.into(),
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            let vk_box = VerifyingKeyBox::new(
+                backend.into(),
+                norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
+            );
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri/sha256-goldilocks:update-curve",
+                circuit_id,
                 None,
                 "test",
                 BackendTag::Stark,
@@ -17729,7 +17743,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             let mut new_rec = VerifyingKeyRecord::new_with_owner(
                 2,
-                "stark/fri/sha256-goldilocks:update-curve",
+                circuit_id,
                 None,
                 "test",
                 BackendTag::Stark,

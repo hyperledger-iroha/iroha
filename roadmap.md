@@ -51,7 +51,53 @@ does not race on the process-global params registry.
 - open work after this slice:
   - keep `/v1/zk/verify-batch` documented and treated as diagnostic-only unless
     a future task deliberately moves it onto the VK registry policy path
+Latest sync (2026-04-18 developer portal Norito snippet fixture refresh):
+The developer-portal Norito snippet harness now seeds a linked caller subject
+before permission-gated setup and uses the same canonical account/asset
+literals as the checked-in portal examples. The portal example sources were
+also refreshed to the current literal surface: `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`
+for the canonical asset definition, valid I105 account literals for the
+transfer examples, and the fully qualified `n0$wonderland.universal` NFT id.
+The generated portal docs and downloadable `.ko` snippets were resynced from
+those sources.
 
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/norito_portal_snippets_compile.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/08_call_transfer_asset.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/12_nft_flow.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`
+  - `/home/mtakemiya/dev/iroha/examples/transfer/transfer.ko`
+  - `/home/mtakemiya/dev/iroha/docs/portal/docs/norito/examples/`
+  - `/home/mtakemiya/dev/iroha/docs/portal/static/norito-snippets/`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test norito_portal_snippets_compile -- --nocapture`
+  - `npm run sync-norito-snippets` from `docs/portal`
+  - `npm run test:norito-snippets` from `docs/portal`
+  - `git diff --check`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-18 mock WSV unregister/relink permission retention):
+The mock WSV now preserves detached subject permissions and role assignments
+when `unregister_account_subject` removes an active account row. The subject
+still behaves as unregistered until it is registered again, but relinking the
+same subject restores the prior `has_permission` surface as expected by the
+mock account-detach tests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test mock_wsv unregister_account_detaches_subject_and_preserves_state_for_relink -- --nocapture`
+  - `cargo test -p ivm --test mock_wsv -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
 Latest sync (2026-04-18 Kotodama ZK vote/unshield sample semantic sync):
 The checked-in `zk_vote_and_unshield.ko` sample now matches the current
 Kotodama semantic contract: its public `demo` entrypoint carries

@@ -135,13 +135,18 @@ fn account(domain: &str, public_key: &str) -> AccountId {
     AccountId::new(public_key)
 }
 
-const ACCOUNT_A_LITERAL: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
-const ACCOUNT_B_LITERAL: &str = "sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K";
+const ACCOUNT_A_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const ACCOUNT_B_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+const TEST_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
 fn parse_account_literal(raw: &str) -> AccountId {
     AccountId::parse_encoded(raw)
         .expect("valid encoded account literal")
         .into_account_id()
+}
+
+fn parse_asset_definition_literal(raw: &str) -> AssetDefinitionId {
+    AssetDefinitionId::parse_address_literal(raw).expect("valid asset definition literal")
 }
 
 #[derive(Default)]
@@ -174,6 +179,7 @@ fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
     let domain: DomainId =
         iroha_data_model::DomainId::try_new("default", "universal").expect("default domain id");
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(caller, PermissionToken::RegisterAccount);
     assert!(
@@ -181,8 +187,8 @@ fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
         "register domain"
     );
     assert!(
-        wsv.register_account(caller, caller.clone()),
-        "register caller account"
+        wsv.link_subject_to_domain(caller.clone(), domain),
+        "link caller domain"
     );
     wsv
 }
@@ -213,10 +219,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     );
     let mut wsv = setup_base_world(&caller);
 
-    let asset_id = AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("default", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
     let recipient = parse_account_literal(ACCOUNT_A_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -243,10 +246,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut wsv = setup_base_world(&caller);
 
     let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id = AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("default", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -298,10 +298,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);
     let bob = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id = AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("default", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -360,7 +357,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
         "register recipient"
     );
 
-    let nft_id = NftId::from_str("n0$default").expect("nft id");
+    let nft_id = NftId::from_str("n0$wonderland.universal").expect("nft id");
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(WsvHost::new_with_subject(
         wsv,
