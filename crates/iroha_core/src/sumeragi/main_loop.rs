@@ -6200,16 +6200,11 @@ impl Actor {
             .and_then(|state| state.last_action_window_index)
     }
 
-    fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
-        let frontier_view = self
-            .phase_tracker
-            .current_view(frontier_height)
-            .or_else(|| {
-                self.frontier_slot
-                    .as_ref()
-                    .and_then(|slot| (slot.height == frontier_height).then_some(slot.view))
-            })
-            .unwrap_or(0);
+    fn committed_edge_conflict_owner_has_local_evidence_for_view(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+    ) -> bool {
         let strong_exact_slot_evidence = self
             .slot_has_authoritative_payload(frontier_height, frontier_view)
             || self
@@ -6241,6 +6236,29 @@ impl Actor {
                         && inflight.pending.height == frontier_height
                         && inflight.pending.view == frontier_view
                 })
+    }
+
+    fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
+        let frontier_view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .or_else(|| {
+                self.frontier_slot
+                    .as_ref()
+                    .and_then(|slot| (slot.height == frontier_height).then_some(slot.view))
+            })
+            .unwrap_or(0);
+        self.committed_edge_conflict_owner_has_local_evidence_for_view(
+            frontier_height,
+            frontier_view,
+        )
+    }
+
+    fn committed_edge_conflict_owner_has_canonical_frontier_evidence(
+        &self,
+        frontier_height: u64,
+    ) -> bool {
+        self.committed_edge_conflict_owner_has_local_evidence_for_view(frontier_height, 0)
     }
 
     fn committed_edge_conflict_owner_present_at_height(&self, frontier_height: u64) -> bool {

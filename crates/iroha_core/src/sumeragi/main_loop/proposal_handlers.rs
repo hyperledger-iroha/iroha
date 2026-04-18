@@ -1225,7 +1225,11 @@ impl Actor {
                 .pending_blocks
                 .get(&hash)
                 .is_some_and(|pending| {
-                    self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
+                    self.should_retain_superseded_contiguous_frontier_payload(
+                        incoming_hash,
+                        hash,
+                        pending,
+                    )
                 });
             let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
@@ -1282,10 +1286,12 @@ impl Actor {
 
     fn should_retain_superseded_contiguous_frontier_payload(
         &self,
+        incoming_hash: HashOf<BlockHeader>,
         block_hash: HashOf<BlockHeader>,
         pending: &PendingBlock,
     ) -> bool {
         if !self.runtime_da_enabled()
+            || self.frontier_block_materialized_locally(incoming_hash)
             || matches!(pending.validation_status, ValidationStatus::Invalid)
             || self.kura.get_block_height_by_hash(block_hash).is_some()
         {
