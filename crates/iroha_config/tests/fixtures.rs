@@ -821,7 +821,7 @@ fn minimal_config_snapshot() {
                         availability: "hot",
                         max_latency_ms: 500,
                         topics: [
-                            "sorafs.sf1.primary:global",
+                            "sorafs.sf1.primary:universal",
                         ],
                     },
                     metering_smoothing: SorafsMeteringSmoothing {
@@ -1218,7 +1218,7 @@ fn minimal_config_snapshot() {
                 da: SumeragiDa {
                     enabled: true,
                     quorum_timeout_multiplier: 2,
-                    availability_timeout_multiplier: 1,
+                    availability_timeout_multiplier: 2,
                     availability_timeout_floor: 100ms,
                     max_commitments_per_block: 16,
                     max_proof_openings_per_block: 128,
@@ -1981,6 +1981,7 @@ fn minimal_config_snapshot() {
                 },
                 stark: Stark {
                     enabled: false,
+                    max_envelope_bytes: 1048576,
                     max_proof_bytes: 1048576,
                 },
                 root_history_cap: 2048,

@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: STARK/FRI V1 verifier hardening
+- The low-level native STARK/FRI V1 checker now uses the domain-aware binary FRI fold for `(x, -x)` openings instead of an x-free sibling linear combination. The high-level STARK `OpenVerifyEnvelope` backend applies metadata/size checks and then fails closed until real verifier-owned AIR openings are implemented.
+- The unsafe synthetic native STARK prover helper now fails closed until a real AIR prover emits verifier-owned openings. Bare recursive/offline STARK aggregate envelopes and Torii readiness advertising are also disabled until they carry those openings.
+- STARK guardrails now distinguish `zk.stark.max_envelope_bytes` for the outer `OpenVerifyEnvelope` from `zk.stark.max_proof_bytes` for the backend-native proof bytes; config defaults, fixtures, overlay prechecks, and guardrail tests were updated.
+- The gated STARK integration target now runs under `--features 'zk-stark zk-tests'`; `zk-tests` enables the core test helpers it depends on, and the stale synthetic-acceptance cases now assert fail-closed behavior.
+- FASTPQ V1 public verification now applies `fastpq_prover::VerifyLimits` and authenticates sampled LDE query chunks against Merkle paths rooted at `lookup_root` before replaying canonical trace commitments. This bounds node-facing replay verification while the remaining per-round FRI and AIR composition opening verifier is implemented in-place for V1.
+- FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries query chunks plus Merkle authentication paths.
+- ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --features zk-stark`
+  - `cargo check -p iroha_torii --features zk-stark`
+  - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
+  - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_stark -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_rejects_stark_ivm_proved_until_air_prover_available -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+  - `cargo test -p integration_tests --features zk-stark --test consensus_and_da --no-run`
+  - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
+  - `git diff --check`
+
 ## 2026-04-18 Follow-up: Kotodama asset registration now requires explicit `AssetDefinitionId` pointers
 - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now treat `register_asset(...)` and `create_new_asset(...)` as pointer-ABI asset-definition operations instead of legacy bare-name calls. The compiler now publishes `AssetDefinitionId` TLVs for `SYSCALL_REGISTER_ASSET`, matching the current `WsvHost` and `CoreHost` ABI surface that rejects `Name` TLVs for asset registration.
 - The affected Kotodama coverage and examples were refreshed to pass explicit asset-definition constructors: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`, and `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`.

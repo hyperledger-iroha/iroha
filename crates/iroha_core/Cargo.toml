@@ -77,7 +77,7 @@ circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless pre-verify + dedup wiring (mock via metadata)
 zk-preverify = []
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed
-zk-tests = []
+zk-tests = ["iroha-core-tests"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
 cuda = ["ivm/cuda"]

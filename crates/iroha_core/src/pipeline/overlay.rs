@@ -2365,7 +2365,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "zk-stark")]
-    fn overlay_accepts_ivm_proved_with_stark_execution_circuit() {
+    fn overlay_rejects_stark_ivm_proved_until_air_prover_available() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -2373,10 +2373,7 @@ mod tests {
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{
-                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
-                VerifyingKeyRecord,
-            },
+            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
@@ -2487,7 +2484,7 @@ mod tests {
             replay.trace_hash,
         );
 
-        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
+        let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
             backend,
             circuit_id,
             &vk_box,
@@ -2496,31 +2493,13 @@ mod tests {
             events_commitment,
             gas_policy_commitment,
         )
-        .expect("build STARK ivm-execution-v1 proof");
-
-        let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
-
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay: overlay.clone(),
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-
-        let overlay_built =
-            build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
-        let built: Vec<InstructionBox> = overlay_built.instructions().cloned().collect();
-        assert_eq!(built.as_slice(), overlay.as_ref());
+        .expect_err("native STARK AIR proving must stay disabled");
+        assert!(err.contains("sound AIR prover"));
     }
 
     #[test]
     #[cfg(feature = "zk-stark")]
-    fn overlay_rejects_stark_ivm_proved_when_circuit_id_mismatch() {
+    fn overlay_stark_circuit_mismatch_test_waits_for_air_prover() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -2528,12 +2507,9 @@ mod tests {
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{
-                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
-                VerifyingKeyRecord,
-            },
+            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
             transaction::{Executable, IvmProved},
-            zk::{BackendTag, OpenVerifyEnvelope},
+            zk::BackendTag,
         };
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
@@ -2642,7 +2618,7 @@ mod tests {
             replay.trace_hash,
         );
 
-        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
+        let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
             backend,
             circuit_id,
             &vk_box,
@@ -2651,38 +2627,8 @@ mod tests {
             events_commitment,
             gas_policy_commitment,
         )
-        .expect("build STARK ivm-execution-v1 proof");
-        let mut envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
-        envelope.circuit_id = format!("{backend}:wrong-circuit");
-        let tampered = iroha_data_model::proof::ProofBox::new(
-            backend.into(),
-            norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope"),
-        );
-
-        let attachment = ProofAttachment::new_ref(backend.into(), tampered, vk_id);
-        let attachments = ProofAttachmentList(vec![attachment]);
-
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode,
-                overlay,
-                events_commitment,
-                gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
-
-        let err = build_overlay_for_transaction(&tx, &state.view())
-            .expect_err("circuit mismatch must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg) if msg.contains("verifying key circuit mismatch")
-            ),
-            "unexpected error: {err:?}"
-        );
+        .expect_err("native STARK AIR proving must stay disabled");
+        assert!(err.contains("sound AIR prover"));
     }
 
     #[test]
@@ -5051,9 +4997,9 @@ where
                     "stark verification is disabled in node configuration".to_owned(),
                 ));
             }
-            if proof_len > zk_cfg.stark.max_proof_bytes {
+            if proof_len > zk_cfg.stark.max_envelope_bytes {
                 return Err(OverlayBuildError::ZkProof(
-                    "proof exceeds node-configured stark.max_proof_bytes".to_owned(),
+                    "proof exceeds node-configured stark.max_envelope_bytes".to_owned(),
                 ));
             }
         }

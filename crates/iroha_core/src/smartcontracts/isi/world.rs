@@ -1757,7 +1757,7 @@ pub mod isi {
             let id_backend = id.backend.as_str();
             match record.backend {
                 BackendTag::Halo2IpaPasta => {
-                    if !record.curve.eq_ignore_ascii_case("pallas") {
+                    if record.curve != "pallas" {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
                                 "verifying key curve must be \"pallas\"".into(),
@@ -1773,7 +1773,7 @@ pub mod isi {
                     }
                 }
                 BackendTag::Stark => {
-                    if !record.curve.eq_ignore_ascii_case("goldilocks") {
+                    if record.curve != "goldilocks" {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
                                 "verifying key curve must be \"goldilocks\"".into(),
@@ -5519,7 +5519,7 @@ pub mod isi {
         let id_backend = id.backend.as_str();
         match new.backend {
             BackendTag::Halo2IpaPasta => {
-                if !new.curve.eq_ignore_ascii_case("pallas") {
+                if new.curve != "pallas" {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "verifying key curve must be \"pallas\"".into(),
@@ -5535,7 +5535,7 @@ pub mod isi {
                 }
             }
             BackendTag::Stark => {
-                if !new.curve.eq_ignore_ascii_case("goldilocks") {
+                if new.curve != "goldilocks" {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "verifying key curve must be \"goldilocks\"".into(),

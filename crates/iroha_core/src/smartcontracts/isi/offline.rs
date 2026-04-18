@@ -1,8 +1,6 @@
 #![allow(clippy::items_after_test_module, clippy::redundant_pub_crate)]
 
 use super::prelude::*;
-#[cfg(feature = "zk-stark")]
-use crate::zk_stark::verify_stark_fri_envelope;
 use crate::{
     smartcontracts::{ValidQuery, isi::asset::isi::assert_numeric_spec_with},
     state::StateReadOnly,
@@ -161,8 +159,10 @@ const KM_ORIGIN_GENERATED: u32 = 0;
 const KM_VERIFIED_BOOT_STATE_VERIFIED: u32 = 0;
 
 #[cfg(feature = "zk-stark")]
-fn verify_recursive_stark_envelope(proof: &[u8]) -> bool {
-    verify_stark_fri_envelope(proof)
+fn verify_recursive_stark_envelope(_proof: &[u8]) -> bool {
+    // Aggregate offline STARK proofs remain unavailable in V1 because the
+    // current envelope does not carry verifier-owned AIR openings.
+    false
 }
 
 #[cfg(not(feature = "zk-stark"))]

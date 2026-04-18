@@ -2,6 +2,66 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 STARK/FRI V1 verifier hardening):
+STARK/FRI V1 was hardened in-place for the first release. The low-level native
+verifier now folds `(x, -x)` pairs with the domain element, STARK guardrails
+split outer OpenVerify envelope bytes from backend-native proof bytes,
+synthetic STARK proving and high-level STARK verification now fail closed until
+real verifier-owned AIR openings exist, the gated STARK tests now assert that
+fail-closed behavior, and curve labels are exact canonical strings. FASTPQ
+verification now has V1 replay limits and authenticates sampled LDE query
+chunks against Merkle paths rooted at `lookup_root`, so node-facing calls cannot
+skip sampled opening authentication while the remaining per-round FRI and AIR
+composition verifier is implemented. FASTPQ proof fixtures, ordering hashes, and
+trace-commitment goldens were refreshed for the in-place V1 wire shape.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/tests/zk_stark.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/backend.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/proof.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/error.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/ordering.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/tests`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_config/src/parameters`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/offline.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/offline_lineage.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/zk_envelopes.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/fastpq_plan.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/fastpq_migration_guide.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/zk/lifecycle.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/zk_stark_network.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --features zk-stark`
+  - `cargo check -p iroha_torii --features zk-stark`
+  - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
+  - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_stark -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_rejects_stark_ivm_proved_until_air_prover_available -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+  - `cargo test -p integration_tests --features zk-stark --test consensus_and_da --no-run`
+  - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
+  - `git diff --check`
+- open work after this slice:
+  - replace FASTPQ replay verification with a logarithmic verifier that consumes
+    per-round FRI openings and AIR composition openings under the existing V1
+    proof family; sampled LDE Merkle authentication paths are already carried
+    and checked
+  - implement the real native STARK AIR prover before re-enabling STARK
+    proof generation, high-level STARK proof acceptance, or offline recursive
+    aggregate STARK envelopes
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
 Latest sync (2026-04-18 Kotodama explicit `AssetDefinitionId` registration):
 Kotodama no longer lowers `register_asset(...)` and `create_new_asset(...)`
 through a bare `Name` pointer for `SYSCALL_REGISTER_ASSET`. The language now
@@ -18646,7 +18706,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Portal SoraFS direct-mode fallback pack translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS SDK index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS Rust SDK snippets translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
- - [x] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, provider advert rollout, priority snapshot 2025-03, taikai monitoring dashboards, sf6 security review, sf1 determinism dry-run, orchestrator GA parity report, sf2c capacity soak report, ai moderation calibration report 2026-02, capacity marketplace validation report, GAR jurisdictional review, GAR operator onboarding, pq primitives, pq ratchet runbook, pq rollout plan, puzzle service operations guide, privacy metrics pipeline, constant-rate profiles, transport overview, testnet rollout, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale (mirrored canonical sources for first release coverage).
+ - [x] Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, provider advert rollout, priority snapshot 2025-03, taikai monitoring dashboards, sf6 security review, sf1 determinism dry-run, orchestrator GA parity report, sf2c capacity soak report, ai moderation calibration report 2026-02, capacity marketplace validation report, GAR jurisdictional review, GAR operator onboarding, pq primitives, pq ratchet runbook, pq rollout plan, puzzle service operations guide, privacy metrics pipeline, constant-rate profiles, transport overview, testnet rollout, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale (mirrored canonical sources for first release coverage).
  - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
  - [x] Extend CLI i18n coverage (remaining messages and clap help output).
  - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.
@@ -19292,9 +19352,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Select the first acceleration target syscall/opcode (Poseidon2/6) based on current profiling and IVM hotspots.
  - [x] Design the deterministic accel/fallback shape (feature detection + config wiring) that keeps outputs identical and ships all syscalls/opcodes; `AccelerationConfig` now drives CPU-only vs accel-on modes with runtime status assertions to mirror host policy.
  - [x] Add benches/tests that toggle accel on/off and compare outputs across architectures, capturing expected budgets/telemetry. Regression `poseidon_instructions_match_across_acceleration_configs` runs Poseidon opcodes twice (accel disabled/enabled) and cross-checks CUDA outputs when present.【crates/ivm/tests/crypto.rs:100】
- - [x] Document acceleration toggles/fallback expectations in code comments and docs, including operator-facing knobs and the parity test recipe.【docs/source/config/acceleration.md:75】 - [x] QA/Docs: docs/testing hygiene—sweep crates to remove `allow(missing_docs)`, require crate-level docs, ensure each new/modified function gains at least one unit test (inline or `tests/`), add trybuild UI coverage for proc macros, tag partial impls with `TODO:`, and keep PR templates capturing change summary + `Testing` commands. *Status: proc-macro UI coverage + docs/testing guardrails in place; keep diagnostics stable as surfaces evolve.*
+ - [x] Document acceleration toggles/fallback expectations in code comments and docs, including operator-facing knobs and the parity test recipe.【docs/source/config/acceleration.md:75】 - [x] QA/Docs: docs/testing hygiene—sweep crates to remove `allow(missing_docs)`, require crate-level docs, ensure each new/modified function gains at least one unit test (inline or `tests/`), add trybuild UI coverage for proc macros, mark partial implementations explicitly, and keep PR templates capturing change summary + `Testing` commands. *Status: proc-macro UI coverage + docs/testing guardrails in place; keep diagnostics stable as surfaces evolve.*
  - [x] Extend the missing-docs guard into a lint/pre-commit hook that fails on changed crates lacking crate-level docs or newly introduced undocumented items; the guard now scans crate roots and new public definitions in diffs.
- - [x] Sweep existing `#[allow(missing_docs)]` allowances crate-by-crate, replacing them with real docs or `TODO:` markers and adding at least one unit test per touched function.
+ - [x] Sweep existing `#[allow(missing_docs)]` allowances crate-by-crate, replacing them with real docs or explicit follow-up markers and adding at least one unit test per touched function.
  - [x] Inventory proc-macro crates lacking trybuild UI coverage and add harnesses/tests for them (e.g., `norito_derive` and other derive/proc crates). - [x] Capture stable, non-panicking diagnostics in trybuild `.stderr` fixtures and document the proc-macro testing policy/guard in the dev workflow/CONTRIBUTING. - [x] Update PR template/contributor docs with explicit doc/test evidence expectations and the new hook invocation.
  Progress: CI/pre-commit guard `ci/check_missing_docs_guard.sh` blocks new `#[allow(missing_docs)]` additions, enforces crate-level docs for touched crates (including bin-only crates), and fails on new public items without `///` docs; PR template/contributor guide call out `make check-missing-docs` and doc/test evidence expectations. The sweep now covers the data-model visitor/ISI layers and derive builders: `#[model]`/`model_single!` inject docs for items/fields/variants, visitor helpers and instruction registries are documented, and instruction wire IDs plus Sumeragi NPoS getters carry docs so no `allow(missing_docs)` shims remain. trybuild UI suites now exercise the entrypoint/parameter/permission macros across `iroha_primitives_derive`, `iroha_executor_derive`, `iroha_executor_data_model_derive`, `iroha_smart_contract_derive`, and `iroha_trigger_derive` with pass/fail fixtures and golden `.stderr` outputs for the negative paths, anchoring proc-macro diagnostics to stable fixtures; executor custom parameters implement `Identifiable` so the derives’ conversions now compile cleanly. *Next: keep diagnostics stable as surfaces evolve.*【crates/iroha_data_model/src/visit/mod.rs】【crates/iroha_data_model_derive/src/model.rs】【crates/iroha_data_model_derive/src/registrable_builder.rs】【crates/iroha_data_model/src/isi/mod.rs】【crates/iroha_data_model/src/parameter/{system,custom}.rs】【crates/iroha_primitives_derive/tests/ui.rs】【crates/iroha_executor_data_model_derive/tests/ui.rs】【crates/iroha_smart_contract_derive/tests/ui.rs】【crates/iroha_trigger_derive/tests/ui.rs】【crates/iroha_executor_derive/tests/ui.rs】 - [x] Build: std-only posture—`ci/check_std_only.sh` blocks `no_std`/`wasm32` cfgs in code/CI (Makefile, agents-preflight, pre-commit, AGENTS workflow), wasm `.cargo` configs were removed, and compute/crypto spike docs now note the std-only stance. - [x] PM/Docs: status hygiene—`ci/check_status_sync.sh` (`make check-status-sync`) now fails when `roadmap.md` or `status.md` change without the other (override via `STATUS_SYNC_ALLOW_UNPAIRED=1` with `AGENTS_BASE_REF` pinned), docs/runbooks call out the stricter guard, and the PR template requires paired roadmap/status edits.【ci/check_status_sync.sh:1】【docs/source/dev_workflow.md:35】【CONTRIBUTING.md:30】【.github/pull_request_template.md:1】
 
