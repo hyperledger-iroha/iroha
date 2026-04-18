@@ -14,6 +14,23 @@ Last updated: 2026-04-18
   - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline -- --nocapture`
   - `cargo test -p iroha_core --lib`
 
+## 2026-04-18 Follow-up: root `ivm.md` pointer type table resynced
+- `/home/mtakemiya/dev/iroha/ivm.md` now matches `ivm::render_pointer_types_markdown_table()` again, restoring the generated pointer-type block for the Soracloud ABI entries `SoracloudRequest` (`0x000E`) and `SoracloudResponse` (`0x000F`).
+- This clears the focused `crates/ivm/tests/pointer_types_doc_generated_ivm_md.rs` regression without changing any ABI logic; the underlying enum IDs and rendered markdown were already correct in code and crate-local docs.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test pointer_types_doc_generated_ivm_md -- --nocapture`
+  - `cargo test -p ivm --test pointer_types_doc_generated -- --nocapture`
+
+## 2026-04-18 Follow-up: `NftId` bare-domain parser compatibility restored
+- `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/nft.rs` now accepts both `name$domain` and `name$domain.dataspace` NFT literals again. Bare domain literals are canonicalized to the `universal` dataspace, while malformed dotted literals remain rejected instead of silently falling back.
+- The same module now has focused parser regressions covering bare-domain canonicalization, fully qualified domains, and invalid multi-dot domain literals so this compatibility path stays pinned in-tree.
+- This restores `/home/mtakemiya/dev/iroha/crates/ivm/tests/pointer_tlv.rs` `validate_known_types_ok`, which had started panicking when the test fixture used `rose$wonderland`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model nft_id -- --nocapture`
+  - `cargo test -p iroha_data_model domain_literal -- --nocapture`
+  - `cargo test -p ivm --test pointer_tlv validate_known_types_ok -- --nocapture`
+
 ## 2026-04-18 Follow-up: Halo2 IPA diagnostic verifier resource hardening
 - `iroha_zkp_halo2` standalone `OpenVerifyEnvelope` decode now accepts explicit verification limits for domain size (`max_k`) and transcript label length, rejects malformed proof-round shapes before folding, and reports typed version/curve/shape/resource-limit errors instead of collapsing these decode failures into generic verification failure.
 - The standalone IPA parameter registry is now bounded (`32` entries) with least-recently-used eviction, and generator vector lengths are checked before curve decoding so malformed payloads cannot force unnecessary point parsing or unbounded parameter-cache growth.
