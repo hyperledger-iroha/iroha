@@ -207,6 +207,7 @@ _apalache-out*
 /fastpq_row_usage_summary.json
 /sora-single/
 /storage/
+/crates/iroha_torii/storage/torii/contract_deploy_bundles/
 /sora-one/
 /bench_trace.json
 /fastpq_*.json

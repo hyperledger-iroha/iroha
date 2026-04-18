@@ -265,24 +265,6 @@
           }
         },
         {
-          "Transfer": {
-            "AssetDefinition": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-              "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuﾛ1Pﾗﾊm4NﾁK8fﾊﾔﾅtﾑﾘvaMkxﾉｾGxNﾋﾐｽﾊoﾏﾔｳr7ｻL1FDSWDS"
-            }
-          }
-        },
-        {
-          "Transfer": {
-            "Domain": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-              "object": "wonderland.universal",
-              "source": "testuﾛ1Pﾗﾊm4NﾁK8fﾊﾔﾅtﾑﾘvaMkxﾉｾGxNﾋﾐｽﾊoﾏﾔｳr7ｻL1FDSWDS"
-            }
-          }
-        },
-        {
           "Grant": {
             "Permission": {
               "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",

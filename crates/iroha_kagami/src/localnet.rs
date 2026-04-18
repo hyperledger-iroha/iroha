@@ -12,12 +12,14 @@ use std::{
 
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_core::zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
+    da::commitment::DaProofPolicyBundle,
     isi::{
         RegisterBox, SetAssetDefinitionAlias,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -485,6 +487,16 @@ fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
     let peers = u32::from(peers.get());
     let fault_tolerance = peers.saturating_sub(1) / 3;
     fault_tolerance.max(1)
+}
+
+const LOCALNET_SBP_ALIAS_DATASPACE_ID: u64 = 10;
+const LOCALNET_CBUAE_ALIAS_DATASPACE_ID: u64 = 12;
+const LOCALNET_SBP_ALIAS_LANE_INDEX: u32 = 3;
+const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
+const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
+
+fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> bool {
+    matches!(sora_profile, Some(SoraProfile::Nexus))
 }
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
@@ -1022,25 +1034,17 @@ fn generate_localnet_with_line<T: Write>(
             .expect("gas account id required for NPoS bootstrap");
         let stake_amount =
             localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
-        genesis = append_localnet_npos_bootstrap(genesis, &peers, gas_account_id, stake_amount)?;
+        genesis = append_localnet_npos_bootstrap(
+            genesis,
+            &peers,
+            gas_account_id,
+            stake_amount,
+            opts.sora_profile,
+        )?;
     }
     genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
-    let genesis = genesis
-        .with_consensus_mode(opts.consensus_mode)
-        .with_consensus_meta();
-    write_genesis(
-        &genesis,
-        &genesis_public_key,
-        genesis_private.clone(),
-        chain_discriminant,
-        &genesis_json_path,
-        &genesis_signed_path,
-    )?;
-    tui::success("Genesis ready");
-
-    tui::status("Writing peer configs");
     let gas_account_id = gas_account_id
         .as_ref()
         .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
@@ -1059,6 +1063,59 @@ fn generate_localnet_with_line<T: Write>(
             pop_hex: format!("0x{}", hex::encode(&p.bls_pop)),
         })
         .collect::<Vec<_>>();
+    let bootstrap_peer = peers
+        .first()
+        .expect("localnet always has at least one peer");
+    let bootstrap_kura_dir = out_dir.join("storage").join("peer0");
+    let bootstrap_tiered_state_dir = bootstrap_kura_dir.join("tiered_state");
+    let bootstrap_da_store_dir = bootstrap_kura_dir.join("da_wsv_snapshots");
+    let bootstrap_config = render_peer_config(
+        bootstrap_peer,
+        &trusted,
+        &peer_telemetry_urls,
+        &genesis_public_key,
+        &genesis_signed_path,
+        &bls_entries,
+        &bootstrap_kura_dir,
+        &bootstrap_tiered_state_dir,
+        &bootstrap_da_store_dir,
+        &chain_id,
+        chain_discriminant,
+        (&hosts.bind, &hosts.public),
+        opts.consensus_mode,
+        RenderPeerFeatures {
+            mcp_enabled,
+            nexus_enabled,
+            npos_bootstrap,
+            da_rbc_enabled,
+        },
+        opts.sora_profile,
+        dataspace_fault_tolerance,
+        gas_account_id.as_deref(),
+        redundant_send_r,
+        collectors_k,
+        commit_inflight_timeout_ms,
+        tx_gossip_overrides,
+        logger_filter,
+        signature_batch_max_ed25519,
+        queue_capacity,
+    );
+    let da_proof_policies = resolve_localnet_da_proof_policies(&bootstrap_config)?;
+    let genesis = genesis
+        .with_consensus_mode(opts.consensus_mode)
+        .with_consensus_meta();
+    write_genesis(
+        &genesis,
+        &genesis_public_key,
+        genesis_private.clone(),
+        chain_discriminant,
+        &genesis_json_path,
+        &genesis_signed_path,
+        Some(da_proof_policies),
+    )?;
+    tui::success("Genesis ready");
+
+    tui::status("Writing peer configs");
     for (idx, peer) in peers.iter().enumerate() {
         let kura_dir = out_dir.join("storage").join(format!("peer{idx}"));
         fs::create_dir_all(&kura_dir)
@@ -1097,6 +1154,7 @@ fn generate_localnet_with_line<T: Write>(
                 npos_bootstrap,
                 da_rbc_enabled,
             },
+            opts.sora_profile,
             dataspace_fault_tolerance,
             gas_account_id.as_deref(),
             redundant_send_r,
@@ -1301,7 +1359,10 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
     Ok(())
 }
 
-fn localnet_dataspace_catalog(fault_tolerance: u32) -> Vec<toml::Value> {
+fn localnet_dataspace_catalog(
+    sora_profile: Option<SoraProfile>,
+    fault_tolerance: u32,
+) -> Vec<toml::Value> {
     use toml::{Table, Value};
 
     let fault_tolerance = i64::from(fault_tolerance);
@@ -1319,7 +1380,97 @@ fn localnet_dataspace_catalog(fault_tolerance: u32) -> Vec<toml::Value> {
         catalog.push(Value::Table(entry));
     }
 
+    if localnet_uses_alias_multilane_catalog(sora_profile) {
+        for (alias, id, description) in [
+            (
+                "sbp",
+                i64::try_from(LOCALNET_SBP_ALIAS_DATASPACE_ID).expect("SBP dataspace id fits i64"),
+                "SBP / FI retail alias dataspace",
+            ),
+            (
+                "cbuae",
+                i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
+                    .expect("CBUAE dataspace id fits i64"),
+                "CBUAE retail alias dataspace",
+            ),
+        ] {
+            let mut entry = Table::new();
+            entry.insert("alias".into(), Value::String(alias.to_owned()));
+            entry.insert("id".into(), Value::Integer(id));
+            entry.insert("description".into(), Value::String(description.to_owned()));
+            entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
+            catalog.push(Value::Table(entry));
+        }
+    }
+
     catalog
+}
+
+fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<toml::Value>)> {
+    use toml::{Table, Value};
+
+    if !localnet_uses_alias_multilane_catalog(sora_profile) {
+        return None;
+    }
+
+    let mut catalog = Vec::new();
+    for (index, alias, description, dataspace, visibility) in [
+        (
+            0_i64,
+            "core",
+            "Primary execution lane",
+            "universal",
+            "public",
+        ),
+        (
+            1_i64,
+            "governance",
+            "Governance & parliament traffic",
+            "governance",
+            "restricted",
+        ),
+        (
+            2_i64,
+            "zk",
+            "Zero-knowledge attachments",
+            "zk",
+            "restricted",
+        ),
+        (
+            i64::from(LOCALNET_SBP_ALIAS_LANE_INDEX),
+            "sbp",
+            "SBP / FI retail alias lane",
+            "sbp",
+            "public",
+        ),
+        (
+            i64::from(LOCALNET_CBUAE_ALIAS_LANE_INDEX),
+            "cbuae",
+            "CBUAE retail alias lane",
+            "cbuae",
+            "public",
+        ),
+    ] {
+        let mut entry = Table::new();
+        entry.insert("index".into(), Value::Integer(index));
+        entry.insert("alias".into(), Value::String(alias.to_owned()));
+        entry.insert("description".into(), Value::String(description.to_owned()));
+        entry.insert("dataspace".into(), Value::String(dataspace.to_owned()));
+        entry.insert("visibility".into(), Value::String(visibility.to_owned()));
+        entry.insert("metadata".into(), Value::Table(Table::new()));
+        catalog.push(Value::Table(entry));
+    }
+
+    Some((LOCALNET_NEXUS_ALIAS_LANE_COUNT, catalog))
+}
+
+fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
+    let mut lanes = vec![LaneId::SINGLE];
+    if localnet_uses_alias_multilane_catalog(sora_profile) {
+        lanes.push(LaneId::new(LOCALNET_SBP_ALIAS_LANE_INDEX));
+        lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
+    }
+    lanes
 }
 
 fn configured_chain_id() -> String {
@@ -1354,6 +1505,7 @@ fn render_peer_config(
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
     features: RenderPeerFeatures,
+    sora_profile: Option<SoraProfile>,
     dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
     redundant_send_r: Option<u8>,
@@ -1589,8 +1741,12 @@ fn render_peer_config(
         );
         nexus.insert("fees".into(), Value::Table(fees));
     }
+    if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile) {
+        nexus.insert("lane_count".into(), Value::Integer(lane_count));
+        nexus.insert("lane_catalog".into(), Value::Array(lane_catalog));
+    }
     if let Some(fault_tolerance) = dataspace_fault_tolerance {
-        let catalog = localnet_dataspace_catalog(fault_tolerance);
+        let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance);
         nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
     }
     root.insert("nexus".into(), Value::Table(nexus));
@@ -2493,6 +2649,7 @@ fn append_localnet_npos_bootstrap(
     peers: &[Peer],
     gas_account_id: &AccountId,
     stake_amount: u64,
+    sora_profile: Option<SoraProfile>,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
     let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
@@ -2500,6 +2657,13 @@ fn append_localnet_npos_bootstrap(
     let stake_asset_id = localnet_stake_asset_definition_id();
     let fee_asset_id = localnet_fee_asset_definition_id();
     let client_account_id = localnet_client_account_id();
+    let public_validator_lanes = localnet_public_validator_lanes(sora_profile);
+    let stake_mint_amount = stake_amount
+        .checked_mul(
+            u64::try_from(public_validator_lanes.len())
+                .expect("public validator lane count must fit in u64"),
+        )
+        .ok_or_else(|| eyre!("localnet validator stake mint amount overflow"))?;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -2568,7 +2732,7 @@ fn append_localnet_npos_bootstrap(
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
-            stake_amount,
+            stake_mint_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -2586,21 +2750,23 @@ fn append_localnet_npos_bootstrap(
         AssetId::new(fee_asset_id, client_account_id),
     ));
 
-    let mut builder = builder.next_transaction();
-    for peer in peers {
-        let validator_id = AccountId::new(peer.public_key.clone());
-        builder = builder.append_instruction(RegisterPublicLaneValidator {
-            lane_id: LaneId::SINGLE,
-            validator: validator_id.clone(),
-            peer_id: PeerId::from(peer.public_key.clone()),
-            stake_account: validator_id.clone(),
-            initial_stake: Numeric::from(stake_amount),
-            metadata: Metadata::default(),
-        });
-        builder = builder.append_instruction(ActivatePublicLaneValidator {
-            lane_id: LaneId::SINGLE,
-            validator: validator_id,
-        });
+    for lane_id in public_validator_lanes {
+        builder = builder.next_transaction();
+        for peer in peers {
+            let validator_id = AccountId::new(peer.public_key.clone());
+            builder = builder.append_instruction(RegisterPublicLaneValidator {
+                lane_id,
+                validator: validator_id.clone(),
+                peer_id: PeerId::from(peer.public_key.clone()),
+                stake_account: validator_id.clone(),
+                initial_stake: Numeric::from(stake_amount),
+                metadata: Metadata::default(),
+            });
+            builder = builder.append_instruction(ActivatePublicLaneValidator {
+                lane_id,
+                validator: validator_id,
+            });
+        }
     }
 
     Ok(builder.build_raw())
@@ -2613,6 +2779,7 @@ fn write_genesis(
     chain_discriminant: Option<u16>,
     json_path: &Path,
     signed_path: &Path,
+    da_proof_policies: Option<DaProofPolicyBundle>,
 ) -> Result<()> {
     let chain_discriminant =
         chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
@@ -2624,12 +2791,26 @@ fn write_genesis(
     let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
     let block = genesis
-        .build_and_sign(&genesis_key_pair)
+        .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)
         .wrap_err("sign genesis block")?;
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
     Ok(())
+}
+
+fn resolve_localnet_da_proof_policies(rendered_config: &str) -> Result<DaProofPolicyBundle> {
+    let table = rendered_config.parse::<toml::Table>().map_err(|err| {
+        eyre!(
+            "failed to parse rendered peer config as TOML while deriving DA proof policies: {err}"
+        )
+    })?;
+    let config = actual::Root::from_toml_source(TomlSource::inline(table)).map_err(|err| {
+        eyre!("failed to parse generated peer config while deriving DA proof policies: {err}")
+    })?;
+    Ok(iroha_core::da::proof_policy_bundle(
+        &config.nexus.lane_config,
+    ))
 }
 
 fn generate_genesis_key_pair(
@@ -3224,9 +3405,14 @@ mod tests {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key);
             let stake_amount =
                 localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
-            genesis =
-                append_localnet_npos_bootstrap(genesis, &peers, &gas_account_id, stake_amount)
-                    .expect("append localnet NPoS bootstrap");
+            genesis = append_localnet_npos_bootstrap(
+                genesis,
+                &peers,
+                &gas_account_id,
+                stake_amount,
+                opts.sora_profile,
+            )
+            .expect("append localnet NPoS bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
     }
@@ -4813,6 +4999,214 @@ mod tests {
                 "fault tolerance should scale with peers"
             );
         }
+    }
+
+    #[test]
+    fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let peer_count = NonZeroU16::new(4).expect("non-zero");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: peer_count,
+            seed: Some("localnet-nexus-alias-lanes".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 32080,
+            base_p2p_port: 32337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .expect("nexus table");
+        assert_eq!(
+            nexus.get("lane_count").and_then(toml::Value::as_integer),
+            Some(LOCALNET_NEXUS_ALIAS_LANE_COUNT),
+            "nexus profile should declare explicit alias-aware lane count"
+        );
+
+        let lane_catalog = nexus
+            .get("lane_catalog")
+            .and_then(toml::Value::as_array)
+            .expect("nexus lane catalog");
+        let lanes_by_alias: BTreeMap<_, _> = lane_catalog
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_table().expect("lane entry");
+                let alias = entry
+                    .get("alias")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane alias")
+                    .to_owned();
+                let dataspace = entry
+                    .get("dataspace")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane dataspace")
+                    .to_owned();
+                let visibility = entry
+                    .get("visibility")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane visibility")
+                    .to_owned();
+                (alias, (dataspace, visibility))
+            })
+            .collect();
+        assert_eq!(
+            lanes_by_alias.get("sbp"),
+            Some(&("sbp".to_owned(), "public".to_owned()))
+        );
+        assert_eq!(
+            lanes_by_alias.get("cbuae"),
+            Some(&("cbuae".to_owned(), "public".to_owned()))
+        );
+
+        let dataspace_catalog = nexus
+            .get("dataspace_catalog")
+            .and_then(toml::Value::as_array)
+            .expect("nexus dataspace catalog");
+        let dataspaces_by_alias: BTreeMap<_, _> = dataspace_catalog
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_table().expect("dataspace entry");
+                let alias = entry
+                    .get("alias")
+                    .and_then(toml::Value::as_str)
+                    .expect("dataspace alias")
+                    .to_owned();
+                let id = entry
+                    .get("id")
+                    .and_then(toml::Value::as_integer)
+                    .expect("dataspace id");
+                (alias, id)
+            })
+            .collect();
+        assert_eq!(
+            dataspaces_by_alias.get("sbp"),
+            Some(
+                &i64::try_from(LOCALNET_SBP_ALIAS_DATASPACE_ID).expect("SBP dataspace id fits i64")
+            )
+        );
+        assert_eq!(
+            dataspaces_by_alias.get("cbuae"),
+            Some(
+                &i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
+                    .expect("CBUAE dataspace id fits i64")
+            )
+        );
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let mut registrations_by_lane = BTreeMap::<u32, usize>::new();
+        let mut activations_by_lane = BTreeMap::<u32, usize>::new();
+        for instruction in manifest.instructions() {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                *registrations_by_lane
+                    .entry(register.lane_id.as_u32())
+                    .or_default() += 1;
+            }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                *activations_by_lane
+                    .entry(activate.lane_id.as_u32())
+                    .or_default() += 1;
+            }
+        }
+
+        let expected_lanes = BTreeSet::from([
+            LaneId::SINGLE.as_u32(),
+            LOCALNET_SBP_ALIAS_LANE_INDEX,
+            LOCALNET_CBUAE_ALIAS_LANE_INDEX,
+        ]);
+        assert_eq!(
+            registrations_by_lane
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expected_lanes,
+            "nexus localnet should seed validators for each public alias lane"
+        );
+        assert_eq!(
+            activations_by_lane.keys().copied().collect::<BTreeSet<_>>(),
+            expected_lanes,
+            "nexus localnet should activate validators for each public alias lane"
+        );
+        for lane in expected_lanes {
+            assert_eq!(
+                registrations_by_lane.get(&lane),
+                Some(&usize::from(peer_count.get())),
+                "expected one validator registration per peer on lane {lane}"
+            );
+            assert_eq!(
+                activations_by_lane.get(&lane),
+                Some(&usize::from(peer_count.get())),
+                "expected one validator activation per peer on lane {lane}"
+            );
+        }
+    }
+
+    #[test]
+    fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-nexus-da-proof-policy".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 33080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
+        let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
+
+        let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
+        let block =
+            decode_framed_signed_block(&bytes).expect("decode signed genesis from framed payload");
+
+        assert_eq!(
+            block.header().da_proof_policies_hash(),
+            Some(expected_hash),
+            "signed genesis should embed the same DA proof policy bundle as peer configs",
+        );
     }
 
     #[test]

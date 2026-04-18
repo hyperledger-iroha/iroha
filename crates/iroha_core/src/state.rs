@@ -32414,6 +32414,7 @@ mod tests {
                             .expect("manifest test validators must be single-signatory")
                             .clone(),
                     ),
+                    torii_url: None,
                 })
                 .collect();
             let rules = GovernanceRules {
