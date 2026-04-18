@@ -83,7 +83,7 @@ pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
-pub use proof::{Proof, Prover, verify};
+pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use trace::{
     ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
     clear_poseidon_pipeline_observer, column_hashes, merkle_root, merkle_root_with_first_level,

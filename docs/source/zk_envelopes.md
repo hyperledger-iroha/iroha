@@ -183,7 +183,9 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `j: u32` — index at this layer
   - `y0: u64`, `y1: u64` — inputs at positions (2*j, 2*j+1)
   - `path_y0: MerklePath`, `path_y1: MerklePath`
-  - `z: u64` — folded value `y0 + r_k*y1`
+  - `z: u64` — domain-aware binary FRI fold
+    `(y0 + y1)/2 + r_k * (y0 - y1)/(2x)`, where `x` is the domain element for
+    the opened `(x, -x)` pair
   - `path_z: MerklePath` — Merkle path for `z` under `roots[k+1]`
 
 - `StarkProofV1`
@@ -222,7 +224,8 @@ Limits and validation
 Verifier behavior (native STARK)
 - For each query, replays all folds:
   - Verifies `y0`, `y1` Merkle openings under `roots[k]` and `z` under `roots[k+1]`.
-  - Checks `z == y0 + r_k*y1` in the field.
+  - Derives the pair domain element `x` from the layer domain and checks
+    `z == (y0 + y1)/2 + r_k * (y0 - y1)/(2x)` in the field.
 - If `comp_root` present, verifies the composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.

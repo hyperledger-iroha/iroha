@@ -105,6 +105,22 @@ pub enum Error {
         /// Position of the failing query.
         index: usize,
     },
+    /// Query Merkle authentication path did not resolve to the lookup root.
+    #[error("query Merkle path mismatch at position {index}")]
+    QueryMerklePathMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// FASTPQ replay verifier input exceeded a configured limit.
+    #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
+    VerifierLimitExceeded {
+        /// Name of the rejected limit.
+        limit: &'static str,
+        /// Observed value.
+        actual: usize,
+        /// Maximum permitted value.
+        max: usize,
+    },
     /// Trace length exceeded the supported 32-bit representation.
     #[error("trace length {rows} exceeds 32-bit bound")]
     TraceLengthOverflow {

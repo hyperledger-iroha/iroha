@@ -31,6 +31,10 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 
+const BENCH_DOMAIN_NAME: &str = "wonderland";
+const BENCH_DATASPACE_NAME: &str = "universal";
+const BENCH_ASSET_NAME: &str = "xor";
+
 #[derive(Clone)]
 struct BenchContext {
     authority: AccountId,
@@ -130,19 +134,12 @@ fn setup_role_assigned(state: &mut BenchState) {
 }
 
 fn setup_asset_definition(state: &mut BenchState) {
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-    state.apply_instrs([Register::asset_definition(AssetDefinition::numeric(ad)).into()]);
+    state.apply_instrs([Register::asset_definition(bench_asset_definition()).into()]);
 }
 
 fn setup_asset_and_balance(state: &mut BenchState) {
     setup_asset_definition(state);
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let ad = bench_asset_definition_id();
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
     state.apply_instrs([
         iroha_data_model::isi::Mint::asset_numeric(Numeric::new(10, 0), asset_id).into(),
@@ -161,6 +158,20 @@ fn setup_trigger_registered(state: &mut BenchState) {
     );
     let trigger = Trigger::new(trigger_id, action);
     state.apply_instrs([Register::trigger(trigger).into()]);
+}
+
+fn bench_asset_definition_id() -> AssetDefinitionId {
+    iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new(BENCH_DOMAIN_NAME, BENCH_DATASPACE_NAME).expect("valid domain id"),
+        BENCH_ASSET_NAME
+            .parse()
+            .expect("valid asset definition name"),
+    )
+}
+
+/// Construct a valid asset definition fixture for registration benchmarks.
+fn bench_asset_definition() -> iroha_data_model::asset::NewAssetDefinition {
+    AssetDefinition::numeric(bench_asset_definition_id()).with_name(BENCH_ASSET_NAME.to_owned())
 }
 
 /// Benchmark a single ISI by executing it in a fresh transaction for each iteration.
@@ -213,11 +224,7 @@ fn run_benchmarks(c: &mut Criterion) {
         Register::account(Account::new(acc.clone())).into()
     });
     bench_isi(c, "RegisterAssetDef", setup_none, |_ctx| {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        Register::asset_definition(AssetDefinition::numeric(ad)).into()
+        Register::asset_definition(bench_asset_definition()).into()
     });
     bench_isi(c, "SetAccountKV_small", setup_none, |ctx| {
         iroha_data_model::isi::SetKeyValue::account(
@@ -245,18 +252,12 @@ fn run_benchmarks(c: &mut Criterion) {
         },
     );
     bench_isi(c, "MintAsset", setup_asset_definition, |ctx| {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
         iroha_data_model::isi::Mint::asset_numeric(Numeric::new(1, 0), id).into()
     });
     bench_isi(c, "TransferAsset", setup_asset_and_balance, |ctx| {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
         iroha_data_model::isi::Transfer::asset_numeric(
             id,

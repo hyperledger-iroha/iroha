@@ -5090,6 +5090,12 @@ pub struct Stark {
     /// Note: runtime enablement requires binaries built with `zk-stark`.
     #[config(env = "ZK_STARK_ENABLED", default = "defaults::zk::stark::ENABLED")]
     pub enabled: bool,
+    /// Maximum accepted outer STARK OpenVerifyEnvelope length (bytes).
+    #[config(
+        env = "ZK_STARK_MAX_ENVELOPE_BYTES",
+        default = "defaults::zk::stark::MAX_ENVELOPE_BYTES"
+    )]
+    pub max_envelope_bytes: usize,
     /// Maximum accepted proof payload length (bytes).
     #[config(
         env = "ZK_STARK_MAX_PROOF_BYTES",
@@ -5102,6 +5108,7 @@ impl Stark {
     fn parse(self) -> actual::Stark {
         actual::Stark {
             enabled: self.enabled,
+            max_envelope_bytes: self.max_envelope_bytes,
             max_proof_bytes: self.max_proof_bytes,
         }
     }

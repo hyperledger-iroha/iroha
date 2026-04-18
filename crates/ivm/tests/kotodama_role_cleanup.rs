@@ -21,15 +21,20 @@ fn caller_account() -> ivm::mock_wsv::AccountId {
     )
 }
 
+fn literal_account() -> ivm::mock_wsv::AccountId {
+    iroha_data_model::account::AccountId::parse_encoded(
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+    )
+    .expect("parse test account literal")
+    .into_account_id()
+}
+
 #[test]
 fn kotodama_revoke_role_denies_mint() {
-    let caller: ivm::mock_wsv::AccountId = caller_account();
+    let caller: ivm::mock_wsv::AccountId = literal_account();
 
     // VM + host with bootstrap permissions
     let mut wsv = MockWorldStateView::new();
-    wsv.add_account_unchecked(caller.clone());
-    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
-    wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
@@ -39,12 +44,10 @@ fn kotodama_revoke_role_denies_mint() {
     let prog_ok = compile(
         r#"
         fn main() {
-          register_domain(domain("default.universal"));
-          register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), name("minter"));
-          mint_asset(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          grant_role(authority(), name("minter"));
+          mint_asset(authority(), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );

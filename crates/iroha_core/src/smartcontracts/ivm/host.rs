@@ -2235,11 +2235,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn curve_is_allowed(&self, curve_label: &str) -> bool {
         match self.halo2_config.curve {
             ivm::host::ZkCurve::Pallas | ivm::host::ZkCurve::Pasta => {
-                curve_label.eq_ignore_ascii_case("pallas")
-                    || curve_label.eq_ignore_ascii_case("pasta")
+                curve_label == "pallas" || curve_label == "pasta"
             }
-            ivm::host::ZkCurve::Goldilocks => curve_label.eq_ignore_ascii_case("goldilocks"),
-            ivm::host::ZkCurve::Bn254 => curve_label.eq_ignore_ascii_case("bn254"),
+            ivm::host::ZkCurve::Goldilocks => curve_label == "goldilocks",
+            ivm::host::ZkCurve::Bn254 => curve_label == "bn254",
         }
     }
 
@@ -2334,6 +2333,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
             halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
             stark_enabled: false,
+            stark_max_envelope_bytes: 0,
             stark_max_proof_bytes: 0,
         };
         Ok(crate::zk::verify_backend_with_timing_guardrails(
@@ -6150,6 +6150,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     halo2_max_envelope_bytes: self.halo2_config.max_envelope_bytes,
                     halo2_max_proof_bytes: self.halo2_config.max_proof_bytes,
                     stark_enabled: false,
+                    stark_max_envelope_bytes: 0,
                     stark_max_proof_bytes: 0,
                 };
 
