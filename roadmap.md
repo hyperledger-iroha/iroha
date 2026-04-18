@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 IVM query-envelope linked-domain test resync):
+`crates/ivm/tests/wsv_host_execute_query_envelope.rs` now follows the current
+universal-account mock WSV semantics for cross-domain subjects. The query
+envelope coverage registers each canonical account subject once, then uses
+`link_subject_to_domain(...)` to seed `list_domains_for_account` and
+`list_accounts_for_domain` behavior across `wonderland.universal`,
+`alpha.universal`, `beta.universal`, and `other.universal`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_execute_query_envelope.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_execute_query_envelope -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 SoraNet PQ hedged RNG boundary hardening):
 SoraNet PQ call sites now flow through explicit hedged RNG objects or fallible
 `_from_os` helpers, and ML-DSA fixture signatures were refreshed for the
