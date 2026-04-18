@@ -47,8 +47,8 @@ Fonte: `examples/transfer/transfer.ko`
 seiyaku TransferDemo {
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-      account!("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"),
+      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
@@ -66,14 +66,14 @@ Fonte: `examples/nft/nft.ko`
 ```
 seiyaku NftDemo {
   kotoage fn create() permission(NftAuthority) {
-    let owner = account!("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
+    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let nft = nft_id!("dragon$wonderland");
     nft_mint_asset(nft, owner);
   }
 
   kotoage fn transfer() permission(NftAuthority) {
-    let owner = account!("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
-    let recipient = account!("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76");
+    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+    let recipient = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
     let nft = nft_id!("dragon$wonderland");
     nft_transfer_asset(owner, nft, recipient);
   }
@@ -96,12 +96,12 @@ seiyaku PointerDemo {
   state Owners: Map<int, AccountId>;
 
   fn hajimari() {
-    let alice = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
+    let alice = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let first = Owners.ensure(7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76");
+    let bob = account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
     let again = Owners.ensure(7, bob);
     assert(again == alice);
   }

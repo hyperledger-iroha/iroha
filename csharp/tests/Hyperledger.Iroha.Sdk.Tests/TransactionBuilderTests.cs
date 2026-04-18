@@ -63,8 +63,8 @@ public sealed class TransactionBuilderTests
     [Fact]
     public async Task LedgerClientSubmitAndWaitPollsUntilTerminalState()
     {
-        var transaction = new TransactionBuilder("00000042", "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+        var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)
@@ -133,15 +133,15 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetAssetKeyValue(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "display_name",
                 JsonValue.Create("Treasury buffer"))
             .RemoveAssetKeyValue(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "legacy_flag")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
@@ -173,7 +173,7 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .AddInstruction(TransactionInstruction.SetDomainKeyValue(
                 "wonderland",
                 "display_name",
@@ -182,11 +182,11 @@ public sealed class TransactionBuilderTests
                 "wonderland",
                 "legacy_flag"))
             .AddInstruction(TransactionInstruction.SetAccountKeyValue(
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "display_name",
                 JsonValue.Create("Treasury buffer")))
             .AddInstruction(TransactionInstruction.RemoveAccountKeyValue(
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "legacy_flag"))
             .AddInstruction(TransactionInstruction.SetAssetDefinitionKeyValue(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -211,7 +211,7 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetDomainKeyValue(
                 "wonderland",
                 "display_name",
@@ -220,11 +220,11 @@ public sealed class TransactionBuilderTests
                 "wonderland",
                 "legacy_flag")
             .SetAccountKeyValue(
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "display_name",
                 JsonValue.Create("Treasury buffer"))
             .RemoveAccountKeyValue(
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 "legacy_flag")
             .SetAssetDefinitionKeyValue(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -297,7 +297,7 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .AddInstruction(TransactionInstruction.SetNftKeyValue(
                 "dragon$wonderland",
                 "rarity",
@@ -334,7 +334,7 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetNftKeyValue(
                 "dragon$wonderland",
                 "rarity",
@@ -452,16 +452,16 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .AddInstruction(TransactionInstruction.TransferDomain(
                 "wonderland",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"))
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"))
             .AddInstruction(TransactionInstruction.TransferAssetDefinition(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"))
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"))
             .AddInstruction(TransactionInstruction.TransferNft(
                 "dragon$wonderland",
-                "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"));
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"));
 
         Assert.Collection(
             builder.Instructions,
@@ -473,8 +473,8 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void BuildSignedEncodesDomainAssetDefinitionAndNftTransfers()
     {
-        var authority = "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53";
-        var destination = "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53";
+        var authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+        var destination = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
         var envelope = new TransactionBuilder("00000042", authority)
             .TransferDomain("wonderland", destination)

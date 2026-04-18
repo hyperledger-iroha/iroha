@@ -35,7 +35,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "id": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "metadata": {
                 "key": "value"
               }
@@ -45,7 +45,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
+              "id": "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"
               }
@@ -81,7 +81,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
+              "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "metadata": {
                 
               }
@@ -157,7 +157,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+              "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
               "metadata": {
                 
               }
@@ -254,7 +254,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -262,7 +262,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -270,7 +270,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
               "object": "250000000"
             }
           }
@@ -278,25 +278,25 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
+              "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
             }
           }
         },
         {
           "Transfer": {
             "Domain": {
-              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "wonderland.universal",
-              "source": "testuロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
+              "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -306,7 +306,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }

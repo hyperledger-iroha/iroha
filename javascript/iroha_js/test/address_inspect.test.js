@@ -15,7 +15,7 @@ const SAMPLE_KEY = Buffer.from(
   "hex",
 );
 const DEFAULT_DOMAIN_CANONICAL_I105 =
-  "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+  "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
 function buildAccount() {
   const address = AccountAddress.fromAccount({
@@ -66,7 +66,7 @@ test("inspectAccountId rejects noncanonical fullwidth-sentinel literals", () => 
     () => inspectAccountId(noncanonical),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
   );
 });
 

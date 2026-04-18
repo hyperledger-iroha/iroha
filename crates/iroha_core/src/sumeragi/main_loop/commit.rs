@@ -2401,12 +2401,25 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
-        let mut commit_topology = self.roster_for_vote_with_mode(
-            block_hash,
-            pending_height,
-            pending_view,
-            consensus_mode,
-        );
+        let mut commit_topology = self
+            .vote_roster_cache
+            .get(&block_hash)
+            .filter(|cached| {
+                cached.height == pending_height
+                    && cached.view == pending_view
+                    && !cached.roster.is_empty()
+            })
+            .map(|cached| {
+                super::roster::canonicalize_roster_for_mode(cached.roster.clone(), consensus_mode)
+            })
+            .unwrap_or_else(|| {
+                self.roster_for_vote_with_mode(
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    consensus_mode,
+                )
+            });
         if commit_topology.is_empty() {
             commit_topology = self.roster_for_live_vote_with_mode(pending_height, consensus_mode);
         }

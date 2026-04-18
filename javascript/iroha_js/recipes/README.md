@@ -39,7 +39,7 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://127.0.0.1:8080 \
-ACCOUNT_ID=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
+ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
 TORII_AUTH_TOKEN=token \
 node ./recipes/nft_account_iteration.mjs
 ```
@@ -162,7 +162,7 @@ Run with:
 npm install
 node ./recipes/contracts.mjs \
   TORII_URL=https://torii.devnet.example \
-  AUTHORITY=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
+  AUTHORITY=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
   PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
   CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
   CONTRACT_ALIAS=demo_contract::universal
@@ -216,8 +216,8 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://localhost:8080 \
-ACCOUNT_ID=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
-NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D \
+ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
 node ./recipes/assets_iterators.mjs

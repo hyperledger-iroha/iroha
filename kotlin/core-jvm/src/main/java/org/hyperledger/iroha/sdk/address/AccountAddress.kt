@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
 private const val I105_WARNING =
-    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. " +
+    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. " +
         "Render and validate them with the intended chain discriminant."
 private const val I105_DISCRIMINANT_MAX = 0xFFFF
 private const val I105_DISCRIMINANT_SORA = 0x02F1
@@ -16,23 +16,14 @@ private const val I105_SENTINEL_SORA = "sora"
 private const val I105_SENTINEL_TEST = "test"
 private const val I105_SENTINEL_DEV = "dev"
 private const val I105_SENTINEL_NUMERIC_PREFIX = "n"
-private const val I105_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ"
-private const val I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ"
-private const val I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ"
-private const val I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ"
 private val BASE58_ALPHABET =
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".map { it.toString() }.toTypedArray()
-private val IROHA_POEM_KANA_FULLWIDTH = arrayOf(
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-)
 private val IROHA_POEM_KANA_HALFWIDTH = arrayOf(
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
     "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 )
-private val I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
+private val I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 
 @Volatile
 private var allowMlDsa = false
@@ -46,8 +37,7 @@ private fun lookupI105Digit(symbol: String): Int? {
     if (canonicalIndex >= 0) {
         return canonicalIndex
     }
-    val halfwidthIndex = IROHA_POEM_KANA_HALFWIDTH.indexOf(symbol)
-    return if (halfwidthIndex >= 0) BASE58_ALPHABET.size + halfwidthIndex else null
+    return null
 }
 
 class AccountAddress private constructor(canonicalBytes: ByteArray) {
@@ -741,17 +731,16 @@ private fun i105SentinelForDiscriminant(discriminant: Int): String = when (discr
 
 private fun parseI105SentinelAndPayload(encoded: String): Pair<Int, String>? {
     when {
-        encoded.startsWith(I105_SENTINEL_SORA) || encoded.startsWith(I105_SENTINEL_SORA_FULLWIDTH) ->
+        encoded.startsWith(I105_SENTINEL_SORA) ->
             return I105_DISCRIMINANT_SORA to encoded.drop(I105_SENTINEL_SORA.length)
-        encoded.startsWith(I105_SENTINEL_TEST) || encoded.startsWith(I105_SENTINEL_TEST_FULLWIDTH) ->
+        encoded.startsWith(I105_SENTINEL_TEST) ->
             return I105_DISCRIMINANT_TEST to encoded.drop(I105_SENTINEL_TEST.length)
-        encoded.startsWith(I105_SENTINEL_DEV) || encoded.startsWith(I105_SENTINEL_DEV_FULLWIDTH) ->
+        encoded.startsWith(I105_SENTINEL_DEV) ->
             return I105_DISCRIMINANT_DEV to encoded.drop(I105_SENTINEL_DEV.length)
     }
 
     val tail = when {
         encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX) -> encoded.drop(I105_SENTINEL_NUMERIC_PREFIX.length)
-        encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH) -> encoded.drop(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH.length)
         else -> return null
     }
     val digitsBuilder = StringBuilder()
@@ -770,7 +759,6 @@ private fun parseI105SentinelAndPayload(encoded: String): Pair<Int, String>? {
 
 private fun asciiDigit(character: Char): Char? = when (character) {
     in '0'..'9' -> character
-    in '０'..'９' -> (character.code - 0xFEE0).toChar()
     else -> null
 }
 

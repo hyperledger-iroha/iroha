@@ -5,7 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AccountAddress } from "../src/address.js";
 
-const ACCOUNT_ID = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 const EXECUTE_TRIGGER = {
   ExecuteTrigger: {
     trigger: "staged_mint_request_hbl",

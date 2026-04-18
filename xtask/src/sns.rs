@@ -2547,7 +2547,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod catalog_verify_tests {
     use super::*;
 
-    const SAMPLE_ASSET_ID: &str = "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const SAMPLE_ASSET_ID: &str =
+        "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
     fn sample_pricing() -> PricingTier {
         PricingTier {
@@ -2569,10 +2570,8 @@ mod catalog_verify_tests {
             suffix: ".sora".into(),
             suffix_id: 1,
             status: "active".into(),
-            steward_account:
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
-            fund_splitter_account:
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+            steward_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
+            fund_splitter_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
             payment_asset_id: SAMPLE_ASSET_ID.into(),
             referral_cap_bps: 500,
             min_term_years: 1,
@@ -2582,10 +2581,7 @@ mod catalog_verify_tests {
             policy_version: 1,
             reserved_labels: vec![ReservedLabel {
                 label: "treasury".into(),
-                assigned_to: Some(
-                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
-                        .into(),
-                ),
+                assigned_to: Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".into()),
                 release_at_ms: None,
                 note: None,
             }],

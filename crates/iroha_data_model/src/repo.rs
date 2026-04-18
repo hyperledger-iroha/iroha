@@ -252,8 +252,7 @@ mod tests {
     use super::*;
     use crate::domain::DomainId;
 
-    const ALICE_ID_STR: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const ALICE_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
         let initiator = AccountId::parse_encoded(ALICE_ID_STR)
             .expect("valid initiator account")

@@ -534,7 +534,7 @@ To create an account, specify the entity type (`account`) and the command (`regi
 
 ```bash
 iroha ledger account register \
-  --id "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+  --id "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
 ```
 
 ### Mint Asset to Account

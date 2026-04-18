@@ -972,7 +972,7 @@ public final class NoritoTests {
     NoritoStreaming.StreamingTicket ticket =
         new NoritoStreaming.StreamingTicket(
             fill(0x33, NoritoStreaming.HASH_LEN),
-            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             42,
             3,
             7,

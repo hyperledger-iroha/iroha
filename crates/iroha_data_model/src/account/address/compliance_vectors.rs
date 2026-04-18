@@ -21,8 +21,7 @@ macro_rules! json_obj {
 }
 
 const NETWORK_PREFIX: u16 = 753;
-const I105_CHECKSUM_MUTATION_CANDIDATES: &str =
-    "アイウエオカキクケコサシスセソタチツテトナニヌネノ";
+const I105_CHECKSUM_MUTATION_CANDIDATES: &str = "ｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ";
 
 struct PositiveEncodings {
     canonical_hex: String,

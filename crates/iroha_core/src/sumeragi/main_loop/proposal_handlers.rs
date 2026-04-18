@@ -160,8 +160,26 @@ impl Actor {
             .is_some_and(|highest| {
                 self.request_missing_block_for_highest_qc_force_exact_repair(highest, source)
             });
-        let recovery_advance =
+        let mut recovery_advance =
             self.advance_frontier_recovery("missing_qc", height, view, false, true, true, now);
+        if matches!(recovery_advance, FrontierRecoveryAdvance::None)
+            && self.frontier_recovery.is_some_and(|state| {
+                state.frontier_height == height
+                    && state.last_cause == "missing_qc"
+                    && state.no_progress_windows == 0
+                    && state.last_rotation_view.is_none()
+                    && state.last_action_at.is_none()
+            })
+        {
+            self.frontier_recovery = None;
+            recovery_advance = self.handle_frontier_slot_event(
+                now,
+                FrontierSlotEvent::OnViewAdvanceRequested {
+                    cause: Self::frontier_recovery_view_change_cause("missing_qc"),
+                    requested_view: view,
+                },
+            );
+        }
         let view_change_triggered = matches!(recovery_advance, FrontierRecoveryAdvance::Rotate);
         warn!(
             height,
@@ -1201,16 +1219,14 @@ impl Actor {
                         .then_some((owner_hash, entry_view))
                 }),
         );
-        let incoming_payload_present = self.frontier_block_materialized_locally(incoming_hash);
         for (hash, old_view) in superseded {
-            let retain_payload = !incoming_payload_present
-                && self
-                    .pending
-                    .pending_blocks
-                    .get(&hash)
-                    .is_some_and(|pending| {
-                        self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
-                    });
+            let retain_payload = self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| {
+                    self.should_retain_superseded_contiguous_frontier_payload(hash, pending)
+                });
             let pending = self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
             self.pending.pending_fetch_requests.remove(&hash);

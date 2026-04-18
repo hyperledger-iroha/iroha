@@ -79,7 +79,7 @@ fn json_encode_decode_roundtrip() {
 }
 
 #[test]
-fn json_decode_rejects_blob() {
+fn json_decode_accepts_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let json = br#"{"a":1,"b":[2,3]}"#;
@@ -99,8 +99,12 @@ fn json_decode_rejects_blob() {
     );
     vm.set_register(10, p_blob);
     vm.load_program(&dec_prog).unwrap();
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    vm.run().unwrap();
+    let p_out = vm.register(10);
+    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
+    assert_eq!(tlv_j.type_id, PointerType::Json);
+    let parsed: iroha_primitives::json::Json = norito::decode_from_bytes(tlv_j.payload).unwrap();
+    assert_eq!(parsed.get(), r#"{"a":1,"b":[2,3]}"#);
 }
 
 #[test]
@@ -471,7 +475,7 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
 
 #[test]
 fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
-    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let expected_owner = AccountId::parse_encoded(owner_literal)
         .expect("valid canonical account id")
         .into_account_id()
@@ -616,7 +620,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_owner_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"owner"))
         .unwrap();
-    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let p_owner = vm
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();

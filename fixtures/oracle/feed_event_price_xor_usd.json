@@ -15,7 +15,7 @@
       },
       "entries": [
         {
-          "oracle_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+          "oracle_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
           "observation_hash": "hash:9686164FE3142385C1B5E298A05F1567C4C9BF0619EF067176BB24D8CE952BF5#888B",
           "value": {
             "mantissa": "1002500",
@@ -24,7 +24,7 @@
           "outlier": false
         },
         {
-          "oracle_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "oracle_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
           "observation_hash": "hash:E73437732E52416ABA254F8C2C081EBBD1BA2E6ADBD9C1CB10D82F9FABB5FC43#EEC6",
           "value": {
             "mantissa": "1001500",

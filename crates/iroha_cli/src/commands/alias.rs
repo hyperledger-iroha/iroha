@@ -459,7 +459,7 @@ mod tests {
     }
 
     const SAMPLE_ACCOUNT_ID: &str =
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
     #[test]
     fn parse_voprf_args() {

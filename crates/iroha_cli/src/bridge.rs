@@ -946,7 +946,7 @@ mod tests {
             source_tx: "11".repeat(32),
             amount: 5,
             asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
-            recipient: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+            recipient: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
                 .to_string(),
             dest_tx: Some("22".repeat(32)),
             proof_hash: Some("33".repeat(32)),
@@ -975,7 +975,7 @@ mod tests {
         assert_eq!(receipt.asset_id, b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_vec());
         assert_eq!(
             receipt.recipient,
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
                 .as_bytes()
                 .to_vec()
         );

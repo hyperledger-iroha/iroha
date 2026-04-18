@@ -11,10 +11,8 @@ mod json_envelope {
         },
     };
 
-    const AUTHORITY: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
-    const ALT_AUTHORITY: &str =
-        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+    const AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+    const ALT_AUTHORITY: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
     fn parse_authority(literal: &str) -> AccountId {
         AccountId::parse_encoded(literal)

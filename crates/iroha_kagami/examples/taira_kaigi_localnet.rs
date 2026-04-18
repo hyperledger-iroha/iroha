@@ -531,7 +531,7 @@ mod tests {
         let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let bootstrap = BootstrapAuthority {
             account_id: AccountId::parse_encoded(
-                "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+                "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
             )
             .map(ParsedAccountId::into_account_id)
             .expect("bootstrap account"),
@@ -544,7 +544,7 @@ mod tests {
         let overlaid = append_bootstrap_authority_overlay(manifest, &bootstrap);
         assert_eq!(
             bootstrap.account_id.to_string(),
-            "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+            "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
             "bootstrap authority literal should stay canonical under the Taira discriminant"
         );
         assert_eq!(
@@ -565,7 +565,7 @@ mod tests {
         let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let bootstrap = BootstrapAuthority {
             account_id: AccountId::parse_encoded(
-                "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+                "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
             )
             .map(ParsedAccountId::into_account_id)
             .expect("bootstrap account"),

@@ -19,8 +19,8 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
 
     // Test values derived from the live account-address fixtures and an owner-qualified
     // asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form.
-    final String sender = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
-    final String receiver = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+    final String sender = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+    final String receiver = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     final String asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + sender;
 
     // tx_id must have LSB=1 (this is the hash from Rust test)

@@ -18,7 +18,7 @@ public sealed class CanonicalRequestTests
         var privateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
         var body = Encoding.UTF8.GetBytes("{\"selector\":\"assets\"}");
         var headers = CanonicalRequest.BuildHeaders(
-            accountId: "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+            accountId: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             privateKeySeed: privateKeySeed,
             method: "post",
             path: "/v1/query",

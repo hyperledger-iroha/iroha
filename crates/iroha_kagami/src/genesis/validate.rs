@@ -229,7 +229,7 @@ mod tests {
                 "instructions": [{
                     "Mint": {
                         "Asset": {
-                            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                             "object": "13"
                         }
                     }

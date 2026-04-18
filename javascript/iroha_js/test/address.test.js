@@ -76,12 +76,12 @@ const DEFAULT_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
 const DEFAULT_PUBLIC_KEY_I105 =
-  "sorauロ1P5チXEエユGjgユレホユクチEtタ3ツコ2gALコメefヘ8DLgセoCVGUYHS5";
+  "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5";
 const AMBIGUOUS_ED25519_PUBLIC_KEY = hexToBytes(
   "BC717326224E4B4119298E7B1DB8133CB27D6CDF6B3E04D75A6D27B29A34C1CF",
 );
 const AMBIGUOUS_ED25519_I105 =
-  "sorauロ1PワdホシヒノNクdチムkiヌ3オモaPBQDTイKqシqオrラカwSQ1フナQU61Y7";
+  "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7";
 const INVALID_I105_CHAR_LITERAL = `${DEFAULT_PUBLIC_KEY_I105.slice(0, -1)}!`;
 const ALT_PUBLIC_KEY = hexToBytes(
   "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
@@ -275,13 +275,23 @@ test("parseEncoded rejects fullwidth-sentinel i105 literals", () => {
     () => AccountAddress.parseEncoded(noncanonical, 753),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
   );
   assert.throws(
     () => decodeI105AccountAddress(noncanonical, { expectDiscriminant: 753 }),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
+  );
+});
+
+test("i105 format rejects legacy fullwidth kana payloads", () => {
+  const noncanonical = DEFAULT_PUBLIC_KEY_I105.replace("ﾛ", "ロ");
+  assert.throws(
+    () => AccountAddress.fromI105(noncanonical, 753),
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.INVALID_I105_CHAR,
   );
 });
 
