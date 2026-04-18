@@ -240,12 +240,11 @@ fn query_list_domains_for_account_returns_sorted_domains() {
     wsv.add_account_unchecked(admin.clone());
     wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
     wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
-    assert!(wsv.register_account(&admin, linked_beta.clone()));
     assert!(wsv.register_domain(&admin, alpha.clone()));
-    assert!(wsv.register_account(&admin, linked_alpha.clone()));
     assert!(wsv.register_domain(&admin, beta.clone()));
+    assert!(wsv.register_account(&admin, linked_beta.clone()));
     assert!(wsv.link_subject_to_domain(linked_beta.clone(), beta.clone()));
-    assert!(wsv.link_subject_to_domain(linked_beta.clone(), alpha.clone()));
+    assert!(wsv.link_subject_to_domain(linked_alpha.clone(), alpha.clone()));
 
     let host = WsvHost::new_with_subject(wsv, admin.clone(), Default::default());
     let mut vm = IVM::new(u64::MAX);
@@ -305,10 +304,14 @@ fn query_list_accounts_for_domain_returns_linked_subjects() {
     wsv.add_account_unchecked(admin.clone());
     wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
     wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
+    assert!(wsv.register_domain(&admin, wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(admin.clone(), wonderland.clone()));
     assert!(wsv.register_account(&admin, alice_wonderland.clone()));
     assert!(wsv.register_account(&admin, bob_wonderland.clone()));
     assert!(wsv.register_domain(&admin, other.clone()));
-    assert!(wsv.register_account(&admin, alice_other.clone()));
+    assert!(wsv.link_subject_to_domain(alice_wonderland.clone(), wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(bob_wonderland.clone(), wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(alice_other.clone(), other.clone()));
 
     let host = WsvHost::new_with_subject(wsv, admin.clone(), Default::default());
     let mut vm = IVM::new(u64::MAX);

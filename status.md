@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: IVM query-envelope linked-domain test resync
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_execute_query_envelope.rs`
+  now seeds multi-domain account visibility through explicit
+  `link_subject_to_domain(...)` calls instead of trying to register the same
+  canonical account subject twice under different domains.
+- The two query-envelope regressions now match the current universal-account
+  mock WSV model:
+  `query_list_domains_for_account_returns_sorted_domains` registers the subject
+  once and links it into `alpha.universal` and `beta.universal`, while
+  `query_list_accounts_for_domain_returns_linked_subjects` explicitly links the
+  admin and test subjects into `wonderland.universal` and reuses the shared
+  Alice subject for `other.universal`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_execute_query_envelope -- --nocapture`
+
 ## 2026-04-18 Follow-up: SoraNet PQ hedged RNG boundary hardening
 - SoraNet PQ key-generation and signing/encapsulation call sites now use the
   explicit hedged-RNG API or fallible `_from_os` convenience helpers instead of
