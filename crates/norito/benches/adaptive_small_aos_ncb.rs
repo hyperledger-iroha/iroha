@@ -2,8 +2,8 @@
 //!
 //! For small inputs, the adaptive encoder does a two-pass probe and picks the
 //! smaller of AoS and NCB. We craft two datasets:
-//! - AoS-friendly: distinct short names → AoS typically wins.
-//! - NCB-friendly: many repeated names → NCB with dictionary should win.
+//! - AoS-friendly: large ID deltas and distinct short names make NCB overhead dominate.
+//! - NCB-friendly: repeated names make NCB with dictionary win.
 //!
 //! We then benchmark view-iterate and materialize for each chosen layout.
 //!
@@ -13,14 +13,18 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 fn rows_aos_friendly(n: usize) -> Vec<(u64, String, bool)> {
     (0..n as u64)
-        .map(|i| (i, format!("s{i}"), (i & 1) == 0))
+        .map(|i| (i << 56, format!("s{i}"), (i & 1) == 0))
         .collect()
 }
 
 fn rows_ncb_friendly(n: usize) -> Vec<(u64, String, bool)> {
     (0..n as u64)
         .map(|i| {
-            let name = if i % 3 == 0 { "alpha" } else { "beta" };
+            let name = if i % 3 == 0 {
+                "alpha_cluster"
+            } else {
+                "beta_cluster"
+            };
             (i, name.to_string(), (i & 1) == 1)
         })
         .collect()
