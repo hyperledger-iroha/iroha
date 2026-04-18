@@ -4898,37 +4898,7 @@ mod stark_prover_tests {
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::{OpenVerifyEnvelope, StarkFriOpenProofV1};
 
-    #[test]
-    fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            public_inputs,
-        )
-        .expect("binding AIR STARK proof");
-        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
-        assert!(report.ok);
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_bound_public_input_tampering() {
+    fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4951,7 +4921,19 @@ mod stark_prover_tests {
             vec![vec![[0x11; 32]], vec![[0x22; 32]]],
         )
         .expect("binding AIR STARK proof");
+        (backend, circuit_id, vk_box, proof)
+    }
 
+    #[test]
+    fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_public_input_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
         let mut outer: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
         let mut open: StarkFriOpenProofV1 =
@@ -4968,29 +4950,7 @@ mod stark_prover_tests {
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_bound_schema_tampering() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("binding AIR STARK proof");
-
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
         let mut outer: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
         outer.public_inputs.push(0xAA);
@@ -5003,30 +4963,29 @@ mod stark_prover_tests {
     }
 
     #[test]
-    fn verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("binding AIR STARK proof");
+    fn verify_stark_open_verify_envelope_rejects_vk_hash_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        outer.vk_hash[0] ^= 0x01;
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
 
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_missing_vk() {
+        let (backend, _circuit_id, _vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, None);
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
         let mut outer: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
         let mut open: StarkFriOpenProofV1 =
@@ -5040,6 +4999,26 @@ mod stark_prover_tests {
             .expect("AIR section")
             .circuit_id
             .push_str(":tampered");
+        open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_parameter_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        inner.params.queries = inner.params.queries.saturating_add(1);
         open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
         outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
         let tampered = ProofBox::new(

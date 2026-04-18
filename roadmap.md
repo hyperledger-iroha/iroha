@@ -2,6 +2,42 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 syscall policy unknown-number test resync):
+`crates/ivm/tests/syscalls_policy.rs` no longer assumes hard-coded numbers such
+as `0x80` are outside the ABI surface. The regression now derives unknown
+syscall numbers from gaps in `abi_syscall_list()` and from values beyond the
+current 8-bit range, so ABI additions do not create false failures in the
+policy suite.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/syscalls_policy.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test syscalls_policy -- --nocapture`
+  - `cargo test -p ivm --test abi_policy -- --nocapture`
+  - `cargo test -p ivm --test syscalls_policy_versions -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-18 IVM cache artifact minor-version gate):
+`IvmCache::decode_artifact` and `IvmCache::get_or_predecode_artifact` now fail closed unless the parsed artifact header is IVM `1.1`. This keeps legacy generic `1.0` metadata parsing available where callers explicitly use `ProgramMetadata::parse`, while artifact-specific cache helpers now match the golden-vector expectation that unsupported minor versions are rejected.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/ivm_cache.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/ivm_cache_artifact.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test predecoder_golden_vectors -- --nocapture`
+  - `cargo test -p ivm --test ivm_cache_artifact -- --nocapture`
+  - `cargo test -p ivm --test predecode_artifact_keying -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a longer clean window
+
 Latest sync (2026-04-18 Sumeragi pending activation window refresh):
 Cached future proposals that become the next active frontier after a parent
 commit now restart their pending age, progress age, and quorum-reschedule
@@ -204,7 +240,9 @@ public-input binding, and the STARK guardrail split where `max_proof_bytes`
 applies to the inner native envelope instead of the outer wrapper. The latest
 coverage pass also pins AIR Merkle-path limits, FRI round-value limits, final
 FRI Merkle-path tampering, outer schema tampering, and inner AIR circuit-id
-tampering.
+tampering. The newest tests also pin query-count and query-chunk limits, zero
+LDE domain rejection, folded/final FRI value tampering, VK-hash tampering,
+missing STARK VK rejection, and inner STARK parameter tampering.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -235,6 +273,9 @@ tampering.
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri_merkle_path -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
@@ -242,6 +283,7 @@ tampering.
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark stark_prover_tests -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
