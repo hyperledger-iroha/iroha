@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlparse
 
 try:
     import tomllib
@@ -21,10 +23,33 @@ except ModuleNotFoundError:
     import tomli as tomllib
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+IROHA_REPO_ROOT = SCRIPT_DIR.parent
+IROHA_PYTHON_SRC = IROHA_REPO_ROOT / "python" / "iroha_python" / "src"
+IROHA_PYTHON_ADDRESS = IROHA_PYTHON_SRC / "iroha_python" / "address.py"
+DEFAULT_LOCALNET_CLIENT_TOML = IROHA_REPO_ROOT / "dist" / "taira-localnet" / "client.toml"
+DEFAULT_IROHA_BIN_CANDIDATES = (
+    IROHA_REPO_ROOT / "target" / "release" / "iroha",
+    IROHA_REPO_ROOT / "target" / "debug" / "iroha",
+)
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from taira_faucet_canary import solve_puzzle  # noqa: E402
+
+
+AccountAddress = None
+if IROHA_PYTHON_ADDRESS.exists():
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "iroha_python_address", IROHA_PYTHON_ADDRESS
+        )
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            AccountAddress = getattr(module, "AccountAddress", None)
+    except Exception:  # pragma: no cover
+        AccountAddress = None
 
 
 DEFAULT_CHAIN_ID = "809574f5-fee7-5e69-bfcf-52451e42d50f"
@@ -113,13 +138,21 @@ def _http_json(method: str, url: str, payload: dict[str, Any] | None = None) -> 
         return exc.code, parsed
 
 
-def run_command(cmd: list[str], *, input_text: str | None = None) -> str:
+def run_command(
+    cmd: list[str],
+    *,
+    input_text: str | None = None,
+    cwd: Path | None = None,
+) -> str:
     proc = subprocess.run(
         cmd,
         input=input_text,
         text=True,
         capture_output=True,
         check=False,
+        cwd=str(cwd) if cwd is not None else None,
+        encoding="utf-8",
+        errors="replace",
     )
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
@@ -155,20 +188,40 @@ def parse_openssl_hex_block(text: str, label: str) -> bytes:
 def generate_ed25519_keypair() -> tuple[str, str, str]:
     with tempfile.TemporaryDirectory() as tmpdir:
         key_path = Path(tmpdir) / "ed25519.pem"
-        subprocess.run(
-            ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(key_path)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        rendered = run_command(["openssl", "pkey", "-in", str(key_path), "-text", "-noout"])
+        try:
+            subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(key_path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            rendered = run_command(["openssl", "pkey", "-in", str(key_path), "-text", "-noout"])
+            private_seed = parse_openssl_hex_block(rendered, "priv")
+            public_key_raw = parse_openssl_hex_block(rendered, "pub")
+            public_key = format_multihash_hex(PUBLIC_ED25519_MULTICODEC, public_key_raw)
+            private_key = format_multihash_hex(PRIVATE_ED25519_MULTICODEC, private_seed)
+            return public_key, private_key, public_key_raw.hex()
+        except (subprocess.CalledProcessError, RuntimeError):
+            return generate_ed25519_keypair_via_iroha(repo_root=IROHA_REPO_ROOT)
 
-    private_seed = parse_openssl_hex_block(rendered, "priv")
-    public_key_raw = parse_openssl_hex_block(rendered, "pub")
-    public_key = format_multihash_hex(PUBLIC_ED25519_MULTICODEC, public_key_raw)
-    private_key = format_multihash_hex(PRIVATE_ED25519_MULTICODEC, private_seed)
-    return public_key, private_key, public_key_raw.hex()
+
+def generate_ed25519_keypair_via_iroha(*, repo_root: Path) -> tuple[str, str, str]:
+    rendered = run_command(
+        ["cargo", "run", "-q", "-p", "iroha", "--example", "dev_key_material"],
+        cwd=repo_root,
+    )
+    try:
+        payload = json.loads(rendered)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"failed to parse Iroha keygen output: {rendered!r}") from exc
+
+    public_key = payload.get("public_key")
+    private_key = payload.get("private_key")
+    public_key_raw_hex = payload.get("public_key_raw_hex")
+    if not all(isinstance(value, str) and value.strip() for value in (public_key, private_key, public_key_raw_hex)):
+        raise RuntimeError(f"Iroha keygen output is incomplete: {payload!r}")
+    return public_key.strip(), private_key.strip(), public_key_raw_hex.strip().lower()
 
 
 def shutil_which(name: str) -> str | None:
@@ -232,6 +285,203 @@ def build_alias(prefix: str, public_key: str, domain: str) -> str:
     return f"{label_prefix}{suffix}@{dataspace}"
 
 
+def is_loopback_torii_root(torii_root: str) -> bool:
+    try:
+        hostname = urlparse(torii_root).hostname
+    except ValueError:
+        return False
+    return hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def canonical_account_id_from_public_key(
+    public_key_literal: str,
+    chain_discriminant: int,
+    iroha_bin: str | None,
+) -> str | None:
+    if not isinstance(public_key_literal, str) or not public_key_literal.strip():
+        return None
+    try:
+        iroha_cli = resolve_iroha_bin(iroha_bin)
+        public_key_bytes = decode_multihash_payload(
+            public_key_literal.strip(), PUBLIC_ED25519_MULTICODEC
+        )
+        candidates = [
+            format_multihash_hex(PUBLIC_ED25519_MULTICODEC, public_key_bytes),
+            public_key_literal.strip(),
+        ]
+        for candidate in candidates:
+            proc = subprocess.run(
+                [
+                    iroha_cli,
+                    "tools",
+                    "address",
+                    "convert",
+                    candidate,
+                    "--network-prefix",
+                    str(chain_discriminant),
+                    "--format",
+                    "i105",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                continue
+            rendered = proc.stdout.strip()
+            if not rendered:
+                stderr_lines = [
+                    line.strip()
+                    for line in proc.stderr.splitlines()
+                    if line.strip()
+                    and not line.startswith("CLI started")
+                    and not line.startswith("Build line:")
+                    and not line.startswith("warning:")
+                ]
+                rendered = stderr_lines[-1] if stderr_lines else ""
+            if rendered:
+                return rendered
+        return None
+    except Exception:
+        return None
+
+
+def load_local_registrar(
+    client_toml: Path, chain_discriminant: int, iroha_bin: str | None
+) -> tuple[str, str]:
+    with client_toml.open("rb") as handle:
+        data = tomllib.load(handle)
+    account = data.get("account")
+    if not isinstance(account, dict):
+        raise RuntimeError(f"local registrar config is missing [account]: {client_toml}")
+    public_key = account.get("public_key")
+    private_key = account.get("private_key")
+    if not isinstance(public_key, str) or not public_key.strip():
+        raise RuntimeError(f"local registrar config is missing account.public_key: {client_toml}")
+    if not isinstance(private_key, str) or not private_key.strip():
+        raise RuntimeError(f"local registrar config is missing account.private_key: {client_toml}")
+    account_id = account.get("id")
+    if not isinstance(account_id, str) or not account_id.strip():
+        account_id = canonical_account_id_from_public_key(
+            public_key.strip(),
+            chain_discriminant,
+            iroha_bin,
+        )
+    if not isinstance(account_id, str) or not account_id.strip():
+        raise RuntimeError(f"failed to derive local registrar account id from {client_toml}")
+    return account_id.strip(), private_key.strip()
+
+
+def patch_account_id_in_toml(raw: str, account_id: str) -> str:
+    lines = raw.splitlines()
+    updated: list[str] = []
+    in_account = False
+    inserted = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_account and not inserted:
+                updated.append(f'id = "{account_id}"')
+                inserted = True
+            in_account = stripped == "[account]"
+            updated.append(line)
+            continue
+        if in_account and stripped.startswith("id"):
+            updated.append(f'id = "{account_id}"')
+            inserted = True
+            continue
+        updated.append(line)
+    if in_account and not inserted:
+        updated.append(f'id = "{account_id}"')
+        inserted = True
+    if not inserted:
+        raise RuntimeError("local registrar config is missing [account] section")
+    return "\n".join(updated).rstrip() + "\n"
+
+
+def resolve_iroha_bin(explicit: str | None) -> str:
+    candidate = explicit.strip() if isinstance(explicit, str) else ""
+    if candidate:
+        resolved = shutil_which(candidate)
+        if resolved:
+            return resolved
+        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+        raise RuntimeError(f"iroha binary not found: {candidate}")
+    for path in DEFAULT_IROHA_BIN_CANDIDATES:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    resolved = shutil_which("iroha")
+    if resolved:
+        return resolved
+    raise RuntimeError("iroha binary not found; pass --iroha-bin explicitly")
+
+
+def register_account_with_local_registrar(
+    *,
+    client_toml: Path,
+    iroha_bin: str | None,
+    chain_discriminant: int,
+    account_id: str,
+    permissions: list[str],
+) -> dict[str, Any]:
+    registrar_account_id, _ = load_local_registrar(
+        client_toml, chain_discriminant, iroha_bin
+    )
+    iroha_cli = resolve_iroha_bin(iroha_bin)
+    try:
+        run_command(
+            [
+                iroha_cli,
+                "-c",
+                str(client_toml),
+                "ledger",
+                "account",
+                "register",
+                "--id",
+                account_id,
+            ]
+        )
+        status = "created-local"
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "already exists" not in message and "409" not in message:
+            raise
+        status = "existing-local"
+
+    for permission in normalize_permissions(permissions):
+        try:
+            run_command(
+                [
+                    iroha_cli,
+                    "-c",
+                    str(client_toml),
+                    "account",
+                    "permission",
+                    "grant",
+                    "--id",
+                    account_id,
+                ],
+                input_text=json.dumps({"name": permission, "payload": {}}),
+            )
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "already exists" not in message and "duplicate" not in message:
+                raise
+
+    return {
+        "status": status,
+        "response_status": 200,
+        "response": {
+            "account_id": account_id,
+            "registrar_account_id": registrar_account_id,
+            "registrar_client_toml": str(client_toml),
+        },
+    }
+
+
 def normalize_permissions(values: list[str]) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -250,6 +500,8 @@ def onboard_account(
     public_key_hex: str,
     *,
     permissions: list[str] | None = None,
+    gas_asset_id: str | None = None,
+    gas_limit: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "alias": alias,
@@ -258,6 +510,10 @@ def onboard_account(
     requested_permissions = normalize_permissions(list(permissions or []))
     if requested_permissions:
         payload["permissions"] = requested_permissions
+    if isinstance(gas_asset_id, str) and gas_asset_id.strip():
+        payload["gas_asset_id"] = gas_asset_id.strip()
+    if isinstance(gas_limit, int) and gas_limit > 0:
+        payload["gas_limit"] = gas_limit
     status, payload = _http_json(
         "POST",
         f"{torii_root.rstrip('/')}/v1/accounts/onboard",
@@ -454,6 +710,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Only generate/onboard the signer and skip the initial faucet attempt",
     )
+    parser.add_argument(
+        "--gas-asset-id",
+        default=None,
+        help="Optional gas asset definition id to attach to onboarding transactions",
+    )
+    parser.add_argument(
+        "--gas-limit",
+        type=int,
+        default=None,
+        help="Optional gas limit to attach to onboarding transactions",
+    )
     return parser.parse_args(argv)
 
 
@@ -492,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
             alias,
             public_key_raw_hex,
             permissions=args.permissions,
+            gas_asset_id=args.gas_asset_id,
+            gas_limit=args.gas_limit,
         )
         response = onboarding.get("response")
         if isinstance(response, dict):
@@ -499,12 +768,31 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(value, str) and value:
                 account_id = value
     except RuntimeError as onboarding_error:
-        account_id = resolve_alias_account_id(args.torii_root, alias)
-        onboarding = {
-            "status": "existing",
-            "response_status": 400,
-            "response": str(onboarding_error),
-        }
+        if is_loopback_torii_root(args.torii_root) and DEFAULT_LOCALNET_CLIENT_TOML.exists():
+            derived_account_id = canonical_account_id_from_public_key(
+                public_key,
+                chain_discriminant,
+                args.iroha_bin,
+            )
+            if not derived_account_id:
+                raise RuntimeError(
+                    "failed to derive canonical account id for local registrar fallback"
+                ) from onboarding_error
+            account_id = derived_account_id
+            onboarding = register_account_with_local_registrar(
+                client_toml=DEFAULT_LOCALNET_CLIENT_TOML,
+                iroha_bin=args.iroha_bin,
+                chain_discriminant=chain_discriminant,
+                account_id=account_id,
+                permissions=args.permissions,
+            )
+        else:
+            account_id = resolve_alias_account_id(args.torii_root, alias)
+            onboarding = {
+                "status": "existing",
+                "response_status": 400,
+                "response": str(onboarding_error),
+            }
     if account_id is None:
         account_id = resolve_alias_account_id(args.torii_root, alias)
     faucet = (

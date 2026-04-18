@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
+- Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,
+  a small `integration_tests` refresh tool that regenerates the grouped
+  `nexus_and_streaming` Norito instruction fixtures and the shared streaming
+  golden snapshots from the same Rust encoders the tests assert against.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/README.md` now documents
+  the refresh command:
+  `cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`.
+- Refreshed stale Norito instruction fixtures under
+  `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/`:
+  - `burn_asset_numeric.json`
+  - `burn_asset_fractional.json`
+  - `mint_asset_numeric.json`
+  - `burn_trigger_repetitions.json`
+- Refreshed the shared streaming snapshot goldens under
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/fixtures/norito_streaming/rans/`:
+  - `baseline.json`
+  - `bundled.json`
+- The refreshed streaming snapshots now match the current canonical encoder
+  output again (`3975` bytes each instead of the stale `9138`-byte payloads).
+- Added focused unit coverage in the new refresh bin for:
+  - canonical instruction `encoded_hex` generation; and
+  - baseline snapshot emission of the expected top-level fields.
+- Focused validation completed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --bin refresh_nexus_streaming_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming norito_burn_fixture:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming snapshot_matches_golden_fixture -- --nocapture`
+  - `git diff --check -- integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs integration_tests/README.md fixtures/norito_instructions/burn_asset_numeric.json fixtures/norito_instructions/burn_asset_fractional.json fixtures/norito_instructions/mint_asset_numeric.json fixtures/norito_instructions/burn_trigger_repetitions.json integration_tests/fixtures/norito_streaming/rans/baseline.json integration_tests/fixtures/norito_streaming/rans/bundled.json`
+
 ## 2026-04-18 Follow-up: Torii deploy-bundle receipt artifact cleanup
 - `/.gitignore` now ignores
   `/crates/iroha_torii/storage/torii/contract_deploy_bundles/`, so generated
