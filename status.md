@@ -2,6 +2,13 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Kotodama ZK vote/unshield sample semantic sync
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko` now matches the current Kotodama semantic checks: the public `demo` entrypoint is tagged with `permission(Admin)`, and the inline unshield builder now uses compile-time literal constructor arguments instead of runtime-only `authority()`.
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.to` was regenerated from the updated source so the bundled sample bytecode stays aligned with the checked-in `.ko`.
+- This restores `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_sample_zk_vote_unshield.rs`, which compiles the sample and asserts the emitted ZK verify plus vendor-bridge syscalls.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test kotodama_sample_zk_vote_unshield -- --nocapture`
+
 ## 2026-04-18 Follow-up: STARK/FRI V1 verifier hardening
 - The low-level native STARK/FRI V1 checker now uses the domain-aware binary FRI fold for `(x, -x)` openings instead of an x-free sibling linear combination. The high-level STARK `OpenVerifyEnvelope` backend applies metadata/size checks and then fails closed until real verifier-owned AIR openings are implemented.
 - The unsafe synthetic native STARK prover helper now fails closed until a real AIR prover emits verifier-owned openings. Bare recursive/offline STARK aggregate envelopes and Torii readiness advertising are also disabled until they carry those openings.

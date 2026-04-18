@@ -40,8 +40,10 @@ seiyaku ZkVoteAndUnshield {
   }
 
   // Optional demo entrypoint: verifies and enqueues both operations using literal data.
+  // The vendor bridge and unshield flow are privileged, so public entrypoints
+  // that reach them must declare a permission tag.
   #[access(read="*", write="*")]
-  kotoage fn demo() {
+  kotoage fn demo() permission(Admin) {
     // Mock envelope bytes (opaque here); in practice, pass a Norito-encoded OpenVerifyEnvelope.
     let env_ballot = norito_bytes("ENV-BALLOT");
     let env_unshield = norito_bytes("ENV-UNSHIELD");
@@ -61,9 +63,12 @@ seiyaku ZkVoteAndUnshield {
     );
     verify_and_submit_ballot(env_ballot, submit);
 
+    // `authority()` is runtime data, so the inline builder sample uses a
+    // compile-time recipient literal instead.
+    let recipient = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let unshield = build_unshield_inline(
       asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
-      authority(),
+      recipient,
       1,
       nullifier,
       "halo2/ipa",
