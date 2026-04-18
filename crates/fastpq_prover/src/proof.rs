@@ -566,6 +566,13 @@ fn enforce_verify_limits(
     proof: &Proof,
     limits: VerifyLimits,
 ) -> Result<()> {
+    if batch.transitions.len() > limits.max_transitions {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_transitions",
+            actual: batch.transitions.len(),
+            max: limits.max_transitions,
+        });
+    }
     let batch_bytes = batch_size_hint(batch);
     if batch_bytes > limits.max_batch_bytes {
         return Err(Error::VerifierLimitExceeded {
@@ -1512,6 +1519,65 @@ mod tests {
     }
 
     #[test]
+    fn verify_limits_reject_transition_count_limit() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let proof_batch = sample_batch();
+        let proof = prover.prove(&proof_batch).unwrap();
+        let batch = sample_batch_with_size(3);
+        let mut limits = VerifyLimits::default();
+        limits.max_transitions = batch.transitions.len() - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                actual,
+                max
+            } if actual == batch.transitions.len() && max + 1 == actual
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_batch_size_limit() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let proof = prover.prove(&batch).unwrap();
+        let batch_bytes = batch_size_hint(&batch);
+        assert!(batch_bytes > 0, "sample batch must have a byte footprint");
+        let mut limits = VerifyLimits::default();
+        limits.max_batch_bytes = batch_bytes - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_batch_bytes",
+                actual,
+                max
+            } if actual == batch_bytes && max + 1 == batch_bytes
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_fri_layer_count_limit() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let layer_count = proof.fri_layers.len();
+        assert!(layer_count > 0, "proof must carry FRI layer roots");
+        let mut limits = VerifyLimits::default();
+        limits.max_fri_layers = layer_count - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_fri_layers",
+                actual,
+                max
+            } if actual == layer_count && max + 1 == layer_count
+        ));
+    }
+
+    #[test]
     fn verify_limits_reject_oversized_air_rows() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1557,6 +1623,58 @@ mod tests {
     }
 
     #[test]
+    fn verify_limits_reject_extra_fri_query_count() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let query_count = proof.queries.len();
+        assert!(query_count > 0, "proof must carry sampled queries");
+        let extra = proof
+            .fri_queries
+            .first()
+            .expect("expected sampled FRI query")
+            .clone();
+        proof.fri_queries.push(extra);
+        let mut limits = VerifyLimits::default();
+        limits.max_queries = query_count;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_queries",
+                actual,
+                max
+            } if actual == query_count + 1 && max == query_count
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_extra_air_opening_count() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let query_count = proof.queries.len();
+        assert!(query_count > 0, "proof must carry sampled queries");
+        let extra = proof
+            .air_openings
+            .first()
+            .expect("expected sampled AIR opening")
+            .clone();
+        proof.air_openings.push(extra);
+        let mut limits = VerifyLimits::default();
+        limits.max_queries = query_count;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_queries",
+                actual,
+                max
+            } if actual == query_count + 1 && max == query_count
+        ));
+    }
+
+    #[test]
     fn verify_limits_reject_oversized_query_chunks() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1578,6 +1696,29 @@ mod tests {
                 actual,
                 max
             } if actual == chunk_len && max + 1 == chunk_len
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_query_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let path = &mut proof
+            .queries
+            .first_mut()
+            .expect("expected sampled query")
+            .merkle_path;
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual,
+                max
+            } if actual == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1
+                && max == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN
         ));
     }
 
@@ -1607,6 +1748,29 @@ mod tests {
     }
 
     #[test]
+    fn verify_limits_reject_oversized_final_fri_values() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let values = &mut proof
+            .fri_queries
+            .first_mut()
+            .expect("expected FRI query opening")
+            .final_values;
+        values.resize(DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES + 1, 0);
+        let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_fri_round_values",
+                actual,
+                max
+            } if actual == DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES + 1
+                && max == DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES
+        ));
+    }
+
+    #[test]
     fn verify_limits_reject_oversized_fri_round_values() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1629,6 +1793,53 @@ mod tests {
                 actual,
                 max
             } if actual == values_len && max + 1 == values_len
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_final_fri_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let path = &mut proof
+            .fri_queries
+            .first_mut()
+            .expect("expected FRI query opening")
+            .final_merkle_path;
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual,
+                max
+            } if actual == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1
+                && max == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_fri_round_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let path = &mut proof
+            .fri_queries
+            .first_mut()
+            .and_then(|query| query.rounds.first_mut())
+            .expect("expected FRI round opening")
+            .merkle_path;
+        path.resize(DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1, 0);
+        let err = verify_with_limits(&batch, &proof, VerifyLimits::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual,
+                max
+            } if actual == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN + 1
+                && max == DEFAULT_MAX_VERIFY_QUERY_PATH_LEN
         ));
     }
 
@@ -1779,16 +1990,20 @@ mod tests {
         let small_batch = sample_batch();
         let proof = prover.prove(&small_batch).unwrap();
         let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
-        let err = verify(&large_batch, &proof).unwrap_err();
+        let mut limits = VerifyLimits::default();
+        limits.max_transitions = large_batch.transitions.len();
+        let err = verify_with_limits(&large_batch, &proof, limits).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
     }
 
     #[test]
-    fn verify_allows_large_batch_without_replay_transition_window() {
+    fn verify_allows_large_batch_when_transition_limit_is_raised() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
         let proof = prover.prove(&batch).unwrap();
-        verify(&batch, &proof).unwrap();
+        let mut limits = VerifyLimits::default();
+        limits.max_transitions = batch.transitions.len();
+        verify_with_limits(&batch, &proof, limits).unwrap();
     }
 
     #[test]

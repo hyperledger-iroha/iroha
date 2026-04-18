@@ -7,8 +7,9 @@ use core::{
 };
 
 use crate::{
-    MlDsaSuite, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mldsa_keypair,
-    generate_mlkem_keypair, mldsa::MlDsaError, mlkem::MlKemError, sign_mldsa, verify_mldsa,
+    MlDsaSuite, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os,
+    generate_mldsa_keypair_from_os, generate_mlkem_keypair_from_os, mldsa::MlDsaError,
+    mlkem::MlKemError, sign_mldsa_from_os, verify_mldsa,
 };
 
 const ERR_INVALID_SUITE: c_int = -1;
@@ -32,7 +33,7 @@ fn map_mldsa_error(err: &MlDsaError) -> c_int {
     match err {
         MlDsaError::BadEncoding(_) => ERR_ENCODING,
         MlDsaError::VerificationFailed(_) => ERR_VERIFICATION_FAILED,
-        MlDsaError::KeyGenerationFailed { .. } => ERR_KEYGEN,
+        MlDsaError::KeyGenerationFailed { .. } | MlDsaError::Rng(_) => ERR_KEYGEN,
     }
 }
 
@@ -153,10 +154,15 @@ pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
             Ok(buf) => buf,
             Err(code) => return code,
         };
-    let pair = generate_mlkem_keypair(suite);
-    public_buf.copy_from_slice(pair.public_key());
-    secret_buf.copy_from_slice(pair.secret_key());
-    0
+    match generate_mlkem_keypair_from_os(suite) {
+        Ok(pair) => {
+            public_buf.copy_from_slice(pair.public_key());
+            secret_buf.copy_from_slice(pair.secret_key());
+            0
+        }
+        Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
+    }
 }
 
 /// Encapsulate against an ML-KEM public key.
@@ -194,13 +200,14 @@ pub unsafe extern "C" fn soranet_mlkem_encapsulate(
         Ok(buf) => buf,
         Err(code) => return code,
     };
-    match encapsulate_mlkem(suite, pk) {
+    match encapsulate_mlkem_from_os(suite, pk) {
         Ok((shared, ciphertext)) => {
             ciphertext_buf.copy_from_slice(ciphertext.as_bytes());
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
         Err(MlKemError::BadEncoding { .. }) => ERR_ENCODING,
+        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
     }
 }
 
@@ -304,7 +311,7 @@ pub unsafe extern "C" fn soranet_mldsa_generate_keypair(
             Ok(buf) => buf,
             Err(code) => return code,
         };
-    let pair = match generate_mldsa_keypair(suite) {
+    let pair = match generate_mldsa_keypair_from_os(suite) {
         Ok(kp) => kp,
         Err(err) => return map_mldsa_error(&err),
     };
@@ -344,7 +351,7 @@ pub unsafe extern "C" fn soranet_mldsa_sign(
             Ok(buf) => buf,
             Err(code) => return code,
         };
-    match sign_mldsa(suite, secret, message) {
+    match sign_mldsa_from_os(suite, secret, &[], message) {
         Ok(signature) => {
             signature_buf.copy_from_slice(signature.as_bytes());
             0
@@ -383,7 +390,7 @@ pub unsafe extern "C" fn soranet_mldsa_verify(
         Ok(bytes) => bytes,
         Err(code) => return code,
     };
-    match verify_mldsa(suite, pk, message, sig) {
+    match verify_mldsa(suite, pk, &[], message, sig) {
         Ok(()) => 0,
         Err(err) => map_mldsa_error(&err),
     }

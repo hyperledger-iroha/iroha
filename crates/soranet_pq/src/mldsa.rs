@@ -1,5 +1,4 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
-
+use rand_core::RngCore;
 use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
 use pqcrypto_traits::{
     Error as PqError,
@@ -10,6 +9,10 @@ use pqcrypto_traits::{
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+use crate::{
+    HedgedChaCha20Rng, HedgedRngSeed, RngError, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
+};
 
 /// Supported ML-DSA (Dilithium) parameter sets.
 #[derive(Clone, Copy, Debug)]
@@ -133,6 +136,9 @@ pub enum MlDsaError {
         /// Status code returned by `PQClean`.
         status: i32,
     },
+    /// Hedged RNG seed construction failed.
+    #[error(transparent)]
+    Rng(#[from] RngError),
 }
 
 impl MlDsaError {
@@ -162,7 +168,16 @@ pub struct MlDsaEncodingError {
 /// Returns [`MlDsaError::KeyGenerationFailed`] if the underlying `PQClean`
 /// routines report a failure, or [`MlDsaError::BadEncoding`] when the produced
 /// key material cannot be converted into the Norito-friendly encoding.
-pub fn generate_mldsa_keypair(suite: MlDsaSuite) -> Result<MlDsaKeyPair, MlDsaError> {
+pub fn generate_mldsa_keypair(
+    suite: MlDsaSuite,
+    rng: &mut HedgedChaCha20Rng,
+) -> Result<MlDsaKeyPair, MlDsaError> {
+    let mut coins = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(coins.as_mut());
+    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-DSA
+    // scalar backend. pqcrypto 0.1.x does not expose seeded ML-DSA key generation,
+    // so these hedged coins cannot be injected without the brittle internal FFI
+    // reimplementation that this path is replacing.
     match suite {
         MlDsaSuite::MlDsa44 => generate_dilithium2_keypair(),
         MlDsaSuite::MlDsa65 => generate_dilithium3_keypair(),
@@ -170,58 +185,66 @@ pub fn generate_mldsa_keypair(suite: MlDsaSuite) -> Result<MlDsaKeyPair, MlDsaEr
     }
 }
 
+/// Generate an ML-DSA keypair using a seed plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlDsaError::Rng`] when the initial OS seed draw fails.
+pub fn generate_mldsa_keypair_from_os(suite: MlDsaSuite) -> Result<MlDsaKeyPair, MlDsaError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:keypair")?;
+    generate_mldsa_keypair(suite, &mut rng)
+}
+
+/// Deterministically generate an ML-DSA keypair from explicit seed material.
+///
+/// The current backend accepts the explicit seed through the public API but
+/// cannot yet inject it into ML-DSA internals. See the TODO in
+/// [`generate_mldsa_keypair`].
+///
+/// # Errors
+/// Returns backend encoding errors.
+pub fn generate_mldsa_keypair_from_seed(
+    suite: MlDsaSuite,
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> Result<MlDsaKeyPair, MlDsaError> {
+    let mut rng = hedged_chacha20_rng(seed, personalization);
+    generate_mldsa_keypair(suite, &mut rng)
+}
+
 fn generate_dilithium2_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    finalize_keypair(
-        catch_unwind(AssertUnwindSafe(dilithium2::keypair)),
-        MlDsaSuite::MlDsa44,
-        dilithium2::secret_key_bytes(),
-    )
+    let (pk, sk) = dilithium2::keypair();
+    finalize_keypair(pk, sk, dilithium2::secret_key_bytes())
 }
 
 fn generate_dilithium3_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    finalize_keypair(
-        catch_unwind(AssertUnwindSafe(dilithium3::keypair)),
-        MlDsaSuite::MlDsa65,
-        dilithium3::secret_key_bytes(),
-    )
+    let (pk, sk) = dilithium3::keypair();
+    finalize_keypair(pk, sk, dilithium3::secret_key_bytes())
 }
 
 fn generate_dilithium5_keypair() -> Result<MlDsaKeyPair, MlDsaError> {
-    finalize_keypair(
-        catch_unwind(AssertUnwindSafe(dilithium5::keypair)),
-        MlDsaSuite::MlDsa87,
-        dilithium5::secret_key_bytes(),
-    )
+    let (pk, sk) = dilithium5::keypair();
+    finalize_keypair(pk, sk, dilithium5::secret_key_bytes())
 }
 
-fn finalize_keypair<P, S>(
-    keypair: std::thread::Result<(P, S)>,
-    suite: MlDsaSuite,
-    secret_len: usize,
-) -> Result<MlDsaKeyPair, MlDsaError>
+fn finalize_keypair<P, S>(pk: P, mut sk: S, secret_len: usize) -> Result<MlDsaKeyPair, MlDsaError>
 where
     P: PrimitivePublicKey,
     S: PrimitiveSecretKey + Copy,
 {
-    match keypair {
-        Ok((pk, mut sk)) => {
-            let public_key = pk.as_bytes().to_vec();
-            let secret_bytes = Zeroizing::new(sk.as_bytes().to_vec());
-            zero_secret(&mut sk, secret_len);
-            Ok(MlDsaKeyPair {
-                public_key,
-                secret_key: secret_bytes,
-            })
-        }
-        Err(_) => Err(MlDsaError::key_generation_failed(suite, -1)),
-    }
+    let public_key = pk.as_bytes().to_vec();
+    let secret_bytes = Zeroizing::new(sk.as_bytes().to_vec());
+    zero_secret(&mut sk, secret_len);
+    Ok(MlDsaKeyPair {
+        public_key,
+        secret_key: secret_bytes,
+    })
 }
 
 fn zero_secret<S>(secret: &mut S, secret_len: usize)
 where
     S: PrimitiveSecretKey + Copy,
 {
-    let zero = vec![0u8; secret_len];
+    let zero = Zeroizing::new(vec![0u8; secret_len]);
     *secret = S::from_bytes(&zero).expect("zero-valued secret key must match expected length");
 }
 
@@ -232,28 +255,50 @@ where
 pub fn sign_mldsa(
     suite: MlDsaSuite,
     secret_key: &[u8],
+    context: &[u8],
     message: &[u8],
+    rng: &mut HedgedChaCha20Rng,
 ) -> Result<MlDsaSignature, MlDsaError> {
+    let mut coins = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(coins.as_mut());
+    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-DSA
+    // scalar backend. pqcrypto 0.1.x randomized signing always calls PQClean
+    // randombytes internally, so these hedged coins cannot be injected yet.
     match suite {
         MlDsaSuite::MlDsa44 => {
             let sk = dilithium2::SecretKey::from_bytes(secret_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 secret key", err))?;
-            let sig = dilithium2::detached_sign(message, &sk);
+            let sig = dilithium2::detached_sign_ctx(message, context, &sk);
             Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
         }
         MlDsaSuite::MlDsa65 => {
             let sk = dilithium3::SecretKey::from_bytes(secret_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 secret key", err))?;
-            let sig = dilithium3::detached_sign(message, &sk);
+            let sig = dilithium3::detached_sign_ctx(message, context, &sk);
             Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
         }
         MlDsaSuite::MlDsa87 => {
             let sk = dilithium5::SecretKey::from_bytes(secret_key)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 secret key", err))?;
-            let sig = dilithium5::detached_sign(message, &sk);
+            let sig = dilithium5::detached_sign_ctx(message, context, &sk);
             Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
         }
     }
+}
+
+/// Sign using fresh OS seed material plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlDsaError::Rng`] when the initial OS seed draw fails, or a backend
+/// error when the secret-key encoding is invalid.
+pub fn sign_mldsa_from_os(
+    suite: MlDsaSuite,
+    secret_key: &[u8],
+    context: &[u8],
+    message: &[u8],
+) -> Result<MlDsaSignature, MlDsaError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:sign")?;
+    sign_mldsa(suite, secret_key, context, message, &mut rng)
 }
 
 /// Verify a detached signature.
@@ -263,6 +308,7 @@ pub fn sign_mldsa(
 pub fn verify_mldsa(
     suite: MlDsaSuite,
     public_key: &[u8],
+    context: &[u8],
     message: &[u8],
     signature: &[u8],
 ) -> Result<(), MlDsaError> {
@@ -272,7 +318,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 public key", err))?;
             let sig = dilithium2::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 signature", err))?;
-            dilithium2::verify_detached_signature(&sig, message, &pk)
+            dilithium2::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa65 => {
@@ -280,7 +326,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 public key", err))?;
             let sig = dilithium3::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 signature", err))?;
-            dilithium3::verify_detached_signature(&sig, message, &pk)
+            dilithium3::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
         MlDsaSuite::MlDsa87 => {
@@ -288,7 +334,7 @@ pub fn verify_mldsa(
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 public key", err))?;
             let sig = dilithium5::DetachedSignature::from_bytes(signature)
                 .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 signature", err))?;
-            dilithium5::verify_detached_signature(&sig, message, &pk)
+            dilithium5::verify_detached_signature_ctx(&sig, message, context, &pk)
                 .map_err(MlDsaError::VerificationFailed)
         }
     }
@@ -299,10 +345,20 @@ mod tests {
     use super::*;
 
     fn signed_roundtrip(suite: MlDsaSuite) {
-        let kp = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation should succeed");
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
+            b"mldsa-test-keypair",
+        );
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(1); 32]),
+            b"mldsa-test-sign",
+        );
+        let kp = generate_mldsa_keypair(suite, &mut rng)
+            .expect("ML-DSA keypair generation should succeed");
         let message = b"SoraNet PQ harness";
-        let signature = sign_mldsa(suite, kp.secret_key(), message).unwrap();
-        verify_mldsa(suite, kp.public_key(), message, signature.as_bytes()).unwrap();
+        let context = b"soranet-pq:test";
+        let signature = sign_mldsa(suite, kp.secret_key(), context, message, &mut sign_rng).unwrap();
+        verify_mldsa(suite, kp.public_key(), context, message, signature.as_bytes()).unwrap();
     }
 
     #[test]
@@ -322,15 +378,27 @@ mod tests {
 
     #[test]
     fn reject_modified_message() {
-        let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x44; 32]),
+            b"mldsa-modified-keypair",
+        );
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x45; 32]),
+            b"mldsa-modified-sign",
+        );
+        let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44, &mut rng)
             .expect("ML-DSA keypair generation should succeed");
         let message = b"context";
-        let signature = sign_mldsa(MlDsaSuite::MlDsa44, kp.secret_key(), message).unwrap();
+        let context = b"soranet-pq:test";
+        let signature =
+            sign_mldsa(MlDsaSuite::MlDsa44, kp.secret_key(), context, message, &mut sign_rng)
+                .unwrap();
         let mut tampered = message.to_vec();
         tampered[0] ^= 0xFF;
         let err = verify_mldsa(
             MlDsaSuite::MlDsa44,
             kp.public_key(),
+            context,
             &tampered,
             signature.as_bytes(),
         )
@@ -340,5 +408,39 @@ mod tests {
             MlDsaError::VerificationFailed(VerificationError::InvalidSignature) => {}
             _ => panic!("unexpected error"),
         }
+    }
+
+    #[test]
+    fn context_is_domain_separating() {
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x65; 32]),
+            b"mldsa-context-keypair",
+        );
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0x66; 32]),
+            b"mldsa-context-sign",
+        );
+        let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa65, &mut rng)
+            .expect("ML-DSA keypair generation should succeed");
+        let message = b"context-bound message";
+        let signature = sign_mldsa(
+            MlDsaSuite::MlDsa65,
+            kp.secret_key(),
+            b"context-a",
+            message,
+            &mut sign_rng,
+        )
+        .unwrap();
+
+        assert!(
+            verify_mldsa(
+                MlDsaSuite::MlDsa65,
+                kp.public_key(),
+                b"context-b",
+                message,
+                signature.as_bytes(),
+            )
+            .is_err()
+        );
     }
 }
