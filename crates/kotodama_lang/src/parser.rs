@@ -2869,9 +2869,9 @@ mod tests {
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
         let domain = "wonderland".to_string();
         let asset_definition = sample_asset_definition_literal();
-        let nft = "n0$wonderland".to_string();
+        let nft = "n0$wonderland.universal".to_string();
         let rwa = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
         );
         let trigger = "wake".to_string();

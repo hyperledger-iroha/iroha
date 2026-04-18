@@ -2740,7 +2740,8 @@ fn parse_burn_asset_builtin() {
 #[test]
 fn parse_register_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(){ register_asset(\"x\", \"X\", 1, 0); }";
+    let src =
+        r#"fn f(){ register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, 0); }"#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2755,7 +2756,7 @@ fn parse_register_asset_builtin() {
 #[test]
 fn parse_create_new_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(){ create_new_asset(\"x\", \"X\", 1, 2, 0); }";
+    let src = r#"fn f(){ create_new_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), 0); }"#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2764,6 +2765,17 @@ fn parse_create_new_asset_builtin() {
         instrs
             .iter()
             .any(|i| matches!(i, Instr::CreateNewAsset { .. }))
+    );
+}
+
+#[test]
+fn parse_register_asset_rejects_bare_name_literal() {
+    let src = r#"fn f(){ register_asset("x", "X", 1, 0); }"#;
+    let prog = parse(src).expect("parse failed");
+    let err = analyze(&prog).expect_err("bare asset names should be rejected");
+    assert!(
+        err.message.contains("AssetDefinitionId"),
+        "unexpected semantic error: {err:?}"
     );
 }
 

@@ -2,6 +2,74 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Kotodama explicit `AssetDefinitionId` registration):
+Kotodama no longer lowers `register_asset(...)` and `create_new_asset(...)`
+through a bare `Name` pointer for `SYSCALL_REGISTER_ASSET`. The language now
+requires an explicit `AssetDefinitionId` in those builtins, the compiler
+publishes `AssetDefinitionId` TLVs to match the current host ABI, and the
+affected IVM tests/examples were refreshed to call `asset_definition(...)`
+explicitly. This closes the `kotodama_register_account_asset_tlv`
+`DecodeError` regression that was left open after the earlier domain-fixture
+refresh.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_register_account_asset_tlv -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_register_asset -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_create_new_asset_builtin -- --nocapture`
+  - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
+- open work after this slice:
+  - investigate the separate `kotodama_role_builtins` failures still present in
+    the runtime account/authority path (`grant_role`, `grant_permission`,
+    `authority()`, and the role-bootstrap mint flow)
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
+Latest sync (2026-04-18 Kotodama fully qualified `NftId` fixtures):
+The stale Kotodama fixtures that still used bare `nft_id("name$domain")`
+literals were refreshed to the canonical `name$domain.dataspace` form across
+the affected IVM roundtrip tests, the map-helper pointer constructor coverage,
+and the nearby Kotodama parser/semantic/compiler structured-data-filter tests.
+The same slice also refreshed the companion RWA literals in those
+`kotodama_lang` tests to `hash$domain.dataspace`, keeping the identifier
+fixtures aligned with the current fully qualified domain parser.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_pointer_roundtrips.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_map_helpers.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/parser.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_pointer_roundtrips -- --nocapture`
+  - `cargo test -p ivm --test kotodama_map_helpers ir_lower_ensure_pointer_variants_use_pointer_syscalls -- --nocapture`
+  - `cargo test -p kotodama_lang structured_data_filters_for_core_families -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_details -- --nocapture`
+- open work after this slice:
+  - audit the remaining non-Kotodama IVM TLV fixtures that still embed bare
+    `NftId` / `DomainId` string payloads and refresh them to the current
+    canonical literal form where those tests now depend on typed parsing
+  - run the full `cargo test --workspace` and strict clippy pass during a
+    longer clean validation window
+
 Latest sync (2026-04-18 Sumeragi lock-override regression coverage):
 The consensus test suite now pins the incoming highest-QC path for the case
 where the local locked payload is unavailable. A known candidate with a newer
@@ -11,9 +79,9 @@ same condition ordering, so future changes are less likely to reintroduce
 strict structural-only validation.
 
 - shipped in:
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
 - validation status:
   - `cargo test -p iroha_core --lib highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missing -- --nocapture`
   - `cargo test -p iroha_core --lib highest_qc_extends_locked -- --nocapture`
@@ -49,8 +117,6 @@ literal validation rules.
   - `cargo test -p kotodama_lang lower_pointer_constructors_to_datarefs -- --nocapture`
   - `cargo test -p kotodama_lang lower_struct_fields_for_transfer_domain -- --nocapture`
 - open work after this slice:
-  - investigate the separate `register_asset(...)` / `SYSCALL_REGISTER_ASSET`
-    runtime `DecodeError` still exposed by `cargo test -p ivm kotodama -- --nocapture`
   - run the full `cargo test --workspace` and strict clippy pass during a
     longer clean validation window
 

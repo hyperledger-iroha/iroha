@@ -13,7 +13,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
           // Bootstrap domain/account/asset
           register_domain(domain("default.universal"));
           register_account(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
-          register_asset("rose", "ROSE", 0, 1);
+          register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "ROSE", 0, 1);
           // Create role with mint permission and grant to authority
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           grant_role(account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), name("minter"));

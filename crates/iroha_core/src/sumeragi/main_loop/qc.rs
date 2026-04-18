@@ -4857,8 +4857,24 @@ impl Actor {
             if self.block_known_for_lock(lock.subject_block_hash) {
                 let same_height_conflict =
                     qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
-                let conflicts_locked =
-                    qc.view <= lock.view && (qc.height < lock.height || same_height_conflict);
+                let conflicts_locked = qc.height < lock.height && qc.view <= lock.view;
+                if same_height_conflict {
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        locked_height = lock.height,
+                        locked_view = lock.view,
+                        locked_hash = %lock.subject_block_hash,
+                        incoming_hash = %qc.subject_block_hash,
+                        "ignoring precommit QC for conflicting block at locked height"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
+                    return false;
+                }
                 if conflicts_locked {
                     info!(
                         height = qc.height,

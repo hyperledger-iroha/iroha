@@ -84,6 +84,9 @@ aggregate fanout headers:
 
 Successful fanout responses keep these counters so operators can see partial
 route degradation even when another dataspace supplied the requested result.
+Typed singleton reads such as `GET /v1/proofs/{id}` now use the same routed
+fanout path, but they preserve the canonical Norito payload after merging
+matching dataspace results.
 
 ## Migration Notes
 
