@@ -1,0 +1,31 @@
+{
+  "ok": false,
+  "bundle_name": "single-contract-deploy",
+  "bundle_digest": "a97325d390e1e67bb2d8c17a33b80e462ee71e645a092940ec7dd4387ae3685b",
+  "chain_fingerprint": "chain@missing-block-1",
+  "dry_run": false,
+  "completed_stages": [
+    "plan"
+  ],
+  "failure_point": "activate contract `deploy1::universal`: Failed to process query",
+  "contracts": [
+    {
+      "name": "deploy1::universal",
+      "contract_alias": "deploy1::universal",
+      "contract_address": "sorac1qyqqqqqqqqqqqqx2c4k4kt8jar0ycqycnuvvs0m2ggjattc9ywzrw",
+      "upgraded": false,
+      "dataspace": "universal",
+      "deploy_nonce": 0,
+      "code_hash_hex": "9da683eaad015abecf3c5fc382ebf082f640883f1fa0e9ab0b2adb74973ac573",
+      "abi_hash_hex": "919d5cdca5efe4c668165b8f2c737c136db0bf399ef7c33e24a95808b1c692bb",
+      "tx_hash_hex": "8dbc258a86ff3b3955dba10761ffd4350f02be13baacb1cbcb417631a8e835dd",
+      "status": "submitted"
+    }
+  ],
+  "init_calls": [
+    
+  ],
+  "assertions": [
+    
+  ]
+}

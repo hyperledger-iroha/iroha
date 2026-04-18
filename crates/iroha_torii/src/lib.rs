@@ -336,7 +336,7 @@ pub mod json_macros {
 pub(crate) mod utils;
 pub use utils::{
     JsonBody, NoritoBody, ResponseFormat,
-    extractors::{JsonOnly, NoritoJson, NoritoJsonWithBytes, NoritoQuery},
+    extractors::{JsonOnly, Norito, NoritoJson, NoritoJsonWithBytes, NoritoQuery},
 };
 #[cfg(feature = "app_api")]
 mod account_literal;
@@ -1268,6 +1268,7 @@ struct AppState {
     da_replay_store: Arc<da::ReplayCursorStore>,
     da_receipt_log: Arc<da::DaReceiptLog>,
     da_receipt_signer: KeyPair,
+    torii_proxy_bridge_signer: KeyPair,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
@@ -8280,6 +8281,15 @@ async fn handler_runtime_abi_hash(
 
 // -------------- Core info (AppState-based) --------------
 
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn handler_internal_torii_proxy_request(
+    State(app): State<SharedAppState>,
+    Norito(request): Norito<ToriiProxyRequestV2>,
+) -> Response {
+    let immediate_sender_peer_id = request.visited_peer_ids.last().cloned();
+    execute_incoming_torii_proxy_request(&app, request, immediate_sender_peer_id).await
+}
+
 /// GET /v1/configuration — wrapper that enforces Torii access policy, then delegates.
 async fn handler_get_configuration(
     State(app): State<SharedAppState>,
@@ -11013,6 +11023,14 @@ fn insert_routing_headers(
     );
 }
 
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn insert_route_transport_header(response: &mut Response, transport: &'static str) {
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-route-transport"),
+        HeaderValue::from_static(transport),
+    );
+}
+
 fn transaction_submission_response(
     app: &AppState,
     tx_hash: HashOf<SignedTransaction>,
@@ -11251,11 +11269,49 @@ fn torii_proxy_error_response(
 const TORII_PROXY_DEFAULT_MAX_HOPS: u8 = 3;
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const TORII_INTERNAL_PROXY_HTTP_PATH: &str = "/v1/internal/torii/proxy";
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthoritativeLanePeerStatus {
+    peer_id: PeerId,
+    torii_url: Option<String>,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 struct AuthoritativeLanePeers {
     authoritative: Vec<PeerId>,
     online: Vec<PeerId>,
-    offline: Vec<PeerId>,
+    offline: Vec<AuthoritativeLanePeerStatus>,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn authoritative_lane_peer_statuses(
+    app: &AppState,
+    routing_decision: RoutingDecision,
+) -> Vec<AuthoritativeLanePeerStatus> {
+    let manifest_bindings = app
+        .state
+        .manifest_lane_validator_bindings(routing_decision.lane_id);
+    if !manifest_bindings.is_empty() {
+        return manifest_bindings
+            .into_iter()
+            .map(|binding| AuthoritativeLanePeerStatus {
+                peer_id: binding.peer_id,
+                torii_url: binding.torii_url,
+            })
+            .collect();
+    }
+
+    app.state
+        .authoritative_lane_peer_ids(routing_decision.lane_id)
+        .into_iter()
+        .map(|peer_id| AuthoritativeLanePeerStatus {
+            peer_id,
+            torii_url: None,
+        })
+        .collect()
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -11269,16 +11325,18 @@ fn authoritative_lane_peers(
         .into_iter()
         .map(|peer| peer.id().clone())
         .collect();
-    let authoritative = app
-        .state
-        .authoritative_lane_peer_ids(routing_decision.lane_id);
+    let statuses = authoritative_lane_peer_statuses(app, routing_decision);
+    let authoritative = statuses
+        .iter()
+        .map(|status| status.peer_id.clone())
+        .collect();
     let mut online = Vec::new();
     let mut offline = Vec::new();
-    for peer_id in authoritative.iter().cloned() {
-        if online_peer_ids.contains(&peer_id) {
-            online.push(peer_id);
+    for status in statuses {
+        if online_peer_ids.contains(&status.peer_id) {
+            online.push(status.peer_id);
         } else {
-            offline.push(peer_id);
+            offline.push(status);
         }
     }
     AuthoritativeLanePeers {
@@ -11340,12 +11398,36 @@ impl ToriiProxyUnavailableReason {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToriiProxyCandidate {
+    P2p(PeerId),
+    HttpBridge { peer_id: PeerId, torii_url: String },
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+impl ToriiProxyCandidate {
+    fn peer_id(&self) -> &PeerId {
+        match self {
+            Self::P2p(peer_id) | Self::HttpBridge { peer_id, .. } => peer_id,
+        }
+    }
+
+    fn transport_label(&self) -> &'static str {
+        match self {
+            Self::P2p(_) => "p2p_proxy",
+            Self::HttpBridge { .. } => "http_bridge",
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 struct ToriiProxyCandidatePeers {
-    peers: Vec<PeerId>,
+    peers: Vec<ToriiProxyCandidate>,
     authoritative_count: usize,
     authoritative_total_count: usize,
     offline_authoritative_count: usize,
+    bridge_authoritative_count: usize,
     loop_prevention_drops: usize,
     unavailable_reason: Option<ToriiProxyUnavailableReason>,
 }
@@ -11502,6 +11584,15 @@ fn torii_proxy_candidate_peer_ids(
         .chain(visited_peer_ids.iter().cloned())
         .collect();
     let authoritative_peers = authoritative_lane_peers(app, routing_decision);
+    let authoritative_total_count = authoritative_peers.authoritative.len();
+    let offline_authoritative_count = authoritative_peers.offline.len();
+    let reachable_authoritative_count = authoritative_peers.online.len().saturating_add(
+        authoritative_peers
+            .offline
+            .iter()
+            .filter(|status| status.torii_url.is_some())
+            .count(),
+    );
     let mut authoritative = Vec::new();
     for peer_id in authoritative_peers.online {
         if &peer_id == local_peer_id {
@@ -11513,16 +11604,32 @@ fn torii_proxy_candidate_peer_ids(
             }
             continue;
         }
-        authoritative.push(peer_id);
+        authoritative.push(ToriiProxyCandidate::P2p(peer_id));
+    }
+    let mut bridge_authoritative_count = 0usize;
+    for status in authoritative_peers.offline {
+        let peer_id = status.peer_id;
+        if &peer_id == local_peer_id {
+            continue;
+        }
+        if exclusion_set.contains(&peer_id) {
+            if loop_prevention_seen.insert(peer_id.clone()) {
+                loop_prevention_drops = loop_prevention_drops.saturating_add(1);
+            }
+            continue;
+        }
+        let Some(torii_url) = status.torii_url else {
+            continue;
+        };
+        bridge_authoritative_count = bridge_authoritative_count.saturating_add(1);
+        authoritative.push(ToriiProxyCandidate::HttpBridge { peer_id, torii_url });
     }
     let authoritative_count = authoritative.len();
-    let authoritative_total_count = authoritative_peers.authoritative.len();
-    let offline_authoritative_count = authoritative_peers.offline.len();
     let unavailable_reason = if authoritative_count > 0 {
         None
     } else if authoritative_total_count == 0 {
         Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
-    } else if offline_authoritative_count == authoritative_total_count {
+    } else if reachable_authoritative_count == 0 {
         Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
     } else {
         Some(ToriiProxyUnavailableReason::LoopPreventionExhausted)
@@ -11532,6 +11639,7 @@ fn torii_proxy_candidate_peer_ids(
         authoritative_count,
         authoritative_total_count,
         offline_authoritative_count,
+        bridge_authoritative_count,
         loop_prevention_drops,
         unavailable_reason,
     }
@@ -15127,6 +15235,47 @@ fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, String> {
+    let base = reqwest::Url::parse(torii_url)
+        .map_err(|error| format!("invalid authoritative Torii URL `{torii_url}`: {error}"))?;
+    base.join(TORII_INTERNAL_PROXY_HTTP_PATH)
+        .map_err(|error| {
+            format!(
+                "failed to resolve internal proxy path for authoritative Torii URL `{torii_url}`: {error}"
+            )
+        })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn reqwest_response_to_torii_proxy_snapshot(
+    response: reqwest::Response,
+) -> Result<ToriiProxyHttpResponseV1, String> {
+    let status_code = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(
+            |(name, value)| iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                name: name.as_str().to_owned(),
+                value: value.as_bytes().to_vec(),
+            },
+        )
+        .collect::<Vec<_>>();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| {
+            format!("failed to read authoritative HTTP bridge response body: {error}")
+        })?
+        .to_vec();
+    Ok(ToriiProxyHttpResponseV1 {
+        status_code,
+        headers,
+        body,
+    })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
     target_peer_id: PeerId,
@@ -15186,6 +15335,70 @@ async fn execute_torii_proxy_request_via_peer(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_proxy_request_via_http_bridge(
+    app: &SharedAppState,
+    target_peer_id: PeerId,
+    torii_url: String,
+    request: ToriiProxyRequestV2,
+) -> Result<ToriiProxyHttpResponseV1, String> {
+    let request_kind_name = torii_proxy_request_kind_name(&request.request);
+    let attempt_timeout = torii_proxy_attempt_timeout(&request.request);
+    let body = norito::to_bytes(&request).map_err(|error| {
+        format!(
+            "failed to encode Torii proxy request `{}` for authoritative HTTP bridge to peer `{target_peer_id}`: {error}",
+            request.request_id
+        )
+    })?;
+    let uri = TORII_INTERNAL_PROXY_HTTP_PATH
+        .parse::<crate::Uri>()
+        .expect("internal Torii proxy path must be a valid URI");
+    let mut headers = operator_signatures::signed_request_headers(
+        &app.torii_proxy_bridge_signer,
+        &crate::Method::POST,
+        &uri,
+        &body,
+    );
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/x-norito"),
+    );
+    headers.insert(
+        axum::http::header::ACCEPT,
+        HeaderValue::from_static("application/x-norito"),
+    );
+
+    let request_url = torii_proxy_bridge_request_url(&torii_url)?;
+    iroha_logger::debug!(
+        request_id = %request.request_id,
+        peer_id = %target_peer_id,
+        torii_url = %request_url,
+        hop_count = request.hop_count,
+        max_hops = request.max_hops,
+        visited_peer_count = request.visited_peer_ids.len(),
+        request_kind = request_kind_name,
+        attempt_timeout_ms = attempt_timeout.as_millis() as u64,
+        "sending Torii proxy request over authoritative HTTP bridge"
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(request_url.clone())
+        .headers(headers)
+        .body(body)
+        .timeout(attempt_timeout)
+        .send()
+        .await
+        .map_err(|error| {
+            format!(
+                "Torii proxy request `{}` to peer `{target_peer_id}` via authoritative HTTP bridge `{request_url}` failed: {error}",
+                request.request_id
+            )
+        })?;
+
+    reqwest_response_to_torii_proxy_snapshot(response).await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_with_fallback(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -15216,6 +15429,7 @@ async fn execute_torii_proxy_request_with_fallback(
         authoritative_candidate_count = candidates.authoritative_count,
         authoritative_total_count = candidates.authoritative_total_count,
         offline_authoritative_count = candidates.offline_authoritative_count,
+        bridge_authoritative_count = candidates.bridge_authoritative_count,
         loop_prevention_drops = candidates.loop_prevention_drops,
         "Torii ingress proxy prepared candidate peers"
     );
@@ -15238,8 +15452,16 @@ async fn execute_torii_proxy_request_with_fallback(
         routing_decision,
         request,
         torii_proxy_hedge_delay(app.as_ref()),
-        |peer_id, request| async move {
-            execute_torii_proxy_request_via_peer(app, peer_id, request).await
+        |candidate, request| async move {
+            match candidate {
+                ToriiProxyCandidate::P2p(peer_id) => {
+                    execute_torii_proxy_request_via_peer(app, peer_id, request).await
+                }
+                ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
+                    execute_torii_proxy_request_via_http_bridge(app, peer_id, torii_url, request)
+                        .await
+                }
+            }
         },
         |request_id| async move {
             mark_torii_proxy_request_completed(app, request_id).await;
@@ -15319,6 +15541,7 @@ async fn forward_incoming_torii_proxy_request(
         authoritative_candidate_count = candidates.authoritative_count,
         authoritative_total_count = candidates.authoritative_total_count,
         offline_authoritative_count = candidates.offline_authoritative_count,
+        bridge_authoritative_count = candidates.bridge_authoritative_count,
         loop_prevention_drops = candidates.loop_prevention_drops,
         "Torii proxy receiver prepared re-forward candidates"
     );
@@ -15353,8 +15576,16 @@ async fn forward_incoming_torii_proxy_request(
         routing_decision,
         forwarded_request,
         torii_proxy_hedge_delay(app.as_ref()),
-        |peer_id, request| async move {
-            execute_torii_proxy_request_via_peer(app, peer_id, request).await
+        |candidate, request| async move {
+            match candidate {
+                ToriiProxyCandidate::P2p(peer_id) => {
+                    execute_torii_proxy_request_via_peer(app, peer_id, request).await
+                }
+                ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
+                    execute_torii_proxy_request_via_http_bridge(app, peer_id, torii_url, request)
+                        .await
+                }
+            }
         },
         |request_id| async move {
             mark_torii_proxy_request_completed(app, request_id).await;
@@ -15365,7 +15596,7 @@ async fn forward_incoming_torii_proxy_request(
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
-    candidate_peers: Vec<PeerId>,
+    candidate_peers: Vec<ToriiProxyCandidate>,
     routing_decision: RoutingDecision,
     request: ToriiProxyRequestV2,
     hedge_delay: Duration,
@@ -15373,7 +15604,7 @@ async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
     complete_request: C,
 ) -> Response
 where
-    F: FnMut(PeerId, ToriiProxyRequestV2) -> Fut,
+    F: FnMut(ToriiProxyCandidate, ToriiProxyRequestV2) -> Fut,
     Fut: core::future::Future<Output = Result<ToriiProxyHttpResponseV1, String>>,
     C: Fn(Hash) -> CFut,
     CFut: core::future::Future<Output = ()>,
@@ -15403,7 +15634,8 @@ where
             Ok(snapshot) => {
                 let status =
                     StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
-                let response = torii_proxy_snapshot_to_response(snapshot);
+                let mut response = torii_proxy_snapshot_to_response(snapshot);
+                insert_route_transport_header(&mut response, peer_id.transport_label());
                 if should_retry_torii_proxy_status(status) {
                     last_retryable = Some(response);
                     continue;
@@ -15412,7 +15644,12 @@ where
                 return response;
             }
             Err(error) => {
-                iroha_logger::warn!(peer_id = %peer_id, %error, "Torii ingress proxy attempt failed");
+                iroha_logger::warn!(
+                    peer_id = %peer_id.peer_id(),
+                    transport = peer_id.transport_label(),
+                    %error,
+                    "Torii ingress proxy attempt failed"
+                );
             }
         }
     }
@@ -17038,6 +17275,377 @@ async fn execute_torii_single_route_read(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn forward_incoming_torii_proxy_request_from_sender(
+    app: &SharedAppState,
+    immediate_sender_peer_id: Option<&PeerId>,
+    routing_decision: RoutingDecision,
+    request: &ToriiProxyRequestV2,
+) -> Response {
+    let Some(sender_peer_id) = immediate_sender_peer_id else {
+        return torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            "Torii proxy request is missing an upstream sender peer id for re-forwarding",
+        );
+    };
+    forward_incoming_torii_proxy_request(app, sender_peer_id, routing_decision, request).await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_incoming_torii_proxy_request(
+    app: &SharedAppState,
+    proxy_request: ToriiProxyRequestV2,
+    immediate_sender_peer_id: Option<PeerId>,
+) -> Response {
+    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V2 {
+        return torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            format!(
+                "unsupported Torii proxy request schema_version `{}`",
+                proxy_request.schema_version
+            ),
+        );
+    }
+    if proxy_request.hop_count == 0
+        || proxy_request.max_hops == 0
+        || proxy_request.hop_count > proxy_request.max_hops
+    {
+        return torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            format!(
+                "invalid Torii proxy hop_count `{}` / max_hops `{}`",
+                proxy_request.hop_count, proxy_request.max_hops
+            ),
+        );
+    }
+
+    let proxy_request_context = proxy_request.clone();
+    match proxy_request.request.clone() {
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            transaction,
+            expected_route,
+        } => {
+            let tx_hash =
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(transaction.hash()));
+            match routing::accept_transaction_for_ingress(
+                app.chain_id.clone(),
+                app.state.clone(),
+                transaction,
+                &app.telemetry,
+            ) {
+                Ok(accepted_tx) => match app
+                    .queue
+                    .route_with_state(&accepted_tx, app.state.as_ref())
+                {
+                    Ok(routing_decision) => {
+                        let routing_decision = effective_proxy_routing_decision(
+                            "submit_transaction",
+                            routing_decision,
+                            expected_route.into(),
+                        );
+                        if !should_execute_route_locally(app, routing_decision) {
+                            forward_incoming_torii_proxy_request_from_sender(
+                                app,
+                                immediate_sender_peer_id.as_ref(),
+                                routing_decision,
+                                &proxy_request_context,
+                            )
+                            .await
+                        } else {
+                            match routing::push_accepted_transaction_for_ingress(
+                                app.queue.clone(),
+                                app.state.clone(),
+                                accepted_tx,
+                            ) {
+                                Ok(_) => transaction_submission_response(
+                                    app.as_ref(),
+                                    tx_hash,
+                                    routing_decision,
+                                    "proxy",
+                                ),
+                                Err(error) => error.into_response(),
+                            }
+                        }
+                    }
+                    Err(error) => routing_resolve_error_to_torii_error(app, error).into_response(),
+                },
+                Err(error) => error.into_response(),
+            }
+        }
+        ToriiProxyRequestKindV1::SignedQuery {
+            query_bytes,
+            expected_route,
+            response_format,
+        } => match norito::decode_from_bytes::<SignedQuery>(&query_bytes) {
+            Ok(query) => match resolve_signed_query_routing_for_app(app.as_ref(), &query) {
+                Ok(routing_decision) => {
+                    let routing_decision = effective_proxy_signed_query_routing_decision(
+                        routing_decision,
+                        expected_route.into(),
+                    );
+                    if !should_execute_incoming_torii_proxy_request_locally(
+                        app,
+                        &proxy_request_context.request,
+                        routing_decision,
+                    ) {
+                        forward_incoming_torii_proxy_request_from_sender(
+                            app,
+                            immediate_sender_peer_id.as_ref(),
+                            routing_decision,
+                            &proxy_request_context,
+                        )
+                        .await
+                    } else {
+                        let format = response_format_from_torii_proxy(response_format);
+                        match routing::handle_queries_with_opts(
+                            app.query_service.clone(),
+                            app.state.clone(),
+                            query,
+                            app.telemetry.clone(),
+                            crate::NoritoQuery(QueryOptions::default()),
+                            format,
+                        )
+                        .await
+                        {
+                            Ok(mut response) => {
+                                insert_routing_headers(&mut response, routing_decision, "proxy");
+                                response
+                            }
+                            Err(error) => error.into_response(),
+                        }
+                    }
+                }
+                Err(error) => torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    error.to_string(),
+                ),
+            },
+            Err(error) => torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_proxy_request",
+                format!("failed to decode proxied signed query: {error}"),
+            ),
+        },
+        ToriiProxyRequestKindV1::VerifiedQuery {
+            request_bytes,
+            expected_route,
+            response_format,
+        } => match norito::decode_from_bytes::<iroha_data_model::query::QueryRequestWithAuthority>(
+            &request_bytes,
+        ) {
+            Ok(request) => {
+                let routing_decision: RoutingDecision = expected_route.into();
+                if !should_execute_incoming_torii_proxy_request_locally(
+                    app,
+                    &proxy_request_context.request,
+                    routing_decision,
+                ) {
+                    forward_incoming_torii_proxy_request_from_sender(
+                        app,
+                        immediate_sender_peer_id.as_ref(),
+                        routing_decision,
+                        &proxy_request_context,
+                    )
+                    .await
+                } else {
+                    let format = response_format_from_torii_proxy(response_format);
+                    match routing::execute_verified_query_with_opts(
+                        app.query_service.clone(),
+                        app.state.clone(),
+                        request,
+                        app.telemetry.clone(),
+                        QueryOptions::default(),
+                    )
+                    .await
+                    {
+                        Ok(query_response) => {
+                            let mut response =
+                                crate::utils::respond_with_format(query_response, format);
+                            insert_routing_headers(&mut response, routing_decision, "proxy");
+                            response
+                        }
+                        Err(error) => error.into_response(),
+                    }
+                }
+            }
+            Err(error) => torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_proxy_request",
+                format!("failed to decode proxied verified query: {error}"),
+            ),
+        },
+        ToriiProxyRequestKindV1::VerifiedQueryFanout {
+            request_bytes,
+            response_format,
+        } => match torii_nexus_route(app.as_ref()) {
+            Ok(nexus_route) => {
+                if !should_execute_incoming_torii_proxy_request_locally(
+                    app,
+                    &proxy_request_context.request,
+                    nexus_route,
+                ) {
+                    forward_incoming_torii_proxy_request_from_sender(
+                        app,
+                        immediate_sender_peer_id.as_ref(),
+                        nexus_route,
+                        &proxy_request_context,
+                    )
+                    .await
+                } else {
+                    execute_torii_verified_query_fanout_proxy_request(
+                        app,
+                        request_bytes,
+                        response_format,
+                    )
+                    .await
+                }
+            }
+            Err(response) => response,
+        },
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::Read(read_request) => {
+            let routing_decision: RoutingDecision = read_request.expected_route.into();
+            if !should_execute_incoming_torii_proxy_request_locally(
+                app,
+                &proxy_request_context.request,
+                routing_decision,
+            ) {
+                forward_incoming_torii_proxy_request_from_sender(
+                    app,
+                    immediate_sender_peer_id.as_ref(),
+                    routing_decision,
+                    &proxy_request_context,
+                )
+                .await
+            } else {
+                execute_torii_read_request_locally(app, read_request, routing_decision, "proxy")
+                    .await
+            }
+        }
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::ReadFanout(read_request) => {
+            match torii_nexus_route(app.as_ref()) {
+                Ok(nexus_route) => {
+                    if !should_execute_incoming_torii_proxy_request_locally(
+                        app,
+                        &proxy_request_context.request,
+                        nexus_route,
+                    ) {
+                        forward_incoming_torii_proxy_request_from_sender(
+                            app,
+                            immediate_sender_peer_id.as_ref(),
+                            nexus_route,
+                            &proxy_request_context,
+                        )
+                        .await
+                    } else {
+                        execute_torii_read_fanout_proxy_request(app, read_request).await
+                    }
+                }
+                Err(response) => response,
+            }
+        }
+        #[cfg(feature = "app_api")]
+        ToriiProxyRequestKindV1::HostedHttp(hosted_request) => {
+            let uri = match hosted_request.query_string.as_deref() {
+                Some(query) => format!("{}?{query}", hosted_request.request_path),
+                None => hosted_request.request_path.clone(),
+            };
+            match (
+                uri.parse::<axum::http::Uri>(),
+                axum::http::Method::from_bytes(hosted_request.method.as_bytes()),
+                hosted_request
+                    .remote_ip
+                    .as_deref()
+                    .map(str::parse::<IpAddr>)
+                    .transpose(),
+            ) {
+                (Err(error), _, _) => torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    format!("failed to decode proxied hosted HTTP URI: {error}"),
+                ),
+                (_, Err(error), _) => torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    format!("failed to decode proxied hosted HTTP method: {error}"),
+                ),
+                (_, _, Err(error)) => torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    format!("failed to decode proxied hosted HTTP remote IP: {error}"),
+                ),
+                (Ok(uri), Ok(method), Ok(_remote_ip)) => {
+                    match resolve_exact_hosted_http_runtime_target(
+                        app,
+                        &hosted_request.service_name,
+                        &hosted_request.service_version,
+                        hosted_request.replica_slot,
+                    ) {
+                        Ok(target) => {
+                            let route_match = soracloud::HostedHttpRouteMatch {
+                                service_name: hosted_request.service_name,
+                                service_version: hosted_request.service_version,
+                                request_path: hosted_request.request_path,
+                            };
+                            match target.local_listen_base_url.as_deref() {
+                                Some(listen_base_url) => {
+                                    match proxy_soracloud_public_hosted_http_locally(
+                                        &method,
+                                        &uri,
+                                        &torii_proxy_headers_to_header_map(&hosted_request.headers),
+                                        Bytes::from(hosted_request.body),
+                                        &route_match,
+                                        listen_base_url,
+                                    )
+                                    .await
+                                    {
+                                        Ok(response) => response,
+                                        Err(error) => soracloud_local_read_error_response(error),
+                                    }
+                                }
+                                None => torii_proxy_error_response(
+                                    StatusCode::SERVICE_UNAVAILABLE,
+                                    "route_unavailable",
+                                    format!(
+                                        "hosted Soracloud service `{}` revision `{}` replica {} has no active local loopback listener",
+                                        route_match.service_name,
+                                        route_match.service_version,
+                                        target.replica_slot
+                                    ),
+                                ),
+                            }
+                        }
+                        Err(error) => soracloud_local_read_error_response(error),
+                    }
+                }
+            }
+        }
+        #[cfg(not(feature = "app_api"))]
+        ToriiProxyRequestKindV1::Read(_) => torii_proxy_error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "route_unavailable",
+            "Torii read proxying requires the `app_api` feature",
+        ),
+        #[cfg(not(feature = "app_api"))]
+        ToriiProxyRequestKindV1::ReadFanout(_) => torii_proxy_error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "route_unavailable",
+            "Torii read fanout proxying requires the `app_api` feature",
+        ),
+        #[cfg(not(feature = "app_api"))]
+        ToriiProxyRequestKindV1::HostedHttp(_) => torii_proxy_error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "route_unavailable",
+            "Torii hosted HTTP proxying requires the `app_api` feature",
+        ),
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn process_incoming_torii_proxy_request(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
@@ -17054,372 +17662,8 @@ async fn process_incoming_torii_proxy_request(
         visited_peer_count = proxy_request.visited_peer_ids.len(),
         "received Torii proxy request"
     );
-    let response = if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V2 {
-        torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            format!(
-                "unsupported Torii proxy request schema_version `{}`",
-                proxy_request.schema_version
-            ),
-        )
-    } else if proxy_request.hop_count == 0
-        || proxy_request.max_hops == 0
-        || proxy_request.hop_count > proxy_request.max_hops
-    {
-        torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            format!(
-                "invalid Torii proxy hop_count `{}` / max_hops `{}`",
-                proxy_request.hop_count, proxy_request.max_hops
-            ),
-        )
-    } else {
-        let proxy_request_context = proxy_request.clone();
-        match proxy_request.request {
-            ToriiProxyRequestKindV1::SubmitTransaction {
-                transaction,
-                expected_route,
-            } => {
-                let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(
-                    transaction.hash(),
-                ));
-                match routing::accept_transaction_for_ingress(
-                    app.chain_id.clone(),
-                    app.state.clone(),
-                    transaction,
-                    &app.telemetry,
-                ) {
-                    Ok(accepted_tx) => {
-                        match app.queue.route_with_state(&accepted_tx, app.state.as_ref()) {
-                            Ok(routing_decision) => {
-                                let routing_decision = effective_proxy_routing_decision(
-                                    "submit_transaction",
-                                    routing_decision,
-                                    expected_route.into(),
-                                );
-                                if !should_execute_route_locally(&app, routing_decision) {
-                                    forward_incoming_torii_proxy_request(
-                                        &app,
-                                        &sender_peer_id,
-                                        routing_decision,
-                                        &proxy_request_context,
-                                    )
-                                    .await
-                                } else {
-                                    match routing::push_accepted_transaction_for_ingress(
-                                        app.queue.clone(),
-                                        app.state.clone(),
-                                        accepted_tx,
-                                    ) {
-                                        Ok(_) => transaction_submission_response(
-                                            app.as_ref(),
-                                            tx_hash,
-                                            routing_decision,
-                                            "proxy",
-                                        ),
-                                        Err(error) => error.into_response(),
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                routing_resolve_error_to_torii_error(&app, error).into_response()
-                            }
-                        }
-                    }
-                    Err(error) => error.into_response(),
-                }
-            }
-            ToriiProxyRequestKindV1::SignedQuery {
-                query_bytes,
-                expected_route,
-                response_format,
-            } => match norito::decode_from_bytes::<SignedQuery>(&query_bytes) {
-                Ok(query) => match resolve_signed_query_routing_for_app(app.as_ref(), &query) {
-                    Ok(routing_decision) => {
-                        let routing_decision = effective_proxy_signed_query_routing_decision(
-                            routing_decision,
-                            expected_route.into(),
-                        );
-                        if !should_execute_incoming_torii_proxy_request_locally(
-                            &app,
-                            &proxy_request_context.request,
-                            routing_decision,
-                        ) {
-                            forward_incoming_torii_proxy_request(
-                                &app,
-                                &sender_peer_id,
-                                routing_decision,
-                                &proxy_request_context,
-                            )
-                            .await
-                        } else {
-                            let format = response_format_from_torii_proxy(response_format);
-                            match routing::handle_queries_with_opts(
-                                app.query_service.clone(),
-                                app.state.clone(),
-                                query,
-                                app.telemetry.clone(),
-                                crate::NoritoQuery(QueryOptions::default()),
-                                format,
-                            )
-                            .await
-                            {
-                                Ok(mut response) => {
-                                    insert_routing_headers(
-                                        &mut response,
-                                        routing_decision,
-                                        "proxy",
-                                    );
-                                    response
-                                }
-                                Err(error) => error.into_response(),
-                            }
-                        }
-                    }
-                    Err(error) => torii_proxy_error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "route_unavailable",
-                        error.to_string(),
-                    ),
-                },
-                Err(error) => torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    format!("failed to decode proxied signed query: {error}"),
-                ),
-            },
-            ToriiProxyRequestKindV1::VerifiedQuery {
-                request_bytes,
-                expected_route,
-                response_format,
-            } => {
-                match norito::decode_from_bytes::<iroha_data_model::query::QueryRequestWithAuthority>(
-                    &request_bytes,
-                ) {
-                    Ok(request) => {
-                        let routing_decision: RoutingDecision = expected_route.into();
-                        if !should_execute_incoming_torii_proxy_request_locally(
-                            &app,
-                            &proxy_request_context.request,
-                            routing_decision,
-                        ) {
-                            forward_incoming_torii_proxy_request(
-                                &app,
-                                &sender_peer_id,
-                                routing_decision,
-                                &proxy_request_context,
-                            )
-                            .await
-                        } else {
-                            let format = response_format_from_torii_proxy(response_format);
-                            match routing::execute_verified_query_with_opts(
-                                app.query_service.clone(),
-                                app.state.clone(),
-                                request,
-                                app.telemetry.clone(),
-                                QueryOptions::default(),
-                            )
-                            .await
-                            {
-                                Ok(query_response) => {
-                                    let mut response =
-                                        crate::utils::respond_with_format(query_response, format);
-                                    insert_routing_headers(
-                                        &mut response,
-                                        routing_decision,
-                                        "proxy",
-                                    );
-                                    response
-                                }
-                                Err(error) => error.into_response(),
-                            }
-                        }
-                    }
-                    Err(error) => torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proxy_request",
-                        format!("failed to decode proxied verified query: {error}"),
-                    ),
-                }
-            }
-            ToriiProxyRequestKindV1::VerifiedQueryFanout {
-                request_bytes,
-                response_format,
-            } => match torii_nexus_route(app.as_ref()) {
-                Ok(nexus_route) => {
-                    if !should_execute_incoming_torii_proxy_request_locally(
-                        &app,
-                        &proxy_request_context.request,
-                        nexus_route,
-                    ) {
-                        forward_incoming_torii_proxy_request(
-                            &app,
-                            &sender_peer_id,
-                            nexus_route,
-                            &proxy_request_context,
-                        )
-                        .await
-                    } else {
-                        execute_torii_verified_query_fanout_proxy_request(
-                            &app,
-                            request_bytes,
-                            response_format,
-                        )
-                        .await
-                    }
-                }
-                Err(response) => response,
-            },
-            #[cfg(feature = "app_api")]
-            ToriiProxyRequestKindV1::Read(read_request) => {
-                let routing_decision: RoutingDecision = read_request.expected_route.into();
-                if !should_execute_incoming_torii_proxy_request_locally(
-                    &app,
-                    &proxy_request_context.request,
-                    routing_decision,
-                ) {
-                    forward_incoming_torii_proxy_request(
-                        &app,
-                        &sender_peer_id,
-                        routing_decision,
-                        &proxy_request_context,
-                    )
-                    .await
-                } else {
-                    execute_torii_read_request_locally(
-                        &app,
-                        read_request,
-                        routing_decision,
-                        "proxy",
-                    )
-                    .await
-                }
-            }
-            #[cfg(feature = "app_api")]
-            ToriiProxyRequestKindV1::ReadFanout(read_request) => {
-                match torii_nexus_route(app.as_ref()) {
-                    Ok(nexus_route) => {
-                        if !should_execute_incoming_torii_proxy_request_locally(
-                            &app,
-                            &proxy_request_context.request,
-                            nexus_route,
-                        ) {
-                            forward_incoming_torii_proxy_request(
-                                &app,
-                                &sender_peer_id,
-                                nexus_route,
-                                &proxy_request_context,
-                            )
-                            .await
-                        } else {
-                            execute_torii_read_fanout_proxy_request(&app, read_request).await
-                        }
-                    }
-                    Err(response) => response,
-                }
-            }
-            #[cfg(feature = "app_api")]
-            ToriiProxyRequestKindV1::HostedHttp(hosted_request) => {
-                let uri = match hosted_request.query_string.as_deref() {
-                    Some(query) => format!("{}?{query}", hosted_request.request_path),
-                    None => hosted_request.request_path.clone(),
-                };
-                match (
-                    uri.parse::<axum::http::Uri>(),
-                    axum::http::Method::from_bytes(hosted_request.method.as_bytes()),
-                    hosted_request
-                        .remote_ip
-                        .as_deref()
-                        .map(str::parse::<IpAddr>)
-                        .transpose(),
-                ) {
-                    (Err(error), _, _) => torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proxy_request",
-                        format!("failed to decode proxied hosted HTTP URI: {error}"),
-                    ),
-                    (_, Err(error), _) => torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proxy_request",
-                        format!("failed to decode proxied hosted HTTP method: {error}"),
-                    ),
-                    (_, _, Err(error)) => torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proxy_request",
-                        format!("failed to decode proxied hosted HTTP remote IP: {error}"),
-                    ),
-                    (Ok(uri), Ok(method), Ok(_remote_ip)) => {
-                        match resolve_exact_hosted_http_runtime_target(
-                            &app,
-                            &hosted_request.service_name,
-                            &hosted_request.service_version,
-                            hosted_request.replica_slot,
-                        ) {
-                            Ok(target) => {
-                                let route_match = soracloud::HostedHttpRouteMatch {
-                                    service_name: hosted_request.service_name,
-                                    service_version: hosted_request.service_version,
-                                    request_path: hosted_request.request_path,
-                                };
-                                match target.local_listen_base_url.as_deref() {
-                                    Some(listen_base_url) => {
-                                        match proxy_soracloud_public_hosted_http_locally(
-                                            &method,
-                                            &uri,
-                                            &torii_proxy_headers_to_header_map(
-                                                &hosted_request.headers,
-                                            ),
-                                            Bytes::from(hosted_request.body),
-                                            &route_match,
-                                            listen_base_url,
-                                        )
-                                        .await
-                                        {
-                                            Ok(response) => response,
-                                            Err(error) => {
-                                                soracloud_local_read_error_response(error)
-                                            }
-                                        }
-                                    }
-                                    None => torii_proxy_error_response(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        "route_unavailable",
-                                        format!(
-                                            "hosted Soracloud service `{}` revision `{}` replica {} has no active local loopback listener",
-                                            route_match.service_name,
-                                            route_match.service_version,
-                                            target.replica_slot
-                                        ),
-                                    ),
-                                }
-                            }
-                            Err(error) => soracloud_local_read_error_response(error),
-                        }
-                    }
-                }
-            }
-            #[cfg(not(feature = "app_api"))]
-            ToriiProxyRequestKindV1::Read(_) => torii_proxy_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                "route_unavailable",
-                "Torii read proxying requires the `app_api` feature",
-            ),
-            #[cfg(not(feature = "app_api"))]
-            ToriiProxyRequestKindV1::ReadFanout(_) => torii_proxy_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                "route_unavailable",
-                "Torii read fanout proxying requires the `app_api` feature",
-            ),
-            #[cfg(not(feature = "app_api"))]
-            ToriiProxyRequestKindV1::HostedHttp(_) => torii_proxy_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                "route_unavailable",
-                "Torii hosted HTTP proxying requires the `app_api` feature",
-            ),
-        }
-    };
+    let response =
+        execute_incoming_torii_proxy_request(&app, proxy_request, Some(sender_peer_id)).await;
 
     network.post(iroha_p2p::Post {
         peer_id: peer.id().clone(),
@@ -27689,6 +27933,7 @@ pub struct Torii {
     rbc_store_dir: Option<PathBuf>,
     rbc_sampling: iroha_config::parameters::actual::RbcSampling,
     da_receipt_signer: KeyPair,
+    torii_proxy_bridge_signer: KeyPair,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -27740,6 +27985,7 @@ pub struct ToriiRuntimeDeps {
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
+    torii_proxy_bridge_signer: Option<KeyPair>,
 }
 
 impl ToriiRuntimeDeps {
@@ -27753,6 +27999,7 @@ impl ToriiRuntimeDeps {
             sorafs_node: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
+            torii_proxy_bridge_signer: None,
         }
     }
 
@@ -27794,6 +28041,13 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_vpn_helper_ticket_secret(mut self, secret: Option<[u8; 32]>) -> Self {
         self.vpn_helper_ticket_secret = secret;
+        self
+    }
+
+    /// Attach the node keypair used to sign internal Torii HTTP bridge requests.
+    #[must_use]
+    pub fn with_torii_proxy_bridge_signer(mut self, signer: KeyPair) -> Self {
+        self.torii_proxy_bridge_signer = Some(signer);
         self
     }
 }
@@ -28167,6 +28421,11 @@ impl Torii {
                     iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE,
                     post(handler_post_nexus_lane_lifecycle).layer(operator_layer.clone()),
                 );
+            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            let operator_router = operator_router.route(
+                TORII_INTERNAL_PROXY_HTTP_PATH,
+                post(handler_internal_torii_proxy_request).layer(operator_layer.clone()),
+            );
             let public_router = Router::new()
                 .route(uri::API_VERSION, get(handler_version))
                 .route(uri::API_VERSIONS, get(handler_api_versions))
@@ -29909,6 +30168,9 @@ impl Torii {
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
+        let torii_proxy_bridge_signer = runtime_deps
+            .torii_proxy_bridge_signer
+            .unwrap_or_else(|| da_receipt_signer.clone());
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -30417,6 +30679,7 @@ impl Torii {
             rbc_store_dir: None,
             rbc_sampling: config.rbc_sampling.clone(),
             da_receipt_signer,
+            torii_proxy_bridge_signer,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
             connect_bus: connect::Bus::from_config(&config.connect),
@@ -30719,6 +30982,7 @@ impl Torii {
             da_replay_store,
             da_receipt_log,
             da_receipt_signer: self.da_receipt_signer.clone(),
+            torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
             da_ingest: self.da_ingest.clone(),
             da_spooler,
             sumeragi: self.sumeragi.clone(),
@@ -33252,7 +33516,7 @@ pub(crate) mod tests_runtime_handlers {
         (restricted_lane, restricted_dataspace)
     }
 
-    fn configure_private_ingress_with_offline_foreign_route_for_test(
+    pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
         app: &mut SharedAppState,
     ) -> (RoutingDecision, RoutingDecision) {
         let nexus_lane = LaneId::new(0);
@@ -33367,6 +33631,27 @@ pub(crate) mod tests_runtime_handlers {
         state: &IrohaState,
         lanes: &[(LaneId, Vec<(AccountId, PeerId)>)],
     ) {
+        let lanes_with_torii_urls = lanes
+            .iter()
+            .map(|(lane_id, validator_bindings)| {
+                (
+                    *lane_id,
+                    validator_bindings
+                        .iter()
+                        .map(|(validator, peer_id)| {
+                            (validator.clone(), peer_id.clone(), None::<&str>)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        install_lane_manifest_registry_with_torii_urls_for_test(state, &lanes_with_torii_urls);
+    }
+
+    fn install_lane_manifest_registry_with_torii_urls_for_test(
+        state: &IrohaState,
+        lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
+    ) {
         let nexus = state.nexus_snapshot();
         let manifest_root = std::env::temp_dir().join(format!(
             "iroha-torii-manifests-{}-{}",
@@ -33387,8 +33672,13 @@ pub(crate) mod tests_runtime_handlers {
                 .unwrap_or_else(|| format!("lane-{}", lane_id.as_u32()));
             let validators_json = validator_bindings
                 .iter()
-                .map(|(validator, peer_id)| {
-                    format!(r#"{{"validator":"{validator}","peer_id":"{peer_id}"}}"#)
+                .map(|(validator, peer_id, torii_url)| {
+                    let torii_url_json = torii_url
+                        .map(|url| format!(r#","torii_url":"{url}""#))
+                        .unwrap_or_default();
+                    format!(
+                        r#"{{"validator":"{validator}","peer_id":"{peer_id}"{torii_url_json}}}"#
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -34333,6 +34623,7 @@ pub(crate) mod tests_runtime_handlers {
             da_replay_store,
             da_receipt_log,
             da_receipt_signer,
+            torii_proxy_bridge_signer: KeyPair::random(),
             da_ingest,
             da_spooler: None,
             #[cfg(feature = "app_api")]
@@ -36181,14 +36472,18 @@ pub(crate) mod tests_runtime_handlers {
         let first_peer_id_for_closure = first_peer_id.clone();
 
         let response = super::execute_torii_proxy_request_across_candidates(
-            vec![first_peer_id.clone(), second_peer_id.clone()],
+            vec![
+                ToriiProxyCandidate::P2p(first_peer_id.clone()),
+                ToriiProxyCandidate::P2p(second_peer_id.clone()),
+            ],
             route,
             request,
             Duration::from_millis(50),
-            move |peer_id, _request| {
+            move |candidate, _request| {
                 let attempts = attempts_ref.clone();
                 let first_peer_id = first_peer_id_for_closure.clone();
                 async move {
+                    let peer_id = candidate.peer_id().clone();
                     attempts
                         .lock()
                         .expect("attempt tracker should lock")
@@ -36251,14 +36546,18 @@ pub(crate) mod tests_runtime_handlers {
         let first_peer_id_for_closure = first_peer_id.clone();
 
         let response = super::execute_torii_proxy_request_across_candidates(
-            vec![first_peer_id.clone(), second_peer_id.clone()],
+            vec![
+                ToriiProxyCandidate::P2p(first_peer_id.clone()),
+                ToriiProxyCandidate::P2p(second_peer_id.clone()),
+            ],
             route,
             request,
             Duration::from_millis(20),
-            move |peer_id, _request| {
+            move |candidate, _request| {
                 let attempts = attempts_ref.clone();
                 let first_peer_id = first_peer_id_for_closure.clone();
                 async move {
+                    let peer_id = candidate.peer_id().clone();
                     attempts
                         .lock()
                         .expect("attempt tracker should lock")
@@ -36312,13 +36611,17 @@ pub(crate) mod tests_runtime_handlers {
         };
 
         let response = super::execute_torii_proxy_request_across_candidates(
-            vec![first_peer_id.clone(), second_peer_id.clone()],
+            vec![
+                ToriiProxyCandidate::P2p(first_peer_id.clone()),
+                ToriiProxyCandidate::P2p(second_peer_id.clone()),
+            ],
             route,
             request,
             Duration::from_millis(20),
-            move |peer_id, _request| {
+            move |candidate, _request| {
                 let first_peer_id = first_peer_id.clone();
                 async move {
+                    let peer_id = candidate.peer_id().clone();
                     if peer_id == first_peer_id {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         return Ok(ToriiProxyHttpResponseV1 {
@@ -37501,7 +37804,7 @@ pub(crate) mod tests_runtime_handlers {
         let missing = AccountId::new(KeyPair::random().public_key().clone());
         let mut app = mk_app_state_for_tests();
         let (local_route, foreign_route) =
-            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
 
         let response = super::execute_torii_account_read_for_routes(
             &app,
@@ -37528,7 +37831,7 @@ pub(crate) mod tests_runtime_handlers {
         let missing = AccountId::new(KeyPair::random().public_key().clone());
         let mut app = mk_app_state_for_tests();
         let (_local_route, foreign_route) =
-            configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
 
         let response = super::execute_torii_account_read_for_routes(
             &app,
@@ -43662,7 +43965,7 @@ pub(crate) mod tests_runtime_handlers {
         );
         assert_eq!(
             candidates.peers,
-            vec![remote_peer_id],
+            vec![ToriiProxyCandidate::P2p(remote_peer_id)],
             "Torii proxy candidate discovery should route to the manifest-backed remote authority"
         );
     }
@@ -43881,6 +44184,7 @@ pub(crate) mod tests_runtime_handlers {
                 .authoritative
                 .into_iter()
                 .filter(|peer_id| peer_id != &local_peer_id)
+                .map(ToriiProxyCandidate::P2p)
                 .collect();
         let candidates =
             super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
@@ -43892,8 +44196,14 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(candidates.peers, authoritative_without_local);
         assert_eq!(candidates.authoritative_total_count, 1);
         assert_eq!(candidates.offline_authoritative_count, 0);
+        assert_eq!(candidates.bridge_authoritative_count, 0);
         assert!(candidates.unavailable_reason.is_none());
-        assert!(!candidates.peers.contains(&fallback_peer_id));
+        assert!(
+            !candidates
+                .peers
+                .iter()
+                .any(|candidate| candidate.peer_id() == &fallback_peer_id)
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -43955,11 +44265,86 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(candidates.authoritative_count, 0);
         assert_eq!(candidates.authoritative_total_count, 1);
         assert_eq!(candidates.offline_authoritative_count, 1);
+        assert_eq!(candidates.bridge_authoritative_count, 0);
         assert!(candidates.peers.is_empty());
         assert_eq!(
             candidates.unavailable_reason,
             Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
         );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_torii_url_is_present()
+     {
+        let local_keypair = KeyPair::random();
+        let authoritative_validator_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([Peer::new(
+                    "127.0.0.1:10001".parse().expect("valid local address"),
+                    local_keypair.public_key().clone(),
+                )]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            install_lane_manifest_registry_with_torii_urls_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(
+                        authoritative_validator,
+                        authoritative_peer_id.clone(),
+                        Some("http://127.0.0.1:19080"),
+                    )],
+                )],
+            );
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert_eq!(candidates.authoritative_count, 1);
+        assert_eq!(candidates.authoritative_total_count, 1);
+        assert_eq!(candidates.offline_authoritative_count, 1);
+        assert_eq!(candidates.bridge_authoritative_count, 1);
+        assert_eq!(
+            candidates.peers,
+            vec![ToriiProxyCandidate::HttpBridge {
+                peer_id: authoritative_peer_id,
+                torii_url: "http://127.0.0.1:19080".to_owned(),
+            }]
+        );
+        assert!(candidates.unavailable_reason.is_none());
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -44111,6 +44496,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(candidates.authoritative_count, 0);
         assert_eq!(candidates.authoritative_total_count, 0);
         assert_eq!(candidates.offline_authoritative_count, 0);
+        assert_eq!(candidates.bridge_authoritative_count, 0);
         assert!(candidates.peers.is_empty());
         assert_eq!(
             candidates.unavailable_reason,
@@ -44218,10 +44604,155 @@ pub(crate) mod tests_runtime_handlers {
         );
 
         assert_eq!(candidates.authoritative_count, 1);
-        assert_eq!(candidates.peers, vec![authoritative_peer_id]);
-        assert!(!candidates.peers.contains(&sender_peer_id));
-        assert!(!candidates.peers.contains(&visited_peer_id));
+        assert_eq!(
+            candidates.peers,
+            vec![ToriiProxyCandidate::P2p(authoritative_peer_id)]
+        );
+        assert!(
+            !candidates
+                .peers
+                .iter()
+                .any(|candidate| candidate.peer_id() == &sender_peer_id)
+        );
+        assert!(
+            !candidates
+                .peers
+                .iter()
+                .any(|candidate| candidate.peer_id() == &visited_peer_id)
+        );
         assert_eq!(candidates.loop_prevention_drops, 2);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn internal_torii_proxy_route_accepts_node_signed_requests() {
+        use tower::ServiceExt as _;
+
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+        let bridge_signer = app.da_receipt_signer.clone();
+        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .torii_proxy_bridge_signer = bridge_signer.clone();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .local_peer_id = Some(local_peer_id.clone());
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let proxy_request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"internal-torii-proxy-read"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: vec![local_peer_id],
+            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+                ToriiReadEndpointV1::AccountGet,
+                route,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+            )),
+        };
+        let body = norito::to_bytes(&proxy_request).expect("encode proxied read");
+        let uri = TORII_INTERNAL_PROXY_HTTP_PATH
+            .parse::<crate::Uri>()
+            .expect("internal proxy URI");
+        let signed_headers = operator_signatures::signed_request_headers(
+            &bridge_signer,
+            &crate::Method::POST,
+            &uri,
+            &body,
+        );
+        let operator_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), operator_signatures::enforce_operator_access);
+        let router = axum::Router::new()
+            .route(
+                TORII_INTERNAL_PROXY_HTTP_PATH,
+                axum::routing::post(handler_internal_torii_proxy_request).layer(operator_layer),
+            )
+            .with_state(app.clone());
+        let mut request = axum::http::Request::builder()
+            .uri(TORII_INTERNAL_PROXY_HTTP_PATH)
+            .method(axum::http::Method::POST)
+            .body(axum::body::Body::from(body))
+            .expect("request");
+        request.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        request.headers_mut().insert(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        request.headers_mut().extend(signed_headers);
+
+        let response = router.oneshot(request).await.expect("router response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("proxy")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let payload = std::str::from_utf8(&body).expect("JSON response body");
+        assert!(payload.contains(&ALICE_ID.to_string()));
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn internal_torii_proxy_route_rejects_unsigned_requests() {
+        use tower::ServiceExt as _;
+
+        let app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+        let operator_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), operator_signatures::enforce_operator_access);
+        let router = axum::Router::new()
+            .route(
+                TORII_INTERNAL_PROXY_HTTP_PATH,
+                axum::routing::post(handler_internal_torii_proxy_request).layer(operator_layer),
+            )
+            .with_state(app.clone());
+        let body = norito::to_bytes(&ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"internal-torii-proxy-read-unsigned"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: vec![PeerId::from(KeyPair::random().public_key().clone())],
+            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+                ToriiReadEndpointV1::AccountGet,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+            )),
+        })
+        .expect("encode proxied read");
+
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(TORII_INTERNAL_PROXY_HTTP_PATH)
+                    .method(axum::http::Method::POST)
+                    .header(axum::http::header::CONTENT_TYPE, "application/x-norito")
+                    .header(axum::http::header::ACCEPT, "application/x-norito")
+                    .body(axum::body::Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -50425,6 +50956,64 @@ mod tests {
         assert_eq!(diagnostics.attempted_routes, 3);
         assert_eq!(diagnostics.succeeded_routes, 3);
         assert_eq!(routed_by, "local");
+    }
+
+    #[tokio::test]
+    async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
+     {
+        let mut app = mk_app_state_for_tests();
+        let (local_route, foreign_route) =
+            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+        let missing_id = ProofId {
+            backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+            proof_hash: [0x44; 32],
+        }
+        .to_string();
+
+        let response = super::resolve_torii_proof_record_for_routes(
+            &app,
+            vec![foreign_route, local_route],
+            missing_id,
+        )
+        .await
+        .expect_err("missing proof record should return an error response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable"),
+            "a definitive missing-proof response should outrank an unrelated unavailable route",
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_only_unavailable()
+    {
+        let mut app = mk_app_state_for_tests();
+        let (_local_route, foreign_route) =
+            crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+        let missing_id = ProofId {
+            backend: "stark/fri/sha256-goldilocks-v1".to_owned(),
+            proof_hash: [0x55; 32],
+        }
+        .to_string();
+
+        let response =
+            super::resolve_torii_proof_record_for_routes(&app, vec![foreign_route], missing_id)
+                .await
+                .expect_err("offline authoritative route should be unavailable");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
     }
 
     #[tokio::test]

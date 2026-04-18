@@ -61624,6 +61624,7 @@ mod public_lane_tests {
         let binding = ManifestValidatorBinding {
             validator: ALICE_ID.clone(),
             peer_id: peer_id.clone(),
+            torii_url: None,
         };
         let (_, value) = manifest_validator_to_json(LaneId::new(7), &binding);
         let obj = value
