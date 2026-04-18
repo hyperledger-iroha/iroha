@@ -2,6 +2,13 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Kotodama ZK vote/unshield sample semantic sync
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko` now matches the current Kotodama semantic checks: the public `demo` entrypoint is tagged with `permission(Admin)`, and the inline unshield builder now uses compile-time literal constructor arguments instead of runtime-only `authority()`.
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.to` was regenerated from the updated source so the bundled sample bytecode stays aligned with the checked-in `.ko`.
+- This restores `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_sample_zk_vote_unshield.rs`, which compiles the sample and asserts the emitted ZK verify plus vendor-bridge syscalls.
+- Focused validation for this slice:
+  - `cargo test -p ivm --test kotodama_sample_zk_vote_unshield -- --nocapture`
+
 ## 2026-04-18 Follow-up: STARK/FRI V1 verifier hardening
 - The low-level native STARK/FRI V1 checker now uses the domain-aware binary FRI fold for `(x, -x)` openings instead of an x-free sibling linear combination. The high-level STARK `OpenVerifyEnvelope` backend now requires verifier-reconstructed V1 binding-AIR composition values before accepting an inner FRI proof.
 - The unsafe synthetic native STARK helper is no longer a production API. Native STARK V1 proof generation emits a deterministic binding-AIR composition root over the backend, circuit id, VK hash, schema descriptor, and public input columns; offline recursive STARK envelopes use the same composition-bound V1 path.

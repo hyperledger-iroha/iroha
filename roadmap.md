@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 Kotodama ZK vote/unshield sample semantic sync):
+The checked-in `zk_vote_and_unshield.ko` sample now matches the current
+Kotodama semantic contract: its public `demo` entrypoint carries
+`permission(Admin)`, and the inline unshield builder uses compile-time literal
+constructor arguments instead of runtime-only `authority()`. This keeps the IVM
+sample regression test aligned with the language rules it exercises.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/samples/zk_vote_and_unshield.to`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test kotodama_sample_zk_vote_unshield -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a longer clean window
+
 Latest sync (2026-04-18 STARK/FRI V1 verifier hardening):
 STARK/FRI V1 was hardened in-place for the first release. The low-level native
 verifier now folds `(x, -x)` pairs with the domain element, STARK guardrails
