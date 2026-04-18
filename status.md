@@ -10,10 +10,11 @@ Last updated: 2026-04-18
   - `npm run build:dist` from `javascript/iroha_js`
   - `IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/package_dist.test.js` from `javascript/iroha_js`
   - `node -e "import('./javascript/iroha_js/dist/index.js').then(() => console.log('dist import ok'))"`
+  - `python3 -m pytest python/iroha_python/tests/test_address_format.py python/iroha_torii_client/tests/test_client.py`
   - direct Python import smokes for `iroha_python.address` and `iroha_torii_client.client` i105 edge cases
   - `CARGO_TARGET_DIR=/tmp/iroha-sdk-i105-target cargo test -p iroha_data_model parse_encoded_without_expected_discriminant_accepts_literal_prefix -- --nocapture`
   - `./target/debug/xtask address-vectors --verify`
-- `python3 -m pytest python/iroha_python/tests/test_address_format.py python/iroha_torii_client/tests/test_client.py` could not run locally because this Python environment does not have `pytest` installed.
+- The stale `ContractInstance` / `ContractInstancesPage` package re-exports were removed from `iroha_python.__init__`; those symbols do not exist in the client module and blocked pytest collection.
 
 ## 2026-04-18 Follow-up: I105 half-width kana standardization
 - I105 account-address codecs now use the half-width Iroha-kana alphabet as the canonical base-105 suffix across Rust, Swift, Kotlin, Java, JavaScript, Python, and C#; legacy full-width kana payload aliases are rejected instead of decoded.
