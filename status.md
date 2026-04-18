@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: SoraNet handshake harness CLI fixture refresh
+- `/Users/takemiyamakoto/dev/iroha/tools/soranet-handshake-harness/tests/simulate_cli.rs`
+  now uses capability vectors with the required `snnet.suite_list` TLV, matching
+  the current canonical SoraNet handshake fixtures and avoiding the downgrade
+  rejection on simulation startup.
+- The CLI frame assertions now derive expected frame filenames from the emitted
+  `handshake_steps` report, so the test follows the current NK2/NK3 step labels
+  instead of stale `ClientHello`/`RelayHello`/`ClientFinish` names.
+- `/Users/takemiyamakoto/dev/iroha/tools/soranet-handshake-harness/README.md`
+  now shows the same suite-list-capable vectors in the `simulate` example.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p soranet-handshake-harness simulate_writes_frames_and_telemetry -- --nocapture`
+  - `cargo test -p soranet-handshake-harness`
+
 ## 2026-04-18 Follow-up: IVM cache artifact minor-version gate
 - `/home/mtakemiya/dev/iroha/crates/ivm/src/ivm_cache.rs` now rejects artifact decode and cached predecode requests unless the parsed header is IVM `1.1`, so legacy `1.0` and unknown-minor headers no longer slip through `IvmCache::decode_artifact` or `IvmCache::get_or_predecode_artifact`.
 - `ProgramMetadata::parse` remains backward-compatible for generic non-artifact parse paths; the stricter version gate is limited to the artifact helpers so legacy header parsing behavior elsewhere stays unchanged.
