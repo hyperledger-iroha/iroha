@@ -1226,9 +1226,6 @@ impl MockWorldStateView {
             return false;
         }
         let subject = Self::account_subject(account);
-        if !self.subject_has_any_domain(&subject) {
-            return false;
-        }
         self.role_assignments
             .entry(subject)
             .or_default()
@@ -5618,7 +5615,7 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_GRANT_PERMISSION => {
                 // r10=&AccountId (subject), r11=permission as Name or Json
-                let subject = self.decode_canonical_account_reg(vm, 10)?;
+                let subject = self.decode_account_subject_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
                 let token = {
                     let v = vm.register(11);
@@ -5643,7 +5640,7 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_REVOKE_PERMISSION => {
-                let subject = self.decode_canonical_account_reg(vm, 10)?;
+                let subject = self.decode_account_subject_reg(vm, 10)?;
                 let token = {
                     let v = vm.register(11);
                     let tlv = vm.memory.validate_tlv(v)?;
@@ -5691,7 +5688,7 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_GRANT_ROLE => {
                 // r10 = &AccountId, r11=&Name
-                let subj = self.decode_canonical_account_reg(vm, 10)?;
+                let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.grant_role(&subj, &rname) {
                     Ok(0)
@@ -5700,7 +5697,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REVOKE_ROLE => {
-                let subj = self.decode_canonical_account_reg(vm, 10)?;
+                let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.revoke_role(&subj, &rname) {
                     Ok(0)

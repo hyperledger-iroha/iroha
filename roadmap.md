@@ -59,6 +59,30 @@ trace-commitment goldens were refreshed for the in-place V1 wire shape.
   - implement the real native STARK AIR prover before re-enabling STARK
     proof generation, high-level STARK proof acceptance, or offline recursive
     aggregate STARK envelopes
+
+Latest sync (2026-04-18 Kotodama assert truthiness and role-account fixtures):
+Kotodama `assert(...)` now lowers with its original boolean condition intact,
+and the final compiler lowering only skips the abort syscall when that
+condition is true. The mock WSV role/permission admin syscalls now also accept
+runtime `AccountId` subjects directly, so runtime account arguments no longer
+trip `DecodeError` on `grant_role` / `grant_permission`. The affected role
+tests were refreshed to mint against the actual caller authority when checking
+role-derived mint permissions.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p ivm --test kotodama_role_builtins -- --nocapture`
+  - `cargo test -p ivm --test kotodama assert_builtin_obeys_truthiness -- --nocapture`
+  - `cargo test -p ivm --test kotodama_role_cleanup -- --nocapture`
+- open work after this slice:
   - run the full `cargo test --workspace` and strict clippy pass during a
     longer clean validation window
 
@@ -94,9 +118,6 @@ refresh.
   - `cargo test -p ivm --test kotodama parse_mfc_example -- --nocapture`
   - `cargo test -p ivm --test kotodama_role_cleanup --no-run`
 - open work after this slice:
-  - investigate the separate `kotodama_role_builtins` failures still present in
-    the runtime account/authority path (`grant_role`, `grant_permission`,
-    `authority()`, and the role-bootstrap mint flow)
   - run the full `cargo test --workspace` and strict clippy pass during a
     longer clean validation window
 

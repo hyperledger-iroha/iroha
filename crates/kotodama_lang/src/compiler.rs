@@ -5708,8 +5708,8 @@ impl Compiler {
                         }
                         Instr::Assert { cond } => {
                             let rs = src_reg(cond, scratch1, &mut code)?;
-                            // Skip ABORT when the condition is false (i.e., == 0).
-                            let skip_word = encode_branch_rv(0x0, rs, 0, 8)?;
+                            // Skip ABORT when the condition is true (i.e., != 0).
+                            let skip_word = encode_branch_rv(0x1, rs, 0, 8)?;
                             push_word(&mut code, skip_word);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
