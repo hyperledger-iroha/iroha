@@ -1,3 +1,5 @@
+//! ABI policy regression tests for syscall allowlist behavior.
+
 use ivm::{self, SyscallPolicy};
 
 #[test]
@@ -33,8 +35,23 @@ fn baseline_policy_allows_known_surface_numbers() {
 
 #[test]
 fn unknown_numbers_rejected() {
-    let nums = [0x80u32, 0x98u32, 0xEEu32];
+    let list = ivm::syscalls::abi_syscall_list();
+    let mut nums: Vec<u32> = list
+        .windows(2)
+        .filter_map(|window| {
+            let candidate = window[0].saturating_add(1);
+            (candidate < window[1]).then_some(candidate)
+        })
+        .take(3)
+        .collect();
+    let mut tail_candidate = list.last().copied().unwrap_or(0).saturating_add(1);
+    while nums.len() < 3 {
+        nums.push(tail_candidate);
+        tail_candidate = tail_candidate.saturating_add(1);
+    }
+
     for &n in &nums {
+        assert!(!list.contains(&n), "test picked known syscall 0x{n:x}");
         assert!(!ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, n));
     }
 }

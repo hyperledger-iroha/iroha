@@ -17,6 +17,45 @@ Last updated: 2026-04-18
   - `cargo test -p soranet-handshake-harness simulate_writes_frames_and_telemetry -- --nocapture`
   - `cargo test -p soranet-handshake-harness`
 
+## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
+- Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,
+  a small `integration_tests` refresh tool that regenerates the grouped
+  `nexus_and_streaming` Norito instruction fixtures and the shared streaming
+  golden snapshots from the same Rust encoders the tests assert against.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/README.md` now documents
+  the refresh command:
+  `cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`.
+- Refreshed stale Norito instruction fixtures under
+  `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/`:
+  - `burn_asset_numeric.json`
+  - `burn_asset_fractional.json`
+  - `mint_asset_numeric.json`
+  - `burn_trigger_repetitions.json`
+- Refreshed the shared streaming snapshot goldens under
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/fixtures/norito_streaming/rans/`:
+  - `baseline.json`
+  - `bundled.json`
+- The refreshed streaming snapshots now match the current canonical encoder
+  output again (`3975` bytes each instead of the stale `9138`-byte payloads).
+- Added focused unit coverage in the new refresh bin for:
+  - canonical instruction `encoded_hex` generation; and
+  - baseline snapshot emission of the expected top-level fields.
+- Focused validation completed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo run -p integration_tests --bin refresh_nexus_streaming_fixtures`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --bin refresh_nexus_streaming_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming norito_burn_fixture:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fixture-refresh cargo test -p integration_tests --test nexus_and_streaming snapshot_matches_golden_fixture -- --nocapture`
+  - `git diff --check -- integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs integration_tests/README.md fixtures/norito_instructions/burn_asset_numeric.json fixtures/norito_instructions/burn_asset_fractional.json fixtures/norito_instructions/mint_asset_numeric.json fixtures/norito_instructions/burn_trigger_repetitions.json integration_tests/fixtures/norito_streaming/rans/baseline.json integration_tests/fixtures/norito_streaming/rans/bundled.json`
+
+## 2026-04-18 Follow-up: syscall policy unknown-number test resynced
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/syscalls_policy.rs` no longer hard-codes `0x80` as an unknown syscall number. That value is now part of the ABI v1 surface as `JSON_GET_ASSET_DEFINITION_ID`, so the regression test now derives truly unknown numbers from gaps in `abi_syscall_list()` and from values beyond the 8-bit surface.
+- The same test crate now starts with an inner doc comment to satisfy the workspace documentation rule for integration tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test syscalls_policy -- --nocapture`
+  - `cargo test -p ivm --test abi_policy -- --nocapture`
+  - `cargo test -p ivm --test syscalls_policy_versions -- --nocapture`
+
 ## 2026-04-18 Follow-up: IVM cache artifact minor-version gate
 - `/home/mtakemiya/dev/iroha/crates/ivm/src/ivm_cache.rs` now rejects artifact decode and cached predecode requests unless the parsed header is IVM `1.1`, so legacy `1.0` and unknown-minor headers no longer slip through `IvmCache::decode_artifact` or `IvmCache::get_or_predecode_artifact`.
 - `ProgramMetadata::parse` remains backward-compatible for generic non-artifact parse paths; the stricter version gate is limited to the artifact helpers so legacy header parsing behavior elsewhere stays unchanged.
@@ -160,7 +199,7 @@ Last updated: 2026-04-18
 - FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries the committed LDE domain size, query chunks, Merkle authentication paths, sampled AIR openings, and per-round FRI openings.
 - ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
 - Follow-up gap closure: the STARK VK update regression now seeds a valid encoded V1 STARK verifying key before exercising the mixed-case curve rejection, and the Nexus compile-only integration target no longer carries unused single-client helper wrappers.
-- Coverage follow-up: FASTPQ now explicitly tests extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR Merkle-path limits, FRI round-value limits, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
+- Coverage follow-up: FASTPQ now explicitly tests extra AIR challenges, AIR trace-root tampering, AIR opening index/count mismatch, next-row tampering, composition Merkle-path tampering, AIR/query Merkle-path and query-count limits, query-chunk limits, FRI round-value limits, zero LDE domain-size rejection, folded/final FRI value tampering, final FRI Merkle-path tampering, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR trace-root tampering, AIR trace-width mismatch, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, high-level wrapper public-input/schema/VK-hash/missing-VK/inner-parameter/AIR-circuit tampering, and the STARK guardrail split where the proof-byte cap applies to the inner native envelope rather than the outer `OpenVerifyEnvelope`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
@@ -168,6 +207,9 @@ Last updated: 2026-04-18
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri_merkle_path -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
@@ -175,6 +217,7 @@ Last updated: 2026-04-18
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark stark_prover_tests -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
