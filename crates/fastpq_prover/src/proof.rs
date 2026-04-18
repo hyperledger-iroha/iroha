@@ -1205,6 +1205,237 @@ mod tests {
     }
 
     #[test]
+    fn public_io_preserves_explicit_roots_and_hashes_claims() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.public_inputs.dsid = [0x11; 16];
+        batch.public_inputs.slot = 99;
+        batch.public_inputs.old_root = [0x22; 32];
+        batch.public_inputs.new_root = [0x33; 32];
+        batch.public_inputs.perm_root = [0x44; 32];
+        batch.public_inputs.tx_set_hash = [0x55; 32];
+        let ordering = Hash::new(b"explicit-ordering-hash");
+        let permission_hashes = vec![[0x66; 32], [0x77; 32]];
+
+        let public_io = build_public_io(&batch, ordering, permission_hashes.clone());
+
+        assert_eq!(public_io.dsid, batch.public_inputs.dsid);
+        assert_eq!(public_io.slot, batch.public_inputs.slot);
+        assert_eq!(public_io.old_root, batch.public_inputs.old_root);
+        assert_eq!(public_io.new_root, batch.public_inputs.new_root);
+        assert_eq!(public_io.perm_root, batch.public_inputs.perm_root);
+        assert_eq!(public_io.tx_set_hash, batch.public_inputs.tx_set_hash);
+        assert_eq!(
+            public_io.ordering_hash,
+            hash_norito::core::to_bytes(&ordering)
+        );
+        assert_eq!(public_io.permission_hashes, permission_hashes);
+    }
+
+    #[test]
+    fn public_io_matcher_reports_direct_mismatches() {
+        let expected = PublicIO {
+            dsid: [0x11; 16],
+            slot: 42,
+            old_root: [0x22; 32],
+            new_root: [0x33; 32],
+            perm_root: [0x44; 32],
+            tx_set_hash: [0x55; 32],
+            ordering_hash: [0x66; 32],
+            permission_hashes: vec![[0x77; 32]],
+        };
+
+        let mut actual = expected.clone();
+        actual.dsid[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch { field: "dsid" })
+        ));
+
+        let mut actual = expected.clone();
+        actual.slot = actual.slot.wrapping_add(1);
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch { field: "slot" })
+        ));
+
+        let mut actual = expected.clone();
+        actual.old_root[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch { field: "old_root" })
+        ));
+
+        let mut actual = expected.clone();
+        actual.new_root[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch { field: "new_root" })
+        ));
+
+        let mut actual = expected.clone();
+        actual.perm_root[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch { field: "perm_root" })
+        ));
+
+        let mut actual = expected.clone();
+        actual.tx_set_hash[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PublicIoMismatch {
+                field: "tx_set_hash"
+            })
+        ));
+
+        let mut actual = expected.clone();
+        actual.ordering_hash[0] ^= 0x01;
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::OrderingHashMismatch)
+        ));
+
+        let mut actual = expected.clone();
+        actual.permission_hashes.push([0x88; 32]);
+        assert!(matches!(
+            ensure_public_io_matches(&expected, &actual),
+            Err(Error::PermissionHashMismatch)
+        ));
+
+        ensure_public_io_matches(&expected, &expected).unwrap();
+    }
+
+    #[test]
+    fn public_io_hash_helpers_are_domain_separated() {
+        assert!(is_zero_bytes(&[0u8; 32]));
+        assert!(!is_zero_bytes(&[0, 0, 1]));
+        assert_eq!(perm_root_from_permission_hashes(&[]), [0u8; 32]);
+
+        let first = [[0x11; 32]];
+        let second = [[0x22; 32]];
+        let first_root = perm_root_from_permission_hashes(&first);
+        let second_root = perm_root_from_permission_hashes(&second);
+        let ordering_root = tx_set_hash_from_ordering(&Hash::new(first[0]));
+
+        assert_ne!(first_root, [0u8; 32]);
+        assert_ne!(first_root, second_root);
+        assert_ne!(first_root, ordering_root);
+    }
+
+    #[test]
+    fn collect_permission_hashes_sorts_roles_and_validates_lengths() {
+        let grant_role = vec![0x11; 32];
+        let grant_permission = vec![0x22; 32];
+        let revoke_role = vec![0x33; 32];
+        let revoke_permission = vec![0x44; 32];
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"z/revoke".to_vec(),
+            vec![1],
+            vec![2],
+            OperationKind::RoleRevoke {
+                role_id: revoke_role.clone(),
+                permission_id: revoke_permission.clone(),
+                epoch: 9,
+            },
+        ));
+        batch.push(StateTransition::new(
+            b"a/grant".to_vec(),
+            vec![3],
+            vec![4],
+            OperationKind::RoleGrant {
+                role_id: grant_role.clone(),
+                permission_id: grant_permission.clone(),
+                epoch: 7,
+            },
+        ));
+        batch.push(StateTransition::new(
+            b"m/mint".to_vec(),
+            vec![5],
+            vec![6],
+            OperationKind::Mint,
+        ));
+
+        let hashes = collect_permission_hashes(&batch).unwrap();
+        assert_eq!(
+            hashes,
+            vec![
+                field_norito::core::to_bytes(
+                    trace::permission_hash(&grant_role, &grant_permission, 7).unwrap()
+                ),
+                field_norito::core::to_bytes(
+                    trace::permission_hash(&revoke_role, &revoke_permission, 9).unwrap()
+                ),
+            ]
+        );
+
+        let mut bad_role = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        bad_role.push(StateTransition::new(
+            b"bad-role".to_vec(),
+            Vec::new(),
+            Vec::new(),
+            OperationKind::RoleGrant {
+                role_id: vec![0xAA; 31],
+                permission_id: vec![0xBB; 32],
+                epoch: 1,
+            },
+        ));
+        assert!(matches!(
+            collect_permission_hashes(&bad_role),
+            Err(Error::InvalidRoleIdLength { length: 31 })
+        ));
+
+        let mut bad_permission =
+            TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        bad_permission.push(StateTransition::new(
+            b"bad-permission".to_vec(),
+            Vec::new(),
+            Vec::new(),
+            OperationKind::RoleRevoke {
+                role_id: vec![0xAA; 32],
+                permission_id: vec![0xBB; 31],
+                epoch: 1,
+            },
+        ));
+        assert!(matches!(
+            collect_permission_hashes(&bad_permission),
+            Err(Error::InvalidPermissionIdLength { length: 31 })
+        ));
+    }
+
+    #[test]
+    fn batch_size_hint_counts_metadata_and_operation_payloads() {
+        let role_id = vec![0xAA; 5];
+        let permission_id = vec![0xBB; 7];
+        let mut batch = TransitionBatch::new("param", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"key".to_vec(),
+            vec![1, 2],
+            vec![3, 4, 5],
+            OperationKind::RoleRevoke {
+                role_id: role_id.clone(),
+                permission_id: permission_id.clone(),
+                epoch: 99,
+            },
+        ));
+        batch.metadata.insert("meta".to_owned(), vec![9, 8, 7]);
+
+        let expected = "param".len()
+            + "key".len()
+            + 2
+            + 3
+            + role_id.len()
+            + permission_id.len()
+            + "meta".len()
+            + 3;
+        assert_eq!(batch_size_hint(&batch), expected);
+        assert_eq!(operation_size_hint(&OperationKind::Transfer), 0);
+        assert_eq!(operation_size_hint(&OperationKind::Mint), 0);
+        assert_eq!(operation_size_hint(&OperationKind::Burn), 0);
+        assert_eq!(operation_size_hint(&OperationKind::MetaSet), 0);
+    }
+
+    #[test]
     fn prove_and_verify_roundtrip() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
@@ -2366,6 +2597,73 @@ mod tests {
     }
 
     #[test]
+    fn verify_fri_query_chain_accepts_terminal_leaf_without_rounds() {
+        let final_values = vec![42];
+        let final_root = backend::hash_fri_chunk(0, 0, &final_values).unwrap();
+        let fri_layers = vec![field_norito::core::to_bytes(final_root)];
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values,
+            final_merkle_path: Vec::new(),
+        };
+
+        verify_fri_query_chain(0, 0, 42, &fri_query, &fri_layers, &[], 2).unwrap();
+    }
+
+    #[test]
+    fn verify_fri_query_chain_rejects_terminal_layer_shape_errors() {
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values: vec![42],
+            final_merkle_path: Vec::new(),
+        };
+        let err = verify_fri_query_chain(0, 0, 42, &fri_query, &[], &[], 2).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::FriLayerLengthMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+
+        let mut malformed_root = field_norito::core::to_bytes(1);
+        malformed_root[8] = 1;
+        let err =
+            verify_fri_query_chain(0, 0, 42, &fri_query, &[malformed_root], &[], 2).unwrap_err();
+        assert!(matches!(err, Error::FriLayerMismatch { round: 0 }));
+
+        let wrong_root = field_norito::core::to_bytes(1);
+        let err = verify_fri_query_chain(0, 0, 42, &fri_query, &[wrong_root], &[], 2).unwrap_err();
+        assert!(matches!(err, Error::QueryMerklePathMismatch { index: 0 }));
+    }
+
+    #[test]
+    fn modular_fri_folding_wraps_in_goldilocks_field() {
+        assert_eq!(add_mod(GOLDILOCKS_MODULUS - 1, 2), 1);
+        assert_eq!(mul_mod(GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS - 1), 1);
+
+        let values = [3, 4, 5];
+        let challenge = 7;
+        let expected = values.iter().enumerate().fold(0u128, |acc, (idx, value)| {
+            let power = (0..idx).fold(1u128, |power, _| {
+                (power * u128::from(challenge)) % u128::from(GOLDILOCKS_MODULUS)
+            });
+            (acc + u128::from(*value) * power) % u128::from(GOLDILOCKS_MODULUS)
+        });
+        assert_eq!(
+            fold_fri_values(&values, challenge),
+            u64::try_from(expected).unwrap()
+        );
+
+        let wrapped = fold_fri_values(&[GOLDILOCKS_MODULUS - 1, 2], GOLDILOCKS_MODULUS - 1);
+        assert_eq!(wrapped, GOLDILOCKS_MODULUS - 3);
+    }
+
+    #[test]
     fn verify_rejects_wrong_air_next_row_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -2552,5 +2850,13 @@ mod tests {
         let encoded = field_norito::core::to_bytes(value);
         assert_eq!(encoded[..8], value.to_le_bytes());
         assert!(encoded[8..].iter().all(|byte| *byte == 0));
+        assert_eq!(field_norito::core::from_bytes(&encoded), Some(value));
+    }
+
+    #[test]
+    fn field_norito_from_bytes_rejects_nonzero_tail() {
+        let mut encoded = field_norito::core::to_bytes(7);
+        encoded[8] = 1;
+        assert_eq!(field_norito::core::from_bytes(&encoded), None);
     }
 }

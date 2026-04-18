@@ -99,6 +99,25 @@ pub fn hedged_chacha20_rng(seed: HedgedRngSeed, personalization: &[u8]) -> Hedge
     build_rng(&seed, personalization, &os_entropy, status)
 }
 
+/// Construct a deterministic `ChaCha20` RNG from explicit seed material.
+///
+/// This is intended for reproducible fixtures and seeded key derivation APIs.
+/// Production code that wants RNG hedging should use [`hedged_chacha20_rng`] or
+/// [`hedged_chacha20_rng_from_os`] so live OS entropy is mixed in when available.
+#[allow(clippy::needless_pass_by_value)] // Seed is consumed to trigger zeroization on drop.
+#[must_use]
+pub fn deterministic_chacha20_rng(
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> HedgedChaCha20Rng {
+    build_rng(
+        &seed,
+        personalization,
+        &[0_u8; 32],
+        HedgedEntropyStatus::OsEntropyUnavailable,
+    )
+}
+
 /// Construct a hedged RNG from fresh OS seed material.
 ///
 /// This helper is for production paths that do not already have deterministic

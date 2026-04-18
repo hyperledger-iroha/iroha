@@ -23,10 +23,10 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
-    let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let asset_domain = DomainId::try_new("wonder", "universal").unwrap();
+    let asset_name: Name = "coin".parse().unwrap();
+    let asset_def_seed: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::new(asset_domain.clone(), asset_name.clone());
     let sample_asset_literal = asset_def_seed.canonical_address();
     let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko")
         .replace("coin#wonder", &sample_asset_literal);
@@ -74,12 +74,11 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         .expect("canonical asset definition literal");
     let reg_account_domain =
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
-    let asset_domain_id = asset_def.domain().clone();
-    let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain_id)));
+    let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain.clone())));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
     let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_name.to_string()),
     ));
     let executor = tx.world.executor().clone();
     for instr in [

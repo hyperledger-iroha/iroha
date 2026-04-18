@@ -11,8 +11,15 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    HedgedChaCha20Rng, HedgedRngSeed, RngError, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
+    HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
+    hedged_chacha20_rng_from_os,
 };
+
+#[path = "mldsa_backend.rs"]
+mod backend;
+
+/// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
+pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
 
 /// Supported ML-DSA (Dilithium) parameter sets.
 #[derive(Clone, Copy, Debug)]
@@ -136,6 +143,12 @@ pub enum MlDsaError {
         /// Status code returned by `PQClean`.
         status: i32,
     },
+    /// Context exceeded the FIPS 204 one-byte context length field.
+    #[error("ML-DSA context length must be at most 255 bytes, found {len}")]
+    ContextTooLong {
+        /// Actual context length in bytes.
+        len: usize,
+    },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
     Rng(#[from] RngError),
@@ -170,15 +183,7 @@ pub fn generate_mldsa_keypair(
 ) -> Result<MlDsaKeyPair, MlDsaError> {
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-DSA
-    // scalar backend. pqcrypto 0.1.x does not expose seeded ML-DSA key generation,
-    // so these hedged coins cannot be injected without the brittle internal FFI
-    // reimplementation that this path is replacing.
-    match suite {
-        MlDsaSuite::MlDsa44 => generate_dilithium2_keypair(),
-        MlDsaSuite::MlDsa65 => generate_dilithium3_keypair(),
-        MlDsaSuite::MlDsa87 => generate_dilithium5_keypair(),
-    }
+    backend::generate_keypair(suite, &coins)
 }
 
 /// Generate an ML-DSA keypair using a seed plus live OS entropy when available.
@@ -203,7 +208,7 @@ pub fn generate_mldsa_keypair_from_seed(
     seed: HedgedRngSeed,
     personalization: &[u8],
 ) -> Result<MlDsaKeyPair, MlDsaError> {
-    let mut rng = hedged_chacha20_rng(seed, personalization);
+    let mut rng = deterministic_chacha20_rng(seed, personalization);
     generate_mldsa_keypair(suite, &mut rng)
 }
 
@@ -257,29 +262,7 @@ pub fn sign_mldsa(
 ) -> Result<MlDsaSignature, MlDsaError> {
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    // TODO: Replace the remaining pqcrypto call with the local pure-Rust ML-DSA
-    // scalar backend. pqcrypto 0.1.x randomized signing always calls PQClean
-    // randombytes internally, so these hedged coins cannot be injected yet.
-    match suite {
-        MlDsaSuite::MlDsa44 => {
-            let sk = dilithium2::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 secret key", err))?;
-            let sig = dilithium2::detached_sign_ctx(message, context, &sk);
-            Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
-        }
-        MlDsaSuite::MlDsa65 => {
-            let sk = dilithium3::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 secret key", err))?;
-            let sig = dilithium3::detached_sign_ctx(message, context, &sk);
-            Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
-        }
-        MlDsaSuite::MlDsa87 => {
-            let sk = dilithium5::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 secret key", err))?;
-            let sig = dilithium5::detached_sign_ctx(message, context, &sk);
-            Ok(MlDsaSignature::new(sig.as_bytes().to_vec()))
-        }
-    }
+    backend::sign(suite, secret_key, context, message, &coins).map(MlDsaSignature::new)
 }
 
 /// Sign using fresh OS seed material plus live OS entropy when available.

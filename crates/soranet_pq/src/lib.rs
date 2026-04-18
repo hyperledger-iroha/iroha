@@ -36,7 +36,7 @@ pub use crate::{
         validate_mlkem_secret_key,
     },
     rng::{
-        HedgedChaCha20Rng, HedgedEntropyStatus, HedgedRngSeed, RngError, hedged_chacha20_rng,
-        hedged_chacha20_rng_from_os,
+        HedgedChaCha20Rng, HedgedEntropyStatus, HedgedRngSeed, RngError,
+        deterministic_chacha20_rng, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
     },
 };
