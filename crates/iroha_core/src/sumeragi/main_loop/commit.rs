@@ -11,7 +11,7 @@ use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
 use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
 use super::pending_block::ValidatedCommitArtifact;
 use super::propose::ProposalBackpressure;
@@ -744,7 +744,7 @@ impl Actor {
 
         if let Some(lock) = self.locked_qc
             && let Some(highest) = self.highest_qc
-            && !qc_extends_locked_with_lookup(lock, highest, |hash, height| {
+            && !qc_satisfies_locked_with_lookup(lock, highest, |hash, height| {
                 self.parent_hash_for(hash, height)
             })
         {
@@ -1631,7 +1631,8 @@ impl Actor {
                     .map(|sig| u32::try_from(sig.index()).unwrap_or_default())
                     .collect();
                 let now = Instant::now();
-                let pending_age = pending.progress_age(now);
+                let pending_age = pending.age();
+                let progress_age = pending.progress_age(now);
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
                 let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
@@ -1644,6 +1645,11 @@ impl Actor {
                     || self.pending_block_has_votes(block_hash, pending_height, pending_view);
                 let has_qc = pending.commit_qc_observed()
                     || self.pending_block_has_qc(block_hash, pending_height, pending_view);
+                let quorum_stall_age = if has_votes || has_qc {
+                    progress_age
+                } else {
+                    pending_age
+                };
                 let validation_inflight = pending.validation_status == ValidationStatus::Pending
                     && self
                         .subsystems
@@ -1660,7 +1666,11 @@ impl Actor {
 
                 if commit_signatures_missing
                     && !has_quorum_signers
-                    && missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached)
+                    && missing_quorum_stale(
+                        quorum_stall_age,
+                        effective_quorum_timeout,
+                        quorum_reached,
+                    )
                 {
                     let reschedule_backoff =
                         super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
@@ -1699,6 +1709,7 @@ impl Actor {
                                 view = pending_view,
                                 block = ?block_hash,
                                 pending_age_ms = pending_age.as_millis(),
+                                quorum_stall_age_ms = quorum_stall_age.as_millis(),
                                 quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                                 vote_rx_depth = queue_depths.vote_rx,
                                 "deferring quorum reschedule while vote queue is backlogged"
@@ -1709,7 +1720,7 @@ impl Actor {
                             reschedule_quorum = Some((
                                 pending,
                                 pending_age,
-                                pending_age,
+                                quorum_stall_age,
                                 min_votes_for_commit,
                                 vote_count,
                                 quorum_timeout,
@@ -3159,6 +3170,7 @@ impl Actor {
                 if enable_qc_pipeline
                     && !pending.local_commit_vote_emitted()
                     && !pending.commit_qc_observed()
+                    && !missing_local_data
                 {
                     if self.should_defer_tip_precommit_for_same_height_conflict(
                         hash,
@@ -3833,49 +3845,51 @@ impl Actor {
         if height == self.committed_height_snapshot().saturating_add(1) {
             let stall_window = self.frontier_slot_lag_window();
             let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
-            request_stalled = self
+            let (dependency_stalled, dwell_stalled) = self
                 .pending
                 .missing_commit_qc_requests
                 .get(&block_hash)
-                .is_some_and(|stats| {
-                    now.saturating_duration_since(stats.last_dependency_progress) >= stall_window
-                        || now.saturating_duration_since(stats.first_seen) >= dwell_window
-                });
-            if !payload_materialized_locally {
-                let lag_window_expired = self.frontier_slot_lag_window_expired(height, now);
-                let mut catchup_advance = FrontierRecoveryAdvance::None;
-                if request_stalled || lag_window_expired {
-                    catchup_advance = self.handle_frontier_slot_event(
-                        now,
-                        super::FrontierSlotEvent::OnLagWindowExpired {
-                            reason: "frontier_stall_reset",
-                        },
-                    );
-                }
-                if matches!(catchup_advance, FrontierRecoveryAdvance::None)
-                    && request_stalled
-                    && self.request_range_pull_from_anchor(
-                        height,
-                        "frontier_stall_reset_fallback",
-                        now,
+                .map_or((false, false), |stats| {
+                    (
+                        now.saturating_duration_since(stats.last_dependency_progress)
+                            >= stall_window,
+                        now.saturating_duration_since(stats.first_seen) >= dwell_window,
                     )
-                {
-                    catchup_advance = FrontierRecoveryAdvance::CatchUp;
-                }
-                if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset")
-                    || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
-                {
-                    info!(
-                        height,
-                        view,
-                        block = %block_hash,
-                        request_stalled,
-                        catchup_advance = ?catchup_advance,
-                        trigger,
-                        "routing known-block commit-QC recovery through frontier stall-reset catch-up"
-                    );
-                    return true;
-                }
+                });
+            request_stalled = dependency_stalled || dwell_stalled;
+            let lag_window_expired =
+                !payload_materialized_locally && self.frontier_slot_lag_window_expired(height, now);
+            let catchup_stalled =
+                dependency_stalled || (!payload_materialized_locally && dwell_stalled);
+            let mut catchup_advance = FrontierRecoveryAdvance::None;
+            if catchup_stalled || lag_window_expired {
+                catchup_advance = self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if matches!(catchup_advance, FrontierRecoveryAdvance::None)
+                && catchup_stalled
+                && self.request_range_pull_from_anchor(height, "frontier_stall_reset_fallback", now)
+            {
+                catchup_advance = FrontierRecoveryAdvance::CatchUp;
+            }
+            if (!payload_materialized_locally
+                && self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset"))
+                || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+            {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    request_stalled,
+                    catchup_advance = ?catchup_advance,
+                    trigger,
+                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                );
+                return true;
             }
         }
 
@@ -4380,7 +4394,16 @@ impl Actor {
             return false;
         }
         if let Some(lock) = self.locked_qc {
-            if !self.block_known_for_lock(lock.subject_block_hash) {
+            let candidate = crate::sumeragi::consensus::QcHeaderRef {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                height,
+                view,
+                epoch,
+            };
+            if !self.block_known_for_lock(lock.subject_block_hash)
+                && candidate.view <= lock.view
+            {
                 let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
@@ -4392,15 +4415,8 @@ impl Actor {
                 );
                 return false;
             }
-            let candidate = crate::sumeragi::consensus::QcHeaderRef {
-                phase: crate::sumeragi::consensus::Phase::Commit,
-                subject_block_hash: block_hash,
-                height,
-                view,
-                epoch,
-            };
             let extends_locked =
-                qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+                qc_satisfies_locked_with_lookup(lock, candidate, |hash, lookup_height| {
                     if hash == block_hash && lookup_height == height {
                         parent_hash
                     } else {

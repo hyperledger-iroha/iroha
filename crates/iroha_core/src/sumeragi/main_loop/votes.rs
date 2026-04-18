@@ -11,7 +11,7 @@ use iroha_logger::prelude::*;
 
 use crate::sumeragi::consensus::Phase;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::*;
 
 pub(super) type VoteLogKey = (
@@ -1592,26 +1592,6 @@ impl Actor {
         self.clear_sidecar_mismatch_for_height(highest.height);
         let now = Instant::now();
         let contiguous_height = committed_height.saturating_add(1);
-        let local_frontier_evidence_restored =
-            self.committed_edge_conflict_owner_has_local_evidence(contiguous_height);
-        if local_frontier_evidence_restored {
-            let _ =
-                self.maybe_release_committed_edge_conflict_owner("highest_qc_committed_conflict");
-            warn!(
-                height = highest.height,
-                view = highest.view,
-                committed_height,
-                incoming_hash = %highest.subject_block_hash,
-                committed_hash = %committed_hash,
-                source,
-                obsolete_request_present,
-                obsolete_request_actionable,
-                contiguous_height,
-                local_frontier_evidence_restored,
-                "suppressing committed-edge conflicting highest-QC reference while preserving authoritative local frontier evidence"
-            );
-            return true;
-        }
         let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
         let active_frontier_view = self
             .phase_tracker
@@ -1687,29 +1667,51 @@ impl Actor {
             .map(|qc| qc.subject_block_hash)
             .or_else(|| self.state.latest_block_hash_fast())
             .unwrap_or(committed_hash);
-        self.activate_committed_edge_conflict_owner(
-            contiguous_height,
-            committed_height,
-            canonical_committed_hash,
-            highest,
-            now,
-        );
-        let passive_metadata_only = self.handoff_contiguous_frontier_to_passive_catchup(
-            contiguous_height,
-            now,
-            "highest_qc_committed_conflict",
-        );
+        let actionable_frontier_dependency =
+            self.frontier_catchup_has_unresolved_dependency(contiguous_height);
+        let (contiguous_consensus_mode, _, _) =
+            self.consensus_context_for_height(contiguous_height);
+        let committed_edge_owner_required = actionable_frontier_dependency
+            || matches!(contiguous_consensus_mode, ConsensusMode::Npos);
         let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
             highest.height,
             "highest_qc_committed_conflict",
             now,
         );
-        let actionable_frontier_dependency =
-            self.frontier_catchup_has_unresolved_dependency(contiguous_height);
-        let recovery_reanchor_requested = if recovery_allowed {
-            self.maybe_emit_committed_edge_conflict_owner_reanchor(contiguous_height, now)
+        let (passive_metadata_only, recovery_reanchor_requested) = if committed_edge_owner_required
+        {
+            self.activate_committed_edge_conflict_owner(
+                contiguous_height,
+                committed_height,
+                canonical_committed_hash,
+                highest,
+                now,
+            );
+            let passive_metadata_only = self.handoff_contiguous_frontier_to_passive_catchup(
+                contiguous_height,
+                now,
+                "highest_qc_committed_conflict",
+            );
+            let recovery_reanchor_requested = if recovery_allowed {
+                self.maybe_emit_committed_edge_conflict_owner_reanchor(contiguous_height, now)
+            } else {
+                false
+            };
+            (passive_metadata_only, recovery_reanchor_requested)
         } else {
-            false
+            if self.committed_edge_conflict_owner_present_at_height(contiguous_height) {
+                self.committed_edge_conflict_owner = None;
+            }
+            let recovery_reanchor_requested = if recovery_allowed {
+                self.request_range_pull_from_anchor(
+                    contiguous_height,
+                    "highest_qc_committed_conflict",
+                    now,
+                )
+            } else {
+                false
+            };
+            (false, recovery_reanchor_requested)
         };
         let owner_shared_window_emission_token = self
             .committed_edge_conflict_owner
@@ -2194,7 +2196,8 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return false;
         };
-        if vote.height < lock.height {
+        let lock_override = vote.view > lock.view;
+        if !lock_override && vote.height < lock.height {
             iroha_logger::debug!(
                 height = vote.height,
                 view = vote.view,
@@ -2212,7 +2215,7 @@ impl Actor {
             );
             return true;
         }
-        if vote.height == lock.height {
+        if !lock_override && vote.height == lock.height {
             if vote.block_hash != lock.subject_block_hash {
                 iroha_logger::debug!(
                     height = vote.height,
@@ -2247,9 +2250,10 @@ impl Actor {
                 view: vote.view,
                 epoch: vote.epoch,
             };
-            let extends_locked = qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
-                self.parent_hash_for(hash, height)
-            });
+            let extends_locked =
+                qc_satisfies_locked_with_lookup(lock, candidate, |hash, height| {
+                    self.parent_hash_for(hash, height)
+                });
             if !extends_locked {
                 iroha_logger::debug!(
                     height = vote.height,

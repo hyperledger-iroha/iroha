@@ -675,7 +675,7 @@ impl Actor {
             let rbc_availability_unresolved = self.rbc_availability_unresolved_for_reschedule(
                 rbc_key,
                 &commit_topology,
-                progress_stall_age,
+                pending_age,
                 availability_timeout,
             );
             let contiguous_frontier_fast_resend_window =
@@ -707,7 +707,7 @@ impl Actor {
                 ));
             }
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
-                if rbc_session_incomplete && progress_stall_age < availability_timeout {
+                if rbc_session_incomplete && pending_age < availability_timeout {
                     debug!(
                         height = pending.height,
                         view = pending.view,
@@ -934,7 +934,7 @@ impl Actor {
                 }
                 if (missing_local_data
                     || matches!(pending.last_gate, Some(GateReason::MissingLocalData)))
-                    && progress_stall_age < availability_timeout
+                    && pending_age < availability_timeout
                     && !near_quorum_fast_timeout_allowed
                 {
                     missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
@@ -1495,10 +1495,16 @@ impl Actor {
                 &self.subsystems.da_rbc.rbc.status_handle,
                 &pending,
             );
+        let da_enabled = self.runtime_da_enabled();
+        let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
+        let missing_local_data_wait_expired = da_enabled
+            && matches!(pending.last_gate, Some(GateReason::MissingLocalData))
+            && (availability_timeout == Duration::ZERO || pending_age >= availability_timeout);
         if no_commit_evidence
             && pending.last_quorum_reschedule.is_none()
             && progress_age < zero_vote_progress_window
             && !zero_vote_fast_reschedule_allowed
+            && !missing_local_data_wait_expired
         {
             debug!(
                 block = %block_hash,
@@ -1545,6 +1551,15 @@ impl Actor {
         }
         let frontier_slot_owner_was_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
+        let frontier_slot_vote_backed_owner_was_active =
+            contiguous_frontier
+                && self.frontier_slot.as_ref().is_some_and(|slot| {
+                    slot.height == height
+                        && slot.view == view
+                        && (slot.quorum_progress.votes_observed
+                            || slot.quorum_progress.commit_qc_observed
+                            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
+                });
         let same_slot_vote_backed_evidence = contiguous_frontier
             && !keep_commit_qc
             && self.slot_has_vote_backed_consensus_evidence(height, view);
@@ -1567,7 +1582,7 @@ impl Actor {
         }
         let effective_has_reschedule_votes = has_reschedule_votes
             || same_slot_vote_backed_evidence
-            || frontier_slot_owner_was_active
+            || frontier_slot_vote_backed_owner_was_active
             || manifest_gate_pending;
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
@@ -1580,6 +1595,7 @@ impl Actor {
             );
         let rotate_authoritative_frontier_immediately = contiguous_frontier
             && effective_has_reschedule_votes
+            && !manifest_gate_pending
             && authoritative_payload_present
             && !frontier_slot_owner_was_active;
         let frontier_window = self
@@ -2211,10 +2227,6 @@ impl Actor {
         );
         let detached = std::mem::replace(pending, placeholder);
         let replaced = self.pending.pending_blocks.insert(block_hash, detached);
-        debug_assert!(
-            replaced.is_none(),
-            "quorum reschedule should only temporarily register detached pending blocks"
-        );
         let result = f(self);
         let restored = self.pending.pending_blocks.remove(&block_hash);
         if let Some(previous) = replaced {

@@ -1,6 +1,15 @@
 # Status
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
+
+## 2026-04-17 Follow-up: Kotodama zero-arg entrypoint hints and canonical domain fixtures
+- `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now resolves manifest/access-hint IR symbol names to the synthetic `__entrypoint_impl__*` wrapper only when a public/view entrypoint actually has parameters and therefore actually gets a wrapper. Zero-argument public entrypoints now retain their own state-derived access hints instead of dropping them during manifest assembly.
+- The same compiler module now has a focused regression that pins `kotoage fn run()` scalar-state reads to `state:counter`, covering the zero-argument public-entrypoint case that previously slipped past the wrapper-name lookup.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs` was refreshed to use canonical `domain.dataspace` and `name$domain.dataspace` literals, and its schema-info syscall assertion now matches the compiler's canonical `SYSCALL_SCHEMA_INFO` lowering.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang zero_arg_public_entrypoint_retains_scalar_state_hints -- --nocapture`
+  - `cargo test -p ivm --test kotodama -- --nocapture`
 
 ## 2026-04-17 Follow-up: AXT golden fixtures resynced with current handle binding
 - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current descriptor/handle/policy Norito bytes again, including the handle's refreshed descriptor binding and header bytes after the bare-payload binding change.
@@ -24497,3 +24506,14 @@ Last updated: 2026-04-17
   - `git diff --check`
   - `cargo test -p iroha_core --features app_api --lib block::commit::axt_validation_tests -- --nocapture`
   - `cargo test -p iroha_core --lib block::tests -- --nocapture`
+
+## 2026-04-18 Sumeragi Lock-Override Liveness Fix
+- Restored the lock-override rule for Sumeragi lock checks: a candidate QC now satisfies the local lock when it either structurally extends `locked_qc` or carries a strictly newer view than `locked_qc.view`.
+- Threaded the predicate through incoming proposal highest-QC validation, precommit vote filtering, precommit-QC aggregation/processing, local precommit emission, and block-sync QC prefilters so divergent higher-view branches are not dropped before they can restore liveness.
+- Same-view and older-view divergent branches still fail closed through the structural ancestry path.
+- Focused validation completed:
+  - `cargo test -p iroha_core qc_satisfies_locked_accepts_divergent_newer_view -- --nocapture`
+  - `cargo test -p iroha_core --lib newer_view -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_satisfies_locked_rejects_divergent_same_view -- --nocapture`
+  - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
+  - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.

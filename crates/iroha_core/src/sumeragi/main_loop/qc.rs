@@ -3,7 +3,7 @@
 use iroha_crypto::Hash;
 use iroha_logger::prelude::*;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::{qc_satisfies_locked_if_present, qc_satisfies_locked_with_lookup};
 use super::*;
 
 #[derive(Debug)]
@@ -1503,6 +1503,7 @@ impl Actor {
         view: u64,
         now: Instant,
     ) {
+        let window_nanos = self.frontier_recovery_window().as_nanos().max(1);
         if let Some(state) = self
             .frontier_recovery
             .as_mut()
@@ -1510,6 +1511,11 @@ impl Actor {
         {
             state.last_cause = "missing_payload";
             state.last_view = state.last_view.max(view);
+            let elapsed_windows = now
+                .saturating_duration_since(state.last_progress_at)
+                .as_nanos()
+                / window_nanos;
+            state.no_progress_windows = u32::try_from(elapsed_windows).unwrap_or(u32::MAX);
             state.last_action_at = Some(now);
             return;
         }
@@ -2297,16 +2303,27 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
-            if self.frontier_slot.as_ref().is_some_and(|slot| {
+            let exact_frontier_slot_matches = self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.block_hash == block_hash
                     && slot.height == stats_snapshot.height
                     && slot.view == stats_snapshot.view
-            }) && self.frontier_slot_is_exact_height(stats_snapshot.height)
-            {
-                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
-                self.clear_missing_block_view_change(&block_hash);
-                progress = true;
-                continue;
+            }) && self
+                .frontier_slot_is_exact_height(stats_snapshot.height);
+            if exact_frontier_slot_matches {
+                if self.frontier_recovery_exists_at_height(stats_snapshot.height) {
+                    if self.frontier_recovery_owns_height_window(stats_snapshot.height, now) {
+                        progress = true;
+                        continue;
+                    }
+                } else {
+                    self.clear_missing_block_request(
+                        &block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.clear_missing_block_view_change(&block_hash);
+                    progress = true;
+                    continue;
+                }
             }
             let local_height = self.committed_height_snapshot();
             let frontier_height = local_height.saturating_add(1);
@@ -2480,7 +2497,7 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            if stats_snapshot.height == frontier_height {
+            if stats_snapshot.height == frontier_height && !exact_frontier_slot_matches {
                 let routed = if let Some(topology) = topology.as_ref() {
                     self.handle_frontier_body_gap_with_topology(
                         block_hash,
@@ -2878,6 +2895,9 @@ impl Actor {
                     if fresh_same_slot_fetch {
                         let seeded =
                             self.seed_frontier_recovery_for_missing_payload(height, view, now);
+                        if !frontier_window_owned {
+                            self.ensure_missing_payload_frontier_recovery_state(height, view, now);
+                        }
                         debug!(
                             height,
                             view,
@@ -4136,7 +4156,7 @@ impl Actor {
         }
     }
 
-    fn precommit_qc_extends_locked(
+    pub(crate) fn precommit_qc_extends_locked(
         &self,
         phase: crate::sumeragi::consensus::Phase,
         block_hash: HashOf<BlockHeader>,
@@ -4161,7 +4181,7 @@ impl Actor {
             epoch,
         };
         let extends_locked =
-            qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+            qc_satisfies_locked_with_lookup(lock, candidate, |hash, lookup_height| {
                 self.parent_hash_for(hash, lookup_height)
             });
         if !extends_locked {
@@ -4818,6 +4838,7 @@ impl Actor {
         let qc_ref = Self::qc_to_header_ref(qc);
         if let Some(lock) = self.locked_qc
             && !self.block_known_for_lock(lock.subject_block_hash)
+            && qc.view <= lock.view
             && (qc.height != lock.height || qc.subject_block_hash != lock.subject_block_hash)
         {
             // Keep lock/highest stable while local lock payload is missing; apply once recovered.
@@ -4836,7 +4857,8 @@ impl Actor {
             if self.block_known_for_lock(lock.subject_block_hash) {
                 let same_height_conflict =
                     qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
-                let conflicts_locked = qc.height < lock.height || same_height_conflict;
+                let conflicts_locked =
+                    qc.view <= lock.view && (qc.height < lock.height || same_height_conflict);
                 if conflicts_locked {
                     info!(
                         height = qc.height,
@@ -4856,7 +4878,7 @@ impl Actor {
             }
         }
         if block_known {
-            let extends_locked = qc_extends_locked_if_present(
+            let extends_locked = qc_satisfies_locked_if_present(
                 self.locked_qc,
                 qc_ref,
                 |hash, height| self.parent_hash_for(hash, height),
@@ -5061,9 +5083,10 @@ impl Actor {
                 view: vote.view,
                 epoch: vote.epoch,
             };
-            let extends_locked = qc_extends_locked_with_lookup(lock, candidate, |hash, height| {
-                self.parent_hash_for(hash, height)
-            });
+            let extends_locked =
+                qc_satisfies_locked_with_lookup(lock, candidate, |hash, height| {
+                    self.parent_hash_for(hash, height)
+                });
             if !extends_locked {
                 drop_keys.push(*key);
                 drop_blocks.insert((vote.block_hash, vote.height));

@@ -19,7 +19,7 @@ fn main() {
         .expect("Failed building the Runtime");
     {
         let _guard = rt.enter();
-        let mut config = ConfigReader::new()
+        let mut config: Config = ConfigReader::new()
             .with_env(std_env)
             .read_and_complete()
             .expect("Failed to load config");
