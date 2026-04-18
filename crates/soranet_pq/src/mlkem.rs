@@ -782,6 +782,18 @@ mod tests {
     }
 
     #[test]
+    fn seeded_keypair_personalization_changes_output() {
+        for suite in MlKemSuite::ALL {
+            let seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xA8); 32]);
+            let first = generate_mlkem_keypair_from_seed(suite, seed.clone(), b"seeded-keygen-a");
+            let second = generate_mlkem_keypair_from_seed(suite, seed, b"seeded-keygen-b");
+
+            assert_ne!(first.public_key(), second.public_key());
+            assert_ne!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
     fn seeded_encapsulation_is_deterministic() {
         for suite in MlKemSuite::ALL {
             let key_seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xB0); 32]);
@@ -801,6 +813,24 @@ mod tests {
     }
 
     #[test]
+    fn seeded_encapsulation_personalization_changes_output() {
+        let suite = MlKemSuite::MlKem768;
+        let key_seed = HedgedRngSeed::from_entropy([0xB7; 32]);
+        let enc_seed = HedgedRngSeed::from_entropy([0xC7; 32]);
+        let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen");
+
+        let (first_shared, first_ct) =
+            encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed.clone(), b"enc-a")
+                .expect("seeded encapsulation succeeds");
+        let (second_shared, second_ct) =
+            encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed, b"enc-b")
+                .expect("seeded encapsulation succeeds");
+
+        assert_ne!(first_ct.as_bytes(), second_ct.as_bytes());
+        assert_ne!(first_shared.as_bytes(), second_shared.as_bytes());
+    }
+
+    #[test]
     fn invalid_public_key_length() {
         let mut rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([0xFE; 32]),
@@ -809,6 +839,39 @@ mod tests {
         let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8], &mut rng).unwrap_err();
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn decapsulation_rejects_invalid_secret_and_ciphertext_lengths() {
+        let suite = MlKemSuite::MlKem512;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDA; 32]),
+            b"decap-length-keygen",
+        );
+        let (_, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            keys.public_key(),
+            HedgedRngSeed::from_entropy([0xDB; 32]),
+            b"decap-length-enc",
+        )
+        .expect("encapsulation succeeds");
+
+        let short_secret = &keys.secret_key()[..keys.secret_key().len() - 1];
+        let err =
+            decapsulate_mlkem(suite, short_secret, ciphertext.as_bytes()).expect_err("bad secret");
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("secret key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+
+        let short_ciphertext = &ciphertext.as_bytes()[..ciphertext.as_bytes().len() - 1];
+        let err =
+            decapsulate_mlkem(suite, keys.secret_key(), short_ciphertext).expect_err("bad ct");
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("ciphertext")),
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
