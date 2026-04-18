@@ -15751,6 +15751,9 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
+    if std::env::var_os("IROHA_DEBUG_RESCHED").is_some() {
+        eprintln!("test last={:?}", pending_after.last_quorum_reschedule);
+    }
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Valid,
