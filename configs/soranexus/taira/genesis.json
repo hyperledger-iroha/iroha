@@ -7,11 +7,13 @@
   "crypto": {
     "allowed_curve_ids": [
       1,
+      3,
       4
     ],
     "allowed_signing": [
       "ed25519",
-      "secp256k1"
+      "secp256k1",
+      "bls_normal"
     ],
     "default_hash": "blake2b-256",
     "sm2_distid_default": "1234567812345678"
@@ -54,16 +56,23 @@
         },
         {
           "Register": {
+            "Account": {
+              "id": "testuﾛ1Pﾗﾊm4NﾁK8fﾊﾔﾅtﾑﾘvaMkxﾉｾGxNﾋﾐｽﾊoﾏﾔｳr7ｻL1FDSWDS",
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
             "AssetDefinition": {
               "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "rose"
             }
           }
         },
@@ -72,9 +81,7 @@
             "Domain": {
               "id": "garden_of_live_flowers.universal",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -82,9 +89,7 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -93,13 +98,12 @@
             "AssetDefinition": {
               "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "cabbage"
             }
           }
         },
@@ -108,9 +112,7 @@
             "Domain": {
               "id": "universal.universal",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -126,13 +128,12 @@
               },
               "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "xor"
             }
           }
         },
@@ -148,9 +149,7 @@
             "Domain": {
               "id": "sora.universal",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -158,9 +157,7 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -169,13 +166,12 @@
             "AssetDefinition": {
               "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "xor"
             }
           }
         },
@@ -187,9 +183,7 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "parameters": {
         "block": {
           "max_transactions": 512
@@ -198,25 +192,22 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
-              "activation_lag_blocks": 1,
-              "block_time_ms": 100,
-              "epoch_length_blocks": 3600,
-              "evidence_horizon_blocks": 7200,
+              "epoch_seed": "08499EEBF6BCDB2EBA26F335D47F5256F4E294E8BCF95D239870177FBEAE4FC2",
               "k_aggregators": 3,
-              "max_entity_correlation_pct": 25,
-              "max_nominator_concentration_pct": 25,
-              "min_self_bond": 1000,
-              "redundant_send_r": 2,
-              "seat_band_pct": 5,
-              "slashing_delay_blocks": 259200,
-              "timeout_aggregator_ms": 120,
-              "timeout_commit_ms": 150,
-              "timeout_da_ms": 300,
-              "timeout_precommit_ms": 250,
-              "timeout_prevote_ms": 300,
-              "timeout_propose_ms": 300,
+              "redundant_send_r": 3,
               "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40
+              "vrf_reveal_window_blocks": 40,
+              "max_validators": 128,
+              "min_self_bond": 1000,
+              "min_nomination_bond": 1,
+              "max_nominator_concentration_pct": 25,
+              "seat_band_pct": 5,
+              "max_entity_correlation_pct": 25,
+              "finality_margin_blocks": 8,
+              "evidence_horizon_blocks": 7200,
+              "activation_lag_blocks": 1,
+              "epoch_length_blocks": 3600,
+              "slashing_delay_blocks": 259200
             }
           }
         },
@@ -245,9 +236,7 @@
           "max_signatures": 16
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     },
     {
       "instructions": [
@@ -280,7 +269,7 @@
             "AssetDefinition": {
               "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
+              "source": "testuﾛ1Pﾗﾊm4NﾁK8fﾊﾔﾅtﾑﾘvaMkxﾉｾGxNﾋﾐｽﾊoﾏﾔｳr7ｻL1FDSWDS"
             }
           }
         },
@@ -289,7 +278,7 @@
             "Domain": {
               "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "wonderland.universal",
-              "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
+              "source": "testuﾛ1Pﾗﾊm4NﾁK8fﾊﾔﾅtﾑﾘvaMkxﾉｾGxNﾋﾐｽﾊoﾏﾔｳr7ｻL1FDSWDS"
             }
           }
         },
@@ -314,9 +303,7 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "parameters": {
         "custom": {
           "ivm_gas_limit_per_block": {
@@ -348,12 +335,10 @@
           "min_finality_ms": 100
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

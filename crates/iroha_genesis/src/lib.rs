@@ -5605,6 +5605,135 @@ mod tests {
     }
 
     #[test]
+    fn shipped_genesis_assets_have_non_blank_human_names() -> Result<()> {
+        use iroha_data_model::asset::definition::validate_asset_name;
+
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            repo_root.join("defaults/genesis.json"),
+            repo_root.join("defaults/nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.json"),
+            repo_root.join("configs/soranexus/taira/genesis.json"),
+        ];
+
+        for manifest_path in manifests {
+            let raw = std::fs::read_to_string(&manifest_path)?;
+            let value = norito::json::parse_value(&raw)?;
+            let transactions = value
+                .get("transactions")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+            for instruction in transactions
+                .iter()
+                .filter_map(|tx| tx.get("instructions"))
+                .filter_map(norito::json::Value::as_array)
+                .flatten()
+            {
+                let Some(asset_definition) = instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                else {
+                    continue;
+                };
+                let name = asset_definition
+                    .get("name")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_default();
+                let id = asset_definition
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or("<missing-id>");
+                validate_asset_name(name).map_err(|err| {
+                    eyre!(
+                        "{} contains invalid asset definition `{}`: {}",
+                        manifest_path.display(),
+                        id,
+                        err
+                    )
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn shipped_genesis_manifests_advertise_current_npos_crypto_caps() -> Result<()> {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            repo_root.join("defaults/genesis.json"),
+            repo_root.join("defaults/nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.json"),
+            repo_root.join("configs/soranexus/taira/genesis.json"),
+        ];
+
+        let bls_curve = iroha_data_model::account::curve::CurveId::try_from_algorithm(
+            iroha_crypto::Algorithm::BlsNormal,
+        )
+        .expect("bls curve id");
+
+        for manifest_path in manifests {
+            let raw = std::fs::read_to_string(&manifest_path)?;
+            let value = norito::json::parse_value(&raw)?;
+            let wire_proto_versions = value
+                .get("wire_proto_versions")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{} missing wire_proto_versions", manifest_path.display()))?;
+            assert_eq!(
+                wire_proto_versions,
+                &vec![norito::json::Value::Number(
+                    u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+                )],
+                "{} must advertise the current consensus wire protocol",
+                manifest_path.display()
+            );
+            let crypto = value
+                .get("crypto")
+                .ok_or_else(|| eyre!("{} missing crypto section", manifest_path.display()))?;
+            let allowed_signing = crypto
+                .get("allowed_signing")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    eyre!("{} missing crypto.allowed_signing", manifest_path.display())
+                })?;
+            assert!(
+                allowed_signing
+                    .iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .any(|algo| algo.eq_ignore_ascii_case("bls_normal")),
+                "{} must advertise bls_normal for NPoS bootstrap",
+                manifest_path.display()
+            );
+            let allowed_curve_ids = crypto
+                .get("allowed_curve_ids")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{} missing crypto.allowed_curve_ids",
+                        manifest_path.display()
+                    )
+                })?;
+            assert!(
+                allowed_curve_ids.iter().any(|value| {
+                    value
+                        .as_u64()
+                        .is_some_and(|curve| curve == u64::from(bls_curve.as_u8()))
+                }),
+                "{} must advertise the BLS curve id for NPoS bootstrap",
+                manifest_path.display()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn set_topology_pop_merges_entries() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let pop =

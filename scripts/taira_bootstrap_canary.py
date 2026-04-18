@@ -232,14 +232,36 @@ def build_alias(prefix: str, public_key: str, domain: str) -> str:
     return f"{label_prefix}{suffix}@{dataspace}"
 
 
-def onboard_account(torii_root: str, alias: str, public_key_hex: str) -> dict[str, Any]:
+def normalize_permissions(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = raw.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def onboard_account(
+    torii_root: str,
+    alias: str,
+    public_key_hex: str,
+    *,
+    permissions: list[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "alias": alias,
+        "public_key_hex": public_key_hex,
+    }
+    requested_permissions = normalize_permissions(list(permissions or []))
+    if requested_permissions:
+        payload["permissions"] = requested_permissions
     status, payload = _http_json(
         "POST",
         f"{torii_root.rstrip('/')}/v1/accounts/onboard",
-        {
-            "alias": alias,
-            "public_key_hex": public_key_hex,
-        },
+        payload,
     )
     if status in (200, 202):
         return {
@@ -409,6 +431,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Alias prefix used when onboarding a new signer",
     )
     parser.add_argument(
+        "--permission",
+        dest="permissions",
+        action="append",
+        default=[],
+        help="Permission token to request during onboarding (repeatable)",
+    )
+    parser.add_argument(
         "--time-to-live-ms",
         type=int,
         default=DEFAULT_TIME_TO_LIVE_MS,
@@ -458,7 +487,12 @@ def main(argv: list[str] | None = None) -> int:
     alias = build_alias(args.alias_prefix, public_key, domain)
     account_id = None
     try:
-        onboarding = onboard_account(args.torii_root, alias, public_key_raw_hex)
+        onboarding = onboard_account(
+            args.torii_root,
+            alias,
+            public_key_raw_hex,
+            permissions=args.permissions,
+        )
         response = onboarding.get("response")
         if isinstance(response, dict):
             value = response.get("account_id")

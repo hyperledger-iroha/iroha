@@ -707,15 +707,24 @@ Last updated: 2026-04-18
   - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
   - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
   - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
-- Additional STARK-enabled cross-dataspace localnet coverage is currently red:
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk TEST_NETWORK_IROHAD_FEATURES=zk-stark NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --features zk-stark --test nexus_and_streaming nexus::cross_dataspace_zk_stark_localnet:: -- --test-threads=1 --nocapture`
-  - Result on the current tree: `stark_cross_dataspace_verifyproof_rejection_without_payload_leak`
-    passed, but `stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak`,
-    `stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak`, and
-    `stark_cross_dataspace_verifyproof_validity_without_payload_leak` all timed out in
-    `wait_for_proof_record_status` at
-    `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs:1019`
-    with the last error `proof record not found yet`.
+- The STARK-enabled cross-dataspace localnet slice is green on the current tree.
+  The raw HTTP proof-record probe in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/cross_dataspace_zk_stark_localnet.rs`
+  now hits `/v1/proofs/{id}`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now
+  normalizes the internal routed `FindProofRecordById` miss from the executor's
+  `QueryExecutionFail::Conversion("ProofRecord not found")` shape into an
+  external `404 Not Found`. That keeps routed proof GET semantics aligned with
+  the direct proof-store lookup path, which is what the cross-dataspace STARK
+  rejection/absence assertions expect.
+  - Added Torii regression coverage for the all-routes-miss case:
+    `proof_record_get_returns_not_found_when_all_routes_miss`
+  - Focused validation:
+    - `CARGO_TARGET_DIR=/tmp/iroha-codex-proof404 cargo test -p iroha_torii proof_record_get_ --lib -- --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-codex-proof404 cargo test -p iroha_torii resolve_torii_proof_record_for_routes_fanouts_matching_records --lib -- --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-commit TEST_NETWORK_IROHAD_FEATURES=zk-stark NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --features zk-stark --test nexus_and_streaming nexus::cross_dataspace_zk_stark_localnet::stark_cross_dataspace_verifyproof_rejection_without_payload_leak -- --test-threads=1 --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-commit TEST_NETWORK_IROHAD_FEATURES=zk-stark NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --features zk-stark --test nexus_and_streaming nexus::cross_dataspace_zk_stark_localnet:: -- --test-threads=1 --nocapture`
+  - Result: `7 passed; 0 failed` for `nexus::cross_dataspace_zk_stark_localnet::`.
 
 ## 2026-04-17 Follow-up: SCCP hub codec canonicalization now matches the bridge pallet
 - `crates/iroha_sccp/src/lib.rs` now validates EVM SCCP codec payloads as

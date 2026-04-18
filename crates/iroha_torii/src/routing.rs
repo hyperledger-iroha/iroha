@@ -18958,8 +18958,8 @@ pub async fn handle_get_proof_record(
             )),
         ))
     })?;
-    let world = state.world_view();
-    let rec = world.proofs().get(&id).cloned().ok_or_else(|| {
+    let view = state.query_view();
+    let rec = view.world().proofs().get(&id).cloned().ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
