@@ -1433,6 +1433,21 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_wrong_air_trace_root() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.air_trace_root[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirTraceRootMismatch
+                | Error::FriChallengeMismatch { .. }
+                | Error::AirMerklePathMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn verify_rejects_missing_air_challenges() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1462,6 +1477,20 @@ mod tests {
                 actual
             } if actual == AIR_COMPOSITION_ALPHA_COUNT + 1
         ));
+    }
+
+    #[test]
+    fn verify_rejects_air_opening_index_mismatch() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .air_openings
+            .first_mut()
+            .expect("expected sampled AIR opening");
+        first.index = first.index.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::AirOpeningMismatch { index: 0 }));
     }
 
     #[test]
@@ -1508,6 +1537,96 @@ mod tests {
     }
 
     #[test]
+    fn verify_limits_reject_oversized_air_merkle_paths() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let path_len = proof
+            .air_openings
+            .first()
+            .expect("expected sampled AIR opening")
+            .current_row_path
+            .len();
+        assert!(path_len > 0, "AIR opening must carry Merkle siblings");
+        let mut limits = VerifyLimits::default();
+        limits.max_query_path_len = path_len - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual,
+                max
+            } if actual == path_len && max + 1 == path_len
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_fri_round_values() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let values_len = proof
+            .fri_queries
+            .first()
+            .and_then(|query| query.rounds.first())
+            .expect("expected FRI round opening")
+            .values
+            .len();
+        assert!(values_len > 0, "FRI round must carry opened values");
+        let mut limits = VerifyLimits::default();
+        limits.max_fri_round_values = values_len - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_fri_round_values",
+                actual,
+                max
+            } if actual == values_len && max + 1 == values_len
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_final_fri_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let query = proof
+            .fri_queries
+            .first_mut()
+            .expect("expected FRI query opening");
+        let sibling = query
+            .final_merkle_path
+            .first_mut()
+            .expect("expected final FRI Merkle path");
+        *sibling = sibling.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_air_next_row_opening() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .air_openings
+            .first_mut()
+            .expect("expected sampled AIR opening");
+        let value = first
+            .next_row
+            .first_mut()
+            .expect("expected next AIR row values");
+        *value = value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirMerklePathMismatch { .. } | Error::AirConstraintMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn verify_rejects_wrong_air_row_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);
@@ -1526,6 +1645,24 @@ mod tests {
             err,
             Error::AirMerklePathMismatch { .. } | Error::AirConstraintMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_air_composition_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .air_openings
+            .first_mut()
+            .expect("expected sampled AIR opening");
+        let sibling = first
+            .composition_path
+            .first_mut()
+            .expect("expected composition Merkle path");
+        *sibling = sibling.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::AirMerklePathMismatch { .. }));
     }
 
     #[test]

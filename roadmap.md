@@ -198,7 +198,13 @@ update regression on a valid encoded V1 STARK verifying key and removes unused
 single-client Nexus helper wrappers from the compile-only integration target.
 Additional coverage now pins extra AIR challenge rejection, AIR opening-count
 checks, AIR row-value limits, AIR composition-root binding, AIR public-digest
-tampering, AIR width limits, and high-level STARK wrapper public-input binding.
+tampering, AIR trace-root and trace-width checks, AIR opening-index checks,
+AIR next-row and composition-path tampering, high-level STARK wrapper
+public-input binding, and the STARK guardrail split where `max_proof_bytes`
+applies to the inner native envelope instead of the outer wrapper. The latest
+coverage pass also pins AIR Merkle-path limits, FRI round-value limits, final
+FRI Merkle-path tampering, outer schema tampering, and inner AIR circuit-id
+tampering.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -228,9 +234,14 @@ tampering, AIR width limits, and high-level STARK wrapper public-input binding.
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover air -- --nocapture`
+  - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri_merkle_path -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
+  - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' stark_rejects_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
