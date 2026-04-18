@@ -375,8 +375,8 @@ def write_config(
         [
             "",
             "[account]",
-            f'domain = "{domain}"',
             f'id = "{account_id}"',
+            f'domain = "{domain}"',
             f'public_key = "{public_key}"',
             f'private_key = "{private_key}"',
             f"chain_discriminant = {chain_discriminant}",

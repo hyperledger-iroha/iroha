@@ -360,6 +360,65 @@ seiyaku ContractViewAccountIdTest {
         .expect("compile contract view AccountId test program")
 }
 
+fn contract_call_configure_account_map_program() -> Vec<u8> {
+    let src = r#"
+seiyaku ContractCallConfigureAccountMapTest {
+  meta { abi_version: 1; }
+
+  state ConfigAccount: Map<Name, AccountId>;
+  state ConfigInt: Map<Name, int>;
+
+  fn key_admin() -> Name {
+    return name("admin");
+  }
+
+  fn key_inori() -> Name {
+    return name("inori");
+  }
+
+  fn key_paused() -> Name {
+    return name("paused");
+  }
+
+  fn initialize_config_defaults() {
+    if (!ConfigInt.contains(key_paused())) {
+      ConfigInt[key_paused()] = 0;
+    }
+  }
+
+  kotoage fn main() {}
+
+  #[access(read="*", write="*")]
+  kotoage fn configure(admin: AccountId, inori: AccountId) permission(Admin) {
+    let has_admin = ConfigAccount.contains(key_admin());
+    if (has_admin) {
+      assert(authority() == ConfigAccount[key_admin()]);
+    } else {
+      assert(authority() == admin);
+    }
+    ConfigAccount[key_admin()] = admin;
+    ConfigAccount[key_inori()] = inori;
+    initialize_config_defaults();
+  }
+
+  view fn admin() -> AccountId {
+    return ConfigAccount[key_admin()];
+  }
+
+  view fn inori() -> AccountId {
+    return ConfigAccount[key_inori()];
+  }
+
+  view fn paused() -> int {
+    return ConfigInt[key_paused()];
+  }
+}
+"#;
+    ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile contract call configure account-map test program")
+}
+
 fn contract_test_app(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -1234,6 +1293,157 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             json::Value::from(1),
         ]))
     );
+}
+
+#[tokio::test]
+async fn contracts_call_configure_roundtrips_account_id_map_state() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        kura.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
+
+    let program = contract_call_configure_account_map_program();
+    let deploy_body = iroha_torii::test_utils::deploy_request_json(
+        &creds.account,
+        &creds.private_key,
+        &base64::engine::general_purpose::STANDARD.encode(&program),
+    );
+    let deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(deploy_body))
+        .unwrap();
+    let deploy_app = app.clone();
+    let deploy_task = tokio::spawn(async move {
+        let deploy_resp = deploy_app.oneshot(deploy_req).await.unwrap();
+        let deploy_status = deploy_resp.status();
+        let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+        (deploy_status, deploy_bytes)
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let applied_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    assert_eq!(applied_deploy, 1, "expected queued deploy transaction");
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after epoch")
+        .as_millis() as u64;
+    let deploy_alias: iroha_data_model::smart_contract::ContractAlias =
+        "deploy1::universal".parse().expect("deploy alias");
+    let post_apply_view = state.view();
+    let alias_target = post_apply_view
+        .world
+        .contract_address_by_alias_at(&deploy_alias, now_ms);
+    let alias_active = alias_target.as_ref().is_some_and(|address| {
+        post_apply_view
+            .world
+            .contract_instances()
+            .get(address)
+            .is_some()
+    });
+    assert!(
+        alias_active,
+        "post-apply alias state missing or inactive: alias_target={alias_target:?}"
+    );
+    let (deploy_status, deploy_bytes) = deploy_task.await.unwrap();
+    if deploy_status != http::StatusCode::OK {
+        panic!(
+            "deploy failed with status {deploy_status}: alias_target={alias_target:?} body_lossy={:?} body_hex={}",
+            String::from_utf8_lossy(&deploy_bytes),
+            hex::encode(&deploy_bytes)
+        );
+    }
+    let deploy_json: json::Value = match json::from_slice(&deploy_bytes) {
+        Ok(value) => value,
+        Err(err) => panic!(
+            "deploy returned non-JSON body: alias_target={alias_target:?} err={err:?} body_lossy={:?} body_hex={}",
+            String::from_utf8_lossy(&deploy_bytes),
+            hex::encode(&deploy_bytes)
+        ),
+    };
+    let contract_address = deployed_contract_address(&deploy_json);
+
+    let configure_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("admin", creds.account.to_string()),
+        iroha_torii::json_entry("inori", creds.account.to_string()),
+    ]);
+    let configure_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("configure"),
+            payload: Some(&configure_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let configure_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(configure_body))
+        .unwrap();
+    let configure_resp = app.clone().oneshot(configure_req).await.unwrap();
+    let configure_status = configure_resp.status();
+    let configure_bytes = configure_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    if configure_status != http::StatusCode::OK {
+        panic!(
+            "configure call failed with status {configure_status}: body_lossy={:?} body_hex={}",
+            String::from_utf8_lossy(&configure_bytes),
+            hex::encode(&configure_bytes)
+        );
+    }
+    let applied_configure =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    assert_eq!(applied_configure, 1);
+
+    let admin = run_contract_view(&app, &creds.account, &contract_address, "admin", None).await;
+    assert_eq!(
+        admin.get("result").and_then(json::Value::as_str),
+        Some(creds.account.to_string().as_str())
+    );
+
+    let inori = run_contract_view(&app, &creds.account, &contract_address, "inori", None).await;
+    assert_eq!(
+        inori.get("result").and_then(json::Value::as_str),
+        Some(creds.account.to_string().as_str())
+    );
+
+    let paused = run_contract_view(&app, &creds.account, &contract_address, "paused", None).await;
+    assert_eq!(paused.get("result").and_then(json::Value::as_i64), Some(0));
 }
 
 #[tokio::test]

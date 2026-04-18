@@ -221,6 +221,51 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
 }
 
 #[test]
+fn durable_name_to_account_id_map_roundtrip() {
+    let src = r#"
+        seiyaku C {
+            state Foo: Map<Name, AccountId>;
+
+            fn main() {
+                let key = name("alice");
+                Foo[key] = authority();
+                assert(Foo.contains(key));
+                assert(Foo[key] == authority());
+            }
+        }
+    "#;
+
+    run_program(src);
+}
+
+#[test]
+fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
+    let write_src = r#"
+        seiyaku C {
+            state Foo: Map<Name, AccountId>;
+
+            fn main() {
+                Foo[name("alice")] = authority();
+            }
+        }
+    "#;
+    let read_src = r#"
+        seiyaku C {
+            state Foo: Map<Name, AccountId>;
+
+            fn main() {
+                let key = name("alice");
+                assert(Foo.contains(key));
+                assert(Foo[key] == authority());
+            }
+        }
+    "#;
+
+    let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
+    let _ = run_program_with_wsv(read_src, wsv);
+}
+
+#[test]
 fn durable_name_map_key_survives_function_call() {
     let src = r#"
         seiyaku C {

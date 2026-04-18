@@ -4959,6 +4959,7 @@ impl Iroha {
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
+            .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
             runtime_deps.with_sorafs_cache(cache)

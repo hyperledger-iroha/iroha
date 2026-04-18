@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "bundle_name": "single-contract-deploy",
+  "bundle_digest": "1f52a658a3c5da3c6091728209e7109f31355cd10177a2847bb365ebd1caf3cd",
+  "chain_fingerprint": "chain@missing-block-1",
+  "dry_run": false,
+  "completed_stages": [
+    "plan",
+    "deploy"
+  ],
+  "contracts": [
+    {
+      "name": "deploy1::universal",
+      "contract_alias": "deploy1::universal",
+      "contract_address": "sorac1qyqqqqqqqqqqqqzvezc0mk3v6czlmaazealje64mdrxycfq5npcv8",
+      "upgraded": false,
+      "dataspace": "universal",
+      "deploy_nonce": 0,
+      "code_hash_hex": "9da683eaad015abecf3c5fc382ebf082f640883f1fa0e9ab0b2adb74973ac573",
+      "abi_hash_hex": "919d5cdca5efe4c668165b8f2c737c136db0bf399ef7c33e24a95808b1c692bb",
+      "tx_hash_hex": "b09369ca905b8fc03091227cf5d3340e363d8e4f100c8c5b2d2fceb1505da32b",
+      "status": "deployed"
+    }
+  ],
+  "init_calls": [
+    
+  ],
+  "assertions": [
+    
+  ]
+}
