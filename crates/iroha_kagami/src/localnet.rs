@@ -6542,15 +6542,13 @@ mod tests {
     }
 
     #[test]
-    fn default_sorafs_telemetry_submitter_literal_respects_requested_chain_discriminant() {
-        let source = iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
-            .into_iter()
-            .next()
-            .expect("default submitter");
-        let literal = account_literal_for_chain_discriminant(&source, 369);
-        println!("{literal}");
-        assert!(literal.starts_with("testu"));
-        assert!(!literal.starts_with("sorau"));
+    fn default_sorafs_telemetry_submitters_match_self_service_policy() {
+        let submitters =
+            iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters();
+        assert!(
+            submitters.is_empty(),
+            "self-service telemetry should not pin default submitter accounts"
+        );
     }
 
     #[test]
