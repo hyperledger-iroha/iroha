@@ -46013,6 +46013,218 @@ async fn frontier_recovery_allows_cleanup_after_same_height_rbc_sender_activity_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_commit_qc_repair_remains_recent()
+ {
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
+    let window = actor.frontier_recovery_window();
+    let stale = now
+        .checked_sub(
+            super::saturating_mul_duration(window, 3).saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let block = sample_block(height, view, Some(genesis_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            now,
+        ),
+        "test setup should seed the exact frontier slot for known-block commit-QC repair"
+    );
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_requested: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_dependency_progress: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: stale,
+        last_progress_at: stale,
+        last_dependency_progress_at: Some(stale),
+        last_action_at: None,
+        no_progress_windows: 2,
+        cleanup_done: false,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let advance =
+        actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
+    assert_eq!(
+        advance,
+        super::FrontierRecoveryAdvance::None,
+        "recent same-slot known-block commit-QC repair should suppress quorum-timeout cleanup"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && !state.cleanup_done
+                && state.last_action_at.is_none()
+                && state.last_cause == "quorum_timeout"
+        }),
+        "cleanup suppression should preserve the active quorum-timeout frontier owner"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "cleanup suppression must keep the exact-slot known block"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "cleanup suppression must keep the same-slot missing commit-QC repair request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_recovery_suppresses_rotation_while_same_slot_missing_commit_qc_repair_remains_recent()
+ {
+    let _view_change_guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let view = actor.phase_tracker.current_view(height).unwrap_or(0);
+    let window = actor.frontier_recovery_window();
+    let stale = now
+        .checked_sub(
+            super::saturating_mul_duration(window, 3).saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let block = sample_block(height, view, Some(genesis_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            now,
+        ),
+        "test setup should seed the exact frontier slot for known-block commit-QC repair"
+    );
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_requested: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_dependency_progress: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: stale,
+        last_progress_at: stale,
+        last_dependency_progress_at: Some(stale),
+        last_action_at: Some(stale),
+        no_progress_windows: 3,
+        cleanup_done: true,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let before = super::status::snapshot();
+    let advance =
+        actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
+    let after = super::status::snapshot();
+    assert_eq!(
+        advance,
+        super::FrontierRecoveryAdvance::None,
+        "recent same-slot known-block commit-QC repair should suppress quorum-timeout rotation"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_rotation_view.is_none()
+                && state.last_cause == "quorum_timeout"
+        }),
+        "rotation suppression should preserve the armed quorum-timeout frontier owner"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "suppressed rotation must keep the current view"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "rotation suppression must keep the same-slot missing commit-QC repair request"
+    );
+    assert_eq!(
+        after.view_change_causes.quorum_timeout_total,
+        before.view_change_causes.quorum_timeout_total,
+        "same-slot known-block commit-QC repair must not trigger an extra quorum-timeout view change"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull() {
     let mut harness = test_actor_harness_with_config(4, test_sumeragi_config(), None).await;
     let actor = &mut harness.actor;
@@ -71405,7 +71617,7 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_directly() {
+async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -71464,27 +71676,24 @@ async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_directly() 
 
     let before = super::status::snapshot();
     assert!(
-        actor.force_view_change_if_idle(now),
-        "empty contiguous-frontier missing_qc should rotate directly instead of arming unified frontier recovery"
+        !actor.force_view_change_if_idle(now),
+        "empty contiguous-frontier missing_qc should arm unified frontier recovery before rotating"
     );
     let after = super::status::snapshot();
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "direct empty-frontier missing_qc should advance the view immediately"
+        Some(current_view),
+        "unified frontier recovery should keep the current view until recovery windows are exhausted"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "direct empty-frontier missing_qc should count one MissingQc rotation"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "arming unified frontier recovery should not count a MissingQc rotation"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .forced_view_after_timeout
-            .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
-        "direct empty-frontier missing_qc should install the next forced-view marker"
+        actor.frontier_recovery.is_some_and(
+            |state| state.frontier_height == height && state.last_cause == "missing_qc"
+        ),
+        "empty contiguous-frontier missing_qc should install unified frontier recovery state"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
