@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 syscall policy unknown-number test resync):
+`crates/ivm/tests/syscalls_policy.rs` no longer assumes hard-coded numbers such
+as `0x80` are outside the ABI surface. The regression now derives unknown
+syscall numbers from gaps in `abi_syscall_list()` and from values beyond the
+current 8-bit range, so ABI additions do not create false failures in the
+policy suite.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/syscalls_policy.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test syscalls_policy -- --nocapture`
+  - `cargo test -p ivm --test abi_policy -- --nocapture`
+  - `cargo test -p ivm --test syscalls_policy_versions -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 IVM cache artifact minor-version gate):
 `IvmCache::decode_artifact` and `IvmCache::get_or_predecode_artifact` now fail closed unless the parsed artifact header is IVM `1.1`. This keeps legacy generic `1.0` metadata parsing available where callers explicitly use `ProgramMetadata::parse`, while artifact-specific cache helpers now match the golden-vector expectation that unsupported minor versions are rejected.
 
