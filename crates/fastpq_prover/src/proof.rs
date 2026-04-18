@@ -24,6 +24,18 @@ const PROTOCOL_VERSION: u16 = 1;
 const PERM_ROOT_DOMAIN: &[u8] = b"fastpq:v1:perm_root";
 /// Domain tag for transaction set hash fallback commitments.
 const TX_SET_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
+/// Default maximum transitions accepted by the replay verifier.
+const DEFAULT_MAX_VERIFY_TRANSITIONS: usize = 256;
+/// Default maximum batch payload bytes accepted by the replay verifier.
+const DEFAULT_MAX_VERIFY_BATCH_BYTES: usize = 256 * 1024;
+/// Default maximum FRI layers accepted by the replay verifier.
+const DEFAULT_MAX_VERIFY_FRI_LAYERS: usize = 16;
+/// Default maximum query openings accepted by the replay verifier.
+const DEFAULT_MAX_VERIFY_QUERIES: usize = 128;
+/// Default maximum LDE values carried by a single query chunk.
+const DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES: usize = 128;
+/// Default maximum Merkle siblings carried by a single query opening.
+const DEFAULT_MAX_VERIFY_QUERY_PATH_LEN: usize = 64;
 
 /// Public inputs committed by the prover and replayed by the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
@@ -48,13 +60,17 @@ pub struct PublicIO {
 }
 
 /// Evaluation opening for the verifier queries into the FRI domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
 pub struct QueryOpening {
     /// Domain index opened by the prover.
     pub index: u32,
     /// Evaluation value at the queried index.
     pub value: u64,
+    /// Full LDE leaf chunk containing `value`.
+    pub chunk_values: Vec<u64>,
+    /// Merkle authentication path from the LDE leaf chunk to `lookup_root`.
+    pub merkle_path: Vec<u64>,
 }
 
 /// Proof artifact produced by the FASTPQ prover.
@@ -93,6 +109,36 @@ impl Proof {
     /// Access the commitment hash.
     pub fn commitment(&self) -> Hash {
         self.trace_commitment
+    }
+}
+
+/// Limits applied before FASTPQ V1 replay verification performs prover-scale work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyLimits {
+    /// Maximum transition rows accepted in the batch supplied to the verifier.
+    pub max_transitions: usize,
+    /// Maximum approximate batch payload size accepted by the verifier.
+    pub max_batch_bytes: usize,
+    /// Maximum number of FRI layer commitments accepted in the proof.
+    pub max_fri_layers: usize,
+    /// Maximum number of verifier query openings accepted in the proof.
+    pub max_queries: usize,
+    /// Maximum number of LDE values carried by each query chunk.
+    pub max_query_chunk_values: usize,
+    /// Maximum Merkle authentication path length accepted for each query.
+    pub max_query_path_len: usize,
+}
+
+impl Default for VerifyLimits {
+    fn default() -> Self {
+        Self {
+            max_transitions: DEFAULT_MAX_VERIFY_TRANSITIONS,
+            max_batch_bytes: DEFAULT_MAX_VERIFY_BATCH_BYTES,
+            max_fri_layers: DEFAULT_MAX_VERIFY_FRI_LAYERS,
+            max_queries: DEFAULT_MAX_VERIFY_QUERIES,
+            max_query_chunk_values: DEFAULT_MAX_VERIFY_QUERY_CHUNK_VALUES,
+            max_query_path_len: DEFAULT_MAX_VERIFY_QUERY_PATH_LEN,
+        }
     }
 }
 
@@ -188,24 +234,35 @@ impl Prover {
         let artifact = self
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
-        Ok(materialise_proof(
-            commitment,
-            public_io,
-            artifact,
-            params_version,
-        ))
+        materialise_proof(commitment, public_io, artifact, params_version)
     }
 }
 
-/// Verify a proof by recomputing the commitment deterministically and replaying
-/// the Stage 2 Fiat–Shamir transcript.
+/// Verify a proof with default V1 replay limits.
 ///
 /// # Errors
 ///
 /// Returns [`Error::UnknownParameter`] when the proof references an unknown
 /// parameter set or an appropriate [`Error`] variant when validation fails.
-#[allow(clippy::too_many_lines)]
 pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
+    verify_with_limits(batch, proof, VerifyLimits::default())
+}
+
+/// Verify a proof by replaying the public transcript, authenticating sampled
+/// LDE openings against the prover's Merkle root, and recomputing the canonical
+/// batch commitments inside explicit replay limits.
+///
+/// # Errors
+///
+/// Returns [`Error::UnknownParameter`] when the proof references an unknown
+/// parameter set, [`Error::VerifierLimitExceeded`] when inputs exceed the
+/// supplied replay limits, or another [`Error`] variant when validation fails.
+#[allow(clippy::too_many_lines)]
+pub fn verify_with_limits(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+) -> Result<()> {
     if proof.protocol_version != PROTOCOL_VERSION {
         return Err(Error::UnsupportedProtocolVersion {
             version: proof.protocol_version,
@@ -224,6 +281,7 @@ pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             actual: proof.params_version,
         });
     }
+    enforce_verify_limits(batch, proof, limits)?;
 
     let expected_commitment = trace_commitment(&params, batch)?;
     if expected_commitment != proof.trace_commitment {
@@ -356,13 +414,122 @@ pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         let value = lde_values
             .get(expected_idx)
             .copied()
-            .unwrap_or_else(|| *lde_values.last().unwrap_or(&0));
+            .ok_or(Error::QueryIndexOutOfRange {
+                index: expected_idx,
+                len: lde_values.len(),
+            })?;
         if value != query.value {
             return Err(Error::QueryMismatch { index: pos });
+        }
+
+        let chunk_size = backend::lde_chunk_size(params.fri.arity).max(1);
+        let leaf_index = expected_idx / chunk_size;
+        let chunk_offset = expected_idx % chunk_size;
+        let chunk_start = leaf_index
+            .checked_mul(chunk_size)
+            .ok_or(Error::QueryMismatch { index: pos })?;
+        let chunk_end = chunk_start.saturating_add(chunk_size).min(lde_values.len());
+        let expected_chunk = &lde_values[chunk_start..chunk_end];
+        if query.chunk_values.as_slice() != expected_chunk {
+            return Err(Error::QueryMismatch { index: pos });
+        }
+        if query.chunk_values.get(chunk_offset).copied() != Some(query.value) {
+            return Err(Error::QueryMismatch { index: pos });
+        }
+        let leaf = backend::hash_lde_chunk(leaf_index, &query.chunk_values)?;
+        if !backend::verify_merkle_path(lde_root, leaf, leaf_index, &query.merkle_path)? {
+            return Err(Error::QueryMerklePathMismatch { index: pos });
         }
     }
 
     Ok(())
+}
+
+fn enforce_verify_limits(
+    batch: &TransitionBatch,
+    proof: &Proof,
+    limits: VerifyLimits,
+) -> Result<()> {
+    if batch.transitions.len() > limits.max_transitions {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_transitions",
+            actual: batch.transitions.len(),
+            max: limits.max_transitions,
+        });
+    }
+    let batch_bytes = batch_size_hint(batch);
+    if batch_bytes > limits.max_batch_bytes {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_batch_bytes",
+            actual: batch_bytes,
+            max: limits.max_batch_bytes,
+        });
+    }
+    if proof.fri_layers.len() > limits.max_fri_layers {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_fri_layers",
+            actual: proof.fri_layers.len(),
+            max: limits.max_fri_layers,
+        });
+    }
+    if proof.queries.len() > limits.max_queries {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_queries",
+            actual: proof.queries.len(),
+            max: limits.max_queries,
+        });
+    }
+    for query in &proof.queries {
+        if query.chunk_values.len() > limits.max_query_chunk_values {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_query_chunk_values",
+                actual: query.chunk_values.len(),
+                max: limits.max_query_chunk_values,
+            });
+        }
+        if query.merkle_path.len() > limits.max_query_path_len {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_query_path_len",
+                actual: query.merkle_path.len(),
+                max: limits.max_query_path_len,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn batch_size_hint(batch: &TransitionBatch) -> usize {
+    let mut total = batch.parameter.len();
+    for transition in &batch.transitions {
+        total = total
+            .saturating_add(transition.key.len())
+            .saturating_add(transition.pre_value.len())
+            .saturating_add(transition.post_value.len())
+            .saturating_add(operation_size_hint(&transition.operation));
+    }
+    for (key, value) in &batch.metadata {
+        total = total.saturating_add(key.len()).saturating_add(value.len());
+    }
+    total
+}
+
+fn operation_size_hint(operation: &crate::OperationKind) -> usize {
+    match operation {
+        crate::OperationKind::RoleGrant {
+            role_id,
+            permission_id,
+            ..
+        }
+        | crate::OperationKind::RoleRevoke {
+            role_id,
+            permission_id,
+            ..
+        } => role_id.len().saturating_add(permission_id.len()),
+        crate::OperationKind::Transfer
+        | crate::OperationKind::Mint
+        | crate::OperationKind::Burn
+        | crate::OperationKind::MetaSet => 0,
+    }
 }
 
 fn materialise_proof(
@@ -370,7 +537,19 @@ fn materialise_proof(
     public_io: PublicIO,
     artifact: BackendArtifact,
     params_version: u16,
-) -> Proof {
+) -> Result<Proof> {
+    if artifact.query_openings.len() != artifact.query_chunks.len() {
+        return Err(Error::QueryCountMismatch {
+            expected: artifact.query_openings.len(),
+            actual: artifact.query_chunks.len(),
+        });
+    }
+    if artifact.query_openings.len() != artifact.query_paths.len() {
+        return Err(Error::QueryCountMismatch {
+            expected: artifact.query_openings.len(),
+            actual: artifact.query_paths.len(),
+        });
+    }
     let fri_layers = artifact
         .fri_layers
         .into_iter()
@@ -379,9 +558,18 @@ fn materialise_proof(
     let queries = artifact
         .query_openings
         .into_iter()
-        .map(|(index, value)| QueryOpening { index, value })
+        .zip(artifact.query_chunks)
+        .zip(artifact.query_paths)
+        .map(
+            |(((index, value), chunk_values), merkle_path)| QueryOpening {
+                index,
+                value,
+                chunk_values,
+                merkle_path,
+            },
+        )
         .collect();
-    Proof {
+    Ok(Proof {
         protocol_version: PROTOCOL_VERSION,
         params_version,
         parameter: artifact.parameter,
@@ -395,7 +583,7 @@ fn materialise_proof(
         betas: artifact.fri_betas,
         fri_layers,
         queries,
-    }
+    })
 }
 
 fn build_public_io(
@@ -871,6 +1059,70 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_wrong_query_chunk_value() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .queries
+            .first_mut()
+            .expect("expected at least one query opening");
+        let chunk_value = first
+            .chunk_values
+            .first_mut()
+            .expect("expected query chunk values");
+        *chunk_value = chunk_value.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::QueryMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_query_merkle_path() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        let first = proof
+            .queries
+            .first_mut()
+            .expect("expected at least one query opening");
+        let sibling = first
+            .merkle_path
+            .first_mut()
+            .expect("expected query Merkle path");
+        *sibling = sibling.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::QueryMerklePathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_rejects_batches_over_default_replay_limit() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let small_batch = sample_batch();
+        let proof = prover.prove(&small_batch).unwrap();
+        let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
+        let err = verify(&large_batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_with_limits_allows_explicit_replay_window() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
+        let proof = prover.prove(&batch).unwrap();
+        let limits = VerifyLimits {
+            max_transitions: DEFAULT_MAX_VERIFY_TRANSITIONS + 1,
+            ..VerifyLimits::default()
+        };
+        verify_with_limits(&batch, &proof, limits).unwrap();
+    }
+
+    #[test]
     fn verify_rejects_stale_version() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
@@ -907,6 +1159,8 @@ mod tests {
             queries: vec![QueryOpening {
                 index: 0,
                 value: 123,
+                chunk_values: vec![123],
+                merkle_path: Vec::new(),
             }],
         };
         let first = norito::core::to_bytes(&proof).expect("encode proof");

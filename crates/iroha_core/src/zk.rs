@@ -514,17 +514,12 @@ fn stark_open_verify_domain_tag_current(
     hex::encode(digest)
 }
 
-/// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
+/// Placeholder for building a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
-/// The produced envelope is accepted by the native `stark/fri` verifier and binds:
-/// - backend family/variant tag
-/// - circuit identifier
-/// - verifying-key commitment
-/// - schema descriptor bytes
-/// - backend-native public inputs (`StarkFriOpenProofV1.public_inputs`)
-///
-/// Note: this helper synthesizes the STARK layer witness deterministically from verifier
-/// parameters. Execution semantics remain enforced by deterministic replay in admission paths.
+/// This currently fails closed. A previous first-release implementation synthesized a
+/// passing FRI witness from verifier metadata, which did not prove execution semantics.
+/// The replacement V1 prover must emit real AIR and FRI openings before this helper can
+/// return a proof again.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_open_verify_envelope(
     backend: &str,
@@ -533,83 +528,21 @@ pub fn prove_stark_fri_open_verify_envelope(
     schema_descriptor: &[u8],
     public_inputs: Vec<Vec<[u8; 32]>>,
 ) -> Result<ProofBox, String> {
-    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriParamsV1};
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
-
-    if !is_stark_fri_v1_backend(backend) {
-        return Err("STARK proving requires stark/fri backend".to_owned());
-    }
-    if vk_box.backend.as_str() != backend {
-        return Err("STARK proving requires vk backend to match requested backend".to_owned());
-    }
-    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&vk_box.bytes)
-            .map_err(|_| "invalid STARK verifying key payload".to_owned())?;
-    if vk_payload.version != 1 {
-        return Err("unsupported STARK verifying key payload version".to_owned());
-    }
-    if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
-        return Err("unsupported STARK verifying key hash_fn".to_owned());
-    }
-    if backend.contains("/sha256-") && vk_payload.hash_fn != STARK_HASH_SHA256_V1 {
-        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
-    }
-    if backend.contains("/poseidon2-") && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
-        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
-    }
-    if backend != ZK_BACKEND_STARK_FRI_V1
-        && !backend.contains("/sha256-")
-        && !backend.contains("/poseidon2-")
-    {
-        return Err("unsupported stark/fri backend variant".to_owned());
-    }
-
-    let req_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
-        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
-    if req_circuit_id != vk_circuit_id {
-        return Err("STARK verifying key circuit_id mismatch".to_owned());
-    }
-
-    let vk_hash = hash_vk(vk_box);
-    let domain_tag = stark_open_verify_domain_tag_current(
+    let _ = (
         backend,
         circuit_id,
-        vk_hash,
+        vk_box,
         schema_descriptor,
-        &public_inputs,
-    );
-    let params = StarkFriParamsV1 {
-        version: 1,
-        n_log2: vk_payload.n_log2,
-        blowup_log2: vk_payload.blowup_log2,
-        fold_arity: vk_payload.fold_arity,
-        queries: vk_payload.queries,
-        merkle_arity: vk_payload.merkle_arity,
-        hash_fn: vk_payload.hash_fn,
-        domain_tag,
-    };
-    let inner =
-        crate::zk_stark::synthesize_stark_fri_envelope_bytes(params, "IROHA-STARK-IVM".to_owned())?;
-    let open = StarkFriOpenProofV1 {
-        version: 1,
         public_inputs,
-        envelope_bytes: inner,
-    };
-    let proof_bytes = norito::to_bytes(&open)
-        .map_err(|err| format!("failed to encode STARK open proof: {err}"))?;
-    let env = OpenVerifyEnvelope {
-        backend: BackendTag::Stark,
-        circuit_id: circuit_id.to_owned(),
-        vk_hash,
-        public_inputs: schema_descriptor.to_vec(),
-        proof_bytes,
-        aux: Vec::new(),
-    };
-    let encoded = norito::to_bytes(&env)
-        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
-    Ok(ProofBox::new(backend.to_owned(), encoded))
+    );
+    // Native STARK/FRI proving is intentionally unavailable in this V1 release
+    // until it emits verifier-owned AIR openings. The previous implementation
+    // synthesized an all-zero FRI witness from public metadata, which did not
+    // prove execution semantics.
+    Err(
+        "native STARK/FRI V1 proving is unavailable until the sound AIR prover is implemented"
+            .to_owned(),
+    )
 }
 
 /// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
@@ -4515,6 +4448,21 @@ fn verify_stark_fri_open_verify_envelope(
     proof: &ProofBox,
     vk: Option<&VerifyingKeyBox>,
 ) -> bool {
+    verify_stark_fri_open_verify_envelope_with_limits(
+        backend,
+        proof,
+        vk,
+        &crate::zk_stark::StarkVerifierLimits::default(),
+    )
+}
+
+#[cfg(feature = "zk-stark")]
+fn verify_stark_fri_open_verify_envelope_with_limits(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    limits: &crate::zk_stark::StarkVerifierLimits,
+) -> bool {
     use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
@@ -4592,6 +4540,9 @@ fn verify_stark_fri_open_verify_envelope(
     if open.version != 1 {
         return reject("unsupported STARK wrapper version");
     }
+    if open.envelope_bytes.len() > limits.max_envelope_bytes {
+        return reject("inner STARK envelope exceeds verifier limits");
+    }
 
     // Bind the inner STARK envelope to the outer OpenVerifyEnvelope metadata and public inputs by
     // requiring `params.domain_tag` to equal the SHA-256 digest (hex, 64 chars) of:
@@ -4630,10 +4581,12 @@ fn verify_stark_fri_open_verify_envelope(
         return reject("domain tag integrity mismatch");
     }
 
-    if !crate::zk_stark::verify_stark_fri_envelope(&open.envelope_bytes) {
-        return reject("native STARK verifier rejected proof");
-    }
-    true
+    // Native STARK/FRI OpenVerify acceptance is intentionally disabled in V1
+    // until proofs carry verifier-owned AIR composition openings. The native
+    // FRI checker proves only low-degree consistency for the supplied layers;
+    // accepting it as an execution proof would let callers submit synthetic
+    // low-degree envelopes for arbitrary public inputs.
+    reject("native STARK/FRI V1 AIR verifier unavailable")
 }
 
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
@@ -4756,17 +4709,14 @@ mod stark_backend_tag_tests {
 mod stark_prover_tests {
     use super::{
         prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
-        verify_backend, verify_backend_with_timing,
+        verify_backend_with_timing,
     };
     use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_crypto::Hash;
-    use iroha_data_model::{
-        proof::{ProofBox, VerifyingKeyBox},
-        zk::OpenVerifyEnvelope,
-    };
+    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
 
     #[test]
-    fn prove_stark_open_verify_envelope_roundtrip() {
+    fn prove_stark_open_verify_envelope_rejects_synthetic_proving() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4782,19 +4732,19 @@ mod stark_prover_tests {
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
         let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
-        let proof = prove_stark_fri_open_verify_envelope(
+        let err = prove_stark_fri_open_verify_envelope(
             backend,
             &circuit_id,
             &vk_box,
             b"tiny:schema:v1",
             public_inputs,
         )
-        .expect("build stark open proof");
-        assert!(verify_backend(backend, &proof, Some(&vk_box)));
+        .expect_err("synthetic STARK proving must stay disabled");
+        assert!(err.contains("sound AIR prover"));
     }
 
     #[test]
-    fn prove_stark_ivm_execution_envelope_roundtrip() {
+    fn prove_stark_ivm_execution_envelope_rejects_synthetic_proving() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:ivm-execution-v1");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4809,7 +4759,7 @@ mod stark_prover_tests {
         };
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_ivm_execution_envelope(
+        let err = prove_stark_fri_ivm_execution_envelope(
             backend,
             &circuit_id,
             &vk_box,
@@ -4818,43 +4768,8 @@ mod stark_prover_tests {
             Hash::new(b"events"),
             Hash::new(b"gas"),
         )
-        .expect("build stark ivm proof");
-        assert!(verify_backend(backend, &proof, Some(&vk_box)));
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_circuit_id_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-
-        let mut envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
-        envelope.circuit_id = format!("{backend}:wrong-circuit");
-        let tampered = ProofBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope"),
-        );
-        assert!(!verify_backend(backend, &tampered, Some(&vk_box)));
+        .expect_err("synthetic STARK proving must stay disabled");
+        assert!(err.contains("sound AIR prover"));
     }
 
     #[test]
@@ -4875,70 +4790,6 @@ mod stark_prover_tests {
         let malformed = ProofBox::new(backend.to_owned(), vec![0xAA, 0xBB, 0xCC]);
         let report = verify_backend_with_timing(backend, &malformed, Some(&vk_box));
         assert!(!report.ok);
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_backend_variant_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let wrong_backend = "stark/fri/poseidon2-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-        assert!(
-            !verify_backend(wrong_backend, &proof, Some(&vk_box)),
-            "proof must be rejected when declared backend variant mismatches the proof hash family"
-        );
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_vk_backend_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let mismatched_vk_backend = "stark/fri/poseidon2-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-
-        let wrong_vk = VerifyingKeyBox::new(mismatched_vk_backend.to_owned(), vk_bytes);
-        assert!(
-            !verify_backend(backend, &proof, Some(&wrong_vk)),
-            "proof must be rejected when verifying key backend differs from proof backend"
-        );
     }
 }
 
@@ -4965,7 +4816,9 @@ pub struct ZkVerifyGuardrails {
     pub halo2_max_proof_bytes: usize,
     /// Whether STARK verification is enabled.
     pub stark_enabled: bool,
-    /// Maximum accepted STARK proof payload size (bytes).
+    /// Maximum accepted outer STARK OpenVerifyEnvelope size (bytes).
+    pub stark_max_envelope_bytes: usize,
+    /// Maximum accepted backend-native STARK proof payload size (bytes).
     pub stark_max_proof_bytes: usize,
 }
 
@@ -4977,6 +4830,7 @@ impl ZkVerifyGuardrails {
             halo2_max_envelope_bytes: cfg.halo2.max_envelope_bytes,
             halo2_max_proof_bytes: cfg.halo2.max_proof_bytes,
             stark_enabled: cfg.stark.enabled,
+            stark_max_envelope_bytes: cfg.stark.max_envelope_bytes,
             stark_max_proof_bytes: cfg.stark.max_proof_bytes,
         }
     }
@@ -5057,10 +4911,49 @@ pub fn verify_backend_with_timing_guardrails(
                 elapsed: Duration::ZERO,
             };
         }
-        if proof.bytes.len() > guardrails.stark_max_proof_bytes {
+        if proof.bytes.len() > guardrails.stark_max_envelope_bytes {
             iroha_logger::debug!(
                 backend,
-                "stark proof exceeds node-configured max_proof_bytes"
+                "stark payload exceeds node-configured max_envelope_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if let Ok(env) =
+            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
+            && let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
+                &env.proof_bytes,
+            )
+            && open.envelope_bytes.len() > guardrails.stark_max_proof_bytes
+        {
+            iroha_logger::debug!(
+                backend,
+                "stark envelope proof bytes exceed node-configured max_proof_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        #[cfg(feature = "zk-stark")]
+        {
+            let started = Instant::now();
+            let mut limits = crate::zk_stark::StarkVerifierLimits::default();
+            limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
+            let ok = verify_stark_fri_open_verify_envelope_with_limits(backend, proof, vk, &limits);
+            return VerifyReport {
+                ok,
+                elapsed: started.elapsed(),
+            };
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            iroha_logger::debug!(
+                backend,
+                "stark/fri backend requested but binary was built without `zk-stark`"
             );
             return VerifyReport {
                 ok: false,
@@ -5088,7 +4981,7 @@ pub fn verify_backend_with_timing_checked(
 #[cfg(test)]
 mod guardrails_tests {
     use super::*;
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     #[test]
     fn guardrails_disable_halo2_returns_zero_duration() {
@@ -5102,6 +4995,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5121,6 +5015,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 8,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5149,6 +5044,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 5,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5168,6 +5064,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: false,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5176,7 +5073,7 @@ mod guardrails_tests {
     }
 
     #[test]
-    fn guardrails_enforce_stark_max_proof_bytes() {
+    fn guardrails_enforce_stark_max_envelope_bytes() {
         let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 9]);
         let report = verify_backend_with_timing_guardrails(
             ZK_BACKEND_STARK_FRI_V1,
@@ -5187,6 +5084,43 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 8,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_enforce_stark_max_proof_bytes_inside_open_verify_envelope() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: "stark/fri/sha256-goldilocks:dummy".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: vec![0xAA; 32],
+            proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            ZK_BACKEND_STARK_FRI_V1.into(),
+            norito::to_bytes(&env).expect("encode envelope"),
+        );
+        let report = verify_backend_with_timing_guardrails(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 8,
             },
         );

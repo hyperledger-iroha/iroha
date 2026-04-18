@@ -3573,7 +3573,10 @@ struct SubmittedTransactionReceipt {
 }
 
 pub(crate) fn offline_recursive_stark_ready() -> bool {
-    cfg!(feature = "zk-stark")
+    // Recursive offline STARK proofs remain unavailable in V1 until the proof
+    // format carries verifier-owned AIR openings instead of synthetic
+    // low-degree envelopes.
+    false
 }
 
 fn ensure_offline_recursive_stark_ready() -> Result<(), Error> {

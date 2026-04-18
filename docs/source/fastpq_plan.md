@@ -1,6 +1,6 @@
 # FASTPQ Prover Work Breakdown
 
-This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless marked as a TODO. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
+This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless explicitly marked as future work. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
 
 ## Stage 0 — Hash Placeholder (landed)
 - Deterministic Norito encoding with BLAKE2b commitment.
@@ -67,7 +67,8 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 - Low-degree extension: evaluate each column on domain `D = { g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the 2-adic capacity of Goldilocks. Let `g = ω^{(p-1)/N_eval}` with `ω` the fixed primitive root of Goldilocks and `p` its modulus; use the base subgroup (no coset). Record `g` in the transcript (tag `fastpq:v1:lde`).
 - Composition polynomials: for each constraint `C_j`, form `F_j(X) = C_j(X) / Z_N(X)` with degree margins listed below.
 - Lookup argument (permissions): sample `γ` from transcript. Trace product `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}`. Table product `T = ∏_j (table_perm_j - γ)`. Boundary constraint: `Z_final / T = 1`.
-- DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold via `H_{ℓ+1}(i) = Σ_{k=0}^{r-1} H_ℓ(r*i + k) * β_ℓ^k`.
+- DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
+- V1 replay verification is capped by `fastpq_prover::VerifyLimits` and authenticates sampled LDE query chunks against Merkle paths rooted at `lookup_root`. Per-round FRI openings and AIR composition openings are still required before verification can become fully logarithmic.
 - Proof object (Norito-encoded):
   ```
   Proof {
@@ -82,8 +83,19 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       betas: Vec<Field>,
       queries: Vec<QueryOpening>,
   }
+
+  QueryOpening {
+      index: u32,
+      value: Field,
+      chunk_values: Vec<Field>,
+      merkle_path: Vec<Field>,
+  }
   ```
-- Verifier mirrors prover; run regression suite on 1k/5k/20k-row traces with golden transcripts.
+- V1 replay verifier mirrors the prover only inside `VerifyLimits`; it binds
+  sampled query chunks to `lookup_root`, but the production replacement must
+  verify per-round FRI openings and AIR composition openings without rebuilding
+  the full trace. Keep large 1k/5k/20k-row traces in prover and benchmark
+  regression suites, not node-facing verification, until that verifier lands.
 
 ### Degree Accounting
 | Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |

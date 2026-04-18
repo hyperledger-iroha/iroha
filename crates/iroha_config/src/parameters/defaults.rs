@@ -2692,6 +2692,8 @@ pub mod zk {
         /// Acceptance still requires binaries built with `zk-stark`; this default
         /// remains `false` so operators must explicitly opt in at runtime.
         pub const ENABLED: bool = false;
+        /// Maximum accepted outer STARK OpenVerifyEnvelope length (bytes).
+        pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024; // 1 MiB
         /// Maximum accepted proof payload length (bytes).
         ///
         /// The native `stark/fri-v1/*` verifier enforces additional structural caps
