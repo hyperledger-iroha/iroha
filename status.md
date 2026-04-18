@@ -11,6 +11,14 @@ Last updated: 2026-04-18
   - `cargo test -p ivm --test kotodama assert_builtin_obeys_truthiness -- --nocapture`
   - `cargo test -p ivm --test kotodama_role_cleanup -- --nocapture`
 
+## 2026-04-18 Follow-up: ISI gas calibration asset definition fixture
+- `/home/mtakemiya/dev/iroha/crates/iroha_core/benches/isi_gas_calibration.rs` now builds the shared `xor` asset definition fixture with an explicit human-facing name before registration, matching the current asset-definition invariant and preventing the `RegisterAssetDef` benchmark warm-up panic.
+- The same named fixture is reused by the `MintAsset` and `TransferAsset` setup paths so all asset-dependent ISI gas calibration cases register valid definitions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo bench -p iroha_core --bench isi_gas_calibration -- --warm-up-time 0.1 --measurement-time 0.1 --sample-size 10`
+  - `cargo test -p iroha_core calibration_bench_gas_snapshot -- --nocapture`
+
 ## 2026-04-18 Follow-up: Kotodama asset registration now requires explicit `AssetDefinitionId` pointers
 - `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/semantic.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/ir.rs`, `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/regalloc.rs`, and `/home/mtakemiya/dev/iroha/crates/kotodama_lang/src/compiler.rs` now treat `register_asset(...)` and `create_new_asset(...)` as pointer-ABI asset-definition operations instead of legacy bare-name calls. The compiler now publishes `AssetDefinitionId` TLVs for `SYSCALL_REGISTER_ASSET`, matching the current `WsvHost` and `CoreHost` ABI surface that rejects `Name` TLVs for asset registration.
 - The affected Kotodama coverage and examples were refreshed to pass explicit asset-definition constructors: `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_register_account_asset_tlv.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_builtins.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/kotodama_role_cleanup.rs`, `/home/mtakemiya/dev/iroha/crates/ivm/tests/data/mfc.ko`, `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`, and `/home/mtakemiya/dev/iroha/crates/ivm/docs/kotodama_grammar.md`.
