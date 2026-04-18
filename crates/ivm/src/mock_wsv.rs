@@ -3753,9 +3753,6 @@ impl IVMHost for WsvHost {
                     }
                     crate::syscalls::SYSCALL_JSON_GET_NFT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        if crate::dev_env::decode_trace_enabled() {
-                            eprintln!("[WsvHost] JSON_GET_NFT_ID raw={raw}");
-                        }
                         let nft = NftId::from_str(raw).map_err(|_| VMError::DecodeError)?;
                         let body = norito::to_bytes(&nft).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
