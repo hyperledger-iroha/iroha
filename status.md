@@ -2,6 +2,16 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: IVM cache artifact minor-version gate
+- `/home/mtakemiya/dev/iroha/crates/ivm/src/ivm_cache.rs` now rejects artifact decode and cached predecode requests unless the parsed header is IVM `1.1`, so legacy `1.0` and unknown-minor headers no longer slip through `IvmCache::decode_artifact` or `IvmCache::get_or_predecode_artifact`.
+- `ProgramMetadata::parse` remains backward-compatible for generic non-artifact parse paths; the stricter version gate is limited to the artifact helpers so legacy header parsing behavior elsewhere stays unchanged.
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/ivm_cache_artifact.rs` now pins the cached artifact rejection path for minor `0`, complementing the existing golden-vector regression that exercises `decode_artifact`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test predecoder_golden_vectors -- --nocapture`
+  - `cargo test -p ivm --test ivm_cache_artifact -- --nocapture`
+  - `cargo test -p ivm --test predecode_artifact_keying -- --nocapture`
+
 ## 2026-04-18 Follow-up: Torii deploy-bundle receipt artifact cleanup
 - `/.gitignore` now ignores
   `/crates/iroha_torii/storage/torii/contract_deploy_bundles/`, so generated
