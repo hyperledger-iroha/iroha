@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-18
 
+Latest sync (2026-04-18 developer portal Norito snippet fixture refresh):
+The developer-portal Norito snippet harness now seeds a linked caller subject
+before permission-gated setup and uses the same canonical account/asset
+literals as the checked-in portal examples. The portal example sources were
+also refreshed to the current literal surface: `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`
+for the canonical asset definition, valid I105 account literals for the
+transfer examples, and the fully qualified `n0$wonderland.universal` NFT id.
+The generated portal docs and downloadable `.ko` snippets were resynced from
+those sources.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/norito_portal_snippets_compile.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/08_call_transfer_asset.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/12_nft_flow.ko`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/docs/examples/13_register_and_mint.ko`
+  - `/home/mtakemiya/dev/iroha/examples/transfer/transfer.ko`
+  - `/home/mtakemiya/dev/iroha/docs/portal/docs/norito/examples/`
+  - `/home/mtakemiya/dev/iroha/docs/portal/static/norito-snippets/`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test norito_portal_snippets_compile -- --nocapture`
+  - `npm run sync-norito-snippets` from `docs/portal`
+  - `npm run test:norito-snippets` from `docs/portal`
+  - `git diff --check`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 mock WSV unregister/relink permission retention):
 The mock WSV now preserves detached subject permissions and role assignments
 when `unregister_account_subject` removes an active account row. The subject

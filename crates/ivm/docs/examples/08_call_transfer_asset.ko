@@ -4,7 +4,7 @@ seiyaku TransferCall {
     transfer_asset(
       account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
       account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
-      asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }
