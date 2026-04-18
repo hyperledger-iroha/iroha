@@ -6,25 +6,25 @@ final class MultisigSpecBuilderTests: XCTestCase {
         let builder = MultisigSpecBuilder()
             .setQuorum(3)
             .setTransactionTtl(milliseconds: 60_000)
-            .addSignatory(accountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", weight: 2)
-            .addSignatory(accountId: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", weight: 1)
+            .addSignatory(accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", weight: 2)
+            .addSignatory(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", weight: 1)
 
         let payload = try builder.build()
 
         XCTAssertEqual(payload.quorum, 3)
         XCTAssertEqual(payload.transactionTtlMs, 60_000)
-        XCTAssertEqual(payload.signatories["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"], 2)
-        XCTAssertEqual(payload.signatories["sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"], 1)
+        XCTAssertEqual(payload.signatories["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"], 2)
+        XCTAssertEqual(payload.signatories["sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"], 1)
 
         let encoded = try builder.encodeJSON()
         let decoded = try JSONDecoder().decode(MultisigSpecPayload.self, from: encoded)
         XCTAssertEqual(decoded.signatories.count, 2)
-        XCTAssertEqual(decoded.signatories["sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"], 1)
+        XCTAssertEqual(decoded.signatories["sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"], 1)
     }
 
     func testMissingFieldsThrow() {
         let builder = MultisigSpecBuilder()
-            .addSignatory(accountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", weight: 1)
+            .addSignatory(accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", weight: 1)
 
         XCTAssertThrowsError(try builder.build()) { error in
             XCTAssertTrue(error is MultisigSpecBuilderError)
@@ -35,8 +35,8 @@ final class MultisigSpecBuilderTests: XCTestCase {
         let builder = MultisigSpecBuilder()
             .setQuorum(5)
             .setTransactionTtl(milliseconds: 0)
-            .addSignatory(accountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", weight: 1)
-            .addSignatory(accountId: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", weight: 2)
+            .addSignatory(accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", weight: 1)
+            .addSignatory(accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", weight: 2)
 
         XCTAssertThrowsError(try builder.build()) { error in
             XCTAssertEqual(error as? MultisigSpecBuilderError, .transactionTtlZero)
@@ -45,7 +45,7 @@ final class MultisigSpecBuilderTests: XCTestCase {
         let quorumBuilder = MultisigSpecBuilder()
             .setQuorum(10)
             .setTransactionTtl(milliseconds: 1)
-            .addSignatory(accountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", weight: 1)
+            .addSignatory(accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", weight: 1)
 
         XCTAssertThrowsError(try quorumBuilder.build()) { error in
             XCTAssertEqual(error as? MultisigSpecBuilderError,
@@ -55,7 +55,7 @@ final class MultisigSpecBuilderTests: XCTestCase {
 
     func testProposalTtlPreviewClampsToPolicyCap() throws {
         let payload = MultisigSpecPayload(
-            signatories: ["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB": 1],
+            signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],
             quorum: 1,
             transactionTtlMs: 60_000
         )
@@ -72,7 +72,7 @@ final class MultisigSpecBuilderTests: XCTestCase {
 
     func testProposalTtlPreviewKeepsShorterOverride() throws {
         let payload = MultisigSpecPayload(
-            signatories: ["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB": 1],
+            signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],
             quorum: 1,
             transactionTtlMs: 60_000
         )
@@ -89,7 +89,7 @@ final class MultisigSpecBuilderTests: XCTestCase {
 
     func testProposalTtlEnforcementRejectsAboveCap() throws {
         let payload = MultisigSpecPayload(
-            signatories: ["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB": 1],
+            signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],
             quorum: 1,
             transactionTtlMs: 60_000
         )
@@ -101,7 +101,7 @@ final class MultisigSpecBuilderTests: XCTestCase {
 
     func testProposalTtlEnforcementAcceptsShorterOverride() throws {
         let payload = MultisigSpecPayload(
-            signatories: ["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB": 1],
+            signatories: ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB": 1],
             quorum: 1,
             transactionTtlMs: 60_000
         )

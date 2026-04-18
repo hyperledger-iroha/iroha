@@ -6261,7 +6261,7 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                         .to_owned(),
                 ],
                 quorum: Some(2),
@@ -8703,8 +8703,8 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_account_record_decodes_payload() {
         let value = norito::json!({
-            "id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-            "i105_address": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+            "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             "network_prefix": 42,
             "metadata": { "role": "admin" },
             "owned_domains": 2,
@@ -8714,11 +8714,11 @@ state_tiered_cold_entries 2
         let record = ExplorerAccountRecord::from_json(&value).expect("record");
         assert_eq!(
             record.id,
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert_eq!(
             record.i105_address,
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert_eq!(record.network_prefix, 42);
         assert_eq!(record.metadata, norito::json!({ "role": "admin" }));
@@ -8738,8 +8738,8 @@ state_tiered_cold_entries 2
             },
             "items": [
                 {
-                    "id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-                    "i105_address": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+                    "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+                    "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                     "network_prefix": 1,
                     "metadata": {},
                     "owned_domains": 0,
@@ -8754,7 +8754,7 @@ state_tiered_cold_entries 2
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].id,
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
     }
 
@@ -8764,7 +8764,7 @@ state_tiered_cold_entries 2
             "id": "sora",
             "logo": "https://example/logo.svg",
             "metadata": { "tier": "p0" },
-            "owned_by": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "accounts": 5,
             "assets": 3,
             "nfts": 1
@@ -8774,7 +8774,7 @@ state_tiered_cold_entries 2
         assert_eq!(record.logo.as_deref(), Some("https://example/logo.svg"));
         assert_eq!(
             record.owned_by,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.accounts, 5);
         assert_eq!(record.assets, 3);
@@ -8785,7 +8785,7 @@ state_tiered_cold_entries 2
     fn explorer_domains_page_validates_entries() {
         let value = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
-            "items":[{ "id":"sora","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","accounts":1,"assets":0,"nfts":0 }]
+            "items":[{ "id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0 }]
         });
         let page = ExplorerDomainsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
@@ -8799,7 +8799,7 @@ state_tiered_cold_entries 2
             "mintable": "Infinitely",
             "logo": null,
             "metadata": { "decimals": 2 },
-            "owned_by": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "assets": 10
         });
         let record = ExplorerAssetDefinitionRecord::from_json(&value).expect("record");
@@ -8808,7 +8808,7 @@ state_tiered_cold_entries 2
         assert_eq!(record.assets, 10);
         assert_eq!(
             record.owned_by,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -8817,7 +8817,7 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "pagination":{"page":1,"per_page":5,"total_pages":1,"total_items":1},
             "items":[
-                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","assets":2}
+                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":2}
             ]
         });
         let page = ExplorerAssetDefinitionsPage::from_json(&value).expect("page");
@@ -8830,14 +8830,14 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "value": "10.0"
         });
         let record = ExplorerAssetRecord::from_json(&value).expect("record");
         assert_eq!(record.id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         assert_eq!(
             record.account_id,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.value, "10.0");
     }
@@ -8847,7 +8847,7 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
             "items":[
-                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","value":"10"}
+                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}
             ]
         });
         let page = ExplorerAssetsPage::from_json(&value).expect("page");
@@ -8859,14 +8859,14 @@ state_tiered_cold_entries 2
     fn explorer_nft_record_decodes_payload() {
         let value = norito::json!({
             "id": "art#gallery",
-            "owned_by": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "metadata": { "uri": "ipfs://cid" }
         });
         let record = ExplorerNftRecord::from_json(&value).expect("record");
         assert_eq!(record.id, "art#gallery");
         assert_eq!(
             record.owned_by,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.metadata, norito::json!({ "uri": "ipfs://cid" }));
     }
@@ -8875,13 +8875,13 @@ state_tiered_cold_entries 2
     fn explorer_nfts_page_validates_entries() {
         let value = norito::json!({
             "pagination":{"page":1,"per_page":1,"total_pages":1,"total_items":1},
-            "items":[{"id":"art#gallery","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","metadata":{}}]
+            "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let page = ExplorerNftsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].owned_by,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -8899,8 +8899,8 @@ state_tiered_cold_entries 2
             },
             "items": [
                 {
-                    "id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-                    "i105_address": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+                    "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+                    "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                     "network_prefix": 1,
                     "metadata": { "owned_assets": 4 },
                     "owned_domains": 0,
@@ -8945,7 +8945,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
-            "items":[{"id":"sora","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","accounts":1,"assets":0,"nfts":0}]
+            "items":[{"id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8954,7 +8954,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "10")
                 .query_param(
                     "owned_by",
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 );
             then.status(200)
                 .body(norito::json::to_string(&body).expect("serialize"));
@@ -8966,7 +8966,7 @@ state_tiered_cold_entries 2
                 page: Some(1),
                 per_page: Some(10),
                 owned_by: Some(
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
                 ),
             })
             .await
@@ -8984,7 +8984,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":2,"per_page":5,"total_pages":3,"total_items":12},
-            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","assets":7}]
+            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":7}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8994,7 +8994,7 @@ state_tiered_cold_entries 2
                 .query_param("domain", "sora")
                 .query_param(
                     "owned_by",
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 );
             then.status(200)
                 .body(norito::json::to_string(&body).expect("serialize"));
@@ -9007,7 +9007,7 @@ state_tiered_cold_entries 2
                 per_page: Some(5),
                 domain: Some("sora".into()),
                 owned_by: Some(
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
                 ),
             })
             .await
@@ -9024,7 +9024,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":1,"per_page":50,"total_pages":1,"total_items":1},
-            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","value":"10"}]
+            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -9033,7 +9033,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "50")
                 .query_param(
                     "owned_by",
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("definition", "usd#sora");
             then.status(200)
@@ -9045,7 +9045,7 @@ state_tiered_cold_entries 2
                 page: Some(1),
                 per_page: Some(50),
                 owned_by: Some(
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
                 ),
                 definition: Some("usd#sora".into()),
             })
@@ -9055,7 +9055,7 @@ state_tiered_cold_entries 2
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].account_id,
-            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -9066,7 +9066,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":3,"per_page":5,"total_pages":6,"total_items":25},
-            "items":[{"id":"art#gallery","owned_by":"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D","metadata":{}}]
+            "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -9075,7 +9075,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "5")
                 .query_param(
                     "owned_by",
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("domain", "gallery");
             then.status(200)
@@ -9087,7 +9087,7 @@ state_tiered_cold_entries 2
                 page: Some(3),
                 per_page: Some(5),
                 owned_by: Some(
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
                 ),
                 domain: Some("gallery".into()),
             })
@@ -9207,7 +9207,7 @@ state_tiered_cold_entries 2
             "items": [
                 {
                     "id": "daily-airdrop",
-                    "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "value": "5" } },
+                    "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "5" } },
                     "metadata": { "cron": "0 0 * * *" }
                 }
             ],
@@ -9219,7 +9219,7 @@ state_tiered_cold_entries 2
                 .query_param("namespace", "core")
                 .query_param(
                     "authority",
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("limit", "5")
                 .query_param("offset", "10");
@@ -9232,7 +9232,7 @@ state_tiered_cold_entries 2
             .list_triggers(TriggerListQuery {
                 namespace: Some(" core ".into()),
                 authority: Some(
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
                 ),
                 limit: Some(5),
                 offset: Some(10),
@@ -9261,7 +9261,7 @@ state_tiered_cold_entries 2
         });
         let body = norito::json!({
             "id": "mint-hook",
-            "action": { "Register": { "Account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D" } },
+            "action": { "Register": { "Account": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D" } },
             "metadata": {}
         });
         let found = server.mock(|when, then| {
@@ -9297,7 +9297,7 @@ state_tiered_cold_entries 2
         };
         let request = norito::json!({
             "id": "hook",
-            "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "value": "42" } },
+            "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "42" } },
             "metadata": { "note": "demo" }
         });
         let response = request.clone();

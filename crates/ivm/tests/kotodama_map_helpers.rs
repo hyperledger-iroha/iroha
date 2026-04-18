@@ -104,7 +104,7 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
         ("Name", r#"name("alias")"#),
         (
             "AccountId",
-            r#"account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")"#,
+            r#"account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")"#,
         ),
         (
             "AssetDefinitionId",

@@ -46,6 +46,33 @@ public sealed class AddressFixtureTests
         }
     }
 
+    [Fact]
+    public void FullwidthSentinelLiteralFails()
+    {
+        var literal = Fixture.Value.Cases.Positive[0].Encodings.I105.String;
+        Assert.StartsWith("sora", literal, StringComparison.Ordinal);
+
+        var noncanonical = $"ｓｏｒａ{literal["sora".Length..]}";
+        var exception = Assert.Throws<AccountAddressException>(() =>
+            AccountAddress.Parse(noncanonical, AccountAddress.DefaultChainDiscriminant));
+
+        Assert.Equal(AccountAddressErrorCode.MissingI105Sentinel, exception.Code);
+    }
+
+    [Fact]
+    public void LegacyFullwidthKanaPayloadFails()
+    {
+        var literal = Fixture.Value.Cases.Positive
+            .Select(testCase => testCase.Encodings.I105.String)
+            .First(value => value.Contains("ﾛ", StringComparison.Ordinal));
+        var noncanonical = literal.Replace("ﾛ", "ロ", StringComparison.Ordinal);
+
+        var exception = Assert.Throws<AccountAddressException>(() =>
+            AccountAddress.Parse(noncanonical, AccountAddress.DefaultChainDiscriminant));
+
+        Assert.Equal(AccountAddressErrorCode.InvalidI105Char, exception.Code);
+    }
+
     private static AddressFixtureRoot LoadFixture()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "address_vectors.json");
@@ -60,6 +87,7 @@ public sealed class AddressFixtureTests
         {
             "ChecksumMismatch" => AccountAddressErrorCode.ChecksumMismatch,
             "InvalidI105Char" => AccountAddressErrorCode.InvalidI105Char,
+            "MissingI105Sentinel" => AccountAddressErrorCode.MissingI105Sentinel,
             "UnexpectedNetworkPrefix" => AccountAddressErrorCode.UnexpectedNetworkPrefix,
             "UnsupportedAddressFormat" => AccountAddressErrorCode.UnsupportedAddressFormat,
             _ => throw new InvalidOperationException($"unsupported fixture error kind: {value}"),

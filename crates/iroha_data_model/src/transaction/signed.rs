@@ -1812,7 +1812,7 @@ mod attachments_tests {
         }
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority = AccountId::parse_encoded(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
         .expect("valid authority")
         .into_account_id();

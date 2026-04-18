@@ -8,7 +8,7 @@ use ivm::{
 };
 
 const TEST_CALLER_ID: &str =
-    "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
 fn test_caller_account() -> AccountId {
     AccountId::parse_encoded(TEST_CALLER_ID)

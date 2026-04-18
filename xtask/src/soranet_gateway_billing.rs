@@ -723,9 +723,9 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir: output_dir.clone(),
-            payer: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                 .to_string(),
-            treasury: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                 .to_string(),
             asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
@@ -810,9 +810,9 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir,
-            payer: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                 .to_string(),
-            treasury: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
                 .to_string(),
             asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,

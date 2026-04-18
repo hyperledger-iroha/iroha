@@ -136,9 +136,9 @@ fn account(domain: &str, public_key: &str) -> AccountId {
 }
 
 const ACCOUNT_A_LITERAL: &str =
-    "sorauロ1PzEcクZkfGハ1レ9ミツRユDAuXヒyヤヰヰ3VgAク4ヌケWL6iXCEYDCW";
+    "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
 const ACCOUNT_B_LITERAL: &str =
-    "sorauロ1PヲヤJdミww6ニfgセ73xJkコモコタEソGzQuトg3ミeユウカメレサY1FC8K";
+    "sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K";
 
 fn parse_account_literal(raw: &str) -> AccountId {
     AccountId::parse_encoded(raw)

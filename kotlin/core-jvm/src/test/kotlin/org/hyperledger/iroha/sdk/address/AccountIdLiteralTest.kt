@@ -68,12 +68,12 @@ class AccountIdLiteralTest {
         val parseError = assertFailsWith<AccountAddressException> {
             AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
-        assertEquals(AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, parseError.code)
+        assertEquals(AccountAddressErrorCode.MISSING_I105_SENTINEL, parseError.code)
 
         val fromI105Error = assertFailsWith<AccountAddressException> {
             AccountAddress.fromI105(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
-        assertEquals(AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, fromI105Error.code)
+        assertEquals(AccountAddressErrorCode.MISSING_I105_SENTINEL, fromI105Error.code)
     }
 
     private fun sampleI105(fill: Int): String = AccountAddress

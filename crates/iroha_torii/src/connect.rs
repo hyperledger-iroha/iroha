@@ -2107,7 +2107,7 @@ mod tests {
             kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
                 wallet_pk: [1u8; 32],
                 account_id:
-                    "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+                    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
                         .into(),
                 permissions: None,
                 proof: None,

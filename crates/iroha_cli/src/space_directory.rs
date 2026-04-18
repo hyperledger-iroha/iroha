@@ -695,7 +695,7 @@ impl ManifestScaffoldProfileArgs {
             .unwrap_or_else(|| format!("profile.{dataspace}.v1"));
         let activation_epoch = self.activation_epoch.unwrap_or(manifest.activation_epoch);
         let governance_issuer = self.governance_issuer.clone().unwrap_or_else(|| {
-            "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A".to_owned()
+            "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned()
         });
         let governance_ticket = self
             .governance_ticket
@@ -704,8 +704,8 @@ impl ManifestScaffoldProfileArgs {
         let governance_quorum = self.governance_quorum.unwrap_or(1);
         let validators = if self.validators.is_empty() {
             vec![
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
                     .to_owned(),
             ]
         } else {
@@ -723,8 +723,8 @@ impl ManifestScaffoldProfileArgs {
         let da_quorum = self.da_quorum.unwrap_or(4);
         let da_attesters = if self.da_attesters.is_empty() {
             vec![
-                "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6".to_owned(),
-                "sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36".to_owned(),
+                "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6".to_owned(),
+                "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36".to_owned(),
             ]
         } else {
             self.da_attesters.clone()
@@ -1410,13 +1410,13 @@ mod tests {
         let profile_args = ManifestScaffoldProfileArgs {
             profile_id: Some("profile.cbdc.preview".to_owned()),
             governance_issuer: Some(
-                "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A".to_owned(),
+                "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned(),
             ),
             governance_ticket: Some("gov-ticket".to_owned()),
             governance_quorum: Some(4),
             validators: vec![
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
                     .to_owned(),
             ],
             validator_quorum: Some(2),
@@ -1424,8 +1424,8 @@ mod tests {
             da_class: Some("A".to_owned()),
             da_quorum: Some(8),
             da_attesters: vec![
-                "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6".to_owned(),
-                "sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36".to_owned(),
+                "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6".to_owned(),
+                "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36".to_owned(),
             ],
             da_rotation_epochs: Some(96),
             composability_group: Some(

@@ -22,61 +22,12 @@ CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
     "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 "
-    "katakana from the Iroha poem. Render and validate them with the intended "
-    "chain discriminant."
+    "half-width katakana from the Iroha poem. Render and validate them with "
+    "the intended chain discriminant."
 )
 
 BASE58_ALPHABET: Tuple[str, ...] = tuple(
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-)
-IROHA_POEM_KANA_FULLWIDTH: Tuple[str, ...] = (
-    "イ",
-    "ロ",
-    "ハ",
-    "ニ",
-    "ホ",
-    "ヘ",
-    "ト",
-    "チ",
-    "リ",
-    "ヌ",
-    "ル",
-    "ヲ",
-    "ワ",
-    "カ",
-    "ヨ",
-    "タ",
-    "レ",
-    "ソ",
-    "ツ",
-    "ネ",
-    "ナ",
-    "ラ",
-    "ム",
-    "ウ",
-    "ヰ",
-    "ノ",
-    "オ",
-    "ク",
-    "ヤ",
-    "マ",
-    "ケ",
-    "フ",
-    "コ",
-    "エ",
-    "テ",
-    "ア",
-    "サ",
-    "キ",
-    "ユ",
-    "メ",
-    "ミ",
-    "シ",
-    "ヱ",
-    "ヒ",
-    "モ",
-    "セ",
-    "ス",
 )
 IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
     "ｲ",
@@ -127,15 +78,9 @@ IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
     "ｾ",
     "ｽ",
 )
-I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
+I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
-I105_INDEX.update(
-    {
-        symbol: len(BASE58_ALPHABET) + idx
-        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
-    }
-)
 
 
 class AccountAddressError(ValueError):
@@ -427,7 +372,7 @@ def i105_discriminant_from_sentinel(encoded: str) -> Optional[int]:
     if not encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
         return None
     index = len(I105_NUMERIC_SENTINEL_PREFIX)
-    while index < len(encoded) and encoded[index].isdigit():
+    while index < len(encoded) and "0" <= encoded[index] <= "9":
         index += 1
     if index == len(I105_NUMERIC_SENTINEL_PREFIX):
         return None

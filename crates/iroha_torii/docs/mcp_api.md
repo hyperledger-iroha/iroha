@@ -406,7 +406,7 @@ supported `iroha.*` tools.
     "name": "torii.get_v1_accounts_account_id_transactions",
     "arguments": {
       "path": {
-        "account_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+        "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
       },
       "query": {
         "limit": 20,
@@ -426,7 +426,7 @@ supported `iroha.*` tools.
   "params": {
     "name": "iroha.accounts.transactions",
     "arguments": {
-      "account_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+      "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
       "limit": 20,
       "offset": 0
     }

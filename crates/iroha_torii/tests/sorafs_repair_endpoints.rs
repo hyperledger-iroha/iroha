@@ -52,7 +52,7 @@ fn repair_report(
     RepairReportV1 {
         version: REPAIR_REPORT_VERSION_V1,
         ticket_id: RepairTicketId(ticket.to_string()),
-        auditor_account: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+        auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
             .to_string(),
         submitted_at_unix,
         evidence: RepairEvidenceV1 {

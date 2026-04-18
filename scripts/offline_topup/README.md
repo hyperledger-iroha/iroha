@@ -18,14 +18,14 @@ $ scripts/offline_topup/run.sh \
 ```jsonc
 {
   "operator": {
-    "account": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",    // required unless overridden per allowance
+    "account": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",    // required unless overridden per allowance
     "private_key": "ed25519:..."        // optional, per-entry overrides take precedence
   },
   "allowances": [
     {
       "label": "retail-demo",           // folder name, used in logs
-      "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-      "operator": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", // optional per entry override for operator account
+      "controller": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+      "operator": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", // optional per entry override for operator account
       "allowance_asset": "<base58-asset-definition-id>#<i105-account-id>",
       "amount": "250.00",
       "issued_at_ms": 1730314876000,

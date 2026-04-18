@@ -170,7 +170,7 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         return try {
             val alias = "retail-wallet-demo"
             val payload = TransactionPayload.builder()
-                .setAuthority("sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
+                .setAuthority("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
                 .putMetadata("scenario", "preview")
                 .build()
             val options = OfflineEnvelopeOptions.builder()

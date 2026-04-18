@@ -72,8 +72,8 @@ public final class OfflineWalletTest {
           {
             "receipts": [
               {
-                "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                "to": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "from": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                "to": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                 "amount": "3.14"
               }
@@ -86,10 +86,10 @@ public final class OfflineWalletTest {
       final OfflineTransferList.OfflineTransferItem item =
           new OfflineTransferList.OfflineTransferItem(
               "bundle",
-              "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-              "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-              "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-              "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+              "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+              "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+              "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               1,
               "3.14",
@@ -102,8 +102,8 @@ public final class OfflineWalletTest {
       assert entries.size() == 1 : "expected single audit entry";
       final OfflineAuditEntry entry = entries.get(0);
       assert "bundle".equals(entry.txId()) : "tx id mismatch";
-      assert "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".equals(entry.senderId()) : "sender mismatch";
-      assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(entry.receiverId()) : "receiver mismatch";
+      assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(entry.senderId()) : "sender mismatch";
+      assert "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".equals(entry.receiverId()) : "receiver mismatch";
       assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(entry.assetId()) : "asset mismatch";
       assert "3.14".equals(entry.amount()) : "amount mismatch";
     } finally {
@@ -168,7 +168,7 @@ public final class OfflineWalletTest {
       final OfflineAllowanceList.OfflineAllowanceItem allowance =
           new OfflineAllowanceList.OfflineAllowanceItem(
               "deadbeef",
-              "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "Alice",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
@@ -305,7 +305,7 @@ public final class OfflineWalletTest {
       final OfflineAllowanceList.OfflineAllowanceItem allowance =
           new OfflineAllowanceList.OfflineAllowanceItem(
               "deadbeef",
-              "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
               "Merchant Wonderland",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
@@ -331,7 +331,7 @@ public final class OfflineWalletTest {
       assert records.containsKey("deadbeef") : "missing certificate entry";
       @SuppressWarnings("unchecked")
       final Map<String, Object> entry = (Map<String, Object>) records.get("deadbeef");
-      assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(entry.get("controller_id"))
+      assert "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".equals(entry.get("controller_id"))
           : "controller id missing from export";
       assert entry.get("policy_expires_at_ms") instanceof Number
           : "policy deadline missing";
@@ -397,7 +397,7 @@ public final class OfflineWalletTest {
             .formatted(maxTokenAgeMs);
     return new OfflineAllowanceList.OfflineAllowanceItem(
         certificateId,
-        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
         "Alice",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",

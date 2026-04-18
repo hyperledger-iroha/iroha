@@ -50,24 +50,13 @@ from urllib.parse import quote
 import requests
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-IROHA_POEM_KANA_FULLWIDTH = (
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-)
 IROHA_POEM_KANA_HALFWIDTH = (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
     "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 )
-I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
+I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
-I105_INDEX.update(
-    {
-        symbol: len(BASE58_ALPHABET) + idx
-        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
-    }
-)
 I105_BASE = len(I105_ALPHABET)
 I105_CHECKSUM_LEN = 6
 I105_BECH32M_CONST = 0x2BC830A3
@@ -181,7 +170,7 @@ def _strip_i105_sentinel(encoded: str) -> str:
             return encoded[len(sentinel) :]
     if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
         index = len(I105_NUMERIC_SENTINEL_PREFIX)
-        while index < len(encoded) and encoded[index].isdigit():
+        while index < len(encoded) and "0" <= encoded[index] <= "9":
             index += 1
         if index > len(I105_NUMERIC_SENTINEL_PREFIX):
             return encoded[index:]

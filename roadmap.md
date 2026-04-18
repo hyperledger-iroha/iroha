@@ -1,6 +1,26 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
+
+Latest sync (2026-04-18 Sumeragi lock-override regression coverage):
+The consensus test suite now pins the incoming highest-QC path for the case
+where the local locked payload is unavailable. A known candidate with a newer
+view can progress, while same-view divergence still waits for the locked
+payload. The shared locked-QC predicate also has direct unit coverage for the
+same condition ordering, so future changes are less likely to reintroduce
+strict structural-only validation.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_core --lib highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missing -- --nocapture`
+  - `cargo test -p iroha_core --lib highest_qc_extends_locked -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_satisfies_locked_if_present -- --nocapture`
+- open work after this slice:
+  - run full `cargo test --workspace` and strict clippy during a longer clean
+    validation window
 
 Latest sync (2026-04-17 Kotodama zero-arg entrypoint hints and canonical domain fixtures):
 Kotodama manifest generation no longer looks up every public/view entrypoint
@@ -9928,8 +9948,7 @@ and
 now carry the broader Python SDK validation follow-up:
 
 - the Python I105 helpers now validate the restored mixed alphabet directly:
-  Base58 plus the 47 katakana from the Iroha poem, with halfwidth Iroha-kana
-  aliases still accepted on decode;
+  Base58 plus the 47 half-width katakana from the Iroha poem;
 - the governance ZK ballot owner-normalization path now accepts canonical
   Python-generated i105 literals again;
 - the broader Python Torii RWA read surface remains green under the full

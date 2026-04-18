@@ -15109,7 +15109,7 @@ test("listKaigiRelays normalizes summary payloads", async () => {
         total: "2",
         items: [
           {
-            relay_id: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+            relay_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             domain: "kaigi",
             bandwidth_class: 5,
             hpke_fingerprint_hex: "aa".repeat(32),

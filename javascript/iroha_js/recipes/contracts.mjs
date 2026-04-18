@@ -14,7 +14,7 @@
  *   CONTRACT_LEASE_EXPIRY_MS            — Optional alias lease expiry
  *
  * Examples:
- *   AUTHORITY=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
+ *   AUTHORITY=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
  *   PRIVATE_KEY_HEX=fedcba... \
  *   CONTRACT_CODE_PATH=./artifacts/contract.to \
  *   CONTRACT_ALIAS=router::universal \

@@ -312,7 +312,7 @@ mod tests {
     impl Visit for NoopVisitor {}
 
     const ALICE_ACCOUNT_ID_STR: &str =
-        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+        "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
     #[test]
     fn visit_find_parameters_dispatches() {

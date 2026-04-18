@@ -10,7 +10,7 @@
     "request_hash": "hash:25BD3C09F859A100396B5FD39066A3AEC5FB2EE6458D8FEDD0E403A35B5B3745#8EF1",
     "entries": [
       {
-        "oracle_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        "oracle_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         "observation_hash": "hash:FFBC1AF96B69C8942738E909545EC7CD292575DBCF45EE36BF1CD0927C84C001#13ED",
         "value": {
           "mantissa": "36956587003717982388190835231522344358",
@@ -19,7 +19,7 @@
         "outlier": false
       },
       {
-        "oracle_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+        "oracle_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
         "observation_hash": "hash:99C53FEC11DDFA9FFB978070E65F6B2538EF3E1B29CF42F5345E340F4F41FCDD#3FDE",
         "value": {
           "mantissa": "36956587003717982388190835231522344358",
@@ -28,7 +28,7 @@
         "outlier": false
       }
     ],
-    "submitter": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+    "submitter": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
   },
   "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 }

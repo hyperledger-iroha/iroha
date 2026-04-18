@@ -42,8 +42,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
 
     func testOfflineCashEndpointsPostRequestsAndKeepRevocationReads() async throws {
         let client = makeClient()
-        let aliceId = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
-        let bobId = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+        let aliceId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let bobId = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let deviceBinding = ToriiOfflineDeviceBinding(
             platform: "ios",
@@ -312,8 +312,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
 
     func testOfflineCashPostHeadersUseStableIdempotencyKeysAndUniqueRequestIds() async throws {
         let client = makeClient()
-        let aliceId = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
-        let bobId = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+        let aliceId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let bobId = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let deviceBinding = ToriiOfflineDeviceBinding(
             platform: "ios",
@@ -619,7 +619,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         {
           "authorization_id": "authorization_b9faaf81e8f788b0a0a1dd80a2555aebbf52481f87b1ce0a4c926b7a8af748e4",
           "lineage_id": "lineage_b70a95d4e5da112c50a36c3270e0282b2f79bdd29f216d4cfffb7aef3e2154d7",
-          "account_id": "sorauロ1PリhワAリキwモ5ePXツfXR5dQbヘ2ヤN22Wムn2gタDヌYロセ1J8NG4W",
+          "account_id": "sorauﾛ1PﾘhﾜAﾘｷwﾓ5ePXﾂfXR5dQbﾍ2ﾔN22Wﾑn2gﾀDﾇYﾛｾ1J8NG4W",
           "verdict_id": "verdict_d8faf3ca1a7beb981edc7b883feb8f76e5a6cf5b37a4af7dcf66a420f0d0b691",
           "max_balance": "1000000",
           "max_tx_value": "1000000",

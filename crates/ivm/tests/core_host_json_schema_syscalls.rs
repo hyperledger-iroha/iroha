@@ -471,7 +471,7 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
 
 #[test]
 fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
-    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let expected_owner = AccountId::parse_encoded(owner_literal)
         .expect("valid canonical account id")
         .into_account_id()
@@ -616,7 +616,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_owner_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"owner"))
         .unwrap();
-    let owner_literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let p_owner = vm
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();

@@ -19,9 +19,9 @@ public sealed class AccountAddress
     private static readonly string[] CanonicalI105Alphabet =
     [
         .. "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".Select(static ch => ch.ToString()),
-        "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ", "レ", "ソ",
-        "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ", "コ", "エ", "テ", "ア",
-        "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
+        "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ",
+        "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ",
+        "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
     ];
 
     private static readonly IReadOnlyDictionary<string, int> I105Index = BuildI105Index();
@@ -84,7 +84,7 @@ public sealed class AccountAddress
     public byte[] PublicKey => publicKey is null ? [] : [.. publicKey];
 
     public static string I105Warning =>
-        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
+        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
     public byte[] CanonicalBytes() => [.. canonicalBytes];
 
@@ -342,22 +342,22 @@ public sealed class AccountAddress
 
     private static (ushort Discriminant, string Payload) SplitI105Sentinel(string encoded)
     {
-        if (encoded.StartsWith("sora", StringComparison.Ordinal) || encoded.StartsWith("ｓｏｒａ", StringComparison.Ordinal))
+        if (encoded.StartsWith("sora", StringComparison.Ordinal))
         {
             return (DefaultChainDiscriminant, encoded["sora".Length..]);
         }
 
-        if (encoded.StartsWith("test", StringComparison.Ordinal) || encoded.StartsWith("ｔｅｓｔ", StringComparison.Ordinal))
+        if (encoded.StartsWith("test", StringComparison.Ordinal))
         {
             return (TestChainDiscriminant, encoded["test".Length..]);
         }
 
-        if (encoded.StartsWith("dev", StringComparison.Ordinal) || encoded.StartsWith("ｄｅｖ", StringComparison.Ordinal))
+        if (encoded.StartsWith("dev", StringComparison.Ordinal))
         {
             return (DevChainDiscriminant, encoded["dev".Length..]);
         }
 
-        if (encoded.StartsWith("n", StringComparison.Ordinal) || encoded.StartsWith("ｎ", StringComparison.Ordinal))
+        if (encoded.StartsWith("n", StringComparison.Ordinal))
         {
             var digits = new StringBuilder();
             foreach (var ch in encoded[1..])
@@ -576,19 +576,6 @@ public sealed class AccountAddress
         for (var index = 0; index < CanonicalI105Alphabet.Length; index += 1)
         {
             values[CanonicalI105Alphabet[index]] = index;
-        }
-
-        string[] halfWidthKana =
-        [
-            "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ",
-            "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ",
-            "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-        ];
-
-        var base58Length = 58;
-        for (var index = 0; index < halfWidthKana.Length; index += 1)
-        {
-            values[halfWidthKana[index]] = base58Length + index;
         }
 
         return values;
