@@ -953,7 +953,10 @@ impl Actor {
         }
     }
 
-    fn block_sync_qc_extends_locked_chain(&self, qc: &crate::sumeragi::consensus::Qc) -> bool {
+    pub(super) fn block_sync_qc_extends_locked_chain(
+        &self,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
         let Some(lock) = self.locked_qc else {
             return true;
         };
@@ -966,7 +969,7 @@ impl Actor {
         })
     }
 
-    fn block_sync_qc_same_height_conflict(
+    pub(super) fn block_sync_qc_same_height_conflict(
         lock: crate::sumeragi::consensus::QcHeaderRef,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> bool {

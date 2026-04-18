@@ -9196,6 +9196,76 @@ async fn block_sync_qc_is_stale_against_lock_matches_lower_height_only() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_qc_lock_override_handles_missing_locked_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA1; Hash::LENGTH],
+        )),
+        height: 10,
+        view: 2,
+        epoch: 0,
+    };
+    actor.locked_qc = Some(lock);
+    assert!(
+        !actor.block_known_for_lock(lock.subject_block_hash),
+        "test lock should be missing locally"
+    );
+
+    let make_qc = |height: u64, view: u64, hash_byte: u8| crate::sumeragi::consensus::Qc {
+        phase: Phase::Commit,
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [hash_byte; Hash::LENGTH],
+        )),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        mode_tag: super::PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+
+    let same_height_newer_view = make_qc(10, 3, 0xA2);
+    assert!(
+        actor.block_sync_qc_extends_locked_chain(&same_height_newer_view),
+        "newer-view block-sync QC should override a missing older lock payload"
+    );
+    assert!(
+        !Actor::block_sync_qc_same_height_conflict(lock, &same_height_newer_view),
+        "newer-view same-height QC should not be treated as an unrecoverable lock conflict"
+    );
+
+    let lower_height_newer_view = make_qc(9, 3, 0xA3);
+    assert!(
+        !actor.block_sync_qc_is_stale_against_lock(&lower_height_newer_view),
+        "newer-view QC below locked height should not be dropped as stale before lock override"
+    );
+
+    let same_height_same_view = make_qc(10, 2, 0xA4);
+    assert!(
+        !actor.block_sync_qc_extends_locked_chain(&same_height_same_view),
+        "same-view divergent block-sync QC must still fail the lock check"
+    );
+    assert!(
+        Actor::block_sync_qc_same_height_conflict(lock, &same_height_same_view),
+        "same-view same-height divergent QC remains an unrecoverable lock conflict"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -14085,6 +14155,65 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
         "missing locked payload should trigger a fetch request"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn process_precommit_qc_accepts_newer_view_when_locked_payload_missing() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 1,
+        view: 0,
+        epoch: 0,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 1, Some(locked_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, 2, 1));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        1,
+        actor.epoch_for_height(2),
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    assert!(
+        actor.process_precommit_qc(&qc, true, false),
+        "newer-view QC should override a missing older lock payload"
+    );
+    let locked = actor.locked_qc.expect("locked qc updated");
+    assert_eq!(locked.subject_block_hash, block_hash);
+    assert_eq!(locked.view, 1);
+    let highest = actor.highest_qc.expect("highest qc updated");
+    assert_eq!(highest.subject_block_hash, block_hash);
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "newer-view override should not request the old lock payload before progressing"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
     harness.shutdown.send();
 }
 
@@ -25219,6 +25348,59 @@ async fn emit_precommit_vote_requests_missing_locked_payload_before_skipping() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn emit_precommit_vote_allows_newer_view_when_locked_payload_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock should be missing locally"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
+    insert_validated_pending(actor, block.clone());
+
+    let lock_epoch = actor.epoch_for_height(1);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 1,
+        view: 0,
+        epoch: lock_epoch,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let emitted = actor.emit_precommit_vote(
+        block.hash(),
+        1,
+        1,
+        actor.epoch_for_height(1),
+        ValidationStatus::Valid,
+        &topology,
+        block.header().prev_block_hash(),
+        Some((Hash::new([]), Hash::new([]))),
+    );
+
+    assert!(
+        emitted,
+        "newer-view precommit should not be blocked by an older missing lock payload"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "newer-view override should not request the old lock payload before voting"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn precommit_vote_rejects_older_view_after_newer_conflict() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -27773,6 +27955,164 @@ async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
             .values()
             .any(|vote| vote.block_hash == locked_block.hash()),
         "precommit votes extending the lock should be retained"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prune_precommit_votes_conflicting_with_lock_keeps_newer_view_override() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(2).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    actor
+        .kura
+        .store_block(locked_block.clone())
+        .expect("store locked block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_block.hash());
+
+    let same_view_block = sample_block(2, 0, None);
+    let newer_view_block = sample_block(2, 1, None);
+    actor.pending.pending_blocks.insert(
+        same_view_block.hash(),
+        PendingBlock::new(same_view_block.clone(), Hash::prehashed([0x68; 32]), 2, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        newer_view_block.hash(),
+        PendingBlock::new(newer_view_block.clone(), Hash::prehashed([0x69; 32]), 2, 1),
+    );
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_block.hash(),
+        height: 1,
+        view: 0,
+        epoch,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+
+    let mut same_view_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: same_view_block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut same_view_vote, &chain, &topology, &harness.key_pairs);
+    actor.vote_log.insert(
+        (
+            same_view_vote.phase,
+            same_view_vote.height,
+            same_view_vote.view,
+            same_view_vote.epoch,
+            same_view_vote.signer,
+        ),
+        same_view_vote,
+    );
+
+    let mut newer_view_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: newer_view_block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 1,
+        epoch,
+        highest_qc: None,
+        signer: 1,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut newer_view_vote, &chain, &topology, &harness.key_pairs);
+    actor.vote_log.insert(
+        (
+            newer_view_vote.phase,
+            newer_view_vote.height,
+            newer_view_vote.view,
+            newer_view_vote.epoch,
+            newer_view_vote.signer,
+        ),
+        newer_view_vote,
+    );
+
+    actor.prune_precommit_votes_conflicting_with_lock(lock);
+
+    assert!(
+        actor
+            .vote_log
+            .values()
+            .all(|vote| vote.block_hash != same_view_block.hash()),
+        "same-view divergent precommit votes should still be pruned"
+    );
+    assert!(
+        actor
+            .vote_log
+            .values()
+            .any(|vote| vote.block_hash == newer_view_block.hash()),
+        "newer-view divergent precommit votes should be retained for lock override"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_filter_allows_newer_view_when_locked_payload_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
+    let other_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 3,
+        view: 2,
+        epoch: actor.epoch_for_height(3),
+    });
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock should be missing locally"
+    );
+
+    let same_view_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: other_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 3,
+        view: 2,
+        epoch: actor.epoch_for_height(3),
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    assert!(
+        actor.drop_precommit_vote_for_lock(&same_view_vote),
+        "same-view conflicting precommit vote should still be dropped"
+    );
+
+    let newer_view_vote = crate::sumeragi::consensus::Vote {
+        view: 3,
+        ..same_view_vote
+    };
+    assert!(
+        !actor.drop_precommit_vote_for_lock(&newer_view_vote),
+        "newer-view precommit vote should not be dropped before lock override"
     );
 
     harness.shutdown.send();
@@ -117740,6 +118080,59 @@ async fn highest_qc_extends_locked_accepts_divergent_newer_view() {
     assert!(
         actor.precommit_qc_extends_locked(Phase::Commit, divergent_hash, 2, 2, epoch),
         "newer-view precommit QC must also override an older divergent lock"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn highest_qc_extends_locked_rejects_divergent_same_view() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_block = sample_block(1, 2, None);
+    let locked_hash = locked_block.hash();
+    let divergent_block = sample_block(2, 2, None);
+    let divergent_hash = divergent_block.hash();
+    actor
+        .kura
+        .store_block(locked_block)
+        .expect("store locked block");
+    actor
+        .kura
+        .store_block(divergent_block)
+        .expect("store divergent block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(locked_hash);
+
+    let epoch = actor.epoch_for_height(1);
+    let lock = QcHeaderRef {
+        height: 1,
+        view: 2,
+        epoch,
+        subject_block_hash: locked_hash,
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let highest = QcHeaderRef {
+        height: 2,
+        view: 2,
+        epoch,
+        subject_block_hash: divergent_hash,
+        phase: Phase::Prepare,
+    };
+
+    assert!(
+        !actor.highest_qc_extends_locked(highest),
+        "same-view divergent highest QC must still fail the structural lock check"
+    );
+    assert!(
+        !actor.precommit_qc_extends_locked(Phase::Commit, divergent_hash, 2, 2, epoch),
+        "same-view divergent precommit QC must still fail the structural lock check"
     );
 
     super::status::set_locked_qc(0, 0, None);
