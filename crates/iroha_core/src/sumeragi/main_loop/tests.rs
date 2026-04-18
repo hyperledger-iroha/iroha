@@ -66723,6 +66723,7 @@ async fn superseded_frontier_owner_with_commit_evidence_serves_exact_body_fetch(
         replacement_hash,
         height,
         replacement_view,
+        false,
     );
 
     let retained = actor
