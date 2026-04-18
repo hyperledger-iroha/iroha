@@ -202,6 +202,7 @@ def load_existing_config(path: Path) -> dict[str, Any] | None:
     account = data.get("account") or {}
     public_key = account.get("public_key")
     private_key = account.get("private_key")
+    account_id = account.get("id")
     if not isinstance(public_key, str) or not isinstance(private_key, str):
         return None
     if public_key in PLACEHOLDER_VALUES or private_key in PLACEHOLDER_VALUES:
@@ -214,6 +215,7 @@ def load_existing_config(path: Path) -> dict[str, Any] | None:
     return {
         "chain": data.get("chain") or DEFAULT_CHAIN_ID,
         "domain": normalize_domain(account.get("domain")),
+        "account_id": account_id.strip() if isinstance(account_id, str) else None,
         "public_key": public_key,
         "private_key": private_key,
         "public_key_raw_hex": public_key_raw,
@@ -319,6 +321,7 @@ def write_config(
     chain: str,
     torii_root: str,
     domain: str,
+    account_id: str,
     public_key: str,
     private_key: str,
     chain_discriminant: int,
@@ -351,6 +354,7 @@ def write_config(
             "",
             "[account]",
             f'domain = "{domain}"',
+            f'id = "{account_id}"',
             f'public_key = "{public_key}"',
             f'private_key = "{private_key}"',
             f"chain_discriminant = {chain_discriminant}",
@@ -445,9 +449,11 @@ def main(argv: list[str] | None = None) -> int:
         generated_keys = False
         basic_auth = existing["basic_auth"]
         nonce = existing["nonce"]
-        chain = existing["chain"]
-        chain_discriminant = int(existing["chain_discriminant"])
-        domain = existing["domain"]
+        # Reuse the generated key material, but honor the current runtime arguments so a
+        # redeployed network can refresh chain/domain settings without forcing a new signer.
+        chain = args.chain_id
+        chain_discriminant = int(args.chain_discriminant)
+        domain = normalize_domain(args.domain)
 
     alias = build_alias(args.alias_prefix, public_key, domain)
     account_id = None
@@ -478,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         chain=chain,
         torii_root=args.torii_root,
         domain=domain,
+        account_id=account_id,
         public_key=public_key,
         private_key=private_key,
         chain_discriminant=chain_discriminant,
