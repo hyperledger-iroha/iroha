@@ -384,6 +384,60 @@ pub mod extractors {
     /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`;
     /// decode failures surface as `400 Bad Request` to distinguish payload issues from negotiation.
     #[derive(Clone, Copy, Debug)]
+    pub struct Norito<T>(pub T);
+
+    impl<S, T> FromRequest<S> for Norito<T>
+    where
+        Bytes: FromRequest<S>,
+        S: Send + Sync,
+        T: SupportsNoritoDecode + Send + 'static,
+    {
+        type Rejection = Response;
+
+        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            let declared = req
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|hv| hv.to_str().ok())
+                .map(str::trim)
+                .filter(|ct| !ct.is_empty())
+                .map(str::to_owned);
+
+            let Some(raw) = declared.as_deref() else {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "Norito requests must set `Content-Type: {}`",
+                        super::NORITO_MIME_TYPE
+                    ),
+                )
+                    .into_response());
+            };
+
+            if !super::is_norito_media_type(raw) {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "Norito requests must set `Content-Type: {}` (got `{raw}`)",
+                        super::NORITO_MIME_TYPE
+                    ),
+                )
+                    .into_response());
+            }
+
+            let body = Bytes::from_request(req, state)
+                .await
+                .map_err(IntoResponse::into_response)?;
+
+            decode_as_norito::<T>(&body).map(Norito)
+        }
+    }
+
+    /// Extractor of Norito-encoded, versioned data from the request body.
+    ///
+    /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`;
+    /// decode failures surface as `400 Bad Request` to distinguish payload issues from negotiation.
+    #[derive(Clone, Copy, Debug)]
     pub struct NoritoVersioned<T>(pub T);
 
     impl<S, T> FromRequest<S> for NoritoVersioned<T>

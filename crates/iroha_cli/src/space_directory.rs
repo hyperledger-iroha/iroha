@@ -181,7 +181,8 @@ impl Run for ManifestEncodeArgs {
         let manifest: AssetPermissionManifest = norito::json::from_slice(&json_bytes)
             .wrap_err("manifest JSON could not be parsed as AssetPermissionManifest")?;
 
-        let encoded = manifest.encode();
+        let encoded = norito::to_bytes(&manifest)
+            .wrap_err("failed to encode manifest as canonical Norito payload")?;
 
         let out_path = self.resolve_out();
         if let Some(parent) = out_path.parent()
@@ -694,9 +695,10 @@ impl ManifestScaffoldProfileArgs {
             .clone()
             .unwrap_or_else(|| format!("profile.{dataspace}.v1"));
         let activation_epoch = self.activation_epoch.unwrap_or(manifest.activation_epoch);
-        let governance_issuer = self.governance_issuer.clone().unwrap_or_else(|| {
-            "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned()
-        });
+        let governance_issuer = self
+            .governance_issuer
+            .clone()
+            .unwrap_or_else(|| "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned());
         let governance_ticket = self
             .governance_ticket
             .clone()
@@ -705,8 +707,7 @@ impl ManifestScaffoldProfileArgs {
         let validators = if self.validators.is_empty() {
             vec![
                 "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
-                    .to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
             ]
         } else {
             self.validators.clone()
@@ -1353,9 +1354,14 @@ mod tests {
         assert!(hash_path.exists(), "missing hash payload");
 
         let encoded = std::fs::read(&to_path).expect("read encoded manifest");
-        let mut reader: &[u8] = &encoded;
-        let decoded = AssetPermissionManifest::decode(&mut reader).expect("decode Norito manifest");
+        let decoded: AssetPermissionManifest =
+            norito::decode_from_bytes(&encoded).expect("decode Norito manifest");
         assert_eq!(decoded, manifest, "encoded manifest differs");
+        assert_eq!(
+            encoded,
+            norito::to_bytes(&manifest).expect("encode canonical Norito manifest"),
+            "encode command must emit canonical Norito bytes"
+        );
 
         let expected_hash = iroha_crypto::Hash::new(&encoded);
         let hash_body = std::fs::read_to_string(&hash_path).expect("read manifest hash file");
@@ -1391,7 +1397,9 @@ mod tests {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
             asset: Some(
-                AssetDefinitionId::new(iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
+                AssetDefinitionId::new(
+                    iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                        .expect("domain"),
                     "cbdc".parse().expect("name"),
                 )
                 .to_string(),
@@ -1416,8 +1424,7 @@ mod tests {
             governance_quorum: Some(4),
             validators: vec![
                 "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
-                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
-                    .to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
             ],
             validator_quorum: Some(2),
             protected_namespaces: vec!["cbdc".to_owned(), "gov".to_owned()],
@@ -1536,6 +1543,9 @@ mod tests {
         assert!(hash_path.exists(), "custom hash path was not created");
 
         let encoded = std::fs::read(&out_path).expect("read encoded manifest");
+        let decoded: AssetPermissionManifest =
+            norito::decode_from_bytes(&encoded).expect("decode canonical Norito manifest");
+        assert_eq!(decoded, manifest, "custom output encoded manifest differs");
         let expected_hash = iroha_crypto::Hash::new(&encoded);
         let hash_body = std::fs::read_to_string(&hash_path).expect("read manifest hash file");
         assert_eq!(

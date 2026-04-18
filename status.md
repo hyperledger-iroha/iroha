@@ -2,6 +2,57 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Torii deploy-bundle receipt artifact cleanup
+- `/.gitignore` now ignores
+  `/crates/iroha_torii/storage/torii/contract_deploy_bundles/`, so generated
+  Torii deploy-bundle receipt JSONs from crate-local runs stay out of git.
+- Removed the tracked generated receipt JSONs under
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/storage/torii/contract_deploy_bundles/`.
+  The receipt tests already use `tempdir()` plus `OverrideGuard`, so no checked-in
+  fixture data is required for this path.
+- Validation for this slice:
+  - `git diff --check`
+
+## 2026-04-18 Follow-up: Nexus autoscale activity gate and canonical manifest fixtures
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/autoscale_localnet.rs`
+  now keeps one submitted transaction hash per ingress client and treats any
+  observed pipeline status on those samples (`Queued`, `Approved`,
+  `Committed`, `Applied`, `Rejected`, or `Expired`) as cycle activity. The
+  autoscale harness no longer dies early waiting for committed counters before
+  it ever reaches the expansion/top-up phase.
+- With that harness fix, both autoscale localnet regressions are green again on
+  the current tree:
+  - `nexus::autoscale_localnet::nexus_autoscale_expands_and_contracts_lanes_in_localnet`
+  - `nexus::autoscale_localnet::nexus_autoscale_repeats_expand_contract_cycles_in_localnet`
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/space_directory.rs`
+  now writes capability manifests with canonical Norito bytes via
+  `norito::to_bytes(...)` instead of the bare codec payload. The CLI manifest
+  tests now decode the emitted payload and assert byte-for-byte equality with
+  the canonical Norito frame.
+- `/Users/takemiyamakoto/dev/iroha/fixtures/space_directory/README.md` now
+  documents the real regeneration command
+  (`cargo run -p iroha_cli --bin iroha -- app space-directory manifest encode
+  ...`), and the four capability `.manifest.to` fixtures were regenerated in
+  canonical form:
+  - `cbdc_wholesale`: `0042f6669af7f7efd3291d5a2f5c0414d881bbea7309f281f4b333ec7bf9f297`
+  - `retail_dapp_access`: `4d529963d3f2a29f77362404738e0d5b458f9cc4b80acef5f8dbdbf80ff56d77`
+  - `eu_regulator_audit`: `1c37c92ff6305b65307bd0f21bc5c8516a270cc072352fd513bb55d40b10c0ff`
+  - `jp_regulator_supervision`: `e90a3624e36dade26b0fdd8175cfa8a36c9dbfecc2dd9e1c3e1268fac779509f`
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/utils.rs` now
+  exposes a Norito-only extractor for internal Torii proxy routes, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` uses it for
+  `ToriiProxyRequestV2`. That fixes the axum handler mismatch on the Norito-only
+  proxy body path while keeping the owned request handoff that the proxy
+  execution flow now expects.
+- Focused validation completed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli cargo build -p iroha_cli --bin iroha`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli cargo test -p iroha_cli manifest_encode_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-widen cargo test -p integration_tests --test nexus_and_streaming nexus::cbdc_whitelist::cbdc_capability_manifests_enforce_policy_semantics -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-fix cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests:: -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-fix cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_expands_and_contracts_lanes_in_localnet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-fix cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_repeats_expand_contract_cycles_in_localnet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-autoscale-fix NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --test-threads=1 --nocapture`
+
 ## 2026-04-18 Follow-up: Sumeragi pending activation window refresh
 - Cached future proposals that become the next frontier after their parent commits now receive a fresh pending age, progress age, and quorum-reschedule window instead of inheriting stale cache timers from before activation.
 - The Sumeragi actor refreshes both cached and in-flight pending blocks for the newly activated height, so a proposal that was validly held back while waiting for its parent is not immediately timed out when the commit pipeline advances the tip.
