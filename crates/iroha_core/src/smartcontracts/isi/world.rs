@@ -12765,7 +12765,7 @@ pub mod isi {
                 .expect("register ALICE account");
         }
 
-        fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
+        fn configure_universal_dataspace(stx: &mut StateTransaction<'_, '_>) {
             let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
@@ -14964,7 +14964,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
@@ -15001,7 +15001,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             stx.nexus.lane_relay_emergency.enabled = true;
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
@@ -15035,7 +15035,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -15069,7 +15069,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
             let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
@@ -15103,7 +15103,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -15136,7 +15136,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let missing = PeerId::new(
@@ -15171,7 +15171,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
@@ -15208,7 +15208,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
@@ -15241,7 +15241,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
@@ -15274,7 +15274,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
@@ -15325,7 +15325,7 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let validator = seed_live_peer(

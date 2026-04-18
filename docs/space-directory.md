@@ -295,10 +295,11 @@ change state or new UAID accounts appear.
 > tweaks keep the behavior deterministic.【crates/iroha_core/src/state.rs:5990】【crates/iroha_core/src/state.rs:2555】
 
 **Admission enforcement.** Transactions signed by UAID-backed accounts are
-routed using global UAID lookup. If a Space Directory manifest exists for the
-target dataspace it must be active; missing target-dataspace manifests do not
-trigger a binding-specific rejection. Inactive manifests are rejected through
-the standard `LaneComplianceDenied` path with a deterministic reason string.
+routed through the UAID's active dataspace binding. The target dataspace must
+have an active binding for the signing account; missing bindings are rejected
+through `LaneComplianceDenied`. If a Space Directory manifest exists for the
+target dataspace it must be active. Missing target-dataspace manifests are only
+accepted when the derived binding exists.
 
 ### Manifest introspection API
 

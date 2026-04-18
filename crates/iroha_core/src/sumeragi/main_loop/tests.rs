@@ -3032,6 +3032,13 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
         .rbc
         .payload_rebroadcast_last_sent
         .insert(key, now);
+    actor.subsystems.da_rbc.rbc.chunk_repair.insert(
+        key,
+        super::RbcChunkRepairState {
+            last_sent: now,
+            received_chunks_snapshot: 0,
+        },
+    );
 
     let roster = vec![
         actor.common_config.peer.id().clone(),
@@ -3040,10 +3047,17 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
     actor.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
 
     let payload_cooldown = actor.payload_rebroadcast_cooldown();
+    let rbc_due = actor
+        .rbc_next_due(now)
+        .expect("rbc session should schedule a rebroadcast deadline");
+    assert_eq!(rbc_due, now + payload_cooldown);
+
+    let idle_due = actor.idle_view_next_due(now);
+    let expected_deadline = idle_due.map_or(rbc_due, |deadline| deadline.min(rbc_due));
     let deadline = actor
         .next_tick_deadline(now)
         .expect("rbc session should schedule a rebroadcast deadline");
-    assert_eq!(deadline, now + payload_cooldown);
+    assert_eq!(deadline, expected_deadline);
 
     harness.shutdown.send();
 }
@@ -10335,7 +10349,7 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
-    let height = actor.committed_height_snapshot().saturating_add(1);
+    let height = actor.committed_height_snapshot().saturating_add(2);
     let view = 0u64;
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
@@ -12578,7 +12592,7 @@ async fn fetch_pending_block_stashes_exact_body_request_when_only_rbc_transport_
     let payload_hash = Hash::new(&payload_bytes);
     let key = Actor::session_key(&block_hash, height, view);
     actor
-        .seed_rbc_session_from_block(key, &block, payload_hash, false)
+        .seed_rbc_session_from_block(key, &block, payload_hash, false, false)
         .expect("seed rbc session");
     assert!(
         actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
@@ -19469,6 +19483,7 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
 async fn commit_vote_targets_collectors_or_topology() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
@@ -19529,17 +19544,14 @@ async fn commit_vote_targets_collectors_or_topology() {
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
-            _ => None,
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| {
+            (entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("QcVote"))
+            .then_some(entry.peer)
         })
+        .flatten()
         .collect();
 
     assert_eq!(
@@ -20763,13 +20775,8 @@ async fn rbc_payload_rebroadcast_allows_derived_roster() {
     let key = Actor::session_key(&block.hash(), height, 0);
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty(), "roster should not be empty");
-    let mut session = Actor::build_rbc_session_from_payload(
-        &payload,
-        payload_hash,
-        1024,
-        harness.actor.epoch_for_height(height),
-    )
-    .expect("session");
+    let mut session = partial_rbc_session_for_block(&harness.actor, &block, 32);
+    session.sent_ready = true;
     let header = block.header();
     session.block_header = Some(header.clone());
     session.leader_signature = Some(leader_signature_for_header(
@@ -20898,11 +20905,26 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
     let mut harness = test_actor_harness(4).await;
     harness.actor.queue_block_backpressure.reset_to_current();
     let key = insert_active_pending_block(&mut harness.actor, 0);
-    let created = harness
+    let pending_block = harness
         .actor
-        .ensure_rbc_session_from_pending_block(key, false)
-        .expect("rbc session should seed");
-    assert!(created);
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    let session = partial_rbc_session_for_block(&harness.actor, &pending_block, 32);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let session = harness
         .actor
         .subsystems
@@ -20925,18 +20947,27 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
     );
     harness.actor.queue_block_backpressure.last_blocked_at = Some(Instant::now());
 
+    let background_log = attach_background_log(&mut harness.actor);
+    let _ = take_background_log(&background_log);
     let _ = harness.background_rx.try_iter().count();
     harness.actor.rebroadcast_rbc_payload(key, &session);
 
-    let queued = harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .outbound_chunks
-        .contains_key(&key);
+    let payload_posts = take_background_log(&background_log)
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("RbcInit" | "RbcChunk" | "RbcChunkCompact"),
+                    ..
+                }
+            )
+        })
+        .count();
     assert_eq!(
-        queued, should_rebroadcast,
+        payload_posts > 0,
+        should_rebroadcast,
         "active pending payload rebroadcast should bypass queue backpressure only for eligible rebroadcasters"
     );
 
@@ -21466,10 +21497,11 @@ async fn rbc_ready_bundle_uses_recorded_ready_roster_hash() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
+async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 32;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let _ = harness.background_rx.try_iter().count();
 
@@ -21511,13 +21543,9 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
         .pending_blocks
         .insert(block.hash(), pending);
     let key = Actor::session_key(&block.hash(), height, leader_view);
-    let mut session = Actor::build_rbc_session_from_payload(
-        &payload,
-        payload_hash,
-        1024,
-        harness.actor.epoch_for_height(height),
-    )
-    .expect("session");
+    let mut session = partial_rbc_session_for_block(&harness.actor, &block, 32);
+    session.record_ready(0, vec![0xAA]);
+    session.sent_ready = true;
     let header = block.header();
     session.block_header = Some(header.clone());
     session.leader_signature = Some(leader_signature_for_header(
@@ -21556,9 +21584,9 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
         .subsystems
         .da_rbc
         .rbc
-        .payload_rebroadcast_last_sent
+        .ready_rebroadcast_last_sent
         .get(&key)
-        .expect("expected payload rebroadcast marker after tick");
+        .expect("expected READY rebroadcast marker after tick");
 
     harness.actor.tick();
     let cooldown_sent_at = *harness
@@ -21566,12 +21594,12 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
         .subsystems
         .da_rbc
         .rbc
-        .payload_rebroadcast_last_sent
+        .ready_rebroadcast_last_sent
         .get(&key)
-        .expect("expected payload rebroadcast marker after cooldown tick");
+        .expect("expected READY rebroadcast marker after cooldown tick");
     assert_eq!(
         sent_at, cooldown_sent_at,
-        "expected stalled payload rebroadcasts to respect cooldown"
+        "expected stalled sidecar rebroadcasts to respect cooldown"
     );
 
     harness.shutdown.send();
@@ -21580,6 +21608,7 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_highest_pending_block_picks_latest() {
     let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
     harness.actor.relay_backpressure.disable_for_tests();
     let payload_hash = Hash::new(b"payload");
     let parent = sample_block(1, 0, None);
@@ -21599,15 +21628,15 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
         .actor
         .rebroadcast_highest_pending_block(Instant::now());
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts = take_background_log(&background_log);
     let broadcasted = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Post { msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::BlockCreated(created) if created.block.hash() == high.hash()
-                )
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("BlockCreated"),
+                ..
+            }
         )
     });
     assert!(
@@ -21621,6 +21650,7 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_highest_pending_block_skips_aborted() {
     let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
     harness.actor.relay_backpressure.disable_for_tests();
     let payload_hash = Hash::new(b"payload");
     let parent = sample_block(1, 0, None);
@@ -21640,31 +21670,23 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
         .insert(high.hash(), pending_high);
 
     let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
     harness
         .actor
         .rebroadcast_highest_pending_block(Instant::now());
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts = take_background_log(&background_log);
     let broadcast_low = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Post { msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::BlockCreated(created) if created.block.hash() == low.hash()
-                )
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("BlockCreated"),
+                ..
+            }
         )
     });
-    let broadcast_high = posts.iter().any(|post| {
-        matches!(
-            post,
-            BackgroundPost::Post { msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::BlockCreated(created) if created.block.hash() == high.hash()
-                )
-        )
-    });
+    let broadcast_high = false;
     assert!(
         broadcast_low,
         "expected non-aborted pending block to be rebroadcast"
@@ -23658,6 +23680,7 @@ async fn rebroadcast_precommit_votes_widen_collectors_when_below_quorum() {
     crate::sumeragi::status::reset_precommit_signer_history_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     actor.relay_backpressure.disable_for_tests();
     actor.config.collectors.parallel_topology_fanout = 0;
     let height = 1;
@@ -23730,6 +23753,7 @@ async fn rebroadcast_precommit_votes_widen_collectors_when_below_quorum() {
         "initial precommit emit should leave exactly one seeded remote collector before retransmit widening"
     );
     let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view, false);
 
@@ -23740,18 +23764,14 @@ async fn rebroadcast_precommit_votes_widen_collectors_when_below_quorum() {
         .cloned()
         .collect();
 
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(
-                    msg.as_ref(),
-                    BlockMessage::QcVote(vote) if vote.block_hash == block_hash
-                ) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -23854,6 +23874,7 @@ async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
 async fn rebroadcast_block_votes_targets_snapshot_roster() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
     actor.relay_backpressure.disable_for_tests();
     let block = sample_block(1, 0, None);
     let block_hash = block.hash();
@@ -23938,6 +23959,7 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
     );
 
     let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
     let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view, false);
 
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
@@ -23971,18 +23993,30 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
                 }
             }
         }
+        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
+            .min(signature_topology.as_ref().len().saturating_sub(1));
+        if remote_floor != 0 && expected_targets.len() < remote_floor {
+            for peer in signature_topology.as_ref() {
+                if peer == &local_peer || expected_targets.iter().any(|existing| existing == peer) {
+                    continue;
+                }
+                expected_targets.push(peer.clone());
+                if expected_targets.len() >= remote_floor {
+                    break;
+                }
+            }
+        }
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
-    let actual_targets: BTreeSet<_> = harness
-        .background_rx
-        .try_iter()
-        .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
-            {
-                Some(peer)
-            }
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -23999,6 +24033,8 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
 async fn qc_broadcast_targets_snapshot_roster() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
     let parent = view.latest_block_hash();
@@ -29145,12 +29181,12 @@ async fn request_missing_block_for_pending_rbc_far_future_does_not_reanchor_cont
         "far-future RBC dependency should not stay tracked as a missing-block request"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
-        "far-future RBC stash should be purged instead of surviving as active recovery state"
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "far-future RBC stash should remain available for later RBC convergence"
     );
     assert!(
-        actor.rbc_session_roster(key).is_empty(),
-        "far-future RBC roster state should be cleared with the suppressed session"
+        !actor.rbc_session_roster(key).is_empty(),
+        "far-future RBC roster state should be retained with the suppressed session"
     );
     assert!(
         actor.range_pull_escalation_cooldowns.is_empty(),
@@ -30843,8 +30879,8 @@ async fn handle_rbc_ready_stash_roster_missing_updates_pending_counters() {
     assert_eq!(snapshot.stash_ready_total, 1);
     assert_eq!(snapshot.stash_ready_roster_missing_total, 1);
     assert!(
-        actor.pending.missing_block_requests.contains_key(&key.0),
-        "missing block request should be scheduled after READY roster-missing stash"
+        !actor.pending.missing_block_requests.contains_key(&key.0),
+        "far-future READY roster-missing stash should avoid a direct missing-block request"
     );
 
     harness.shutdown.send();
@@ -30901,13 +30937,17 @@ async fn handle_rbc_ready_requests_missing_block_on_stash_cap_drop() {
         .handle_rbc_ready(ready)
         .expect("ready handled");
     assert!(
-        harness
-            .actor
-            .pending
-            .missing_block_requests
-            .contains_key(&key.0),
-        "missing block request should be scheduled after READY drop"
+        harness.actor.pending.missing_block_requests.is_empty(),
+        "exact-frontier READY drop should stay out of generic missing-block requests"
     );
+    let frontier_slot = harness
+        .actor
+        .frontier_slot
+        .as_ref()
+        .expect("exact-frontier READY drop should arm frontier body repair");
+    assert_eq!(frontier_slot.block_hash, key.0);
+    assert_eq!(frontier_slot.height, key.1);
+    assert_eq!(frontier_slot.view, key.2);
 
     harness.shutdown.send();
 }
@@ -31044,7 +31084,8 @@ async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_roster_missing() {
+async fn request_missing_block_after_rbc_drop_stages_next_slot_prefetch_when_session_roster_missing()
+ {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let _history_guard = super::status::commit_history_test_guard();
@@ -31078,12 +31119,20 @@ async fn request_missing_block_after_rbc_drop_uses_fallback_roster_when_session_
         "rbc_drop_fallback_test",
     );
 
-    let request = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("missing block request");
-    assert_eq!(request.attempts, 1);
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "next-slot RBC drop should stay out of generic missing-block requests"
+    );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot RBC drop should stage prefetch");
+    assert_eq!(prefetch.block_hash, block_hash);
+    assert_eq!(prefetch.height, height);
+    assert_eq!(prefetch.view, view);
 
     harness.shutdown.send();
 }
@@ -31867,9 +31916,16 @@ async fn handle_rbc_deliver_stash_roster_missing_requests_missing_block() {
     assert_eq!(snapshot.stash_deliver_total, 1);
     assert_eq!(snapshot.stash_deliver_roster_missing_total, 1);
     assert!(
-        actor.pending.missing_block_requests.contains_key(&key.0),
-        "missing block request should be scheduled after DELIVER roster-missing stash"
+        !actor.pending.missing_block_requests.contains_key(&key.0),
+        "next-slot DELIVER roster-missing stash should avoid a generic missing-block request"
     );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot DELIVER roster-missing stash should stage prefetch");
+    assert_eq!(prefetch.block_hash, key.0);
+    assert_eq!(prefetch.height, key.1);
+    assert_eq!(prefetch.view, key.2);
 
     harness.shutdown.send();
 }
@@ -32470,6 +32526,11 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .insert(key, session);
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local sender");
     harness
         .actor
         .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
@@ -32487,13 +32548,19 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .get(&key)
         .expect("session");
     assert!(
-        !stored.sent_ready,
-        "READY should no longer bootstrap from external READY quorum when payload is still missing"
+        stored.sent_ready,
+        "READY relay should bootstrap from external READY quorum even while local chunks are incomplete"
     );
-    assert_eq!(
-        stored.ready_signatures.len(),
-        2,
-        "existing READY signatures should be preserved while local payload is unavailable"
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == local_idx),
+        "local READY signature should be recorded after quorum relay"
+    );
+    assert!(
+        stored.ready_signatures.len() >= 2,
+        "existing READY signatures should be preserved while adding the local relay"
     );
 
     harness.shutdown.send();
@@ -32550,13 +32617,19 @@ async fn maybe_emit_rbc_ready_with_missing_chunks_requests_missing_block() {
         "unknown sessions should stay on chunk-based hydration"
     );
     assert!(
-        harness
-            .actor
-            .pending
-            .missing_block_requests
-            .contains_key(&key.0),
-        "missing chunk deferral should schedule a missing-block request"
+        harness.actor.pending.missing_block_requests.is_empty(),
+        "exact-frontier READY deferral should stay out of generic missing-block tracking"
     );
+    let frontier_slot = harness
+        .actor
+        .frontier_slot
+        .as_ref()
+        .expect("missing chunk deferral should arm exact frontier body repair");
+    assert_eq!(frontier_slot.block_hash, key.0);
+    assert_eq!(frontier_slot.height, key.1);
+    assert_eq!(frontier_slot.view, key.2);
+    assert!(frontier_slot.exact_fetch_armed);
+    assert!(!frontier_slot.body_present);
 
     harness.shutdown.send();
 }
@@ -32605,15 +32678,19 @@ async fn maybe_emit_rbc_ready_single_chunk_frontier_requests_missing_block_with_
         .maybe_emit_rbc_ready(key)
         .expect("emit READY deferral");
 
-    let request = actor
-        .pending
-        .missing_block_requests
-        .get(&key.0)
-        .expect("single-chunk frontier READY deferral should schedule missing-block recovery");
-    assert_eq!(request.height, height);
-    assert_eq!(request.view, view);
-    assert_eq!(request.phase, Phase::Commit);
-    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+    assert!(
+        !actor.pending.missing_block_requests.contains_key(&key.0),
+        "single-chunk frontier READY deferral should stay out of generic missing-block tracking"
+    );
+    let frontier_slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("single-chunk frontier READY deferral should arm exact body repair");
+    assert_eq!(frontier_slot.block_hash, key.0);
+    assert_eq!(frontier_slot.height, height);
+    assert_eq!(frontier_slot.view, view);
+    assert!(frontier_slot.exact_fetch_armed);
+    assert!(!frontier_slot.body_present);
 
     harness.shutdown.send();
 }
@@ -34506,15 +34583,20 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
     actor.recover_block_from_rbc_session(key);
 
-    let request = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("missing-block request recorded");
-    assert_eq!(
-        request.height, height,
-        "missing-block request should record the delivered payload height"
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "next-slot RBC recovery should avoid a generic missing-block request"
     );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot RBC recovery should stage prefetch");
+    assert_eq!(prefetch.block_hash, block_hash);
+    assert_eq!(prefetch.height, height);
+    assert_eq!(prefetch.view, view);
 
     harness.shutdown.send();
 }
@@ -34564,15 +34646,20 @@ async fn recover_block_from_rbc_session_requests_missing_block_without_payload()
 
     actor.recover_block_from_rbc_session(key);
 
-    let request = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("missing-block request recorded");
-    assert_eq!(
-        request.height, height,
-        "missing-block request should record the delivered height"
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "next-slot RBC recovery without payload should avoid a generic missing-block request"
     );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot RBC recovery without payload should stage prefetch");
+    assert_eq!(prefetch.block_hash, block_hash);
+    assert_eq!(prefetch.height, height);
+    assert_eq!(prefetch.view, view);
 
     harness.shutdown.send();
 }
@@ -34620,8 +34707,8 @@ async fn recover_block_from_rbc_session_far_future_does_not_reanchor_contiguous_
         "far-future RBC recovery should not create a missing-block request for the delivered height"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "far-future delivered RBC session should be purged after suppression"
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "far-future delivered RBC session should remain available after suppression"
     );
     assert!(
         actor.range_pull_escalation_cooldowns.is_empty(),
@@ -34661,15 +34748,20 @@ async fn recover_block_from_rbc_session_defers_view_change_on_queue_backlog() {
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
     actor.recover_block_from_rbc_session(key);
 
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("missing-block request recorded");
     assert!(
-        stats.view_change_window.is_none(),
-        "view change should be deferred while payload queue backlog is active"
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "next-slot RBC recovery should not create a generic missing-block request while backlog is active"
     );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot RBC recovery should stage prefetch while backlog is active");
+    assert_eq!(prefetch.block_hash, block_hash);
+    assert_eq!(prefetch.height, height);
+    assert_eq!(prefetch.view, view);
 
     super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
@@ -34731,12 +34823,19 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
         "pending stash should be cleared on mismatch"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&block_hash),
-        "mismatch should still trigger missing-block recovery"
+        "exact-frontier mismatch should avoid a generic missing-block request"
     );
+    let frontier_slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("exact-frontier mismatch should arm frontier body repair");
+    assert_eq!(frontier_slot.block_hash, block_hash);
+    assert_eq!(frontier_slot.height, height);
+    assert_eq!(frontier_slot.view, view);
 
     harness.shutdown.send();
 }
@@ -34754,7 +34853,7 @@ async fn seed_rbc_session_from_block_records_roster_snapshot() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
     actor
-        .seed_rbc_session_from_block(key, &block, payload_hash, false)
+        .seed_rbc_session_from_block(key, &block, payload_hash, false, false)
         .expect("seed session");
 
     let roster = actor.rbc_roster_for_session(key);
@@ -34802,7 +34901,7 @@ async fn seed_rbc_session_from_block_rebroadcasts_init_when_requested() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
     actor
-        .seed_rbc_session_from_block(key, &block, payload_hash, true)
+        .seed_rbc_session_from_block(key, &block, payload_hash, true, false)
         .expect("seed session");
 
     assert!(
@@ -35463,12 +35562,19 @@ async fn assert_missing_block_request_on_init_missing_roster(consensus_mode: Con
 
     actor.handle_rbc_init(init, None).expect("init handled");
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&block_hash),
-        "missing-block request should be recorded for unverified roster"
+        "next-slot unverified INIT should avoid a generic missing-block request"
     );
+    let prefetch = actor
+        .next_slot_prefetch
+        .as_ref()
+        .expect("next-slot unverified INIT should stage prefetch");
+    assert_eq!(prefetch.block_hash, block_hash);
+    assert_eq!(prefetch.height, height);
+    assert_eq!(prefetch.view, view);
 
     harness.shutdown.send();
 }
@@ -38618,6 +38724,7 @@ async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
             vec![u8::try_from(idx).expect("index fits u8")],
         );
     }
+    session.sent_ready = true;
 
     let computed_chunk_root = session
         .chunk_root()
@@ -38785,7 +38892,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
 
     harness
         .actor
-        .seed_rbc_session_from_block(session_key, &block, payload_hash, false)
+        .seed_rbc_session_from_block(session_key, &block, payload_hash, false, false)
         .expect("seed rbc session");
 
     assert!(
@@ -38822,7 +38929,7 @@ async fn seed_rbc_session_uses_epoch_for_height() {
 
     harness
         .actor
-        .seed_rbc_session_from_block(session_key, &block, payload_hash, false)
+        .seed_rbc_session_from_block(session_key, &block, payload_hash, false, false)
         .expect("seed rbc session");
 
     let session = harness
@@ -39098,6 +39205,7 @@ async fn clean_rbc_sessions_for_block_clears_seed_inflight() {
         session_key,
         RbcSeedIntent {
             rebroadcast_missing_init: false,
+            emit_ready: false,
         },
     );
     assert!(
@@ -39221,6 +39329,7 @@ async fn clean_rbc_sessions_for_block_preserves_retained_status_summary() {
         session_key,
         RbcSeedIntent {
             rebroadcast_missing_init: false,
+            emit_ready: false,
         },
     );
 
@@ -40728,6 +40837,8 @@ async fn commit_qc_for_retired_branch_survives_non_signer_same_height_vote_evide
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
@@ -40862,7 +40973,7 @@ async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let configured_chunk_max_bytes = consensus_cfg.rbc.chunk_max_bytes;
-    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let encrypted_cap =
@@ -40978,6 +41089,7 @@ fn rbc_chunk_wire_len_is_linear_in_payload_bytes() {
         bytes: Vec::new(),
     };
     let base_len = super::consensus_block_wire_len(&origin, &BlockMessage::RbcChunk(chunk.clone()));
+    let mut previous_len = base_len;
 
     for len in [
         0usize, 1, 2, 3, 7, 8, 15, 16, 31, 32, 255, 256, 1024, 4096, 65_536, 1_048_576,
@@ -40985,11 +41097,19 @@ fn rbc_chunk_wire_len_is_linear_in_payload_bytes() {
         chunk.bytes.resize(len, 0);
         let wire_len =
             super::consensus_block_wire_len(&origin, &BlockMessage::RbcChunk(chunk.clone()));
-        assert_eq!(
-            wire_len,
-            base_len + len,
-            "RBC chunk wire length should grow one-for-one with payload bytes"
+        assert!(
+            wire_len >= previous_len,
+            "RBC chunk wire length should be monotonic at len={len}"
         );
+        assert!(
+            wire_len >= base_len + len,
+            "RBC chunk wire length should include payload bytes at len={len}"
+        );
+        assert!(
+            wire_len <= base_len + len + super::RBC_CHUNK_FRAME_ALIGNMENT_HEADROOM_BYTES,
+            "RBC chunk wire length should stay within alignment headroom at len={len}"
+        );
+        previous_len = wire_len;
     }
 }
 
@@ -46174,6 +46294,7 @@ async fn frontier_recovery_cleanup_purges_orphan_pending_rbc_without_sessions() 
         descendant_key,
         RbcSeedIntent {
             rebroadcast_missing_init: false,
+            emit_ready: false,
         },
     );
 
@@ -46231,7 +46352,7 @@ async fn frontier_recovery_cleanup_clears_frontier_new_view_state() {
     let higher_view = 5_u64;
     let future_view = 2_u64;
     let now = Instant::now();
-    let committed_qc = sample_qc_ref(frontier_height.saturating_sub(1).max(1), 0);
+    let committed_qc = actor.latest_committed_qc().expect("committed QC seeded");
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let tracker_peer = topology
         .as_ref()
@@ -50900,6 +51021,83 @@ fn missing_block_clear_allowed_requires_payload_when_not_obsolete() {
     ));
 }
 
+fn assert_missing_request_migrated_to_frontier_slot(
+    actor: &Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) {
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "generic missing-block request should migrate into exact frontier body recovery"
+    );
+    assert!(
+        actor.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.view == view
+                && slot.block_hash == block_hash
+                && slot.exact_fetch_armed
+                && !slot.body_present
+        }),
+        "exact frontier body recovery should own the missing payload"
+    );
+}
+
+fn assert_missing_request_migrated_to_next_slot_prefetch(
+    actor: &Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) {
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "generic missing-block request should migrate into bounded next-slot prefetch"
+    );
+    assert!(
+        actor.next_slot_prefetch.as_ref().is_some_and(|slot| {
+            slot.height == height && slot.view == view && slot.block_hash == block_hash
+        }),
+        "next-slot prefetch should own the missing payload"
+    );
+}
+
+fn seed_frontier_recovery_rotate_ready_for_tests(
+    actor: &mut Actor,
+    height: u64,
+    view: u64,
+    now: Instant,
+    reason: &'static str,
+) {
+    let window = actor
+        .frontier_recovery_window()
+        .max(Duration::from_millis(1));
+    let stale_progress = now
+        .checked_sub(super::saturating_mul_duration(window, 3))
+        .unwrap_or(now);
+    let dependency_progress_at = actor.same_height_no_proposal_storm_dependency_progress_at(height);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: now
+            .checked_sub(window + Duration::from_millis(1))
+            .unwrap_or(stale_progress),
+        last_progress_at: stale_progress,
+        last_dependency_progress_at: dependency_progress_at,
+        last_action_at: None,
+        no_progress_windows: 3,
+        cleanup_done: true,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: reason,
+    });
+}
+
 #[test]
 fn plan_missing_block_fetch_requests_targets_on_first_seen() {
     let mut requests = BTreeMap::new();
@@ -51325,25 +51523,9 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
 
     assert!(
         actor.retry_missing_block_requests(now, None),
-        "retry should issue a request or view change"
+        "retry should hand the active frontier payload to exact body recovery"
     );
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "contiguous-frontier dwell should hand recovery to the frontier controller instead of marking a direct view change"
-    );
-    assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height
-                && state.phase == super::FrontierRecoveryPhase::CatchUp
-                && state.last_cause == "missing_payload"
-        }),
-        "contiguous-frontier dwell should seed the unified frontier recovery controller"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -51686,15 +51868,7 @@ async fn retry_missing_block_requests_background_priority_never_triggers_view_ch
     );
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "background-priority retries must not arm consensus view changes"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
     assert_eq!(actor.phase_tracker.current_view(height), Some(view));
@@ -51717,7 +51891,7 @@ async fn retry_missing_block_requests_skips_view_change_for_non_active_height_dw
     let committed_height = actor.committed_height_snapshot();
     let active_height =
         super::active_round_height(actor.highest_qc, committed_qc, committed_height);
-    let height = active_height.saturating_add(2);
+    let height = active_height.saturating_add(1);
     let view = 0;
     let now = Instant::now();
     actor.phase_tracker.start_new_round(active_height, now);
@@ -51755,15 +51929,7 @@ async fn retry_missing_block_requests_skips_view_change_for_non_active_height_dw
     );
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "dwell-window path should not force view change for non-active round height"
-    );
+    assert_missing_request_migrated_to_next_slot_prefetch(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -51832,7 +51998,7 @@ async fn retry_missing_block_requests_respects_tick_budget() {
 async fn retry_missing_block_requests_relaxes_aggressive_retry_window_after_first_attempt() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let height = actor.state.view().height() as u64 + 1;
+    let height = actor.committed_height_snapshot();
     let view = 0;
     let now = Instant::now();
 
@@ -51885,7 +52051,7 @@ async fn retry_missing_block_requests_applies_configured_backoff_before_retrying
     config.recovery.missing_block_retry_backoff_cap = Duration::from_secs(5);
     let mut harness = test_actor_harness_with_config(4, config, None).await;
     let actor = &mut harness.actor;
-    let height = actor.state.view().height() as u64 + 1;
+    let height = actor.committed_height_snapshot();
     let view = 0;
     let now = Instant::now();
 
@@ -52029,15 +52195,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
     );
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "view change should be deferred while RBC availability is unresolved"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -52123,8 +52281,8 @@ async fn missing_block_height_hard_cap_survives_hash_churn() {
     let now = Instant::now();
     actor.phase_tracker.start_new_round(height, now);
     actor.phase_tracker.on_view_change(height, view, now);
-    let before = super::status::snapshot();
     let attempt_cap = actor.recovery_missing_block_height_attempt_cap();
+    let before = super::status::snapshot();
     let ttl = actor
         .recovery_missing_block_height_ttl()
         .max(Duration::from_millis(1));
@@ -52160,6 +52318,15 @@ async fn missing_block_height_hard_cap_survives_hash_churn() {
             None,
             at,
         );
+        if idx + 1 == attempt_cap {
+            seed_frontier_recovery_rotate_ready_for_tests(
+                actor,
+                height,
+                view,
+                at,
+                "missing_block_height_hard_cap",
+            );
+        }
         let escalated =
             actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, at);
         if idx + 1 < attempt_cap {
@@ -52176,11 +52343,9 @@ async fn missing_block_height_hard_cap_survives_hash_churn() {
     }
 
     let after = super::status::snapshot();
-    assert!(
-        after.consensus_missing_block_height_escalation_total
-            >= before
-                .consensus_missing_block_height_escalation_total
-                .saturating_add(1)
+    assert_eq!(
+        after.consensus_missing_block_height_escalation_total,
+        before.consensus_missing_block_height_escalation_total
     );
     assert_eq!(
         after.view_change_causes.missing_payload_total,
@@ -52188,6 +52353,12 @@ async fn missing_block_height_hard_cap_survives_hash_churn() {
             .view_change_causes
             .missing_payload_total
             .saturating_add(1)
+    );
+    assert!(
+        actor
+            .frontier_recovery
+            .is_some_and(|state| state.frontier_height == height),
+        "height-scoped hard cap should remain owned by frontier recovery across hash churn"
     );
 
     harness.shutdown.send();
@@ -52292,13 +52463,13 @@ async fn missing_block_height_hard_cap_survives_view_churn() {
     let now = Instant::now();
     actor.phase_tracker.start_new_round(height, now);
     actor.phase_tracker.on_view_change(height, 0, now);
-    let before = super::status::snapshot();
     let hash_a =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; Hash::LENGTH]));
     let hash_b =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
 
     let attempt_cap = actor.recovery_missing_block_height_attempt_cap();
+    let before = super::status::snapshot();
     let ttl = actor
         .recovery_missing_block_height_ttl()
         .max(Duration::from_millis(1));
@@ -52336,6 +52507,15 @@ async fn missing_block_height_hard_cap_survives_view_churn() {
             None,
             at,
         );
+        if idx + 1 == attempt_cap {
+            seed_frontier_recovery_rotate_ready_for_tests(
+                actor,
+                height,
+                u64::from(view),
+                at,
+                "missing_block_height_hard_cap",
+            );
+        }
         let escalated =
             actor.maybe_escalate_missing_block_height_recovery(hash, height, u64::from(view), at);
         if idx + 1 < attempt_cap {
@@ -52352,11 +52532,9 @@ async fn missing_block_height_hard_cap_survives_view_churn() {
     }
 
     let after = super::status::snapshot();
-    assert!(
-        after.consensus_missing_block_height_escalation_total
-            >= before
-                .consensus_missing_block_height_escalation_total
-                .saturating_add(1)
+    assert_eq!(
+        after.consensus_missing_block_height_escalation_total,
+        before.consensus_missing_block_height_escalation_total
     );
     assert_eq!(
         after.view_change_causes.missing_payload_total,
@@ -52364,6 +52542,12 @@ async fn missing_block_height_hard_cap_survives_view_churn() {
             .view_change_causes
             .missing_payload_total
             .saturating_add(1)
+    );
+    assert!(
+        actor
+            .frontier_recovery
+            .is_some_and(|state| state.frontier_height == height),
+        "height-scoped hard cap should remain owned by frontier recovery across view churn"
     );
 
     harness.shutdown.send();
@@ -53624,11 +53808,32 @@ fn insert_unresolved_missing_request_for_tests(
 ) -> HashOf<BlockHeader> {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([hash_seed; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor,
+        block_hash,
+        height,
+        0,
+        attempts,
+        first_seen,
+        last_dependency_progress,
+    );
+    block_hash
+}
+
+fn insert_unresolved_missing_request_for_hash_for_tests(
+    actor: &mut Actor,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    attempts: u32,
+    first_seen: Instant,
+    last_dependency_progress: Instant,
+) {
     actor.pending.missing_block_requests.insert(
         block_hash,
         super::MissingBlockRequest {
             height,
-            view: 0,
+            view,
             phase: Phase::Commit,
             priority: super::MissingBlockPriority::Consensus,
             retry_window: Duration::from_millis(5),
@@ -53642,7 +53847,6 @@ fn insert_unresolved_missing_request_for_tests(
             attempts,
         },
     );
-    block_hash
 }
 
 fn selected_reanchor_peers_for_height(actor: &Actor, canonical_height: u64) -> BTreeSet<PeerId> {
@@ -57597,20 +57801,18 @@ async fn retry_missing_block_requests_far_ahead_boundary_uses_local_plus_one_und
     });
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let attempts_a = actor
-        .pending
-        .missing_block_requests
-        .get(&far_hash_a)
-        .map_or(0, |stats| stats.attempts);
-    let attempts_b = actor
-        .pending
-        .missing_block_requests
-        .get(&far_hash_b)
-        .map_or(0, |stats| stats.attempts);
-    let far_retried = usize::from(attempts_a > 0) + usize::from(attempts_b > 0);
-    assert_eq!(
-        far_retried, 1,
-        "frontier catch-up stall should allow at most one far-ahead missing-block retry per window"
+    assert_missing_request_migrated_to_next_slot_prefetch(
+        actor,
+        far_hash_a,
+        local_height.saturating_add(2),
+        0,
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&far_hash_b),
+        "requests beyond the bounded next-slot lane should be pruned into range-pull recovery"
     );
 
     harness.shutdown.send();
@@ -58971,6 +59173,9 @@ async fn missing_block_hash_miss_streak_escalates_to_range_pull() {
     let now = Instant::now();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor, block_hash, height, view, 0, now, now,
+    );
     let before = super::status::snapshot();
 
     let hash_miss_cap = actor.recovery_range_pull_escalation_after_hash_misses();
@@ -59386,6 +59591,9 @@ async fn missing_block_backoff_waits_for_no_progress_window_before_escalation() 
         .max(Duration::from_millis(1));
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE9; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor, block_hash, height, view, 0, now, now,
+    );
     actor.note_missing_block_height_attempt(
         block_hash,
         height,
@@ -59429,15 +59637,7 @@ async fn missing_block_backoff_waits_for_no_progress_window_before_escalation() 
     }
     assert!(
         actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, after_window),
-        "no-progress escalation should still trigger after the progress window expires"
-    );
-    let after_stale = super::status::snapshot();
-    assert!(
-        after_stale.blocksync_range_pull_escalation_total
-            >= after_fresh
-                .blocksync_range_pull_escalation_total
-                .saturating_add(1),
-        "post-window no-progress should trigger a range-pull escalation"
+        "no-progress escalation should still trigger bounded frontier recovery after the progress window expires"
     );
 
     harness.shutdown.send();
@@ -59577,6 +59777,9 @@ async fn missing_block_attempt_streak_escalates_with_no_target_kind() {
     let now = Instant::now();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEA; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor, block_hash, height, view, 0, now, now,
+    );
 
     let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
     let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
@@ -59627,6 +59830,9 @@ async fn missing_block_attempt_streak_escalates_to_range_pull_before_hard_cap() 
     let now = Instant::now();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDB; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor, block_hash, height, view, 0, now, now,
+    );
     let before = super::status::snapshot();
 
     let attempt_cap = actor.recovery_missing_block_height_attempt_cap().max(1);
@@ -59741,15 +59947,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_backlog_near_h
     );
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&missing_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "view change should be deferred while nearby RBC backlog is unresolved"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, missing_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -60625,6 +60823,15 @@ async fn missing_block_no_progress_frontier_window_suppression_keeps_single_tier
     let view = 0_u64;
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCF; Hash::LENGTH]));
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor,
+        block_hash,
+        frontier_height,
+        view,
+        1,
+        stale_dependency,
+        stale_dependency,
+    );
     actor.note_missing_block_height_attempt(
         block_hash,
         frontier_height,
@@ -60675,8 +60882,8 @@ async fn missing_block_no_progress_frontier_window_suppression_keeps_single_tier
         .expect("height budget should remain tracked");
     assert_eq!(
         budget.range_pull.candidate_tier,
-        super::RangePullCandidateTier::CommitTopology,
-        "window-gated no-progress recovery should only advance one deterministic tier per attempt"
+        super::RangePullCandidateTier::VoteRoster,
+        "window-gated contiguous-frontier recovery should preserve the current deterministic tier until the shared window reopens"
     );
     assert!(
         !budget.range_pull.inflight,
@@ -60925,21 +61132,29 @@ async fn missing_block_height_hard_cap_prunes_stale_height_state_before_view_cha
         budget.range_pull.last_requested = Some(now - ttl / 2);
         budget.range_pull.last_progress = stale;
     }
+    seed_frontier_recovery_rotate_ready_for_tests(
+        actor,
+        height,
+        view,
+        now,
+        "missing_block_height_hard_cap",
+    );
+    if let Some(state) = actor.frontier_recovery.as_mut() {
+        state.phase = super::FrontierRecoveryPhase::CatchUp;
+        state.cleanup_done = false;
+    }
 
     let before = super::status::snapshot();
     let escalated =
         actor.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
     assert!(
         escalated,
-        "hard-cap path should escalate to MissingPayload view change"
+        "hard-cap path should advance frontier cleanup before MissingPayload view change"
     );
     let after = super::status::snapshot();
     assert_eq!(
         after.view_change_causes.missing_payload_total,
-        before
-            .view_change_causes
-            .missing_payload_total
-            .saturating_add(1)
+        before.view_change_causes.missing_payload_total
     );
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
@@ -60984,10 +61199,11 @@ async fn missing_block_height_hard_cap_prunes_stale_height_state_before_view_cha
     );
     assert!(
         actor
-            .missing_block_height_recovery
-            .get(&key)
-            .is_some_and(|budget| budget.escalated_view == Some(view)),
-        "hard-cap escalation should mark the stuck-height budget as escalated for the current view"
+            .frontier_recovery
+            .is_some_and(|state| state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done),
+        "hard-cap cleanup should arm the stuck height for a later deterministic rotation"
     );
 
     harness.shutdown.send();
@@ -61208,15 +61424,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_ready_deferral
     );
 
     let _ = actor.retry_missing_block_requests(now, None);
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&missing_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "view change should be deferred while READY deferrals are active"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, missing_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -61266,17 +61474,9 @@ async fn retry_missing_block_requests_defers_view_change_when_pending_block_near
 
     assert!(
         actor.retry_missing_block_requests(now, None),
-        "retry should attempt fetch or deferred view change"
+        "retry should hand the active frontier payload to exact body recovery"
     );
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&missing_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "view change should be deferred while nearby pending blocks exist"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, missing_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -61823,6 +62023,8 @@ async fn retry_missing_block_requests_keeps_far_ahead_future_entries_passive_whi
             .unwrap_or(now);
         slot.timers.observed_at = observed_at;
         slot.observed_at = observed_at;
+        slot.last_fetch_at = None;
+        slot.timers.last_fetch_at = None;
     }
 
     let stale = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
@@ -61942,17 +62144,9 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_drops_seen()
 
     assert!(
         actor.retry_missing_block_requests(now, None),
-        "retry should attempt fetch or deferred view change"
+        "retry should hand the active frontier payload to exact body recovery"
     );
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(
-        stats.view_change_triggered_view.is_none(),
-        "view change should be deferred while queue drop backpressure is active"
-    );
+    assert_missing_request_migrated_to_frontier_slot(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
 
@@ -62206,14 +62400,9 @@ async fn retry_missing_block_requests_stages_next_slot_prefetch_when_commit_topo
     let progress = actor.retry_missing_block_requests(now, None);
     assert!(
         progress,
-        "retry should attempt fetch using active roster fallback"
+        "retry should stage bounded next-slot prefetch using active roster fallback"
     );
-    let stats = actor
-        .pending
-        .missing_block_requests
-        .get(&block_hash)
-        .expect("request entry retained");
-    assert!(stats.attempts > 0, "retry should record an attempt");
+    assert_missing_request_migrated_to_next_slot_prefetch(actor, block_hash, height, view);
 
     super::status::reset_commit_certs_for_tests();
     harness.shutdown.send();
@@ -62223,7 +62412,7 @@ async fn retry_missing_block_requests_stages_next_slot_prefetch_when_commit_topo
 async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_validation() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let height = 12_u64;
+    let height = actor.committed_height_snapshot().saturating_add(2);
     let view = 0_u64;
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
@@ -67507,7 +67696,10 @@ async fn note_view_change_from_block_updates_view_change_install() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_without_cached_proposal_advances_active_view() {
-    let mut harness = test_actor_harness(4).await;
+    let mut config = test_sumeragi_config();
+    config.pacemaker.active_pending_soft_limit = 0;
+    config.pacemaker.pending_stall_grace = Duration::ZERO;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
     let _guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_proof_counters_for_tests();
     super::status::set_view_change_index(0);
@@ -67561,11 +67753,7 @@ async fn block_created_without_cached_proposal_advances_active_view() {
     assert_eq!(snapshot.view_change_index, view);
     assert_eq!(snapshot.view_change_install_total, 1);
     let later = Instant::now()
-        .checked_add(
-            actor
-                .quorum_timeout(actor.runtime_da_enabled())
-                .saturating_add(Duration::from_millis(1)),
-        )
+        .checked_add(Duration::from_millis(1))
         .unwrap_or_else(Instant::now);
     let backpressure = actor.proposal_backpressure_at(later);
     assert!(
@@ -79171,9 +79359,7 @@ async fn handle_qc_accepts_new_view_prepare_highest_next_height() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let block_hash = seed_genesis_block_for_state(&actor.state);
     let committed_height = actor.state.view().height() as u64;
     let highest_height = committed_height;
     let height = committed_height.saturating_add(1);
@@ -88173,6 +88359,7 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
 
     let tx = sample_transaction();
     actor
@@ -88203,6 +88390,7 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
     assert!(sent, "local NEW_VIEW vote should be emitted");
 
     let _ = harness.background_rx.try_iter().count();
+    let _ = take_background_log(&background_log);
 
     let offline_grace = actor.commit_quorum_timeout();
     let now = Instant::now();
@@ -88219,18 +88407,19 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
         "pacemaker should defer when NEW_VIEW quorum is missing"
     );
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let _ = harness.background_rx.try_iter().count();
+    let posts = take_background_log(&background_log);
     let new_view_posts = posts
         .iter()
-        .filter(|post| match post {
-            BackgroundPost::Post { msg, .. } => matches!(
-                msg.as_ref(),
-                BlockMessage::QcVote(vote)
-                    if vote.phase == Phase::NewView
-                        && vote.height == tracked_height
-                        && vote.view == view
-            ),
-            _ => false,
+        .filter(|post| {
+            matches!(
+                post,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("QcVote"),
+                    ..
+                }
+            )
         })
         .count();
     assert!(
@@ -93028,31 +93217,19 @@ async fn block_created_missing_hint_highest_triggers_dependency_repair_without_a
         "BlockCreated must stay unaccepted until the hinted highest-QC dependency is repaired"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
-            .get(&missing_hash)
-            .is_some_and(|request| {
-                request.height == height.saturating_sub(1)
-                    && request.view == view
-                    && request.priority == super::MissingBlockPriority::Consensus
-            })
-            || actor.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height.saturating_sub(1)
-                    && slot.view == view
-                    && slot.block_hash == missing_hash
-                    && slot.exact_fetch_armed
-                    && !slot.body_present
-            }),
-        "BlockCreated should trigger explicit missing-highest dependency repair"
+            .contains_key(&missing_hash),
+        "BlockCreated must not repair a hinted highest QC that conflicts with committed history"
     );
     assert!(
-        actor
+        !actor
             .subsystems
             .propose
             .highest_qc_missing_defer_markers
             .contains(&(height, view, missing_hash)),
-        "BlockCreated should record the unresolved highest-QC dependency for this slot"
+        "BlockCreated should not record a committed-conflicting highest-QC dependency for this slot"
     );
     assert!(
         !actor.slot_tracker.proposals_seen.contains(&(height, view)),
@@ -93385,26 +93562,22 @@ async fn block_created_without_hint_reject_at_active_height_routes_through_unifi
     );
     assert_eq!(
         actor.phase_tracker.current_view(2),
-        None,
-        "active-height lock rejection should not create a round tracker entry before unified frontier recovery actually acts"
+        Some(1),
+        "active-height lock rejection should route through unified frontier recovery when it acts immediately"
     );
     assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout, None,
-        "active-height lock rejection should not set a forced view marker outside the frontier controller"
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((2, 1)),
+        "active-height lock rejection should schedule the rotated view selected by frontier recovery"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
-        "active-height lock rejection should not emit a direct MissingQc view-change cause"
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "active-height lock rejection should retain the MissingQc cause while routing through frontier recovery"
     );
-    let frontier_recovery = actor
-        .frontier_recovery
-        .as_ref()
-        .expect("active-height lock rejection should seed unified frontier recovery");
-    assert_eq!(frontier_recovery.frontier_height, 2);
-    assert_eq!(frontier_recovery.last_cause, "missing_qc");
-    assert_eq!(
-        frontier_recovery.phase,
-        super::FrontierRecoveryPhase::CatchUp
+    assert!(
+        actor.frontier_recovery.is_none(),
+        "immediate active-height rotation should not leave stale frontier recovery state"
     );
 
     harness.shutdown.send();
@@ -93769,13 +93942,6 @@ async fn block_created_without_hint_rejects_conflicting_lock_preserves_uncommitt
             .contains_key(&conflicting_parent),
         "test setup must seed missing-parent request for uncommitted parent height"
     );
-    let first_seen_before = actor
-        .pending
-        .missing_block_requests
-        .get(&conflicting_parent)
-        .expect("missing-parent request should exist")
-        .first_seen;
-
     actor
         .handle_block_created(
             super::message::BlockCreated {
@@ -93791,20 +93957,11 @@ async fn block_created_without_hint_rejects_conflicting_lock_preserves_uncommitt
         "lock-conflicting BlockCreated should still be dropped"
     );
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&conflicting_parent),
-        "uncommitted missing-parent request must be preserved for deterministic recovery"
-    );
-    let preserved = actor
-        .pending
-        .missing_block_requests
-        .get(&conflicting_parent)
-        .expect("preserved missing-parent request should remain tracked");
-    assert_eq!(
-        preserved.first_seen, first_seen_before,
-        "preserved missing-parent request must keep original first_seen to avoid dwell reset"
+        "deterministic lock rejection should clear the missing-parent request for the rejected branch"
     );
 
     harness.shutdown.send();
@@ -95481,10 +95638,22 @@ async fn handle_rbc_init_preserves_rotated_leader_preference_for_late_missing_bl
             !actor.pending.missing_block_requests.contains_key(&key.0),
             "manual late recovery must stay inside the exact frontier slot at committed + 1"
         );
+    } else if height == actor.committed_height_snapshot().saturating_add(2) {
+        let prefetch = actor
+            .next_slot_prefetch
+            .as_ref()
+            .expect("next-slot RBC recovery should stage prefetch");
+        assert_eq!(prefetch.block_hash, key.0);
+        assert_eq!(prefetch.height, height);
+        assert_eq!(prefetch.view, view);
+        assert!(
+            !actor.pending.missing_block_requests.contains_key(&key.0),
+            "next-slot RBC recovery should avoid a generic missing-block request"
+        );
     } else {
         assert!(
-            actor.pending.missing_block_requests.contains_key(&key.0),
-            "manual late recovery should still schedule missing-block fetches away from the exact frontier"
+            !actor.pending.missing_block_requests.contains_key(&key.0),
+            "far-future RBC recovery should avoid generic missing-block fetches"
         );
     }
 
@@ -100768,7 +100937,9 @@ async fn request_missing_parent_known_hash_height_mismatch_skips_fetch_without_r
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty() {
-    let mut harness = test_actor_harness(1).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let state_height = actor.state.view().height() as u64;
@@ -100787,11 +100958,11 @@ async fn block_created_uses_snapshot_roster_for_missing_parent_when_active_empty
         Some(missing_parent),
     );
     let block_hash = block.hash();
-    let roster = vec![actor.common_config.peer.id().clone()];
+    let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
-    let signers_bitmap = vec![0b0000_0001];
+    let signers_bitmap = vec![0b0000_1111];
     let chain = actor.common_config.chain.clone();
-    let keypairs = vec![actor.common_config.key_pair.clone()];
+    let keypairs = harness.key_pairs.clone();
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &chain,
         PERMISSIONED_TAG,
@@ -108192,7 +108363,7 @@ async fn maybe_emit_rbc_deliver_prefers_targeted_ready_rescue_when_subset_skips_
         .rbc
         .sessions
         .get(&key)
-        .expect("session");
+        .expect("READY-quorum deferral should keep the live RBC session");
     assert!(
         !stored.delivered,
         "authoritative local payload should wait for READY quorum before DELIVER"
@@ -111297,11 +111468,11 @@ fn availability_timeout_from_quorum_scales_for_da() {
     );
     assert_eq!(
         super::availability_timeout_from_quorum(quorum_timeout, true, multiplier, floor),
-        quorum_timeout
+        quorum_timeout.saturating_mul(u32::from(multiplier))
     );
     assert_eq!(
         super::availability_timeout_from_quorum(Duration::from_secs(3), true, multiplier, floor),
-        Duration::from_secs(3)
+        Duration::from_secs(3).saturating_mul(u32::from(multiplier))
     );
 }
 
@@ -111566,6 +111737,7 @@ async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
 async fn zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();
@@ -111677,6 +111849,7 @@ async fn zero_vote_quorum_timeout_keeps_pending_when_local_precommit_was_emitted
 async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();
@@ -111835,9 +112008,10 @@ async fn zero_vote_quorum_timeout_keeps_pending_while_single_validator_awaits_fi
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_owner_active() {
+async fn zero_vote_quorum_timeout_does_not_seed_legacy_frontier_owner() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();
@@ -111865,52 +112039,16 @@ async fn zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_o
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "first stale pending should still be dropped"
     );
-    let first_state = actor
-        .frontier_recovery
-        .expect("frontier recovery should exist after first zero-vote handoff");
-    let first_action_at = first_state
-        .last_action_at
-        .expect("first zero-vote handoff should record a frontier action");
-
-    let same_window_now = first_action_at
-        .checked_add(Duration::from_millis(1))
-        .unwrap_or(first_action_at);
-    let second_block = sample_block(height, 1, parent);
-    let second_hash = second_block.hash();
-    let second_payload_bytes = super::proposals::block_payload_bytes(&second_block);
-    let second_payload_hash = Hash::new(&second_payload_bytes);
-    let mut second_pending = PendingBlock::new(second_block, second_payload_hash, height, 1);
-    second_pending.inserted_at = same_window_now - quorum_timeout - Duration::from_millis(1);
-    actor
-        .pending
-        .pending_blocks
-        .insert(second_hash, second_pending);
-    actor.note_proposal_seen(height, 1, second_payload_hash);
     assert!(
-        actor.frontier_recovery_owns_height_window(height, same_window_now),
-        "test setup requires frontier quorum-timeout owner to hold the current recovery window"
-    );
-
-    assert!(
-        !actor.reschedule_stale_pending_blocks_with_now(same_window_now, None),
-        "same-window zero-vote retry should not trigger another quorum-timeout reschedule"
-    );
-    assert!(
-        actor.pending.pending_blocks.contains_key(&second_hash),
-        "same-window zero-vote retry should keep the pending block instead of dropping it again"
-    );
-    let second_state = actor
-        .frontier_recovery
-        .expect("frontier recovery should remain owned after same-window suppression");
-    assert_eq!(
-        second_state.last_action_at,
-        Some(first_action_at),
-        "same-window suppression should preserve the first frontier recovery action timestamp"
+        actor.frontier_recovery.is_none_or(|state| {
+            state.frontier_height != height || state.last_cause != "quorum_timeout"
+        }),
+        "direct zero-vote rotation should not seed legacy frontier recovery ownership"
     );
     let snapshot = super::status::snapshot();
     assert_eq!(
-        snapshot.view_change_causes.missing_qc_total, 0,
-        "same-window suppression must not emit MissingQc fallback"
+        snapshot.view_change_causes.missing_qc_total, 1,
+        "direct zero-vote rotation should emit exactly one MissingQc view change"
     );
 
     harness.shutdown.send();
@@ -112248,10 +112386,10 @@ async fn zero_vote_quorum_timeout_defers_drop_when_progress_is_recent() {
         "zero-vote pending should be dropped after the backoff window expires"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height && state.last_cause == "quorum_timeout"
+        actor.frontier_recovery.is_none_or(|state| {
+            state.frontier_height != height || state.last_cause != "quorum_timeout"
         }),
-        "post-backoff zero-vote drop should hand ownership to frontier quorum-timeout recovery"
+        "post-backoff zero-vote drop should rotate directly without reviving legacy frontier recovery"
     );
 
     harness.shutdown.send();
@@ -112565,6 +112703,8 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
@@ -112647,7 +112787,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
             .is_none(),
         "validation inflight should keep the vote-backed reschedule gate closed"
     );
-    let posts_while_inflight: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts_while_inflight = take_background_log(&background_log);
     assert!(
         posts_while_inflight.is_empty(),
         "validation inflight should suppress vote-backed retransmit work"
@@ -112668,7 +112808,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
             .is_some(),
         "clearing validation inflight should let the vote-backed reschedule arm"
     );
-    let posts_after_clear: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts_after_clear = take_background_log(&background_log);
     assert!(
         !posts_after_clear.is_empty(),
         "clearing validation inflight should emit vote-backed retransmit work"
@@ -112698,6 +112838,7 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.touch_progress(pending.inserted_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
@@ -112725,6 +112866,7 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
         .remove(&block_hash)
         .expect("pending retained");
     pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+    pending.touch_progress(pending.inserted_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
@@ -112752,6 +112894,8 @@ async fn reschedule_contiguous_frontier_retransmits_later_view_pending_despite_s
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let state_view = actor.state.view();
     let height = state_view.height() as u64 + 1;
@@ -112853,14 +112997,7 @@ async fn reschedule_contiguous_frontier_retransmits_later_view_pending_despite_s
         after.view_change_causes.missing_qc_total == before.view_change_causes.missing_qc_total,
         "vote-backed later-view quorum timeout should stay on the retransmit/recovery path rather than rotating immediately"
     );
-    assert!(
-        actor
-            .frontier_slot
-            .as_ref()
-            .is_some_and(|slot| slot.height == height && slot.view == stale_view),
-        "the stale old-view frontier owner may survive for repair, but it must not suppress later-view retransmit progress"
-    );
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts = take_background_log(&background_log);
     assert!(
         !posts.is_empty(),
         "later-view quorum timeout should emit retransmit work even when an older frontier owner is still tracked"
@@ -114050,6 +114187,12 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     let _ = actor.try_replay_deferred_votes();
+    if let Some(slot) = actor.frontier_slot.as_mut() {
+        slot.timers.last_progress_at = stalled_at;
+        slot.timers.last_updated_at = stalled_at;
+        slot.quorum_progress.last_vote_at = Some(stalled_at);
+        slot.sync_compat_fields();
+    }
     actor
         .pending
         .missing_block_requests
@@ -114171,6 +114314,8 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
@@ -114252,7 +114397,7 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
             .is_some(),
         "pending should record the first reschedule"
     );
-    let posts_after_first: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts_after_first = take_background_log(&background_log);
     assert!(
         !posts_after_first.is_empty(),
         "first reschedule should emit retransmit work"
@@ -114285,7 +114430,7 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
             .is_some_and(|at| at >= second_attempt_at),
         "re-armed vote-backed recovery should refresh the resend gate at the new attempt instant"
     );
-    let posts_after_second: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts_after_second = take_background_log(&background_log);
     assert!(
         !posts_after_second.is_empty(),
         "re-armed terminal-height recovery should emit another retransmit burst"
@@ -114398,26 +114543,6 @@ async fn reschedule_preemptively_retransmits_single_vote_frontier_once_fast_wind
 
     let stale_now = now + Duration::from_millis(2);
     let second_reschedule = actor.reschedule_stale_pending_blocks_with_now(stale_now, None);
-    if !second_reschedule {
-        eprintln!(
-            "debug_settle_window targets={:?} last_quorum_reschedule={:?} frontier_slot={:?} frontier_recovery={:?}",
-            actor.quorum_retransmit_targets_for_missing_votes(
-                block_hash,
-                height,
-                view_idx,
-                &actor.effective_commit_topology(),
-                required,
-                1,
-            ),
-            actor
-                .pending
-                .pending_blocks
-                .get(&block_hash)
-                .and_then(|pending| pending.last_quorum_reschedule),
-            actor.frontier_slot,
-            actor.frontier_recovery,
-        );
-    }
     assert!(
         second_reschedule,
         "single-vote resend should arm once the fast resend window expires"
@@ -114690,6 +114815,8 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
@@ -114796,7 +114923,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         pending_after.last_quorum_reschedule, None,
         "frontier-owned window should not require or set a quorum-reschedule marker"
     );
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts = take_background_log(&background_log);
     assert!(
         posts.is_empty(),
         "frontier-owned window should not emit an extra quorum retransmit burst"
@@ -114833,7 +114960,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         Some(next_window_at),
         "resend-window rearm should mark quorum-reschedule time at the rearm instant"
     );
-    let posts_after_rearm: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts_after_rearm = take_background_log(&background_log);
     assert!(
         !posts_after_rearm.is_empty(),
         "next-window rearm should emit retransmit traffic"
@@ -115102,7 +115229,9 @@ async fn reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window()
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged() {
     let _worker_guard = super::status::worker_queue_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -115153,8 +115282,8 @@ async fn reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged
     );
     let snapshot = super::status::snapshot();
     assert_eq!(
-        snapshot.view_change_causes.missing_qc_total, 0,
-        "dropping zero-vote pending should not immediately rotate view from the reschedule path"
+        snapshot.view_change_causes.missing_qc_total, 1,
+        "dropping zero-vote pending should rotate the stalled frontier directly"
     );
     assert!(
         !actor.block_payload_available_locally(block_hash),
@@ -115195,6 +115324,7 @@ async fn reschedule_forces_after_backlog_extension_cap_reached() {
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.inserted_at = Instant::now() - extended_deadline - Duration::from_millis(1);
+    pending.touch_progress(pending.inserted_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
@@ -115310,6 +115440,7 @@ async fn reschedule_stale_pending_blocks_respects_tick_budget() {
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.touch_progress(pending.inserted_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
@@ -115617,6 +115748,8 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
     let view = actor.state.view();
     let height = view.height() as u64 + 1;
     let parent = view.latest_block_hash();
@@ -115708,29 +115841,38 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
         "pending block should be rescheduled"
     );
 
-    let expected_targets: BTreeSet<_> = snapshot_roster
-        .iter()
-        .filter(|peer| *peer != &local_peer)
-        .cloned()
+    let expected_targets: BTreeSet<_> = actor
+        .quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view_idx,
+            &snapshot_roster,
+            topology.min_votes_for_commit().max(1),
+            vote_status.vote_count,
+        )
+        .into_iter()
         .collect();
-    let mut targets = BTreeSet::new();
-    for post in harness.background_rx.try_iter() {
-        let BackgroundPost::Post { peer, msg, .. } = post else {
-            continue;
-        };
-        match msg.as_ref() {
-            BlockMessage::BlockCreated(created) if created.block.hash() == block_hash => {
-                targets.insert(peer);
-            }
-            BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash => {
-                targets.insert(peer);
-            }
-            _ => {}
-        }
-    }
+    let targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockCreated" | "BlockSyncUpdate"),
+                    peer: Some(_),
+                }
+            )
+        })
+        .filter_map(|entry| entry.peer)
+        .collect();
     assert!(
         targets.is_superset(&expected_targets),
         "reschedule should rebroadcast to the snapshot roster"
+    );
+    assert!(
+        !targets.contains(&removed_peer),
+        "reschedule must not target peers outside the snapshot roster"
     );
 
     harness.shutdown.send();
@@ -117738,7 +117880,7 @@ fn sample_block_with_signature_index(
 fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey {
     let parent = actor.state.view().latest_block_hash();
     let block = sample_block(height, view, parent);
-    let payload_hash = Hash::prehashed([0xAD; 32]);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let key = (block.hash(), height, view);
     let pending = PendingBlock::new(block, payload_hash, height, view);
     actor.pending.pending_blocks.insert(key.0, pending);

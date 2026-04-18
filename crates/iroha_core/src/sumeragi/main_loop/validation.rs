@@ -330,6 +330,19 @@ impl Actor {
             Err(outcome) => return outcome,
         };
 
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if pending.height == local_height.saturating_add(1) {
+            let expected_parent = self.state.view().latest_block_hash();
+            let actual_parent = pending.block.header().prev_block_hash();
+            if actual_parent != expected_parent {
+                let err = BlockValidationError::PrevBlockHashMismatch {
+                    expected: expected_parent,
+                    actual: actual_parent,
+                };
+                return self.finalize_validation_failure(hash, pending, &err);
+            }
+        }
+
         let validation_priority_reason =
             self.pending_block_validation_priority_reason(hash, &pending);
         let has_commit_qc = pending.commit_qc_observed()
@@ -428,7 +441,6 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let expected_height = local_height.saturating_add(1);
         if pending.height > expected_height {
             if let Some(parent_hash) = pending.block.header().prev_block_hash() {

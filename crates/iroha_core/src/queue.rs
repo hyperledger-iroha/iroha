@@ -678,6 +678,15 @@ impl Queue {
     ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
         extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(|err| {
             match err {
+                LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace } => {
+                    Error::LaneComplianceDenied {
+                        alias: lane_alias.to_string(),
+                        reason: format!(
+                            "UAID {uaid} is not bound to dataspace {}",
+                            dataspace.as_u64()
+                        ),
+                    }
+                }
                 LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => {
                     Error::LaneComplianceDenied {
                         alias: lane_alias.to_string(),
@@ -6107,7 +6116,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_without_dataspace_binding_is_admitted() {
+    async fn uaid_without_dataspace_binding_is_rejected() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
         let dataspace = DataSpaceId::new(7);
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
@@ -6155,12 +6164,20 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        queue
-            .push(
-                accepted_tx_by(account_id.clone(), &key_pair, &time_source),
-                state.view(),
-            )
-            .expect("UAID should route globally even without a dataspace binding");
+        let result = queue.push(
+            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            state.view(),
+        );
+        match result {
+            Err(Failure {
+                err: Error::LaneComplianceDenied { reason, .. },
+                ..
+            }) => assert!(
+                reason.contains("not bound to dataspace"),
+                "expected missing dataspace binding rejection, got {reason}"
+            ),
+            other => panic!("expected missing dataspace binding rejection, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -6221,7 +6238,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_routing_allows_foreign_dataspace_without_binding() {
+    async fn uaid_routing_rejects_foreign_dataspace_without_binding() {
         let bound = DataSpaceId::new(42);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rebind"));
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, bound, true);
@@ -6240,12 +6257,20 @@ pub mod tests {
             }),
         );
 
-        queue
-            .push(
-                accepted_tx_by(account_id.clone(), &key_pair, &time_source),
-                state.view(),
-            )
-            .expect("global UAID routing should not require target dataspace binding");
+        let result = queue.push(
+            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            state.view(),
+        );
+        match result {
+            Err(Failure {
+                err: Error::LaneComplianceDenied { reason, .. },
+                ..
+            }) => assert!(
+                reason.contains("not bound to dataspace"),
+                "expected missing dataspace binding rejection, got {reason}"
+            ),
+            other => panic!("expected missing dataspace binding rejection, got {other:?}"),
+        }
     }
 
     #[tokio::test]

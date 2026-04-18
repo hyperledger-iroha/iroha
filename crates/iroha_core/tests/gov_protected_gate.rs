@@ -54,8 +54,13 @@ fn compute_proposal_id(
 fn sample_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
-    iroha_data_model::smart_contract::ContractAddress::derive(0, authority, 0, DataSpaceId::new(0))
-        .expect("contract address")
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        0,
+        authority,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address")
 }
 
 #[test]

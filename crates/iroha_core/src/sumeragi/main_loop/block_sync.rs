@@ -923,12 +923,28 @@ impl Actor {
         let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
         let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
+        let tracked_missing_payload_recovery = self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash)
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.subject_block_hash == block_hash
+                    && entry.qc.height == block_height
+                    && entry.qc.view == block_view
+            })
+            || self.missing_commit_qc_repair_active_for_round(
+                block_hash,
+                block_height,
+                block_view,
+                self.committed_height_snapshot(),
+                Instant::now(),
+            );
         let send_block_sync = match consensus_mode {
             ConsensusMode::Permissioned => has_roster || has_cached_qc,
             // Missing-block recovery in NPoS must stay on the BlockSyncUpdate path even when
             // roster sidecars/hints are unavailable, otherwise responders fall back to
             // BlockCreated and receivers can livelock on lock-conflicting hintless payloads.
-            ConsensusMode::Npos => true,
+            ConsensusMode::Npos => has_roster || has_cached_qc || tracked_missing_payload_recovery,
         };
         if !send_block_sync {
             BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block))
@@ -1565,10 +1581,17 @@ impl Actor {
             incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
         let exact_contiguous_frontier = block_height == local_height.saturating_add(1)
             && parent_hash == self.state.latest_block_hash_fast();
+        let implicit_recovery_consensus_mode = self.consensus_context_for_height(block_height).0;
+        let vote_only_frontier_update =
+            has_commit_votes && incoming_qc.is_none() && validator_checkpoint.is_none();
+        let implicit_frontier_recovery_allowed =
+            !(matches!(implicit_recovery_consensus_mode, ConsensusMode::Npos)
+                && vote_only_frontier_update);
         if self.runtime_da_enabled()
             && exact_contiguous_frontier
             && !block_known_locally
             && !requested_missing_block
+            && implicit_frontier_recovery_allowed
         {
             requested_missing_block = true;
             debug!(
@@ -2118,6 +2141,7 @@ impl Actor {
             && !requested_missing_block
             && !block_known_locally
             && block_height <= local_height.saturating_add(1)
+            && implicit_frontier_recovery_allowed
         {
             // Aborted pending payloads are retained for recovery but must still be treated as
             // missing for consensus progression, otherwise sparse next-height block-sync updates
@@ -2162,10 +2186,15 @@ impl Actor {
         // Commit votes can arm missing-block recovery before we reach the roster/payload path.
         // Keep the local gate in sync with the tracked request state so vote-backed stale-view
         // recovery does not get dropped as if no recovery request existed.
-        requested_missing_block |= self
+        let vote_requested_missing_block = self
             .pending
             .missing_block_requests
             .contains_key(&block_hash);
+        if vote_requested_missing_block
+            && (implicit_frontier_recovery_allowed || explicit_requested_missing_block)
+        {
+            requested_missing_block = true;
+        }
         let vote_only_known_block_fast_path = block_known
             && has_commit_votes
             && incoming_qc.is_none()
@@ -2214,12 +2243,19 @@ impl Actor {
         )
         .is_some();
         let parent_known_locally = parent_hash.is_some_and(|hash| self.block_known_locally(hash));
+        let unsolicited_npos_vote_only_frontier = matches!(consensus_mode, ConsensusMode::Npos)
+            && has_commit_votes
+            && !requested_missing_block
+            && incoming_qc.is_none()
+            && validator_checkpoint.is_none()
+            && !cached_frontier_qc;
         let frontier_lane_payload_only = frontier_lane_owned
             && !frontier_lane_deep_catchup
             && !block_known
             && incoming_qc.is_none()
             && validator_checkpoint.is_none()
             && !cached_frontier_qc
+            && !unsolicited_npos_vote_only_frontier
             && (requested_missing_block
                 || parent_known_locally
                 || (matches!(consensus_mode, ConsensusMode::Npos)
@@ -3275,6 +3311,17 @@ impl Actor {
                 &block_signers,
                 &topology,
             ) {
+                if matches!(consensus_mode, ConsensusMode::Npos)
+                    && vote_only_frontier_update
+                    && !explicit_requested_missing_block
+                {
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockSyncUpdate,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::QuorumMissing,
+                    );
+                    return Ok(());
+                }
                 // Invariant A: sparse missing-QC updates must transition request state in this
                 // same event step (or stay explicitly suppressed via backoff).
                 requested_missing_block = true;
@@ -5140,6 +5187,15 @@ impl Actor {
         );
         if block_known_for_commit {
             self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
+            self.qc_cache
+                .entry((
+                    qc.phase,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.epoch,
+                ))
+                .or_insert_with(|| qc.clone());
             self.request_commit_pipeline_for_round(
                 block_height,
                 block_view,

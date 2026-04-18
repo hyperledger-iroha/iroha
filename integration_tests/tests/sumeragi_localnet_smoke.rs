@@ -201,7 +201,7 @@ fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lanes = vec![
         ModelLaneConfig {
             id: LaneId::new(0),
-            dataspace_id: DataSpaceId::new(0),
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "lane-universal".to_owned(),
             visibility: LaneVisibility::Public,
             ..ModelLaneConfig::default()

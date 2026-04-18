@@ -1907,6 +1907,7 @@ impl Actor {
         block: &SignedBlock,
         payload_hash: Hash,
         rebroadcast_missing_init: bool,
+        emit_ready: bool,
     ) -> Result<()> {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(());
@@ -1981,10 +1982,22 @@ impl Actor {
             self.persist_rbc_session(key, &session);
         }
         self.publish_rbc_backlog_snapshot();
-        self.maybe_emit_rbc_ready(key)?;
+        if emit_ready {
+            self.maybe_emit_rbc_ready(key)?;
+        }
         if should_rebroadcast {
             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
-                self.rebroadcast_rbc_payload_for_missing_init(key, &session);
+                let roster = self.rbc_session_roster(key);
+                if let Some((init, chunks)) = Self::rbc_payload_bundle(key, &session, &roster) {
+                    self.rebroadcast_rbc_payload_bundle(
+                        key,
+                        init,
+                        chunks,
+                        session.ready_signatures.len(),
+                    );
+                } else {
+                    self.rebroadcast_rbc_payload_for_missing_init(key, &session);
+                }
             }
         }
         Ok(())
@@ -1998,6 +2011,23 @@ impl Actor {
         payload_hash: Hash,
     ) -> Result<()> {
         let Some(init) = self.rebuild_rbc_init_from_block(block, key) else {
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+                && session.total_chunks() != 0
+            {
+                let session_roster = self.rbc_session_roster(key);
+                if !session_roster.is_empty() {
+                    self.update_rbc_status_entry(key, &session, false);
+                    self.persist_rbc_session_sync(key, &session, session_roster.as_slice());
+                    self.publish_rbc_backlog_snapshot();
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        "persisted exact-frontier RBC recovery snapshot from live session"
+                    );
+                    return Ok(());
+                }
+            }
             debug!(
                 height = key.1,
                 view = key.2,
@@ -2035,7 +2065,7 @@ impl Actor {
         }
 
         if !has_session {
-            self.seed_rbc_session_from_block(key, block, payload_hash, pending_rbc)?;
+            self.seed_rbc_session_from_block(key, block, payload_hash, pending_rbc, true)?;
             return Ok(());
         }
 
@@ -2047,10 +2077,50 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash));
         if needs_payload {
+            let mut queued_seed = false;
+            if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                let work = RbcSeedWork {
+                    key,
+                    payload_hash,
+                    payload_bytes: payload_bytes.to_vec(),
+                    chunking: RbcChunkingSpec::from_config(&self.config.rbc),
+                    epoch: self.epoch_for_height(key.1),
+                    started_at: Instant::now(),
+                };
+                match seed_tx.try_send(work) {
+                    Ok(()) => {
+                        self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                            key,
+                            super::RbcSeedIntent {
+                                rebroadcast_missing_init: pending_rbc,
+                                emit_ready: true,
+                            },
+                        );
+                        queued_seed = true;
+                    }
+                    Err(mpsc::TrySendError::Full(_work)) => {
+                        debug!(
+                            ?key,
+                            "RBC seed queue full; hydrating exact-frontier payload inline"
+                        );
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_work)) => {
+                        warn!(
+                            ?key,
+                            "RBC seed worker disconnected; hydrating exact-frontier payload inline"
+                        );
+                        self.subsystems.da_rbc.rbc.seed_tx = None;
+                        self.subsystems.da_rbc.rbc.seed_rx = None;
+                        self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                    }
+                }
+            }
             self.hydrate_rbc_session_from_block(key, payload_bytes, payload_hash, sender)?;
-        } else {
-            self.populate_rbc_session_metadata_from_block(key, block);
+            if queued_seed {
+                self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
+            }
         }
+        self.populate_rbc_session_metadata_from_block(key, block);
 
         if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
@@ -2060,6 +2130,7 @@ impl Actor {
         {
             self.rebroadcast_rbc_payload_for_missing_init(key, &session);
         }
+        let _ = self.retire_exact_frontier_rbc_runtime(key, "block_created");
         Ok(())
     }
 
@@ -2181,7 +2252,8 @@ impl Actor {
                     None
                 }
             }
-        };
+        }
+        .or_else(|| block.signatures().next().cloned());
 
         let mut changed = false;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
@@ -2239,7 +2311,6 @@ impl Actor {
         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
             let payload_bytes = block_payload_bytes(&block);
             let payload_len = payload_bytes.len();
-            let payload_bytes_for_hydrate = payload_bytes.clone();
             let work = RbcSeedWork {
                 key,
                 payload_hash,
@@ -2254,6 +2325,7 @@ impl Actor {
                         key,
                         super::RbcSeedIntent {
                             rebroadcast_missing_init,
+                            emit_ready: false,
                         },
                     );
                     if let Err(err) = self.insert_stub_rbc_session_from_block(
@@ -2272,16 +2344,6 @@ impl Actor {
                         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
                         return Ok(false);
                     }
-                    let hydrate_result = self.hydrate_rbc_session_from_block(
-                        key,
-                        &payload_bytes_for_hydrate,
-                        payload_hash,
-                        None,
-                    );
-                    // Pending block already includes full payload; keep READY/DELIVER on the
-                    // synchronous path and ignore delayed background seed completion.
-                    self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
-                    hydrate_result?;
                     if rebroadcast_missing_init
                         && let Some(session) =
                             self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
@@ -2304,7 +2366,13 @@ impl Actor {
                 }
             }
         }
-        self.seed_rbc_session_from_block(key, &block, payload_hash, rebroadcast_missing_init)?;
+        self.seed_rbc_session_from_block(
+            key,
+            &block,
+            payload_hash,
+            rebroadcast_missing_init,
+            false,
+        )?;
         Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key))
     }
 
@@ -2658,7 +2726,14 @@ impl Actor {
         if self.suppress_far_future_rbc_missing_block_fetch(key, "rbc_recover_future_window") {
             return;
         }
-        let payload = self.rbc_session_payload_bytes(&key);
+        let payload = self.rbc_session_payload_bytes(&key).or_else(|| {
+            let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
+            if session.received_chunks() == session.total_chunks() {
+                session.payload_bytes()
+            } else {
+                None
+            }
+        });
         if let Some(payload) = payload {
             let payload_hash = Hash::new(&payload);
             let mut payload_mismatch: Option<Hash> = None;
@@ -2921,6 +2996,14 @@ impl Actor {
         if key.1 != frontier_height {
             return false;
         }
+        if self
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .is_some_and(|pending| pending.aborted)
+        {
+            return false;
+        }
         if self.frontier_block_materialized_locally(key.0) && !self.block_known_locally(key.0) {
             return false;
         }
@@ -2984,72 +3067,34 @@ impl Actor {
         }
         self.clear_missing_block_recovery_for_height(key.1, now);
 
-        let has_rbc_state = self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
-            || self.subsystems.da_rbc.rbc.pending.contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .session_rosters
-                .contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .payload_rebroadcast_last_sent
-                .contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .ready_rebroadcast_last_sent
-                .contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .deliver_rebroadcast_last_sent
-                .contains_key(&key)
-            || self.subsystems.da_rbc.rbc.ready_deferral.contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .deliver_deferral
-                .contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .outbound_chunks
-                .contains_key(&key)
-            || self.subsystems.da_rbc.rbc.persisted_sessions.contains(&key)
-            || self.subsystems.da_rbc.rbc.persist_inflight.contains(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .persist_pending_refresh
-                .contains_key(&key);
-        if has_rbc_state {
-            self.purge_rbc_state(key, key.0, key.1, key.2);
-        }
-
-        let reanchor_requested = self.request_range_pull_from_anchor_with_tier(
-            frontier_height,
-            "rbc_far_future_missing_block",
-            now,
-            Some(super::RangePullCandidateTier::CommitTopology),
+        let lock_lag_active = self.lock_lag_range_pull_active_for_height(key.1);
+        let dropped_by_future_window = matches!(
+            context,
+            "rbc_init_future_window"
+                | "rbc_chunk_future_window"
+                | "rbc_ready_future_window"
+                | "rbc_deliver_future_window"
         );
+        let reanchor_requested = if lock_lag_active || dropped_by_future_window {
+            self.request_range_pull_from_anchor_with_tier(
+                frontier_height,
+                "rbc_far_future_missing_block",
+                now,
+                Some(super::RangePullCandidateTier::CommitTopology),
+            )
+        } else {
+            false
+        };
         debug!(
             height = key.1,
             view = key.2,
             frontier_height,
             block = %key.0,
             context,
-            had_rbc_state = has_rbc_state,
+            lock_lag_active,
+            dropped_by_future_window,
             reanchor_requested,
-            "suppressing far-future RBC missing-block fetch beyond contiguous frontier"
+            "suppressing far-future RBC missing-block fetch beyond contiguous frontier while retaining RBC state"
         );
         true
     }
@@ -6844,13 +6889,15 @@ impl Actor {
                         self.persist_rbc_session(key, &session);
                     }
                     self.publish_rbc_backlog_snapshot();
-                    if let Err(err) = self.maybe_emit_rbc_ready(key) {
-                        debug!(
-                            height = key.1,
-                            view = key.2,
-                            ?err,
-                            "failed to emit RBC READY after seed completion"
-                        );
+                    if intent.emit_ready {
+                        if let Err(err) = self.maybe_emit_rbc_ready(key) {
+                            debug!(
+                                height = key.1,
+                                view = key.2,
+                                ?err,
+                                "failed to emit RBC READY after seed completion"
+                            );
+                        }
                     }
                     if intent.rebroadcast_missing_init {
                         if let Some(session) =
@@ -6875,6 +6922,9 @@ impl Actor {
     }
 
     pub(super) fn persist_rbc_session(&mut self, key: SessionKey, session: &RbcSession) {
+        if session.is_invalid() {
+            return;
+        }
         let total_chunks = session.total_chunks();
         if total_chunks == 0 {
             return;
@@ -6909,6 +6959,9 @@ impl Actor {
     }
 
     fn enqueue_rbc_persist_snapshot(&mut self, key: SessionKey, persisted: PersistedSession) {
+        if persisted.invalid {
+            return;
+        }
         if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
             match tx.try_send(RbcPersistWork { key, persisted }) {
                 Ok(()) => {
@@ -7006,6 +7059,9 @@ impl Actor {
         session: &RbcSession,
         session_roster: &[PeerId],
     ) {
+        if session.is_invalid() {
+            return;
+        }
         if !self.ensure_rbc_chunk_store() {
             trace!(
                 ?key,
@@ -7040,6 +7096,9 @@ impl Actor {
     }
 
     fn persist_rbc_snapshot_sync(&mut self, key: SessionKey, persisted: &PersistedSession) {
+        if persisted.invalid {
+            return;
+        }
         if !self.ensure_rbc_chunk_store() {
             trace!(
                 ?key,
