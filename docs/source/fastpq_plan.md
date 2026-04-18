@@ -68,7 +68,7 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 - Composition polynomials: for each constraint `C_j`, form `F_j(X) = C_j(X) / Z_N(X)` with degree margins listed below.
 - Lookup argument (permissions): sample `γ` from transcript. Trace product `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}`. Table product `T = ∏_j (table_perm_j - γ)`. Boundary constraint: `Z_final / T = 1`.
 - DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
-- V1 replay verification is capped by `fastpq_prover::VerifyLimits` and authenticates sampled LDE query chunks against Merkle paths rooted at `lookup_root`. Per-round FRI openings and AIR composition openings are still required before verification can become fully logarithmic.
+- V1 verification authenticates sampled LDE query chunks against `lookup_root` and consumes per-round FRI openings under `fri_layers`; the verifier checks transcript-derived challenges, Merkle paths, and fold equations without rebuilding the LDE or folding the full trace. AIR composition openings remain the next tightening step for full constraint sampling.
 - Proof object (Norito-encoded):
   ```
   Proof {
@@ -82,6 +82,7 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       alphas: Vec<Field>,
       betas: Vec<Field>,
       queries: Vec<QueryOpening>,
+      fri_queries: Vec<FriQueryOpening>,
   }
 
   QueryOpening {
@@ -90,12 +91,19 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       chunk_values: Vec<Field>,
       merkle_path: Vec<Field>,
   }
+
+  FriQueryOpening {
+      initial_index: u32,
+      rounds: Vec<FriRoundOpening>,
+      final_index: u32,
+      final_values: Vec<Field>,
+      final_merkle_path: Vec<Field>,
+  }
   ```
-- V1 replay verifier mirrors the prover only inside `VerifyLimits`; it binds
-  sampled query chunks to `lookup_root`, but the production replacement must
-  verify per-round FRI openings and AIR composition openings without rebuilding
-  the full trace. Keep large 1k/5k/20k-row traces in prover and benchmark
-  regression suites, not node-facing verification, until that verifier lands.
+- Node-facing V1 verification no longer runs trace rebuild, LDE derivation, or
+  full recursive folding. `VerifyLimits` caps proof material, query counts, path
+  depth, and payload size; large 1k/5k/20k-row traces remain in prover and
+  benchmark regression suites.
 
 ### Degree Accounting
 | Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |

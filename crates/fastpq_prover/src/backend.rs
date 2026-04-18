@@ -22,7 +22,7 @@ use crate::{
     fft::Planner,
     overrides, pack_bytes,
     poseidon::{self, PoseidonSponge},
-    proof::PublicIO,
+    proof::{FriQueryOpening, FriRoundOpening, PublicIO},
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
         hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
@@ -32,6 +32,7 @@ use crate::{
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const FIELD_ONE: u64 = 1;
 const LDE_LEAF_DOMAIN: &[u8] = b"fastpq:v1:lde:leaf";
+const FRI_LEAF_DOMAIN: &[u8] = b"fastpq:v1:fri:leaf";
 const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
 pub const LOOKUP_PRODUCT_DOMAIN: &str = "fastpq:v1:lookup:product";
 const FRI_FINAL_DOMAIN: &str = "fastpq:v1:fri:final";
@@ -942,6 +943,8 @@ pub struct BackendArtifact {
     pub trace_root: u64,
     /// Poseidon2 Merkle root over the low-degree extension leaf hashes.
     pub lookup_root: u64,
+    /// Number of evaluation rows committed under `lookup_root`.
+    pub lde_domain_size: u32,
     /// Lookup grand-product accumulator over the permission witness column.
     pub lookup_grand_product: u64,
     /// Lookup Fiat–Shamir challenge (`γ`).
@@ -962,6 +965,8 @@ pub struct BackendArtifact {
     pub query_chunks: Vec<Vec<u64>>,
     /// Merkle authentication paths for each queried evaluation chunk.
     pub query_paths: Vec<Vec<u64>>,
+    /// Per-round FRI openings for sampled query indices.
+    pub fri_query_openings: Vec<FriQueryOpening>,
 }
 
 /// Concrete backend implementing the deterministic FASTPQ STARK pipeline.
@@ -1017,9 +1022,28 @@ pub fn hash_lde_chunk(leaf_index: usize, values: &[u64]) -> Result<u64> {
     hash_with_domain(LDE_LEAF_DOMAIN, &limbs)
 }
 
+/// Hash one FRI round leaf with domain separation from LDE openings.
+///
+/// # Errors
+/// Returns an error if the leaf coordinates cannot be represented.
+pub fn hash_fri_chunk(round: usize, leaf_index: usize, values: &[u64]) -> Result<u64> {
+    let round = u64::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?;
+    let index =
+        u64::try_from(leaf_index).map_err(|_| Error::QueryIndexOverflow { index: leaf_index })?;
+    let mut limbs = Vec::with_capacity(values.len() + 2);
+    limbs.push(round);
+    limbs.push(index);
+    limbs.extend(values.iter().copied());
+    hash_with_domain(FRI_LEAF_DOMAIN, &limbs)
+}
+
 /// Return the chunk size (number of evaluations per leaf hash) for the given FRI arity.
 pub fn lde_chunk_size(arity: u32) -> usize {
     usize::try_from(arity.saturating_mul(8).max(1)).expect("FRI chunk size fits usize")
+}
+
+fn fri_chunk_size(arity: u32) -> usize {
+    usize::try_from(arity.max(1)).expect("FRI arity fits usize")
 }
 
 /// Open the full LDE leaf chunks that contain the supplied query indices.
@@ -1103,6 +1127,49 @@ pub fn merkle_paths_for_queries(
                 .unwrap_or_else(|| level[leaf_index]);
             path.push(sibling);
             leaf_index /= 2;
+        }
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
+fn merkle_paths_for_leaf_indices(leaves: &[u64], leaf_indices: &[usize]) -> Result<Vec<Vec<u64>>> {
+    if leaf_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+    if leaves.is_empty() {
+        return Err(Error::QueryIndexOutOfRange {
+            index: leaf_indices[0],
+            len: 0,
+        });
+    }
+    let levels = build_merkle_levels(leaves)?;
+    let leaf_count = levels
+        .first()
+        .expect("non-empty levels for non-empty leaves")
+        .len();
+    let mut paths = Vec::with_capacity(leaf_indices.len());
+    for &leaf_index in leaf_indices {
+        if leaf_index >= leaf_count {
+            return Err(Error::QueryIndexOutOfRange {
+                index: leaf_index,
+                len: leaf_count,
+            });
+        }
+        let mut index = leaf_index;
+        let mut path = Vec::with_capacity(levels.len().saturating_sub(1));
+        for level in levels.iter().take(levels.len().saturating_sub(1)) {
+            let sibling_idx = if index.is_multiple_of(2) {
+                index + 1
+            } else {
+                index.saturating_sub(1)
+            };
+            let sibling = level
+                .get(sibling_idx)
+                .copied()
+                .unwrap_or_else(|| level[index]);
+            path.push(sibling);
+            index /= 2;
         }
         paths.push(path);
     }
@@ -1345,6 +1412,153 @@ pub fn fold_with_fri(
     Ok((layers, betas))
 }
 
+fn fold_with_fri_opening_layers(
+    evaluations: &[u64],
+    arity: u32,
+    max_reductions: u32,
+    transcript: &mut Transcript,
+) -> Result<(Vec<Vec<u64>>, Vec<u64>, Vec<u64>)> {
+    if arity != 8 && arity != 16 {
+        return Err(Error::FriArity(arity));
+    }
+    if evaluations.is_empty() {
+        transcript.append_fri_final(0);
+        return Ok((vec![Vec::new()], vec![0], Vec::new()));
+    }
+
+    let arity_usize = usize::try_from(arity).expect("FRI arity fits usize");
+    let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
+    let mut current = evaluations.to_vec();
+    let mut layer_values = Vec::new();
+    let mut roots = Vec::new();
+    let mut betas = Vec::new();
+    let mut round = 0usize;
+
+    while current.len() > 1 && round < max_rounds {
+        pad_to_arity(&mut current, arity_usize);
+        let leaves = hash_fri_leaves(round, &current, arity)?;
+        let root = merkle_root(&leaves);
+        transcript.append_fri_layer(round, root);
+        roots.push(root);
+        layer_values.push(current.clone());
+
+        let beta = transcript.challenge_beta(round);
+        betas.push(beta);
+        current = fold_round(&current, arity_usize, beta);
+        round += 1;
+    }
+
+    let leaves = hash_fri_leaves(round, &current, arity)?;
+    let final_root = merkle_root(&leaves);
+    transcript.append_fri_final(final_root);
+    roots.push(final_root);
+    layer_values.push(current);
+
+    Ok((layer_values, roots, betas))
+}
+
+fn hash_fri_leaves(round: usize, values: &[u64], arity: u32) -> Result<Vec<u64>> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let chunk = fri_chunk_size(arity).max(1);
+    let mut leaves = Vec::with_capacity(values.len().div_ceil(chunk));
+    for (idx, group) in values.chunks(chunk).enumerate() {
+        leaves.push(hash_fri_chunk(round, idx, group)?);
+    }
+    Ok(leaves)
+}
+
+fn open_fri_query_chains(
+    layer_values: &[Vec<u64>],
+    query_indices: &[usize],
+    arity: u32,
+) -> Result<Vec<FriQueryOpening>> {
+    if layer_values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let arity_usize = fri_chunk_size(arity).max(1);
+    let mut round_leaves = Vec::with_capacity(layer_values.len());
+    for (round, values) in layer_values.iter().enumerate() {
+        round_leaves.push(hash_fri_leaves(round, values, arity)?);
+    }
+
+    let mut openings = Vec::with_capacity(query_indices.len());
+    for &initial_index in query_indices {
+        let initial_index_u32 =
+            u32::try_from(initial_index).map_err(|_| Error::QueryIndexOverflow {
+                index: initial_index,
+            })?;
+        let mut index = initial_index;
+        let mut rounds = Vec::with_capacity(layer_values.len().saturating_sub(1));
+        for round in 0..layer_values.len().saturating_sub(1) {
+            let values = &layer_values[round];
+            if index >= values.len() {
+                return Err(Error::QueryIndexOutOfRange {
+                    index,
+                    len: values.len(),
+                });
+            }
+            let leaf_index = index / arity_usize;
+            let start = leaf_index
+                .checked_mul(arity_usize)
+                .ok_or(Error::QueryMismatch { index: round })?;
+            let end = start.saturating_add(arity_usize).min(values.len());
+            let group = values[start..end].to_vec();
+            let paths = merkle_paths_for_leaf_indices(&round_leaves[round], &[leaf_index])?;
+            let folded_index = leaf_index;
+            let folded_value = layer_values
+                .get(round + 1)
+                .and_then(|next| next.get(folded_index))
+                .copied()
+                .ok_or(Error::QueryIndexOutOfRange {
+                    index: folded_index,
+                    len: layer_values.get(round + 1).map_or(0, Vec::len),
+                })?;
+            rounds.push(FriRoundOpening {
+                round: u32::try_from(round)
+                    .map_err(|_| Error::QueryIndexOverflow { index: round })?,
+                index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+                values: group,
+                folded_value,
+                merkle_path: paths.into_iter().next().unwrap_or_default(),
+            });
+            index = folded_index;
+        }
+
+        let final_values = layer_values
+            .last()
+            .expect("non-empty layer values")
+            .as_slice();
+        if index >= final_values.len() {
+            return Err(Error::QueryIndexOutOfRange {
+                index,
+                len: final_values.len(),
+            });
+        }
+        let final_leaf_index = index / arity_usize;
+        let start = final_leaf_index
+            .checked_mul(arity_usize)
+            .ok_or(Error::QueryMismatch {
+                index: openings.len(),
+            })?;
+        let end = start.saturating_add(arity_usize).min(final_values.len());
+        let final_paths = merkle_paths_for_leaf_indices(
+            round_leaves.last().expect("final leaves"),
+            &[final_leaf_index],
+        )?;
+        openings.push(FriQueryOpening {
+            initial_index: initial_index_u32,
+            rounds,
+            final_index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
+            final_values: final_values[start..end].to_vec(),
+            final_merkle_path: final_paths.into_iter().next().unwrap_or_default(),
+        });
+    }
+
+    Ok(openings)
+}
+
 fn pad_to_arity(values: &mut Vec<u64>, arity: usize) {
     if values.is_empty() || arity == 0 {
         return;
@@ -1492,6 +1706,10 @@ impl Backend for StarkBackend {
         let lde_columns = polynomial_data.lde_columns();
         let lde_rows = hash_trace_rows(lde_columns);
         let lde_values = extend_row_hashes(&planner, resolved_mode, lde_rows, trace.padded_len);
+        let lde_domain_size =
+            u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
+                rows: lde_values.len(),
+            })?;
         let lde_hashes = hash_lde_leaves(&lde_values, self.config.params.fri.arity)?;
         let lde_root = merkle_root(&lde_hashes);
 
@@ -1522,7 +1740,7 @@ impl Backend for StarkBackend {
         }
         transcript.append_message(LOOKUP_PRODUCT_DOMAIN, &lookup_grand_product.to_le_bytes());
 
-        let (fri_layers, fri_betas) = fold_with_fri(
+        let (fri_layer_values, fri_layers, fri_betas) = fold_with_fri_opening_layers(
             &lde_values,
             self.config.params.fri.arity,
             self.config.params.fri.max_reductions,
@@ -1542,6 +1760,11 @@ impl Backend for StarkBackend {
             self.config.params.fri.arity,
             lde_values.len(),
         )?;
+        let fri_query_openings = open_fri_query_chains(
+            &fri_layer_values,
+            &query_indices,
+            self.config.params.fri.arity,
+        )?;
 
         let trace_rows = u32::try_from(trace.rows)
             .map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
@@ -1551,6 +1774,7 @@ impl Backend for StarkBackend {
             trace_rows,
             trace_root,
             lookup_root: lde_root,
+            lde_domain_size,
             lookup_grand_product,
             lookup_challenge: gamma,
             alphas,
@@ -1561,6 +1785,7 @@ impl Backend for StarkBackend {
             query_openings,
             query_chunks,
             query_paths,
+            fri_query_openings,
         })
     }
 }

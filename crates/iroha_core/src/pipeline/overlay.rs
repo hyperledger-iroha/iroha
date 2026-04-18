@@ -2365,7 +2365,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "zk-stark")]
-    fn overlay_rejects_stark_ivm_proved_until_air_prover_available() {
+    fn overlay_accepts_stark_ivm_proved_binding_air_proof() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -2373,7 +2373,10 @@ mod tests {
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+            proof::{
+                ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
+                VerifyingKeyRecord,
+            },
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
@@ -2484,7 +2487,7 @@ mod tests {
             replay.trace_hash,
         );
 
-        let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
+        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
             backend,
             circuit_id,
             &vk_box,
@@ -2493,13 +2496,30 @@ mod tests {
             events_commitment,
             gas_policy_commitment,
         )
-        .expect_err("native STARK AIR proving must stay disabled");
-        assert!(err.contains("sound AIR prover"));
+        .expect("STARK binding AIR proof");
+        let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
+        let attachments = ProofAttachmentList(vec![attachment]);
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode,
+                overlay: overlay.clone(),
+                events_commitment,
+                gas_policy_commitment,
+            }))
+            .with_attachments(attachments)
+            .sign(kp.private_key());
+
+        let overlay_built =
+            build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
+        let built: Vec<InstructionBox> = overlay_built.instructions().cloned().collect();
+        assert_eq!(built.as_slice(), overlay.as_ref());
     }
 
     #[test]
     #[cfg(feature = "zk-stark")]
-    fn overlay_stark_circuit_mismatch_test_waits_for_air_prover() {
+    fn overlay_stark_prover_rejects_circuit_mismatch() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -2620,15 +2640,15 @@ mod tests {
 
         let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
             backend,
-            circuit_id,
+            "stark/fri/sha256-goldilocks:not-ivm-execution-v1",
             &vk_box,
             code_hash,
             overlay_hash,
             events_commitment,
             gas_policy_commitment,
         )
-        .expect_err("native STARK AIR proving must stay disabled");
-        assert!(err.contains("sound AIR prover"));
+        .expect_err("mismatched STARK circuit must be rejected");
+        assert!(err.contains("circuit_id mismatch"));
     }
 
     #[test]

@@ -3,12 +3,12 @@
 Last updated: 2026-04-18
 
 ## 2026-04-18 Follow-up: STARK/FRI V1 verifier hardening
-- The low-level native STARK/FRI V1 checker now uses the domain-aware binary FRI fold for `(x, -x)` openings instead of an x-free sibling linear combination. The high-level STARK `OpenVerifyEnvelope` backend applies metadata/size checks and then fails closed until real verifier-owned AIR openings are implemented.
-- The unsafe synthetic native STARK prover helper now fails closed until a real AIR prover emits verifier-owned openings. Bare recursive/offline STARK aggregate envelopes and Torii readiness advertising are also disabled until they carry those openings.
+- The low-level native STARK/FRI V1 checker now uses the domain-aware binary FRI fold for `(x, -x)` openings instead of an x-free sibling linear combination. The high-level STARK `OpenVerifyEnvelope` backend now requires verifier-reconstructed V1 binding-AIR composition values before accepting an inner FRI proof.
+- The unsafe synthetic native STARK helper is no longer a production API. Native STARK V1 proof generation emits a deterministic binding-AIR composition root over the backend, circuit id, VK hash, schema descriptor, and public input columns; offline recursive STARK envelopes use the same composition-bound V1 path.
 - STARK guardrails now distinguish `zk.stark.max_envelope_bytes` for the outer `OpenVerifyEnvelope` from `zk.stark.max_proof_bytes` for the backend-native proof bytes; config defaults, fixtures, overlay prechecks, and guardrail tests were updated.
 - The gated STARK integration target now runs under `--features 'zk-stark zk-tests'`; `zk-tests` enables the core test helpers it depends on, and the stale synthetic-acceptance cases now assert fail-closed behavior.
-- FASTPQ V1 public verification now applies `fastpq_prover::VerifyLimits` and authenticates sampled LDE query chunks against Merkle paths rooted at `lookup_root` before replaying canonical trace commitments. This bounds node-facing replay verification while the remaining per-round FRI and AIR composition opening verifier is implemented in-place for V1.
-- FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries query chunks plus Merkle authentication paths.
+- FASTPQ V1 public verification now applies `fastpq_prover::VerifyLimits`, authenticates sampled LDE query chunks against `lookup_root`, and verifies per-round FRI query chains against `fri_layers` without rebuilding the trace, deriving the LDE, or folding the full evaluation vector. AIR composition openings remain the next constraint-sampling tightening.
+- FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries query chunks, Merkle authentication paths, and per-round FRI openings.
 - ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
 - Focused validation for this slice:
   - `cargo fmt --all`

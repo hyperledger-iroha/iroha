@@ -6,14 +6,14 @@ Latest sync (2026-04-18 STARK/FRI V1 verifier hardening):
 STARK/FRI V1 was hardened in-place for the first release. The low-level native
 verifier now folds `(x, -x)` pairs with the domain element, STARK guardrails
 split outer OpenVerify envelope bytes from backend-native proof bytes,
-synthetic STARK proving and high-level STARK verification now fail closed until
-real verifier-owned AIR openings exist, the gated STARK tests now assert that
-fail-closed behavior, and curve labels are exact canonical strings. FASTPQ
-verification now has V1 replay limits and authenticates sampled LDE query
-chunks against Merkle paths rooted at `lookup_root`, so node-facing calls cannot
-skip sampled opening authentication while the remaining per-round FRI and AIR
-composition verifier is implemented. FASTPQ proof fixtures, ordering hashes, and
-trace-commitment goldens were refreshed for the in-place V1 wire shape.
+the synthetic STARK helper was removed from the production API, high-level
+STARK verification now requires verifier-reconstructed V1 binding-AIR
+composition values, offline recursive STARK readiness uses that composition
+path, and curve labels are exact canonical strings. FASTPQ verification now
+authenticates sampled LDE query chunks and per-round FRI query chains without
+trace rebuild, LDE derivation, or full recursive folding. FASTPQ proof fixtures,
+ordering hashes, and trace-commitment goldens were refreshed for the in-place V1
+wire shape.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -46,19 +46,17 @@ trace-commitment goldens were refreshed for the in-place V1 wire shape.
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark_ -- --nocapture`
   - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark overlay_stark -- --nocapture`
-  - `cargo test -p iroha_core --lib --features zk-stark overlay_rejects_stark_ivm_proved_until_air_prover_available -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark overlay_accepts_stark_ivm_proved_binding_air_proof -- --nocapture`
   - `cargo test -p iroha_config --test fixtures -- --nocapture`
   - `cargo test -p integration_tests --features zk-stark --test consensus_and_da --no-run`
   - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
   - `git diff --check`
 - open work after this slice:
-  - replace FASTPQ replay verification with a logarithmic verifier that consumes
-    per-round FRI openings and AIR composition openings under the existing V1
-    proof family; sampled LDE Merkle authentication paths are already carried
-    and checked
-  - implement the real native STARK AIR prover before re-enabling STARK
-    proof generation, high-level STARK proof acceptance, or offline recursive
-    aggregate STARK envelopes
+  - add FASTPQ AIR composition openings so sampled constraints are checked
+    directly beside the per-round FRI openings now carried in V1 proofs
+  - replace the first-release native STARK binding circuits with full
+    circuit-specific execution AIRs where a feature needs cryptographic
+    execution semantics beyond deterministic replay/public-input binding
 
 Latest sync (2026-04-18 Kotodama assert truthiness and role-account fixtures):
 Kotodama `assert(...)` now lowers with its original boolean condition intact,

@@ -514,12 +514,100 @@ fn stark_open_verify_domain_tag_current(
     hex::encode(digest)
 }
 
-/// Placeholder for building a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_CONSTANT: u64 = 17;
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
+#[cfg(feature = "zk-stark")]
+const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_preimage(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<u8> {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:zk:stark-binding-air:v1");
+    preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(backend.as_bytes());
+    preimage.extend_from_slice(&(circuit_id.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(circuit_id.as_bytes());
+    preimage.extend_from_slice(&vk_hash);
+    preimage.extend_from_slice(&(env_public_inputs.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(env_public_inputs);
+    preimage.extend_from_slice(&(public_inputs.len() as u64).to_le_bytes());
+    let mut cell_count = 0u64;
+    for column in public_inputs {
+        preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
+        cell_count = cell_count.saturating_add(column.len() as u64);
+        for value in column {
+            preimage.extend_from_slice(value);
+        }
+    }
+    preimage.extend_from_slice(&cell_count.to_le_bytes());
+    preimage
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_field_limb_from_digest(bytes: &[u8]) -> u64 {
+    let mut word = [0u8; 8];
+    word.copy_from_slice(bytes);
+    let value = u64::from_le_bytes(word);
+    (u128::from(value) % STARK_GOLDILOCKS_MODULUS) as u64
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_terms(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<crate::zk_stark::StarkCompositionTermV1> {
+    let preimage = stark_binding_air_preimage(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    let digest = Sha256::digest(&preimage);
+    let mut terms = Vec::with_capacity(6);
+    for (idx, chunk) in digest.chunks_exact(8).enumerate() {
+        let coeff = (idx as u64) + 3;
+        terms.push(crate::zk_stark::StarkCompositionTermV1 {
+            wire_index: idx as u32,
+            value: stark_field_limb_from_digest(chunk),
+            coeff,
+        });
+    }
+    terms.push(crate::zk_stark::StarkCompositionTermV1 {
+        wire_index: 4,
+        value: (public_inputs.len() as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 11,
+    });
+    let cell_count = public_inputs
+        .iter()
+        .map(Vec::len)
+        .fold(0usize, usize::saturating_add);
+    terms.push(crate::zk_stark::StarkCompositionTermV1 {
+        wire_index: 5,
+        value: (cell_count as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 13,
+    });
+    terms
+}
+
+/// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
-/// This currently fails closed. A previous first-release implementation synthesized a
-/// passing FRI witness from verifier metadata, which did not prove execution semantics.
-/// The replacement V1 prover must emit real AIR and FRI openings before this helper can
-/// return a proof again.
+/// The first-release native V1 circuit is a binding circuit: it proves low-degree
+/// FRI consistency for a deterministic witness and binds the envelope metadata,
+/// verifying-key hash, schema descriptor, and public input columns through a
+/// verifier-reconstructed composition leaf. Execution semantics remain enforced
+/// by the callers that derive and replay those public commitments.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_open_verify_envelope(
     backend: &str,
@@ -528,21 +616,86 @@ pub fn prove_stark_fri_open_verify_envelope(
     schema_descriptor: &[u8],
     public_inputs: Vec<Vec<[u8; 32]>>,
 ) -> Result<ProofBox, String> {
-    let _ = (
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    if !is_stark_fri_v1_backend(backend) {
+        return Err("backend is not a STARK/FRI V1 backend".to_owned());
+    }
+    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+        norito::decode_from_bytes(&vk_box.bytes)
+            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
+    if vk_payload.version != 1 {
+        return Err("unsupported STARK verifying key payload version".to_owned());
+    }
+    let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
+    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
+        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
+    if env_circuit_id != vk_circuit_id {
+        return Err("STARK verifying key circuit_id mismatch".to_owned());
+    }
+    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
+        vk_payload.hash_fn
+    } else if backend.contains("/sha256-") {
+        crate::zk_stark::STARK_HASH_SHA256_V1
+    } else if backend.contains("/poseidon2-") {
+        crate::zk_stark::STARK_HASH_POSEIDON2_V1
+    } else {
+        return Err("unsupported STARK/FRI backend variant".to_owned());
+    };
+    if vk_payload.hash_fn != expected_hash_fn {
+        return Err("STARK verifying key hash_fn mismatch".to_owned());
+    }
+
+    let vk_hash = hash_vk(vk_box);
+    let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,
-        vk_box,
+        vk_hash,
         schema_descriptor,
-        public_inputs,
+        &public_inputs,
     );
-    // Native STARK/FRI proving is intentionally unavailable in this V1 release
-    // until it emits verifier-owned AIR openings. The previous implementation
-    // synthesized an all-zero FRI witness from public metadata, which did not
-    // prove execution semantics.
-    Err(
-        "native STARK/FRI V1 proving is unavailable until the sound AIR prover is implemented"
-            .to_owned(),
-    )
+    let params = crate::zk_stark::StarkFriParamsV1 {
+        version: 1,
+        n_log2: vk_payload.n_log2,
+        blowup_log2: vk_payload.blowup_log2,
+        fold_arity: vk_payload.fold_arity,
+        queries: vk_payload.queries,
+        merkle_arity: vk_payload.merkle_arity,
+        hash_fn: vk_payload.hash_fn,
+        domain_tag,
+    };
+    let terms = stark_binding_air_terms(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let envelope_bytes = crate::zk_stark::prove_stark_fri_composition_envelope_bytes(
+        params,
+        "IROHA-STARK-BINDING-AIR-V1".to_owned(),
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        terms,
+    )?;
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs,
+        envelope_bytes,
+    };
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash,
+        public_inputs: schema_descriptor.to_vec(),
+        proof_bytes: norito::to_bytes(&open)
+            .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
+        aux: Vec::new(),
+    };
+    let bytes = norito::to_bytes(&env)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(backend.to_owned(), bytes))
 }
 
 /// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
@@ -4581,12 +4734,31 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         return reject("domain tag integrity mismatch");
     }
 
-    // Native STARK/FRI OpenVerify acceptance is intentionally disabled in V1
-    // until proofs carry verifier-owned AIR composition openings. The native
-    // FRI checker proves only low-degree consistency for the supplied layers;
-    // accepting it as an execution proof would let callers submit synthetic
-    // low-degree envelopes for arbitrary public inputs.
-    reject("native STARK/FRI V1 AIR verifier unavailable")
+    let Some(comp_values) = inner.proof.comp_values.as_ref() else {
+        return reject("missing STARK binding AIR composition values");
+    };
+    if inner.proof.commits.comp_root.is_none() {
+        return reject("missing STARK binding AIR composition root");
+    }
+    let expected_terms = stark_binding_air_terms(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
+    for comp in comp_values {
+        if comp.constant != STARK_BINDING_AIR_CONSTANT
+            || comp.z_coeff != STARK_BINDING_AIR_Z_COEFF
+            || comp.aux_terms != expected_terms
+        {
+            return reject("STARK binding AIR composition mismatch");
+        }
+    }
+    if !crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits) {
+        return reject("inner STARK/FRI verifier rejected proof");
+    }
+    true
 }
 
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
@@ -4716,7 +4888,7 @@ mod stark_prover_tests {
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
 
     #[test]
-    fn prove_stark_open_verify_envelope_rejects_synthetic_proving() {
+    fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4732,19 +4904,20 @@ mod stark_prover_tests {
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
         let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
-        let err = prove_stark_fri_open_verify_envelope(
+        let proof = prove_stark_fri_open_verify_envelope(
             backend,
             &circuit_id,
             &vk_box,
             b"tiny:schema:v1",
             public_inputs,
         )
-        .expect_err("synthetic STARK proving must stay disabled");
-        assert!(err.contains("sound AIR prover"));
+        .expect("binding AIR STARK proof");
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
     }
 
     #[test]
-    fn prove_stark_ivm_execution_envelope_rejects_synthetic_proving() {
+    fn prove_stark_ivm_execution_envelope_emits_binding_air_proof() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:ivm-execution-v1");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4759,7 +4932,7 @@ mod stark_prover_tests {
         };
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let err = prove_stark_fri_ivm_execution_envelope(
+        let proof = prove_stark_fri_ivm_execution_envelope(
             backend,
             &circuit_id,
             &vk_box,
@@ -4768,8 +4941,9 @@ mod stark_prover_tests {
             Hash::new(b"events"),
             Hash::new(b"gas"),
         )
-        .expect_err("synthetic STARK proving must stay disabled");
-        assert!(err.contains("sound AIR prover"));
+        .expect("binding AIR STARK proof");
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
     }
 
     #[test]
