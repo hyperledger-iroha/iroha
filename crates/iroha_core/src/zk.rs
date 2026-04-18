@@ -4896,6 +4896,7 @@ mod stark_prover_tests {
     use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_crypto::Hash;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+    use iroha_data_model::zk::{OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     #[test]
     fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
@@ -4924,6 +4925,45 @@ mod stark_prover_tests {
         .expect("binding AIR STARK proof");
         let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
         assert!(report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_public_input_tampering() {
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:tiny-open");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
+        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"tiny:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("binding AIR STARK proof");
+
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        open.public_inputs[0][0][0] ^= 0x01;
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
     }
 
     #[test]

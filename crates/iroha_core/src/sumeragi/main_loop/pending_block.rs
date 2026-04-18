@@ -472,6 +472,13 @@ impl PendingBlock {
         self.last_progress = now;
     }
 
+    pub(super) fn refresh_activation_window(&mut self, now: Instant) {
+        self.inserted_at = now;
+        self.last_progress = now;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
     pub(super) fn precommit_rebroadcast_due(&self, now: Instant, cooldown: Duration) -> bool {
         self.last_precommit_rebroadcast
             .is_none_or(|last| now.saturating_duration_since(last) >= cooldown)
@@ -708,6 +715,23 @@ mod tests {
         let age_after = pending.progress_age(now);
         assert!(age_before >= age_after);
         assert_eq!(age_after, Duration::ZERO);
+    }
+
+    #[test]
+    fn refresh_activation_window_resets_pending_timers() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let now = Instant::now();
+        let stale_progress = now - Duration::from_secs(5);
+        pending.inserted_at = stale_progress;
+        pending.touch_progress(stale_progress);
+        pending.mark_quorum_reschedule(stale_progress);
+
+        pending.refresh_activation_window(now);
+
+        assert_eq!(pending.inserted_at, now);
+        assert_eq!(pending.progress_age(now), Duration::ZERO);
+        assert!(pending.last_quorum_reschedule.is_none());
     }
 
     #[test]

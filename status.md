@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: Sumeragi pending activation window refresh
+- Cached future proposals that become the next frontier after their parent commits now receive a fresh pending age, progress age, and quorum-reschedule window instead of inheriting stale cache timers from before activation.
+- The Sumeragi actor refreshes both cached and in-flight pending blocks for the newly activated height, so a proposal that was validly held back while waiting for its parent is not immediately timed out when the commit pipeline advances the tip.
+- Queue-full validation cutover coverage now isolates commit-history state and asserts the multi-validator topology precondition before checking that fresh pending blocks remain deferred until the configured inline-validation cutover.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::pending_block::tests::refresh_activation_window_resets_pending_timers -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::cached_future_proposal_does_not_immediately_timeout_after_parent_commit_activation -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline_keeps_deferred_validation_before_queue_full_cutover -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline -- --nocapture`
+  - `cargo test -p iroha_core --lib`
+
 ## 2026-04-18 Follow-up: Halo2 IPA diagnostic verifier resource hardening
 - `iroha_zkp_halo2` standalone `OpenVerifyEnvelope` decode now accepts explicit verification limits for domain size (`max_k`) and transcript label length, rejects malformed proof-round shapes before folding, and reports typed version/curve/shape/resource-limit errors instead of collapsing these decode failures into generic verification failure.
 - The standalone IPA parameter registry is now bounded (`32` entries) with least-recently-used eviction, and generator vector lengths are checked before curve decoding so malformed payloads cannot force unnecessary point parsing or unbounded parameter-cache growth.
@@ -54,18 +66,25 @@ Last updated: 2026-04-18
 - FASTPQ V1 public verification now applies `fastpq_prover::VerifyLimits`, authenticates sampled LDE query chunks against `lookup_root`, requires the exact V1 AIR composition challenge count, recomputes sampled AIR composition values from authenticated adjacent LDE rows under `air_trace_root`, checks those values under `air_composition_root`, and verifies per-round FRI query chains against `fri_layers` without rebuilding the trace, deriving the LDE, or folding the full evaluation vector.
 - FASTPQ proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for the in-place V1 proof wire shape that now carries the committed LDE domain size, query chunks, Merkle authentication paths, sampled AIR openings, and per-round FRI openings.
 - ZK verifying key curve labels are now exact canonical strings (`pallas`, `goldilocks`, `bn254`) instead of case-insensitive comparisons.
+- Follow-up gap closure: the STARK VK update regression now seeds a valid encoded V1 STARK verifying key before exercising the mixed-case curve rejection, and the Nexus compile-only integration target no longer carries unused single-client helper wrappers.
+- Coverage follow-up: FASTPQ now explicitly tests extra AIR challenges, AIR opening-count mismatch, and `max_air_row_values` enforcement; native STARK now covers AIR composition-root binding to FRI layer zero, AIR public-digest tampering, AIR opening-count mismatch, AIR width limits, and high-level wrapper public-input tampering.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark zk_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark guardrails_ -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark prove_stark -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark verify_stark_open_verify_envelope_rejects_bound_public_input_tampering -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark register_vk_rejects_mixed_case_stark_curve -- --nocapture`
+  - `cargo test -p iroha_core --lib --features zk-stark update_vk_rejects_mixed_case_stark_curve -- --nocapture`
   - `cargo test -p iroha_core --test zk_stark --features 'zk-stark zk-tests' -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark overlay_stark -- --nocapture`
   - `cargo test -p iroha_core --lib --features zk-stark overlay_accepts_stark_ivm_proved_binding_air_proof -- --nocapture`
   - `cargo test -p iroha_config --test fixtures -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api,zk-verify-batch,zk-stark --test zk_verify_batch_handler_integration -- --nocapture`
   - `cargo test -p integration_tests --features zk-stark --test consensus_and_da --no-run`
   - `cargo test -p integration_tests --features zk-stark --test nexus_and_streaming --no-run`
   - `git diff --check`

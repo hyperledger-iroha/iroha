@@ -911,6 +911,59 @@ fn stark_rejects_mismatched_merkle_indices() {
 }
 
 #[test]
+fn stark_rejects_unbound_air_composition_root() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof
+        .air
+        .as_mut()
+        .expect("AIR section")
+        .composition_root[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR composition root must match FRI layer zero"
+    );
+}
+
+#[test]
+fn stark_rejects_tampered_air_public_digest() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof.air.as_mut().expect("AIR section").public_digest[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR public digest must remain bound to sampled rows and composition openings"
+    );
+}
+
+#[test]
+fn stark_rejects_air_opening_count_mismatch() {
+    let mut env = build_sample_air_composition_envelope();
+    let air = env.proof.air.as_mut().expect("AIR section");
+    assert_eq!(air.openings.len(), env.proof.queries.len());
+    air.openings.clear();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR opening count must match verifier query count"
+    );
+}
+
+#[test]
+fn stark_air_width_limit_is_enforced() {
+    let env = build_sample_air_composition_envelope();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    let trace_width = env.proof.air.as_ref().expect("AIR section").trace_width as usize;
+    assert!(trace_width > 1, "sample AIR trace must have width");
+    let mut limits = StarkVerifierLimits::default();
+    limits.max_air_width = trace_width - 1;
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&bytes, &limits),
+        "AIR trace width must respect verifier limits"
+    );
+}
+
+#[test]
 fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     use iroha_data_model::{
         proof::ProofBox,

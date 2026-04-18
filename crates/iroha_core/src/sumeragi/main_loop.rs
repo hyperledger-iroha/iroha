@@ -8106,6 +8106,29 @@ impl Actor {
         }
     }
 
+    fn refresh_pending_activation_window(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            if !pending.aborted && pending.height == height && pending.view == view {
+                pending.refresh_activation_window(now);
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut() {
+            if inflight.block_hash == block_hash
+                && !inflight.pending.aborted
+                && inflight.pending.height == height
+                && inflight.pending.view == view
+            {
+                inflight.pending.refresh_activation_window(now);
+            }
+        }
+    }
+
     fn refresh_tip_activated_pending_progress(
         &mut self,
         committed_height: u64,
@@ -8129,7 +8152,12 @@ impl Actor {
             })
             .collect();
         for (hash, view) in &activated {
-            self.touch_pending_progress(*hash, committed_height.saturating_add(1), *view, now);
+            self.refresh_pending_activation_window(
+                *hash,
+                committed_height.saturating_add(1),
+                *view,
+                now,
+            );
         }
         activated.len()
     }

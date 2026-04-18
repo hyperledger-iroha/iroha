@@ -1449,6 +1449,65 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_extra_air_challenges() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.alphas.push(42);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirChallengeCountMismatch {
+                expected: AIR_COMPOSITION_ALPHA_COUNT,
+                actual
+            } if actual == AIR_COMPOSITION_ALPHA_COUNT + 1
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_air_opening_count_mismatch() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let mut proof = prover.prove(&batch).unwrap();
+        assert!(
+            !proof.air_openings.is_empty(),
+            "expected sampled AIR openings"
+        );
+        proof.air_openings.pop();
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AirOpeningCountMismatch { expected, actual }
+                if expected == proof.queries.len() && actual + 1 == expected
+        ));
+    }
+
+    #[test]
+    fn verify_limits_reject_oversized_air_rows() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch_with_size(32);
+        let proof = prover.prove(&batch).unwrap();
+        let row_len = proof
+            .air_openings
+            .first()
+            .expect("expected sampled AIR opening")
+            .current_row
+            .len();
+        assert!(row_len > 0, "AIR row must carry trace values");
+        let mut limits = VerifyLimits::default();
+        limits.max_air_row_values = row_len - 1;
+        let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual,
+                max
+            } if actual == row_len && max + 1 == row_len
+        ));
+    }
+
+    #[test]
     fn verify_rejects_wrong_air_row_opening() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(32);

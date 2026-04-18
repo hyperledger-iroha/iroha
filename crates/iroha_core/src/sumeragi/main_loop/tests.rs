@@ -18838,23 +18838,28 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         })
         .expect("send commit result");
 
+    let activation_started_at = Instant::now();
     assert!(
         actor.poll_commit_results(),
         "commit outcome should advance the tip"
     );
 
-    let now = Instant::now();
-    let progress_age = actor
+    let pending_after = actor
         .pending
         .pending_blocks
         .get(&future_hash)
-        .expect("future pending block should remain cached after parent commit")
-        .progress_age(now);
+        .expect("future pending block should remain cached after parent commit");
     assert!(
-        progress_age < quorum_timeout,
+        pending_after.inserted_at >= activation_started_at,
+        "future pending block should restart its pending age when its parent commit activates the frontier"
+    );
+    assert_eq!(
+        pending_after.progress_age(pending_after.inserted_at),
+        Duration::ZERO,
         "future pending block should receive a fresh quorum-timeout window after its parent commit activates the frontier"
     );
 
+    let now = Instant::now();
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
         !proposed,
@@ -117178,6 +117183,7 @@ async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
 async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
 
+    let _history_guard = super::status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     {
@@ -117200,6 +117206,8 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
     let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology_before =
+        actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
     let fast_timeout = {
         let view = actor.state.view();
         actor.pending_fast_path_timeout(&view, consensus_mode)
@@ -117214,6 +117222,10 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
         inline_cutover > Duration::from_millis(1),
         "test requires enough room below cutover"
     );
+    assert!(
+        commit_topology_before.len() > 1,
+        "test requires non-local-only commit topology"
+    );
     let (_work_tx, _work_rx) =
         std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
     actor.subsystems.validation.work_txs = vec![_work_tx];
@@ -117223,7 +117235,7 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
     // Keep this synthetic block fresh even when the parallel test runner deschedules this task.
     pending.inserted_at = Instant::now()
-        .checked_add(Duration::from_secs(60))
+        .checked_add(Duration::from_secs(60 * 60))
         .expect("fresh pending marker should fit in Instant range");
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view, payload_hash);
@@ -117235,10 +117247,17 @@ async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
+    let pending_age_after = pending_after.age();
     assert_eq!(
         pending_after.validation_status,
         ValidationStatus::Pending,
-        "fresh queue-full pending block should stay deferred before cutover"
+        "fresh queue-full pending block should stay deferred before cutover: age_ms={} inline_cutover_ms={} workers={} result_rx={} inflight={} commit_topology_len={}",
+        pending_age_after.as_millis(),
+        inline_cutover.as_millis(),
+        actor.subsystems.validation.work_txs.len(),
+        actor.subsystems.validation.result_rx.is_some(),
+        actor.subsystems.validation.inflight.len(),
+        commit_topology_before.len()
     );
     assert!(
         pending_after.parent_state_root.is_none(),
