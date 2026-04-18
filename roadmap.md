@@ -19451,7 +19451,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## 2026-04-18 Lock-Override Follow-up
 1. Completed: Sumeragi lock validation now accepts structurally divergent QCs when the candidate view is strictly newer than the local `locked_qc.view`, matching the lock-override liveness rule while retaining same-view/older-view structural-extension safety.
-2. Completed: focused unit coverage now exercises the proposal highest-QC path, precommit QC/vote aggregation path, divergent newer-view acceptance, and divergent same-view rejection.
+2. Completed: focused unit coverage now exercises the proposal highest-QC path, precommit QC/vote aggregation path, block-sync QC prefilters, local precommit emission, cached vote pruning, divergent newer-view acceptance, and divergent same-view rejection.
 3. Remaining open: rerun a 4+ peer view-change/localnet regression once the surrounding dirty-tree Sumeragi formatting drift is settled enough for the standard full validation corridor.
 
 ## 2026-04-04 Throughput Harness Follow-up
