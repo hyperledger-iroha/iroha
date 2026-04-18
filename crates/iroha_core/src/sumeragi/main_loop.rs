@@ -6011,6 +6011,36 @@ impl Actor {
         )
     }
 
+    fn frontier_recovery_same_slot_missing_commit_qc_repair_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let committed_height = self.committed_height_snapshot();
+        self.pending
+            .missing_commit_qc_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == frontier_height
+                    && request.view == frontier_view
+                    && (recent(request.last_requested)
+                        || recent(request.last_dependency_progress)
+                        || recent(request.first_seen))
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
     fn frontier_recovery_same_slot_missing_payload_recovery_active(
         &self,
         frontier_height: u64,
@@ -6130,6 +6160,11 @@ impl Actor {
             queue_depths,
         ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_missing_block_request_active(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_missing_commit_qc_repair_active(
                 frontier_height,
                 frontier_view,
                 now,
@@ -30432,6 +30467,8 @@ impl Actor {
                 self.frontier_recovery_same_slot_ingress_active(height, view, now, queue_depths);
             let same_slot_missing_payload_recovery_active =
                 self.frontier_recovery_same_slot_missing_payload_recovery_active(height, view, now);
+            let same_slot_missing_commit_qc_repair_active =
+                self.frontier_recovery_same_slot_missing_commit_qc_repair_active(height, view, now);
             let same_slot_vote_backed_recovery_active =
                 self.frontier_recovery_same_slot_vote_backed_recovery_active(height, view, now);
             let same_slot_reassembly_active =
@@ -30440,6 +30477,7 @@ impl Actor {
                 && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
             if same_slot_ingress_active
                 || same_slot_missing_payload_recovery_active
+                || same_slot_missing_commit_qc_repair_active
                 || same_slot_vote_backed_recovery_active
                 || same_slot_reassembly_active
                 || same_height_rbc_sender_activity_active
@@ -30450,6 +30488,7 @@ impl Actor {
                     reason,
                     same_slot_ingress_active,
                     same_slot_missing_payload_recovery_active,
+                    same_slot_missing_commit_qc_repair_active,
                     same_slot_vote_backed_recovery_active,
                     same_slot_reassembly_active,
                     same_height_rbc_sender_activity_active,
@@ -32238,6 +32277,26 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+                if !proposal_seen && matches!(direct_cause, ViewChangeCause::MissingQc) {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "routing empty contiguous-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
+                    );
+                    return matches!(
+                        self.advance_frontier_recovery(
+                            "missing_qc",
+                            height,
+                            current_view,
+                            proposal_seen,
+                            false,
+                            true,
+                            now,
+                        ),
+                        FrontierRecoveryAdvance::Rotate
+                    );
+                }
                 if pre_reset_frontier_reanchor_unresolved_in_window
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
                     && !self.try_reserve_missing_qc_height_stall_rotation_window(
