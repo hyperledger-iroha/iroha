@@ -1457,7 +1457,7 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_JSON_DECODE => {
-                // r10 = &NoritoBytes (Norito-framed Json) -> r10 = &Json
+                // r10 = &NoritoBytes / &Json / raw-JSON Blob -> r10 = &Json
                 let r10_before = vm.register(10);
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!("[CoreHost] JSON_DECODE enter r10=0x{r10_before:08x}");
@@ -1474,11 +1474,18 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Json) {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = match tlv.type_id {
+                    PointerType::NoritoBytes | PointerType::Json => {
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
+                    }
+                    PointerType::Blob => {
+                        let raw =
+                            core::str::from_utf8(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                        let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
+                        Json::from(value)
+                    }
+                    _ => return Err(VMError::NoritoInvalid),
+                };
                 let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
