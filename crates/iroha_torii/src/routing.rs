@@ -53286,7 +53286,9 @@ pub async fn handle_v1_accounts_onboard(
         instructions.push(InstructionBox::from(publish));
     }
 
+    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_metadata(tx_metadata)
         .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
@@ -53442,7 +53444,9 @@ pub async fn handle_v1_accounts_faucet(
         account_id.clone(),
     )));
 
+    let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
+        .with_metadata(tx_metadata)
         .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&faucet.private_key.0);
