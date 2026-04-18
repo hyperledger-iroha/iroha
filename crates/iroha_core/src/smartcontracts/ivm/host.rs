@@ -5014,7 +5014,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         .expected_dsids()
                         .first()
                         .copied()
-                        .unwrap_or_else(|| DataSpaceId::new(0));
+                        .unwrap_or(DataSpaceId::UNIVERSAL);
                     let (elapsed_ns, budget_ns) = match err {
                         analysis::AmxBudgetError::PerDataspaceBudgetExceeded {
                             estimated_ns,

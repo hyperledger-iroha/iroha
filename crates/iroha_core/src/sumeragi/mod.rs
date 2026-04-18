@@ -2556,7 +2556,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::new(0),
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
             total_xor_due_micro: 0,
@@ -8517,7 +8517,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::new(0),
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
             total_xor_due_micro: 0,

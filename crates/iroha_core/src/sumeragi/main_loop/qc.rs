@@ -1323,11 +1323,16 @@ impl Actor {
                     Err(err) => {
                         let mut branch_progress = false;
                         warn!(?err, reason, "failed to replay deferred missing-payload QC");
-                        if self.should_defer_missing_block_view_change(
-                            &qc.subject_block_hash,
-                            qc.height,
-                            qc.view,
-                        ) {
+                        let same_height_stall_handoff = self
+                            .missing_qc_height_stall_snapshot(qc.height, now)
+                            .is_some_and(|snapshot| snapshot.mode_active);
+                        if !same_height_stall_handoff
+                            && self.should_defer_missing_block_view_change(
+                                &qc.subject_block_hash,
+                                qc.height,
+                                qc.view,
+                            )
+                        {
                             if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
                                 entry.first_seen = now;
                                 entry.last_attempt = now;
@@ -1353,7 +1358,7 @@ impl Actor {
                                     qc.height, qc.view, first_seen, now,
                                 )
                             {
-                                if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                if !matches!(action, super::FrontierRecoveryAdvance::None) {
                                     self.deferred_missing_payload_qcs.remove(&key);
                                     super::status::inc_qc_deferred_expired();
                                     #[cfg(feature = "telemetry")]
@@ -1410,11 +1415,16 @@ impl Actor {
                 ReplayAction::Expire { key, qc, reason } => {
                     let mut branch_progress = false;
                     let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    if self.should_defer_missing_block_view_change(
-                        &qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                    ) {
+                    let same_height_stall_handoff = self
+                        .missing_qc_height_stall_snapshot(qc.height, now)
+                        .is_some_and(|snapshot| snapshot.mode_active);
+                    if !same_height_stall_handoff
+                        && self.should_defer_missing_block_view_change(
+                            &qc.subject_block_hash,
+                            qc.height,
+                            qc.view,
+                        )
+                    {
                         if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
                             entry.first_seen = now;
                             entry.last_attempt = now;
@@ -1439,7 +1449,7 @@ impl Actor {
                                 qc.height, qc.view, first_seen, now,
                             )
                         {
-                            if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                            if !matches!(action, super::FrontierRecoveryAdvance::None) {
                                 self.deferred_missing_payload_qcs.remove(&key);
                                 super::status::inc_qc_deferred_expired();
                                 #[cfg(feature = "telemetry")]
@@ -1487,6 +1497,39 @@ impl Actor {
         progress
     }
 
+    fn ensure_missing_payload_frontier_recovery_state(
+        &mut self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        if let Some(state) = self
+            .frontier_recovery
+            .as_mut()
+            .filter(|state| state.frontier_height == height)
+        {
+            state.last_cause = "missing_payload";
+            state.last_view = state.last_view.max(view);
+            state.last_action_at = Some(now);
+            return;
+        }
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(height);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height: height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: now,
+            last_progress_at: now,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: Some(now),
+            no_progress_windows: 0,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "missing_payload",
+        });
+    }
+
     fn handoff_contiguous_frontier_missing_payload_recovery(
         &mut self,
         height: u64,
@@ -1496,21 +1539,36 @@ impl Actor {
     ) -> Option<super::FrontierRecoveryAdvance> {
         let committed_height = self.committed_height_snapshot();
         let frontier_height = committed_height.saturating_add(1);
-        if height != frontier_height || height != self.active_consensus_round_height() {
+        if height != frontier_height {
             return None;
         }
         let _ = first_seen;
         if self.frontier_slot_lag_window_expired(height, now)
             || self.frontier_slot_deep_catchup_active_at_height(height)
         {
-            return Some(self.handle_frontier_slot_event(
+            let advance = self.handle_frontier_slot_event(
                 now,
                 super::FrontierSlotEvent::OnLagWindowExpired {
                     reason: "frontier_stall_reset",
                 },
-            ));
+            );
+            if !matches!(advance, super::FrontierRecoveryAdvance::None) {
+                self.ensure_missing_payload_frontier_recovery_state(height, _view, now);
+                return Some(advance);
+            }
         }
-        Some(self.handle_frontier_slot_event(now, super::FrontierSlotEvent::OnFetchRetryDue))
+        let slot_advance =
+            self.handle_frontier_slot_event(now, super::FrontierSlotEvent::OnFetchRetryDue);
+        if !matches!(slot_advance, super::FrontierRecoveryAdvance::None) {
+            self.ensure_missing_payload_frontier_recovery_state(height, _view, now);
+            return Some(slot_advance);
+        }
+        if self.seed_frontier_recovery_for_missing_payload(height, _view, now) {
+            self.ensure_missing_payload_frontier_recovery_state(height, _view, now);
+            return Some(super::FrontierRecoveryAdvance::CatchUp);
+        }
+        self.ensure_missing_payload_frontier_recovery_state(height, _view, now);
+        Some(super::FrontierRecoveryAdvance::CatchUp)
     }
 
     pub(super) fn request_missing_block(
@@ -1520,11 +1578,11 @@ impl Actor {
         view: u64,
         priority: super::MissingBlockPriority,
         targets: &[PeerId],
-    ) {
+    ) -> bool {
         if self
             .try_route_missing_block_through_exact_frontier_slot(block_hash, height, view, targets)
         {
-            return;
+            return true;
         }
         if self.should_suppress_lock_rejected_block_fetch(
             height,
@@ -1532,7 +1590,7 @@ impl Actor {
             "request_missing_block",
         ) {
             self.clear_missing_block_view_change(&block_hash);
-            return;
+            return false;
         }
         let requester_roster_proof_known =
             matches!(priority, super::MissingBlockPriority::Consensus)
@@ -1547,6 +1605,7 @@ impl Actor {
             requester_roster_proof_known,
             targets,
         );
+        false
     }
 
     pub(super) fn try_route_missing_block_through_exact_frontier_slot(
@@ -1821,11 +1880,6 @@ impl Actor {
             )
         };
         let now = Instant::now();
-        if self.handle_frontier_body_gap_with_topology(
-            block_hash, height, view, signers, topology, true, now,
-        ) {
-            return true;
-        }
         let committed_height = self.committed_height_snapshot();
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         if self.missing_hash_is_non_actionable_dependency(
@@ -1853,6 +1907,11 @@ impl Actor {
                 block = %block_hash,
                 "deferring QC aggregation without fetch: block hash is obsolete/non-actionable dependency"
             );
+            return true;
+        }
+        if self.handle_frontier_body_gap_with_topology(
+            block_hash, height, view, signers, topology, true, now,
+        ) {
             return true;
         }
         if self.should_suppress_lock_rejected_block_fetch(
@@ -5572,6 +5631,17 @@ impl Actor {
 
         if !block_known_locally {
             let now = Instant::now();
+            let same_height_frontier_commit_qc =
+                matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                    && qc.height == self.committed_height_snapshot().saturating_add(1);
+            if same_height_frontier_commit_qc {
+                self.note_frontier_commit_qc_observed(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    now,
+                );
+            }
             let committed_height = self.committed_height_snapshot();
             let subject_height =
                 Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
@@ -5615,7 +5685,10 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
-            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            if same_height_frontier_commit_qc {
+                // Already recorded before the non-actionable dependency gate so certified
+                // same-height recovery can supersede a live local owner.
+            } else if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
                 self.note_frontier_commit_qc_observed(
                     qc.subject_block_hash,
                     qc.height,
@@ -5631,37 +5704,6 @@ impl Actor {
                         voter: None,
                     },
                 );
-            }
-            if self.handle_frontier_body_gap_with_topology(
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                &signer_set,
-                &topology,
-                true,
-                now,
-            ) {
-                debug!(
-                    height = qc.height,
-                    view = qc.view,
-                    phase = ?qc.phase,
-                    hash = %qc.subject_block_hash,
-                    "routed frontier QC payload miss through exact body repair"
-                );
-                if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-                    super::status::record_commit_qc(qc.clone());
-                }
-                self.qc_cache.insert(
-                    (
-                        qc.phase,
-                        qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                        qc.epoch,
-                    ),
-                    qc.clone(),
-                );
-                return Ok(());
             }
             let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
             let base_retry_window = self.rebroadcast_cooldown();

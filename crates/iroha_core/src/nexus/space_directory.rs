@@ -24,6 +24,13 @@ use crate::state::WorldReadOnly;
 /// Lane identity extraction failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneIdentityMetadataError {
+    /// A UAID exists but is not active in the routed dataspace.
+    MissingDataspaceBinding {
+        /// Account UAID.
+        uaid: UniversalAccountId,
+        /// Routed dataspace.
+        dataspace: DataSpaceId,
+    },
     /// A UAID record exists for the target dataspace but its manifest is inactive.
     InactiveManifest {
         /// Account UAID.
@@ -35,11 +42,13 @@ pub enum LaneIdentityMetadataError {
 
 /// Extract lane identity metadata (UAID + capability tags) for transaction admission.
 ///
-/// The lookup is global by account UAID:
+/// The lookup is scoped by account UAID and routed dataspace:
 /// - if no account or no UAID exists, returns `(None, [])`
-/// - if the UAID has an active manifest for the target dataspace, returns tags from manifest notes
-/// - if the UAID has no manifest for the target dataspace, returns `(Some(uaid), [])`
+/// - if the UAID is not bound to the routed dataspace, returns
+///   [`LaneIdentityMetadataError::MissingDataspaceBinding`]
 /// - if the target manifest exists but is inactive, returns [`LaneIdentityMetadataError`]
+/// - if the UAID has an active manifest for the target dataspace, returns tags from manifest notes
+/// - if the UAID has a binding but no target manifest, returns `(Some(uaid), [])`
 pub fn extract_lane_identity_metadata(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -53,16 +62,31 @@ pub fn extract_lane_identity_metadata(
         return Ok((None, Vec::new()));
     };
 
-    if let Some(manifest_set) = world.space_directory_manifests().get(&uaid)
-        && let Some(record) = manifest_set.get(&dataspace_id)
+    let manifest_record = world
+        .space_directory_manifests()
+        .get(&uaid)
+        .and_then(|manifest_set| manifest_set.get(&dataspace_id).cloned());
+    if let Some(record) = &manifest_record
+        && !record.is_active()
     {
-        if !record.is_active() {
-            return Err(LaneIdentityMetadataError::InactiveManifest {
-                uaid,
-                dataspace: dataspace_id,
-            });
-        }
+        return Err(LaneIdentityMetadataError::InactiveManifest {
+            uaid,
+            dataspace: dataspace_id,
+        });
+    }
 
+    let is_bound = world
+        .uaid_dataspaces()
+        .get(&uaid)
+        .is_some_and(|bindings| bindings.is_bound_to(dataspace_id, authority));
+    if !is_bound {
+        return Err(LaneIdentityMetadataError::MissingDataspaceBinding {
+            uaid,
+            dataspace: dataspace_id,
+        });
+    }
+
+    if let Some(record) = manifest_record {
         let mut tags = BTreeSet::new();
         for entry in &record.manifest.entries {
             if let Some(note) = &entry.notes {
@@ -543,24 +567,28 @@ mod tests {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             world.space_directory_manifests.insert(uaid, set);
+            if manifest_active {
+                let mut bindings = UaidDataspaceBindings::default();
+                bindings.bind_account(dataspace, authority.clone());
+                world.uaid_dataspaces.insert(uaid, bindings);
+            }
         }
 
         (world, authority)
     }
 
     #[test]
-    fn lane_identity_metadata_allows_missing_target_manifest() {
+    fn lane_identity_metadata_rejects_missing_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-missing"));
         let dataspace = DataSpaceId::new(17);
         let (world, authority) = world_with_uaid(uaid, dataspace, false, true);
         let world_view = world.view();
 
-        let (observed, tags) = extract_lane_identity_metadata(&world_view, &authority, dataspace)
-            .expect("missing target manifest should be accepted");
-        assert_eq!(observed, Some(uaid));
-        assert!(
-            tags.is_empty(),
-            "missing manifest yields no capability tags"
+        let err = extract_lane_identity_metadata(&world_view, &authority, dataspace)
+            .expect_err("UAID routing must require a dataspace binding");
+        assert_eq!(
+            err,
+            LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace }
         );
     }
 

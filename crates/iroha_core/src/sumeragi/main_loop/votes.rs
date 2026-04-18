@@ -1445,7 +1445,7 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.request_missing_block_for_highest_qc_inner(highest, source, false, true)
+        self.request_missing_block_for_highest_qc_inner(highest, source, false, true, true)
     }
 
     pub(super) fn request_missing_block_for_highest_qc_force(
@@ -1453,7 +1453,23 @@ impl Actor {
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.request_missing_block_for_highest_qc_inner(highest, source, true, true)
+        self.request_missing_block_for_highest_qc_inner(highest, source, true, true, true)
+    }
+
+    pub(super) fn request_missing_block_for_highest_qc_exact_repair(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
+    ) -> bool {
+        self.request_missing_block_for_highest_qc_inner(highest, source, false, true, false)
+    }
+
+    pub(super) fn request_missing_block_for_highest_qc_force_exact_repair(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
+    ) -> bool {
+        self.request_missing_block_for_highest_qc_inner(highest, source, true, true, false)
     }
 
     pub(super) fn suppress_committed_edge_conflicting_highest_qc(
@@ -1767,6 +1783,7 @@ impl Actor {
         source: &'static str,
         force_fetch: bool,
         observe_sidecar_mismatch: bool,
+        retain_exact_frontier_request: bool,
     ) -> bool {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if self.suppress_committed_edge_conflicting_highest_qc(highest, source) {
@@ -1973,25 +1990,6 @@ impl Actor {
                 )
             };
         }
-        if self.handle_frontier_body_gap_with_topology(
-            highest.subject_block_hash,
-            highest.height,
-            highest.view,
-            &signers,
-            &topology,
-            true,
-            now,
-        ) {
-            debug!(
-                height = highest.height,
-                view = highest.view,
-                block = %highest.subject_block_hash,
-                roster_source,
-                source,
-                "routed highest-QC frontier body miss through exact body repair"
-            );
-            return true;
-        }
         let retry_window = self.consensus_missing_block_retry_window(
             highest.subject_block_hash,
             highest.height,
@@ -2084,13 +2082,22 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(
+                let routed_exact_frontier = self.request_missing_block(
                     highest.subject_block_hash,
                     highest.height,
                     highest.view,
                     MissingBlockPriority::Consensus,
                     &targets,
                 );
+                if !retain_exact_frontier_request
+                    && (routed_exact_frontier
+                        || highest.height == self.committed_height_snapshot().saturating_add(1))
+                {
+                    self.clear_missing_block_request(
+                        &highest.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                }
                 iroha_logger::info!(
                     height = highest.height,
                     view = highest.view,
@@ -2138,6 +2145,21 @@ impl Actor {
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
     ) -> bool {
+        self.observe_new_view_highest_qc_inner(highest, true)
+    }
+
+    pub(super) fn observe_new_view_highest_qc_exact_repair(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        self.observe_new_view_highest_qc_inner(highest, false)
+    }
+
+    fn observe_new_view_highest_qc_inner(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        retain_exact_frontier_request: bool,
+    ) -> bool {
         if self.suppress_committed_edge_conflicting_highest_qc(highest, "new_view") {
             return false;
         }
@@ -2154,7 +2176,11 @@ impl Actor {
             super::status::set_highest_qc(highest.height, highest.view);
             super::status::set_highest_qc_hash(highest.subject_block_hash);
         }
-        self.request_missing_block_for_highest_qc(highest, "new_view");
+        if retain_exact_frontier_request {
+            self.request_missing_block_for_highest_qc(highest, "new_view");
+        } else {
+            self.request_missing_block_for_highest_qc_exact_repair(highest, "new_view");
+        }
         true
     }
 
@@ -3451,10 +3477,16 @@ impl Actor {
         let canonicalize =
             |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
-            if !cached.roster.is_empty() {
-                return canonicalize(cached.roster.clone());
-            }
+        let cached_roster = self
+            .vote_roster_cache
+            .get(&block_hash)
+            .filter(|cached| !cached.roster.is_empty())
+            .map(|cached| cached.roster.clone());
+        let next_committed_height = committed_height.saturating_add(1);
+        if height != next_committed_height
+            && let Some(cached) = cached_roster.as_ref()
+        {
+            return canonicalize(cached.clone());
         }
         let allow_sidecar = !self.sidecar_quarantined_for_height(height);
         if let Some(selection) = super::persisted_roster_for_block(
@@ -3483,13 +3515,15 @@ impl Actor {
             }
         }
         // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
-        // Roster changes committed at height N must be visible for votes at N+1 immediately, but
-        // a block-specific cached or persisted roster snapshot must win when present.
-        if height == committed_height.saturating_add(1) {
+        // Roster changes committed at height N must be visible for votes at N+1 immediately.
+        if height == next_committed_height {
             let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
             if !live.is_empty() {
                 return canonicalize(live);
             }
+        }
+        if let Some(cached) = cached_roster {
+            return canonicalize(cached);
         }
         if height <= committed_height {
             let mut roster_height = height;

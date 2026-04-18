@@ -23360,8 +23360,8 @@ Last updated: 2026-04-17
     - `unregister_domain_rejects_when_member_account_has_viral_escrow_state`
     - `unregister_account_rejects_when_account_has_sorafs_pin_manifest_state`
     - `unregister_domain_rejects_when_member_account_has_sorafs_pin_manifest_state`
-- Updated Space Directory and Nexus compliance docs to match global UAID routing semantics:
-  - replaced outdated “UAID not bound => queue rejection” wording with “missing target manifest allowed; inactive manifest rejected”
+- Updated Space Directory and Nexus compliance docs to remove legacy dataspace-agnostic UAID routing semantics:
+  - replaced outdated “missing target manifest allowed” wording with “UAID-backed routing requires a target dataspace binding; inactive manifest rejected”
   - touched multilingual variants in:
     - `docs/space-directory*.md`
     - `docs/source/nexus_compliance*.md`
