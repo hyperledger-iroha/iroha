@@ -259,6 +259,8 @@ use iroha_data_model::events::{
     },
 };
 #[cfg(feature = "app_api")]
+use iroha_data_model::proof::ProofRecord;
+#[cfg(feature = "app_api")]
 use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "app_api")]
 use iroha_data_model::sorafs::deal::DealUsageReport;
@@ -13583,6 +13585,31 @@ where
 }
 
 #[cfg(feature = "app_api")]
+async fn torii_norito_body<T>(response: Response, label: &str) -> Result<T, Response>
+where
+    T: norito::codec::Decode,
+{
+    let status = response.status();
+    if !status.is_success() {
+        return Err(response);
+    }
+
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|error| {
+            torii_internal_json_error(format!("failed to read proxied {label}: {error}"))
+        })?;
+
+    norito::decode_from_bytes::<T>(&body).map_err(|error| {
+        let mut response =
+            torii_internal_json_error(format!("failed to decode proxied {label}: {error}"));
+        *response.status_mut() = parts.status;
+        response
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, Response> {
     norito::json::to_vec(value).map_err(|error| {
         torii_internal_json_error(format!("failed to encode merged JSON: {error}"))
@@ -15683,6 +15710,16 @@ async fn execute_torii_read_request_locally(
                 Err(error) => error.into_response(),
             }
         }
+        ToriiReadEndpointV1::ProofRecordGet => {
+            let Ok(proof_id) = torii_proxy_path_arg(&request, 0, "proof_id") else {
+                return torii_proxy_path_arg(&request, 0, "proof_id").unwrap_err();
+            };
+            finish_torii_read_result(
+                routing::handle_get_proof_record(app.state.clone(), AxPath(proof_id)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::AccountsList => {
             let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
                 request.query_string.as_deref(),
@@ -16190,6 +16227,109 @@ fn torii_read_fanout_request(
         query_string,
         body,
         response_format,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn resolve_torii_proof_record_for_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    proof_id: String,
+) -> Result<(ProofRecord, ToriiFanoutDiagnostics, &'static str), Response> {
+    if routes.is_empty() {
+        return Err(with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        ));
+    }
+
+    let routed_by = routed_by_for_routes(app, &routes);
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for _ in &routes {
+        diagnostics.record_attempt();
+    }
+    let responses = futures_util::future::join_all(routes.iter().map(|route| {
+        execute_torii_single_route_read(
+            app,
+            *route,
+            ToriiReadEndpointV1::ProofRecordGet,
+            vec![proof_id.clone()],
+            None,
+            Vec::new(),
+        )
+    }))
+    .await;
+
+    for response in responses {
+        if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_norito_body::<ProofRecord>(response, "proof record response").await {
+            Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push(payload);
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+
+    let mut unique_payloads = BTreeMap::<Vec<u8>, ProofRecord>::new();
+    for payload in payloads {
+        let key = match canonical_norito_bytes(&payload) {
+            Ok(key) => key,
+            Err(response) => return Err(with_torii_fanout_headers(response, diagnostics)),
+        };
+        unique_payloads.entry(key).or_insert(payload);
+    }
+
+    match unique_payloads.len() {
+        1 => Ok((
+            unique_payloads
+                .into_values()
+                .next()
+                .expect("singleton map length should be one"),
+            diagnostics,
+            routed_by,
+        )),
+        _ => Err(with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::CONFLICT,
+                "route_conflict",
+                "multiple dataspaces returned conflicting singleton results",
+            ),
+            diagnostics,
+        )),
     }
 }
 
@@ -24748,7 +24888,12 @@ async fn handler_proof_record_get(
         enforce,
     )
     .await?;
-    let NoritoBody(rec) = routing::handle_get_proof_record(app.state.clone(), AxPath(id)).await?;
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    let (rec, diagnostics, routed_by) =
+        match resolve_torii_proof_record_for_routes(&app, routes, id).await {
+            Ok(result) => result,
+            Err(response) => return Ok(response),
+        };
     let etag_value = format!("\"{}:{}\"", rec.id.backend, hex::encode(rec.id.proof_hash));
     let cache_control_value = format!(
         "public, max-age={}",
@@ -24787,7 +24932,8 @@ async fn handler_proof_record_get(
             if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
                 resp.headers_mut().insert(axum::http::header::ETAG, etag);
             }
-            return Ok(resp);
+            insert_routed_by_header(&mut resp, routed_by);
+            return Ok(with_torii_fanout_headers(resp, diagnostics));
         }
     }
 
@@ -24818,10 +24964,11 @@ async fn handler_proof_record_get(
     if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
         resp.headers_mut().insert(axum::http::header::ETAG, etag);
     }
+    insert_routed_by_header(&mut resp, routed_by);
     app.telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("/v1/proofs/{id}", "ok", body_len, start.elapsed())
     });
-    Ok(resp)
+    Ok(with_torii_fanout_headers(resp, diagnostics))
 }
 
 async fn handler_proof_retention_status(
@@ -32876,7 +33023,7 @@ pub(crate) mod tests_runtime_handlers {
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
 
-    fn configure_private_ingress_routes_for_test(
+    pub(crate) fn configure_private_ingress_routes_for_test(
         app: &mut SharedAppState,
     ) -> (LaneId, DataSpaceId) {
         let nexus_lane = LaneId::new(0);
@@ -50109,6 +50256,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn torii_norito_body_decodes_successful_responses() {
+        let record = ProofRecord {
+            id: ProofId {
+                backend: "debug-proof".to_owned(),
+                proof_hash: [0xAA; 32],
+            },
+            vk_ref: None,
+            vk_commitment: None,
+            status: ProofStatus::Verified,
+            verified_at_height: Some(7),
+            bridge: None,
+        };
+        let response = (StatusCode::OK, utils::NoritoBody(record.clone())).into_response();
+
+        let decoded = super::torii_norito_body::<ProofRecord>(response, "proof record response")
+            .await
+            .expect("norito body should decode");
+
+        assert_eq!(decoded, record);
+    }
+
+    #[tokio::test]
+    async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
+        let mut app = mk_app_state_for_tests();
+        crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
+        let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
+        let routes = super::torii_all_dataspace_routes(app.as_ref());
+
+        let (record, diagnostics, routed_by) =
+            super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
+                .await
+                .expect("proof record fanout should resolve");
+
+        assert_eq!(record.id.to_string(), id);
+        assert_eq!(diagnostics.attempted_routes, 3);
+        assert_eq!(diagnostics.succeeded_routes, 3);
+        assert_eq!(routed_by, "local");
+    }
+
+    #[tokio::test]
     async fn proof_record_get_advertises_cache_and_304() {
         let app = mk_app_state_for_tests();
         let id = seed_proof_record(&app, "debug-proof", [0xAB; 32]);
@@ -50143,6 +50330,8 @@ mod tests {
             .unwrap()
             .to_bytes();
         assert!(!body.is_empty(), "first response includes body");
+        let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
+        assert_eq!(record.id.to_string(), id);
 
         let mut conditional_headers = HeaderMap::new();
         conditional_headers.insert(axum::http::header::IF_NONE_MATCH, etag);
@@ -50162,6 +50351,54 @@ mod tests {
             .unwrap()
             .to_bytes();
         assert!(empty.is_empty(), "304 responses have no body");
+    }
+
+    #[tokio::test]
+    async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
+        let mut app = mk_app_state_for_tests();
+        crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
+        let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
+
+        let response = handler_proof_record_get(
+            State(app.clone()),
+            negotiated(&app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path(id.clone()),
+        )
+        .await
+        .expect("proof record ok")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-attempted")
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-fanout-routes-succeeded")
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
+
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
+        assert_eq!(record.id.to_string(), id);
     }
 
     #[tokio::test]
