@@ -201,4 +201,106 @@ mod tests {
         let decoded = <BigNumeric as norito::codec::Decode>::decode(&mut slice).expect("decode");
         assert_eq!(v, decoded);
     }
+
+    #[test]
+    fn new_rejects_scale_above_limit() {
+        let err = BigNumeric::new(BigInt::from_i128(1), 29)
+            .expect_err("scale above 28 should be rejected");
+
+        assert_eq!(err, BigNumericError::ScaleTooLarge);
+    }
+
+    #[test]
+    fn accessors_expose_mantissa_and_scale() {
+        let value = BigNumeric::new(BigInt::from_i128(-12345), 3).expect("construct");
+
+        assert_eq!(value.mantissa(), &BigInt::from_i128(-12345));
+        assert_eq!(value.scale(), 3);
+        assert_eq!(value.to_string(), "-12.345");
+    }
+
+    #[test]
+    fn checked_add_aligns_scales() {
+        let lhs: BigNumeric = "1.20".parse().expect("parse lhs");
+        let rhs: BigNumeric = "3.004".parse().expect("parse rhs");
+
+        let sum = lhs.checked_add(&rhs).expect("add");
+
+        assert_eq!(sum.to_string(), "4.204");
+        assert_eq!(sum.scale(), 3);
+        assert_eq!(sum.mantissa(), &BigInt::from_i128(4204));
+    }
+
+    #[test]
+    fn checked_add_preserves_negative_result() {
+        let lhs: BigNumeric = "-1.50".parse().expect("parse lhs");
+        let rhs: BigNumeric = "0.25".parse().expect("parse rhs");
+
+        let sum = lhs.checked_add(&rhs).expect("add");
+
+        assert_eq!(sum.to_string(), "-1.25");
+        assert_eq!(sum.mantissa(), &BigInt::from_i128(-125));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_character_and_large_scale() {
+        let bad_char = "12.x"
+            .parse::<BigNumeric>()
+            .expect_err("invalid character should be rejected");
+        assert_eq!(bad_char, BigNumericError::MantissaTooLarge);
+
+        let too_many_decimal_places = "0.12345678901234567890123456789"
+            .parse::<BigNumeric>()
+            .expect_err("scale above 28 should be rejected");
+        assert_eq!(too_many_decimal_places, BigNumericError::ScaleTooLarge);
+    }
+
+    #[test]
+    fn json_roundtrip_and_invalid_error_field() {
+        let value: BigNumeric = "-42.500".parse().expect("parse");
+        let json = norito::json::to_json(&value).expect("serialize");
+        assert_eq!(json, "\"-42.500\"");
+
+        let decoded: BigNumeric = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, value);
+
+        let err = norito::json::from_str::<BigNumeric>("\"not-a-number\"")
+            .expect_err("invalid bignumeric string should be rejected");
+        match err {
+            json::Error::InvalidField { field, message } => {
+                assert_eq!(field, "bignumeric");
+                assert!(message.contains("invalid bignumeric `not-a-number`"));
+            }
+            other => panic!("unexpected JSON error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_from_slice_reports_used_bytes() {
+        let value: BigNumeric = "987.65".parse().expect("parse");
+        let mut bytes = norito::codec::Encode::encode(&value);
+        let encoded_len = bytes.len();
+        bytes.extend([0xaa, 0xbb]);
+
+        let (decoded, used) =
+            <BigNumeric as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode");
+        assert_eq!(decoded, value);
+        assert_eq!(used, encoded_len);
+    }
+
+    #[test]
+    fn decode_from_slice_rejects_too_large_scale() {
+        let mut bytes = norito::codec::Encode::encode(&BigInt::from_i128(1));
+        bytes.extend(norito::codec::Encode::encode(&29_u32));
+
+        let err = <BigNumeric as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("scale above 28 should be rejected");
+        match err {
+            norito::core::Error::Message(message) => {
+                assert_eq!(message, "Scale exceeds 28 decimal places");
+            }
+            other => panic!("unexpected decode error: {other:?}"),
+        }
+    }
 }

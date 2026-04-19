@@ -40,6 +40,8 @@ json = [
 ]
 # Enable Chinese SM algorithm family plumbing in dependent crates.
 sm = [
+    "ivm/sm",
+    "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
 ]

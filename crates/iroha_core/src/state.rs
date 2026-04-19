@@ -16,10 +16,10 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{ConsensusMode, LaneConfig};
-#[cfg(feature = "sm")]
-use iroha_crypto::sm::Sm2PublicKey;
 #[cfg(feature = "sm-ffi-openssl")]
-use iroha_crypto::sm::{OpenSslProvider, SmIntrinsicPolicy};
+use iroha_crypto::sm::OpenSslProvider;
+#[cfg(feature = "sm")]
+use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
     blake2::{Blake2b512, digest::Digest as _},
@@ -3834,9 +3834,14 @@ impl ZkAssetState {
         frontier_evictions: u64,
     ) -> ConfidentialTreeStats {
         let last_checkpoint = self.frontier_checkpoints.last().copied();
+        let tree_depth = if self.commitments.is_empty() {
+            0
+        } else {
+            u64::from(self.tree.depth()).saturating_add(1)
+        };
         ConfidentialTreeStats {
             commitments: saturating_len_to_u64(self.commitments.len()),
-            tree_depth: u64::from(self.tree.depth()),
+            tree_depth,
             root_history: saturating_len_to_u64(self.root_history.len()),
             frontier_checkpoints: saturating_len_to_u64(self.frontier_checkpoints.len()),
             last_checkpoint_height: last_checkpoint.as_ref().map_or(0, |cp| cp.height),
@@ -30732,7 +30737,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = World::default();
-        let mut state = State::new_for_testing(world, kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
 
         let mut crypto_cfg = (*state.crypto()).clone();
         crypto_cfg.sm2_distid_default = "runtime-override".to_owned();
@@ -36069,6 +36074,7 @@ mod tests {
         let keypair = KeyPair::random();
         let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
+            .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
@@ -36226,6 +36232,9 @@ mod tests {
             Signature::from_bytes(&[0x11; 64]),
         );
         state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate empty DA cursor index before seeding stale cursor");
+        state
             .advance_da_shard_cursors_from_bundle(1, &[record])
             .expect("advance cursor");
 
@@ -36236,6 +36245,7 @@ mod tests {
             .into();
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
+            .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
@@ -36245,10 +36255,13 @@ mod tests {
         let err = state_block
             .validate_da_shard_cursors(&second_block)
             .expect_err("stale cursor should fail validation");
-        assert!(matches!(
-            err,
-            BlockValidationError::DaShardCursor(DaShardCursorError::StaleCursor { .. })
-        ));
+        assert!(
+            matches!(
+                err,
+                BlockValidationError::DaShardCursor(DaShardCursorError::StaleCursor { .. })
+            ),
+            "unexpected DA shard cursor validation error: {err:?}"
+        );
 
         let counter = metrics
             .da_shard_cursor_events_total
@@ -37556,7 +37569,7 @@ mod tests {
         assert_eq!(
             metrics
                 .axt_policy_snapshot_cache_events_total
-                .with_label_values(&["hit"])
+                .with_label_values(&["cache_hit"])
                 .get(),
             1
         );
@@ -37577,7 +37590,7 @@ mod tests {
         assert_eq!(
             metrics
                 .axt_policy_snapshot_cache_events_total
-                .with_label_values(&["miss"])
+                .with_label_values(&["cache_miss"])
                 .get(),
             1
         );
@@ -41790,6 +41803,13 @@ mod tests {
 
     #[test]
     fn apply_without_execution_updates_commit_topology_from_world_peers() {
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -41804,6 +41824,17 @@ mod tests {
                 .public_key()
                 .clone(),
         );
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.push(new_peer.clone());
+                peers.apply();
+            }
+            world_block.commit();
+        }
 
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -41811,14 +41842,6 @@ mod tests {
             .unpack(|_| {});
         let signed_block: SignedBlock = block.into();
         let mut state_block = state.block(signed_block.header());
-
-        {
-            let mut peers = state_block.world.peers_mut_for_testing().transaction();
-            peers.clear();
-            peers.extend(base_topology.clone());
-            peers.push(new_peer.clone());
-            peers.apply();
-        }
 
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
@@ -41837,6 +41860,8 @@ mod tests {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
     }
 
     #[test]

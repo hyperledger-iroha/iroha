@@ -82,18 +82,37 @@ fn build_block_with_txs(
 }
 
 #[cfg(feature = "bls")]
+fn bls_pop_metadata(kp: &KeyPair) -> iroha_data_model::Metadata {
+    let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("BLS PoP");
+    let mut metadata = iroha_data_model::Metadata::default();
+    metadata.insert(
+        "bls_pop".parse().expect("valid BLS PoP metadata key"),
+        iroha_primitives::json::Json::new(hex::encode_upper(pop)),
+    );
+    metadata
+}
+
+#[cfg(feature = "bls")]
 fn mk_tx_with_creation_time(
     chain: &ChainId,
     authority: &AccountId,
     msg: &str,
     ct_ms: u64,
-    sk: &iroha_crypto::PrivateKey,
+    signer: &KeyPair,
+    pop_authority: &KeyPair,
 ) -> SignedTransaction {
     use core::time::Duration;
     let mut b = TransactionBuilder::new(chain.clone(), authority.clone());
     b.set_creation_time(Duration::from_millis(ct_ms));
-    b.with_instructions([Log::new(Level::INFO, msg.to_string())])
-        .sign(sk)
+    let mut tx = b
+        .with_instructions([Log::new(Level::INFO, msg.to_string())])
+        .with_metadata(bls_pop_metadata(pop_authority))
+        .sign(pop_authority.private_key());
+    tx.set_signature(TransactionSignature(SignatureOf::new(
+        signer.private_key(),
+        tx.payload(),
+    )));
+    tx
 }
 
 #[cfg(feature = "bls")]
@@ -215,8 +234,8 @@ fn bls_same_message_group_duplicate_rejected() {
 
     // Two transactions with identical payloads (same creation_time and instructions), both signed correctly
     let ct = 1_651_234_567u64;
-    let tx1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, good.private_key());
-    let tx2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, good.private_key());
+    let tx1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
+    let tx2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
 
     let ct_ms = u64::max(
         tx1.creation_time().as_millis() as u64,
@@ -268,12 +287,12 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
 
     // Two identical valid transactions (same payload) form the same-message group
     let ct = 1_651_234_567u64;
-    let tx_same1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, good.private_key());
-    let tx_same2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, good.private_key());
+    let tx_same1 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
+    let tx_same2 = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
 
     // Two distinct valid transactions (different payloads) serve as singletons
-    let tx_s1 = mk_tx_with_creation_time(&chain, &authority, "s1", ct + 1, good.private_key());
-    let tx_s2 = mk_tx_with_creation_time(&chain, &authority, "s2", ct + 2, good.private_key());
+    let tx_s1 = mk_tx_with_creation_time(&chain, &authority, "s1", ct + 1, &good, &good);
+    let tx_s2 = mk_tx_with_creation_time(&chain, &authority, "s2", ct + 2, &good, &good);
 
     let block =
         presigned_block_with_creation_after_txs(&leader, vec![tx_same1, tx_same2, tx_s1, tx_s2]);
@@ -312,9 +331,9 @@ fn bls_same_message_group_bisect_bad() {
     let leader = good.clone();
 
     let ct = 1_651_234_567u64;
-    let tx_good = mk_tx_with_creation_time(&chain, &authority, "same", ct, good.private_key());
+    let tx_good = mk_tx_with_creation_time(&chain, &authority, "same", ct, &good, &good);
     // Same payload but signed with a key that does not match the authority
-    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "same", ct, bad.private_key());
+    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "same", ct, &bad, &good);
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_good, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
@@ -357,9 +376,11 @@ fn bls_multi_message_aggregate_ok() {
     // Two distinct messages with current creation time (avoid TTL rejection)
     let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions([Log::new(Level::INFO, "m1".to_string())])
+        .with_metadata(bls_pop_metadata(&good))
         .sign(good.private_key());
     let tx2 = TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions([Log::new(Level::INFO, "m2".to_string())])
+        .with_metadata(bls_pop_metadata(&good))
         .sign(good.private_key());
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
@@ -451,8 +472,8 @@ fn bls_multi_message_aggregate_fails_and_counts() {
     let leader = good.clone();
 
     let ct = 1_751_234_567u64;
-    let tx_valid = mk_tx_with_creation_time(&chain, &authority, "m1", ct, good.private_key());
-    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "m2", ct + 1, bad.private_key());
+    let tx_valid = mk_tx_with_creation_time(&chain, &authority, "m1", ct, &good, &good);
+    let tx_bad = mk_tx_with_creation_time(&chain, &authority, "m2", ct + 1, &bad, &good);
 
     let block = presigned_block_with_creation_after_txs(&leader, vec![tx_valid, tx_bad]);
     let peer = PeerId::from(leader.public_key().clone());
