@@ -37,6 +37,18 @@ Last updated: 2026-04-19
   - `cargo test -p iroha_primitives -- --nocapture`
     (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
 
+## 2026-04-19 Follow-up: Python RWA classmethod fixtures
+- `python/iroha_python/iroha_python_rs/src/lib.rs` now uses fully qualified
+  `commodities.universal` RWA domain literals in the Python binding classmethod
+  tests, matching `RwaId` parsing through `DomainId::parse_fully_qualified`.
+- The `merge_rwas` Python fixture JSON now uses normal object braces instead
+  of escaped `{{ ... }}` braces, so `json.loads` receives valid JSON before the
+  payload is converted into `MergeRwas`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_python_rs rwa -- --nocapture` (`4 passed`)
+  - `cargo test -p iroha_python_rs -- --nocapture` (`33 passed`)
+
 ## 2026-04-19 Follow-up: SoraNet gateway billing fixture asset IDs
 - `configs/soranet/gateway_m1/alpha_config.json` and
   `configs/soranet/gateway_m2/beta_config.json` now use the canonical
