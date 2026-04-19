@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Mochi supervisor Kagami and stream fixture sync):
+The Mochi supervisor integration harness now matches the current external
+`kagami` contract, including the `--version` probe and the newer genesis
+generation flags. The same pass refreshed stale block/event replay fixtures,
+updated the block-stream decoder to accept framed canonical block wire before
+falling back to bare versioned payloads, and resynced the supervisor tests with
+addr literals, signed-genesis config paths, and the allocator's cross-pool
+uniqueness behavior.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/src/bin/kagami_mock.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/src/mock_torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/tests/supervisor.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/tests/fixtures/torii_replay/{block.bin,event.bin,status.json}`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/tests/fixtures/canonical_block_wire.bin`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p mochi-integration`
+    (`17 passed`)
+  - `cargo test -p mochi-core canonical_block_fixture_roundtrips_via_wire_helpers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core block_stream_end_to_end_decodes_canonical_block -- --nocapture`
+    (`1 passed`)
+- open work after this slice:
+  - rerun broader Mochi or workspace validation during a longer clean window
+
 Latest sync (2026-04-19 Mochi readiness status decoding):
 Mochi now accepts framed Norito `/status` payloads in the Torii client and
 still falls back to the older bare-payload decode path, which fixes the mock
@@ -20455,3 +20483,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## 2026-04-17 Permission Cache Replay Follow-up
 1. Completed: `state::permission_cache_tests::permission_cache_rebuilds_after_restart` now builds replay-valid post-height-2 blocks with embedded previous-roster evidence and no longer depends on libtest's default worker stack.
 2. No additional roadmap item was opened from this fix; the focused `iroha_core` permission-cache replay regression is green.
+
+## 2026-04-19 Integration Failure Sweep Follow-up
+1. Completed: the reported `fast_dsl`, scheduler TEU default-lane, and threshold escrow contract-state regressions are fixed and covered by focused integration validation.
+2. No additional roadmap item was opened from this sweep; the remaining validation gap is the normal multi-hour full workspace test run.
