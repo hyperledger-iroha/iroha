@@ -2858,18 +2858,22 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX, KeyPair,
-        NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
-        TOTAL_PEERS, VALIDATORS_PER_LANE, bounded_observer_request_timeout,
-        cross_dataspace_gas_account_id, duration_min_avg_max_secs,
-        expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
-        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        ALICE_ID, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX,
+        ExpectedLaneValidatorBinding, KeyPair, NEXUS_ID_U64, NEXUS_LANE_INDEX,
+        OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse, TOTAL_PEERS,
+        VALIDATORS_PER_LANE, bounded_observer_request_timeout, cross_dataspace_gas_account_id,
+        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
+        expected_lane_binding_for_peer, is_inconclusive_blocking_submit_error,
+        is_inconclusive_committed_outcome_error, lane_validator_snapshot,
         multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
         npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
-        render_error_with_debug, routed_header_string, stake_asset_definition_id,
-        stake_asset_id_literal, validator_authority_account_for_peer,
+        render_error_with_debug, render_rejection_reason, routed_header_string,
+        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
     };
-    use iroha::data_model::da::commitment::{DaProofPolicyBundle, DaProofScheme};
+    use iroha::data_model::{
+        da::commitment::{DaProofPolicyBundle, DaProofScheme},
+        transaction::error::{TransactionLimitError, TransactionRejectionReason},
+    };
     use norito::json::Value as JsonValue;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::{
@@ -2900,6 +2904,8 @@ mod tests {
     fn parse_positive_usize_override_falls_back_on_invalid_input() {
         assert_eq!(parse_positive_usize_override(None, 10), 10);
         assert_eq!(parse_positive_usize_override(Some("0"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("-1"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("1.5"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
     }
@@ -2938,6 +2944,18 @@ mod tests {
     }
 
     #[test]
+    fn multilane_da_policy_bundle_hash_is_deterministic_and_order_sensitive() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let repeated = multilane_da_proof_policy_bundle();
+        let mut reversed_policies = bundle.policies.clone();
+        reversed_policies.reverse();
+        let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
+
+        assert_eq!(bundle, repeated);
+        assert_ne!(bundle.policy_hash, reversed_hash);
+    }
+
+    #[test]
     fn genesis_post_topology_builder_covers_all_lane_buckets() {
         let topology = deterministic_topology(TOTAL_PEERS);
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
@@ -2961,6 +2979,15 @@ mod tests {
             .peer_id,
             topology[VALIDATORS_PER_LANE * 2].to_string()
         );
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_is_deterministic_for_same_roster() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let first = npos_multilane_genesis_post_topology_transactions(&topology);
+        let second = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
 
     #[test]
@@ -3014,6 +3041,95 @@ mod tests {
             binding.validator,
             validator_authority_account_for_peer(4).to_string()
         );
+    }
+
+    #[test]
+    fn lane_validator_snapshot_filters_active_bindings_and_preserves_total() {
+        let body = norito::json!({
+            "total": 3,
+            "items": [
+                {
+                    "validator": "validator-a",
+                    "peer_id": "peer-a",
+                    "status": { "type": "Active" },
+                },
+                {
+                    "validator": "validator-b",
+                    "peer_id": "peer-b",
+                    "status": { "type": "Pending" },
+                },
+                {
+                    "validator": "validator-c",
+                    "peer_id": "peer-c",
+                    "status": { "type": "Active" },
+                },
+            ],
+        });
+
+        let (total, active) =
+            lane_validator_snapshot(&body, "lane validators").expect("lane snapshot should parse");
+
+        assert_eq!(total, 3);
+        assert_eq!(active.len(), 2);
+        assert!(active.contains(&ExpectedLaneValidatorBinding {
+            validator: "validator-a".to_owned(),
+            peer_id: "peer-a".to_owned(),
+        }));
+        assert!(active.contains(&ExpectedLaneValidatorBinding {
+            validator: "validator-c".to_owned(),
+            peer_id: "peer-c".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn lane_validator_snapshot_rejects_malformed_payloads() {
+        for (body, expected) in [
+            (JsonValue::Null, "lane validator response is not an object"),
+            (
+                norito::json!({ "items": [] }),
+                "lane validator response is missing total",
+            ),
+            (
+                norito::json!({ "total": 1 }),
+                "lane validator response is missing items",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "status": { "type": "Active" }, "peer_id": "peer-a" }],
+                }),
+                "validator entry missing validator literal",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "status": { "type": "Active" } }],
+                }),
+                "validator entry missing peer_id literal",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "peer_id": "peer-a" }],
+                }),
+                "validator entry missing status.type",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": ["not-an-entry"],
+                }),
+                "validator entry is not an object",
+            ),
+        ] {
+            let err = lane_validator_snapshot(&body, "lane validators")
+                .expect_err("malformed lane snapshot should fail");
+
+            assert!(
+                err.to_string().contains(expected),
+                "expected `{expected}` in `{err}`"
+            );
+        }
     }
 
     #[test]
@@ -3078,6 +3194,31 @@ mod tests {
     }
 
     #[test]
+    fn bounded_observer_request_timeout_applies_floor_when_slice_is_small() {
+        let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 100);
+
+        assert_eq!(
+            timeout,
+            Duration::from_secs(2),
+            "small per-client slices should use the observer floor when the remaining budget allows it"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_uses_divided_slice_between_floor_and_cap() {
+        let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 3);
+
+        assert!(
+            timeout > Duration::from_secs(2),
+            "divided slice should stay above the observer floor"
+        );
+        assert!(
+            timeout <= Duration::from_secs(3),
+            "divided slice should be close to the remaining budget divided by clients"
+        );
+    }
+
+    #[test]
     fn tx_fallback_error_classifiers_match_cross_dataspace_outcomes() {
         for error_text in [
             "transaction.status_timeout_ms elapsed",
@@ -3110,6 +3251,7 @@ mod tests {
             "failed to send http GET request",
             "submitter thread completed normally",
             "transaction status timeout was not configured",
+            "Failed to send http PATCH request",
         ] {
             assert!(
                 !is_inconclusive_blocking_submit_error(error_text),
@@ -3120,6 +3262,19 @@ mod tests {
         assert!(!is_inconclusive_committed_outcome_error(
             "waiting for committed transaction outcome succeeded"
         ));
+    }
+
+    #[test]
+    fn render_rejection_reason_includes_debug_details_when_display_is_generic() {
+        let reason = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+            reason: "cross-dataspace route limit exceeded".to_owned(),
+        });
+
+        let rendered = render_rejection_reason(&reason);
+
+        assert!(rendered.contains("Failed to validate transaction limits"));
+        assert!(rendered.contains("details:"));
+        assert!(rendered.contains("cross-dataspace route limit exceeded"));
     }
 
     #[test]

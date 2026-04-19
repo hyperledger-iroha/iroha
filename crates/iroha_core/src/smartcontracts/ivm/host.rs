@@ -7395,6 +7395,7 @@ mod pointer_abi_tests {
         let mut snapshot = make_policy_snapshot(dsid, manifest_root, 12);
         snapshot.entries[0].policy.min_handle_era = 5;
         snapshot.entries[0].policy.min_sub_nonce = 3;
+        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = fixture_account("alice");
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
@@ -12883,7 +12884,7 @@ seiyaku Vault {
         }
     }
 
-    #[cfg(feature = "telemetry")]
+    #[cfg(all(feature = "telemetry", feature = "sm"))]
     #[test]
     fn sm3_syscall_records_success_metric() {
         crate::test_alias::ensure();
@@ -12910,6 +12911,7 @@ seiyaku Vault {
 
         let accounts = Arc::new(vec![authority.clone()]);
         let mut host = CoreHost::with_accounts(authority, accounts);
+        host.force_sm_enabled_for_tests(true);
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
         vm.set_host(host);
@@ -12926,7 +12928,7 @@ seiyaku Vault {
         );
     }
 
-    #[cfg(feature = "telemetry")]
+    #[cfg(all(feature = "telemetry", feature = "sm"))]
     #[test]
     fn sm3_syscall_failure_records_failure_metric() {
         crate::test_alias::ensure();
@@ -12954,6 +12956,7 @@ seiyaku Vault {
 
         let accounts = Arc::new(vec![authority.clone()]);
         let mut host = CoreHost::with_accounts(authority, accounts);
+        host.force_sm_enabled_for_tests(true);
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
         vm.set_host(host);
