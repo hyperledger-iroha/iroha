@@ -190,6 +190,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::borrow::Borrow;
+
     use norito::codec::{Decode, Encode};
 
     use super::*;
@@ -224,6 +226,20 @@ mod tests {
     fn push_returns_false_if_value_is_not_unique() {
         let mut unique_vec = unique_vec![1, 2, 3];
         assert!(matches!(unique_vec.push(1), PushResult::Duplicate(1)));
+    }
+
+    #[test]
+    fn duplicate_push_returns_original_value() {
+        let mut unique_vec = unique_vec![String::from("alice")];
+        let duplicate = String::from("alice");
+
+        match unique_vec.push(duplicate) {
+            PushResult::Duplicate(value) => assert_eq!(value, "alice"),
+            PushResult::Ok => panic!("duplicate value should not be inserted"),
+        }
+        let expected = [String::from("alice")];
+        let actual: &[String] = unique_vec.borrow();
+        assert_eq!(actual, expected.as_slice());
     }
 
     // Removing by index should yield the element that was stored at that position.
@@ -262,6 +278,37 @@ mod tests {
         let mut unique_vec = unique_vec![1, 2, 3];
         unique_vec.extend([1, 2, 3, 4, 5]);
         assert_eq!(unique_vec, unique_vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn macro_accepts_empty_and_trailing_comma() {
+        let empty: UniqueVec<u32> = unique_vec![];
+        let with_trailing = unique_vec![1_u32, 2, 1,];
+
+        assert!(empty.is_empty());
+        assert_eq!(with_trailing, unique_vec![1, 2]);
+    }
+
+    #[test]
+    fn borrow_iterators_and_vec_conversion_preserve_order() {
+        let unique_vec = unique_vec![3_u32, 1, 2, 1];
+        let borrowed: &[u32] = unique_vec.borrow();
+
+        assert_eq!(borrowed, &[3, 1, 2]);
+        assert_eq!(
+            (&unique_vec).into_iter().copied().collect::<Vec<_>>(),
+            vec![3, 1, 2]
+        );
+        assert_eq!(Vec::from(unique_vec.clone()), vec![3, 1, 2]);
+        assert_eq!(unique_vec.into_iter().collect::<Vec<_>>(), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn norito_encoding_matches_inner_vec_layout() {
+        let unique_vec = unique_vec![1_u32, 2, 3];
+        let inner = vec![1_u32, 2, 3];
+
+        assert_eq!(unique_vec.encode(), inner.encode());
     }
 
     // The serialization codec should produce data that can be decoded back into
@@ -304,5 +351,19 @@ mod tests {
         let json = "[1, 2, 1]";
         let result: Result<UniqueVec<u32>, _> = norito::json::from_str(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn json_duplicate_error_names_unique_vec_field() {
+        let err = norito::json::from_str::<UniqueVec<u32>>("[9,9]")
+            .expect_err("duplicate JSON elements should be rejected");
+
+        match err {
+            json::Error::InvalidField { field, message } => {
+                assert_eq!(field, "UniqueVec");
+                assert_eq!(message, "duplicate element");
+            }
+            other => panic!("unexpected JSON error: {other:?}"),
+        }
     }
 }

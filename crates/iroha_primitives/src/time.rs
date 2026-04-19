@@ -106,6 +106,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mock_source_reports_start_time_as_unix_and_system_time() {
+        let start = Duration::from_millis(1_234_567);
+        let (handle, source) = TimeSource::new_mock(start);
+
+        assert_eq!(source.now(), start);
+        assert_eq!(source.get_unix_time(), start);
+        assert_eq!(source.get_system_time(), SystemTime::UNIX_EPOCH + start);
+
+        handle.set(Duration::from_secs(42));
+        assert_eq!(
+            source.get_system_time(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(42)
+        );
+    }
+
+    #[test]
+    fn cloned_mock_handles_and_sources_share_time_state() {
+        let handle = MockTimeHandle::new(Duration::from_secs(10));
+        let cloned_handle = handle.clone();
+        let source = handle.source();
+        let cloned_source = source.clone();
+
+        cloned_handle.set(Duration::from_secs(20));
+        assert_eq!(source.now(), Duration::from_secs(20));
+
+        handle.advance(Duration::from_millis(250));
+        assert_eq!(cloned_source.now(), Duration::from_millis(20_250));
+
+        cloned_handle.rewind(Duration::from_secs(5));
+        assert_eq!(source.get_unix_time(), Duration::from_millis(15_250));
+    }
+
+    #[test]
+    fn system_source_reports_time_within_call_window() {
+        let source = TimeSource::new_system();
+        let before = SystemTime::now();
+        let observed = source.get_system_time();
+        let after = SystemTime::now();
+
+        assert!(observed >= before);
+        assert!(observed <= after);
+    }
+
+    #[test]
+    fn default_source_uses_system_unix_time() {
+        let source = TimeSource::default();
+        let before = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("current time should be after unix epoch");
+        let observed = source.now();
+        let after = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("current time should be after unix epoch");
+
+        assert!(observed >= before);
+        assert!(observed <= after);
+    }
+
+    #[test]
     fn rewind_saturates_at_zero() {
         let handle = MockTimeHandle::new(Duration::from_secs(5));
         let source = handle.source();

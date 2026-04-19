@@ -1493,12 +1493,14 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 #[cfg(test)]
 mod tests {
     use super::{
-        AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DataSpaceId, DomainId, LaneId,
-        RoutedJsonResponse, account_assets_response_contains, expect_proxy_fanout_headers,
-        expect_proxy_route_headers, manifest_response_contains_dataspace,
-        manifest_response_contains_status, permission_response_contains, routed_header_string,
-        routed_json_empty_body_is_transient, routed_json_response_is_transient,
-        routed_response_context,
+        ALICE_ID, Algorithm, AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64,
+        DataSpaceId, DomainId, KeyPair, LaneId, PeerId, RoutedJsonResponse,
+        account_assets_response_contains, expect_proxy_fanout_headers, expect_proxy_route_headers,
+        expected_lane_binding_for_peer, manifest_response_contains_dataspace,
+        manifest_response_contains_status, nexus_fee_asset_definition_id,
+        permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
+        routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
+        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
     };
     use norito::json::Value as JsonValue;
     use reqwest::{
@@ -1541,6 +1543,54 @@ mod tests {
             DomainId::try_new("nexus", "universal").expect("asset domain"),
             "ds2coin".parse().expect("asset name"),
         )
+    }
+
+    #[test]
+    fn fixture_asset_helpers_keep_stake_and_fee_ids_distinct() {
+        let stake_definition_id = stake_asset_definition_id();
+        let fee_definition_id = nexus_fee_asset_definition_id();
+
+        assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
+        assert_ne!(
+            stake_definition_id.to_string(),
+            fee_definition_id.to_string(),
+            "stake and fee helpers should preserve their separate asset-definition domains"
+        );
+    }
+
+    #[test]
+    fn routing_probe_gas_account_uses_alice_subject() {
+        let gas_account = routing_probe_gas_account_id();
+
+        assert_eq!(gas_account, ALICE_ID.clone());
+        assert_eq!(
+            gas_account.canonical_i105().expect("gas account i105"),
+            ALICE_ID.canonical_i105().expect("alice i105")
+        );
+    }
+
+    #[test]
+    fn expected_lane_binding_for_peer_is_deterministic() {
+        let mut seed = vec![0_u8; 32];
+        seed[0] = 0x5A;
+        let peer_key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
+
+        let binding = expected_lane_binding_for_peer(5, &peer_id);
+
+        assert_eq!(binding.peer_id, peer_id.to_string());
+        assert_eq!(
+            binding.validator,
+            validator_authority_account_for_peer(5).to_string()
+        );
+        assert_eq!(
+            validator_authority_account_for_peer(5),
+            validator_authority_account_for_peer(5)
+        );
+        assert_ne!(
+            validator_authority_account_for_peer(5),
+            validator_authority_account_for_peer(6)
+        );
     }
 
     #[test]

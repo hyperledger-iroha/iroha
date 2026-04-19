@@ -2,6 +2,54 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: SoraNet gateway billing fixture asset IDs
+- `configs/soranet/gateway_m1/alpha_config.json` and
+  `configs/soranet/gateway_m2/beta_config.json` now use the canonical
+  `4cuvDVPuLBKJyN6dPbRQhmLh68sU` asset definition ID for billing ledger
+  projections instead of the stale `xor#wonderland` display literal.
+- This keeps the default M1/M2 bundle configs aligned with
+  `xtask soranet-gateway-billing`, which parses billing projection assets as
+  canonical `AssetDefinitionId` values before emitting transfer batches.
+- Focused validation for this slice:
+  - `cargo test -p xtask --test soranet_gateway_m1 soranet_gateway_m1_bundle_is_emitted -- --nocapture`
+  - `cargo test -p xtask --test soranet_gateway_m2 soranet_gateway_m2_pipeline_emits_beta_and_ga -- --nocapture`
+
+## 2026-04-19 Follow-up: primitive container API coverage
+- `crates/iroha_primitives/src/unique_vec.rs` now has additional unit coverage
+  for duplicate push ownership, empty/trailing-comma macro construction,
+  borrowed slice access, borrowed and owned iteration order, conversion back to
+  `Vec`, Norito byte parity with the inner vector layout, and exact JSON
+  duplicate-field error details.
+- `crates/iroha_primitives/src/small.rs` now covers `SmallStr` owned/borrowed
+  constructors, prefix checks, display output, direct slice decode consumed
+  length, `SmallVec` push/extend/remove/clear/into-vec APIs, `From<Vec>`,
+  `FromIterator`, owned iteration, truncated element payload rejection, and
+  zero-length payload-context deserialization.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives unique_vec::tests` (`18 passed`)
+  - `cargo test -p iroha_primitives small::tests` (`13 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`177 passed`; `numeric_inspect`
+    `1 passed`; doctests `1 passed; 1 ignored`)
+
+## 2026-04-19 Follow-up: TimeSource mock clock coverage
+- `crates/iroha_primitives/src/time.rs` now has focused unit coverage for the
+  mockable clock API. The new tests pin `TimeSource::new_mock` start-time
+  wiring, exact mock UNIX/system-time conversion, shared state across cloned
+  handles and cloned sources, and `MockTimeHandle::set` interactions with
+  `advance` / `rewind`.
+- The system-clock branch is also covered with bounded call-window assertions
+  for `TimeSource::new_system`, `TimeSource::default`, `get_system_time`, and
+  `now` / `get_unix_time`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives time::tests -- --nocapture` (`6 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`177 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
 ## 2026-04-19 Follow-up: DefaultHost Halo2 open-verify gating
 - `crates/ivm/src/host.rs` no longer hard-disables the single-envelope Halo2
   verify syscalls on `DefaultHost`. `ZK_VERIFY_TRANSFER`,
@@ -56,6 +104,9 @@ Last updated: 2026-04-19
 - The newest assertions add missing lane/dataspace route-header failures,
   manifest records with absent or non-numeric dataspace IDs, exact asset-literal
   matching, and non-empty null-body retry rejection.
+- This pass adds fixture-helper coverage for wrong-ingress setup invariants:
+  stake/fee asset helper separation, Alice-backed routing probe gas account
+  selection, and deterministic validator binding derivation from peer IDs.
 - This improves coverage without starting another localnet; the existing
   end-to-end wrong-ingress localnet remains the behavioral regression for real
   cross-dataspace routing.
@@ -69,13 +120,16 @@ Last updated: 2026-04-19
 - Additional atomic-swap helper cases cover single-sample timing summaries,
   zero remaining-client timeout slicing, unrelated fallback error phrases, and
   unknown fanout route sources.
+- The atomic-swap helper suite now also pins stake/fee asset helper separation,
+  Alice-backed gas-account selection, deterministic validator authority
+  derivation, and expected lane binding construction.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`21 passed; 208 filtered out`)
+    (`24 passed; 212 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`11 passed; 218 filtered out`)
+    (`15 passed; 221 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 ## 2026-04-19 Follow-up: ConstVec manual fallback coverage
