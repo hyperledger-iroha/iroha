@@ -2,6 +2,54 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 cross-dataspace transaction routing helper coverage):
+The wrong-ingress cross-dataspace transaction/query regression now has broader
+pure helper coverage alongside the localnet path. The added tests pin routed
+response context/header extraction, exact lane/dataspace route header
+enforcement, fanout responses that must not expose singular route headers,
+permission payload filtering by dataspace, manifest status/dataspace matching,
+and account-asset response matching by canonical asset-definition literal. The
+atomic-swap localnet module also now covers duration summaries, inconclusive
+submit/history fallback classification, local/proxy fanout header validation,
+and routed header extraction.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
+    (`11 passed; 199 filtered out`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
+    (`6 passed; 208 filtered out`)
+  - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
+
+Latest sync (2026-04-19 ConstVec manual fallback coverage):
+The malformed-query guard now has broader focused coverage for the compatibility
+paths around manual unpacked `ConstVec` payloads. Tests cover recovery through
+the outer helper, direct rejection of zero-count payloads with trailing bytes,
+accepted payload comparison when only element length words differ, and rejection
+for changed payload bytes, changed count headers, total length mismatches,
+partial element headers, and too-short payloads. The stale byte-vector and
+compatibility-length assertions now pin the current length-prefixed layout. The
+latest pass also covers `ToConstVec` / iterator order, the legacy unpacked byte
+layout, direct empty payload decoding, recovery from a misaligned fallback
+error, and integrated `reencode_and_verify` accept/reject paths.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives manual_unpacked` (`26 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`46 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`148 passed`; doctests `1 passed; 1 ignored`)
+
 Latest sync (2026-04-19 MOCHI bundle package lookup):
 `xtask mochi-bundle` no longer depends on the stale `mochi-ui-egui` Cargo
 package id. The bundle build now addresses the desktop shell by manifest path
@@ -39,13 +87,9 @@ headers, and invalid first and later element bodies.
 - validation status:
   - `cargo fmt --all -- --check`
   - `cargo test -p iroha_primitives manual_unpacked` (`16 passed`)
-  - `cargo test -p iroha_primitives` still fails the existing
-    `const_vec::tests::matches_vec_encoding` and
-    `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
+  - Broader `cargo test -p iroha_primitives` validation is covered by the
+    2026-04-19 manual fallback coverage follow-up.
 - open work after this slice:
-  - decide whether the older zero-flag `ConstVec` expectations should be
-    updated for the current default `COMPACT_LEN` layout or guarded under an
-    explicit legacy flag context
   - add a Torii-level malformed-query regression once the query fixture can be
     kept small and stable
 
