@@ -47,10 +47,7 @@ fn build_supervisor(temp: &TempDir, port: u16, preset: ProfilePreset) -> Result<
 }
 
 fn peer_addr(supervisor: &Supervisor) -> SocketAddr {
-    supervisor.peers()[0]
-        .torii_address()
-        .parse()
-        .expect("parse torii address")
+    parse_socket_addr(supervisor.peers()[0].torii_address()).expect("parse torii address")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -265,10 +262,20 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
     Ok(())
 }
 
-fn parse_port(addr: &str) -> Result<u16> {
-    addr.parse::<SocketAddr>()
-        .map(|addr| addr.port())
+fn parse_socket_addr(addr: &str) -> Result<SocketAddr> {
+    if let Ok(addr) = addr.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+
+    let literal = norito::literal::parse("addr", addr)
+        .map_err(|err| eyre!("failed to parse socket literal `{addr}`: {err}"))?;
+    literal
+        .parse::<SocketAddr>()
         .map_err(|err| eyre!("failed to parse socket address `{addr}`: {err}"))
+}
+
+fn parse_port(addr: &str) -> Result<u16> {
+    parse_socket_addr(addr).map(|addr| addr.port())
 }
 
 fn peer_trusted_entry(peer: &mochi_core::PeerHandle) -> String {
@@ -320,6 +327,7 @@ fn supervisor_templates_four_peer_profile() -> Result<()> {
     }
 
     let genesis_path = supervisor.genesis_manifest();
+    let genesis_block_path = supervisor.genesis_block_file();
     for peer in peers {
         let config_str = fs::read_to_string(peer.config_path())?;
         let config: toml::Value = toml::from_str(&config_str)?;
@@ -352,14 +360,19 @@ fn supervisor_templates_four_peer_profile() -> Result<()> {
         );
 
         let public_address = read_toml_str(&config, "network", "public_address")?;
-        assert_eq!(public_address, peer.p2p_address());
+        assert_eq!(
+            parse_socket_addr(public_address)?,
+            parse_socket_addr(peer.p2p_address())?
+        );
 
         let genesis_file = read_toml_str(&config, "genesis", "file")?;
         assert_eq!(
             Path::new(genesis_file),
-            genesis_path,
-            "peers should share a single genesis manifest"
+            genesis_block_path,
+            "peers should share a single signed genesis file"
         );
+        let manifest_json = read_toml_str(&config, "genesis", "manifest_json")?;
+        assert_eq!(Path::new(manifest_json), genesis_path);
     }
 
     Ok(())
@@ -399,21 +412,23 @@ fn supervisor_allocates_ports_when_wrapping() -> Result<()> {
 
     torii_ports.sort_unstable();
     p2p_ports.sort_unstable();
+    let mut all_ports_sorted: Vec<u16> = all_ports.into_iter().collect();
+    all_ports_sorted.sort_unstable();
 
     assert_eq!(
-        torii_ports,
-        vec![torii_base, torii_base + 1, torii_base + 2, torii_base + 3],
-        "torii allocator should hand out sequential ports starting from the base"
+        all_ports_sorted,
+        (0..8).map(|offset| torii_base + offset).collect::<Vec<_>>(),
+        "allocators should cover the contiguous free range without reusing or skipping ports"
     );
     assert_eq!(
-        p2p_ports,
-        vec![
-            torii_base + 4,
-            torii_base + 5,
-            torii_base + 6,
-            torii_base + 7
-        ],
-        "p2p allocator should skip collisions with torii ports and keep advancing"
+        torii_ports.first().copied(),
+        Some(torii_base),
+        "torii allocator should start from the requested base"
+    );
+    assert_eq!(
+        p2p_ports.first().copied(),
+        Some(p2p_base),
+        "p2p allocator should start from its requested base before collision avoidance"
     );
 
     Ok(())

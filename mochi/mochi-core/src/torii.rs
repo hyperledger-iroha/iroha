@@ -3638,7 +3638,20 @@ impl BlockStream {
                 match receiver.recv().await {
                     Ok(WsFrame::Binary(frame)) => {
                         let raw_len = frame.len();
-                        match block::decode_versioned_signed_block(&frame) {
+                        let decoded =
+                            block::decode_framed_signed_block(&frame).or_else(|framed_err| {
+                                match block::decode_versioned_signed_block(&frame) {
+                                    Ok(block) => Ok(block),
+                                    Err(versioned_err) => {
+                                        if matches!(framed_err, VersionError::NotVersioned) {
+                                            Err(versioned_err)
+                                        } else {
+                                            Err(framed_err)
+                                        }
+                                    }
+                                }
+                            });
+                        match decoded {
                             Ok(block) => {
                                 let block = Arc::<SignedBlock>::new(block);
                                 let summary = BlockSummary::from_block(block.as_ref());
