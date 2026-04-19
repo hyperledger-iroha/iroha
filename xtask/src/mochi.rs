@@ -13,6 +13,9 @@ use walkdir::WalkDir;
 
 use crate::workspace_root;
 
+const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
+const MOCHI_BIN_NAME: &str = "mochi";
+
 #[derive(Debug, Clone)]
 pub(crate) struct MochiBundleResult {
     pub target: String,
@@ -286,13 +289,20 @@ fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     } else if profile != "debug" {
         command.args(["--profile", profile]);
     }
-    command.args(["-p", "mochi-ui-egui"]);
+    command
+        .arg("--manifest-path")
+        .arg(mochi_ui_manifest_path())
+        .args(["--bin", MOCHI_BIN_NAME]);
     command.current_dir(workspace_root());
     let status = command.status()?;
     if !status.success() {
-        return Err("cargo build -p mochi-ui-egui failed".into());
+        return Err(format!("cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} failed").into());
     }
     Ok(())
+}
+
+fn mochi_ui_manifest_path() -> PathBuf {
+    workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
 
 fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
@@ -486,10 +496,29 @@ fn create_archive(
 
 #[cfg(test)]
 mod tests {
-    use super::create_archive;
+    use super::{MOCHI_BIN_NAME, MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_manifest_path};
     use std::{fs, process::Command};
 
     use tempfile::tempdir;
+
+    #[test]
+    fn mochi_ui_manifest_path_declares_packaged_binary() {
+        let manifest_path = mochi_ui_manifest_path();
+
+        assert!(
+            manifest_path.ends_with(MOCHI_UI_MANIFEST_REL),
+            "unexpected MOCHI UI manifest path: {}",
+            manifest_path.display()
+        );
+
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
+        assert!(
+            manifest.contains("[[bin]]")
+                && manifest.contains(&format!("name = \"{MOCHI_BIN_NAME}\"")),
+            "MOCHI UI manifest must declare the packaged `{MOCHI_BIN_NAME}` binary"
+        );
+    }
 
     #[test]
     fn create_archive_packages_bundle_directory() {

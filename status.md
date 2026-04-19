@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: MOCHI bundle package lookup
+- `xtask/src/mochi.rs` now builds the packaged MOCHI desktop binary through
+  `--manifest-path mochi/mochi-ui-egui/Cargo.toml --bin mochi` instead of the
+  stale `-p mochi-ui-egui` package id. This matches the current `mochi-ui`
+  package while keeping the bundle tied to the existing UI manifest path.
+- Added a focused regression that verifies the bundle helper still points at a
+  manifest declaring the packaged `mochi` binary.
+- Focused validation for this slice:
+  - `rustfmt --check --edition 2024 xtask/src/mochi.rs`
+  - `cargo test -p xtask --test mochi_bundle -- --nocapture`
+  - `cargo test -p xtask mochi_ui_manifest_path_declares_packaged_binary -- --nocapture`
+
 ## 2026-04-19 Follow-up: Kotodama pointer-ABI fixture resync
 - `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs` now uses the current
   Kotodama JSON method helpers (`ev.get_account_id(...)` and

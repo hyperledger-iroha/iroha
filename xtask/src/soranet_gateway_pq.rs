@@ -416,7 +416,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::certificate::{RelayCapabilityFlagsV1, RelayCertificateV2};
     use rand_core_06::OsRng;
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     use tempfile::TempDir;
 
     use super::*;
@@ -483,7 +483,12 @@ mod tests {
         let mut rng = OsRng;
         let ed_signing = SigningKey::generate(&mut rng);
         let ed_public = ed_signing.verifying_key();
-        let ml_keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("ml keypair");
+        let ml_keypair = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0x65; 32]),
+            b"xtask:soranet-gateway-pq:readiness",
+        )
+        .expect("ml keypair");
         let ml_public = ml_keypair.public_key.clone();
         let ml_secret = ml_keypair.secret_key;
 
