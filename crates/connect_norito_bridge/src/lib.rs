@@ -10305,6 +10305,12 @@ fn convert_field_elem<L: Into<String>>(
     Some(limbs)
 }
 
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn convert_field_elems<L: Into<String>>(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JLongArray<'_>,
