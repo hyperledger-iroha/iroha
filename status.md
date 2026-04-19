@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Sumeragi DA view-zero missing-leader recovery
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now lets the DA
+  empty-frontier `MissingQc` path at view `0` rotate after the existing
+  frontier recovery controller has reached `RotateArmed`. The first timeout
+  still only arms recovery, preserving the bounded commit-skew guard for
+  DA-enabled frontiers.
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` adds a focused
+  regression proving that an exhausted `missing_qc` recovery advances view `0`
+  and arms the forced next-view proposal path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_da_view_zero_after_missing_qc_recovery_is_armed -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture`
+    (`1 passed`; 144.39s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_view_change_lock_convergence -- --nocapture`
+    (`1 passed`; 50.62s)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
 ## 2026-04-19 Follow-up: big integer numeric coverage
 - `crates/iroha_primitives/src/bigint.rs` now has focused unit coverage for
   zero/one/sign helpers, absolute value and negation, subtraction, division with
