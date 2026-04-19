@@ -16702,18 +16702,8 @@ impl State {
     /// otherwise projecting from the Space Directory + lane catalog.
     #[must_use]
     pub fn axt_policy_snapshot(&self) -> iroha_data_model::nexus::AxtPolicySnapshot {
-        let world = self.world_view();
-        let mut entries: Vec<iroha_data_model::nexus::AxtPolicyBinding> = world
-            .axt_policies()
-            .iter()
-            .map(|(dsid, policy)| iroha_data_model::nexus::AxtPolicyBinding {
-                dsid: *dsid,
-                policy: *policy,
-            })
-            .collect();
-        entries.sort_by_key(|binding| binding.dsid);
-        let version = iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&entries);
-        iroha_data_model::nexus::AxtPolicySnapshot { version, entries }
+        let view = self.view();
+        StateReadOnly::axt_policy_snapshot(&view)
     }
 
     /// Install or update a dataspace AXT policy entry.
