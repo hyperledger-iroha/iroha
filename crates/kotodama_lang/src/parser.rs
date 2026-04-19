@@ -921,10 +921,9 @@ impl<'a> Parser<'a> {
                 "access" => self.parse_access_attribute_body(&mut attrs)?,
                 "test" | "テスト" => self.parse_test_attribute_body(&mut attrs)?,
                 _ => {
-                    return Err(self.error(
-                        attr_tok,
-                        "expected attribute `access`, `test`, or `テスト`",
-                    ));
+                    return Err(
+                        self.error(attr_tok, "expected attribute `access`, `test`, or `テスト`")
+                    );
                 }
             }
             self.expect(TokenKind::RBracket)?;
@@ -1046,7 +1045,11 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::Colon)?;
             match key.as_str() {
                 "target" => target = Some(self.expect_ident_or_string()?),
-                _ => return Err(self.error(self.tokens[self.pos.saturating_sub(1)].clone(), "target")),
+                _ => {
+                    return Err(
+                        self.error(self.tokens[self.pos.saturating_sub(1)].clone(), "target")
+                    );
+                }
             }
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
@@ -3201,7 +3204,9 @@ mod tests {
         "#;
         let prog = parse(src).expect("parse koto_test program");
         assert_eq!(
-            prog.test_target.as_ref().map(|target| target.target.as_str()),
+            prog.test_target
+                .as_ref()
+                .map(|target| target.target.as_str()),
             Some("contracts/demo.ko")
         );
         assert_eq!(prog.fixtures.len(), 1);

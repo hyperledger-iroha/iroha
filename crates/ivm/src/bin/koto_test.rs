@@ -31,7 +31,7 @@ enum Command {
     Profile,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TestCase {
     name: String,
     fixture: Option<String>,
@@ -141,14 +141,15 @@ fn discover_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     }
 }
 
-fn discover_suite_from_target(path: &Path, target_program: Program) -> Result<DiscoveredSuite, String> {
+fn discover_suite_from_target(
+    path: &Path,
+    target_program: Program,
+) -> Result<DiscoveredSuite, String> {
     let mut merged_program = target_program.clone();
     let standalone_tests = discover_standalone_tests_for_target(path)?;
     for (test_path, test_program) in standalone_tests {
         validate_standalone_test_program(&test_path, path, &test_program)?;
-        merged_program
-            .items
-            .extend(test_program.items.into_iter());
+        merged_program.items.extend(test_program.items.into_iter());
         merged_program
             .fixtures
             .extend(test_program.fixtures.into_iter());
@@ -161,10 +162,12 @@ fn discover_suite_from_standalone_test(
     test_path: &Path,
     test_program: Program,
 ) -> Result<DiscoveredSuite, String> {
-    let target_decl = test_program
-        .test_target
-        .as_ref()
-        .ok_or_else(|| format!("{} is missing a koto_test target declaration", test_path.display()))?;
+    let target_decl = test_program.test_target.as_ref().ok_or_else(|| {
+        format!(
+            "{} is missing a koto_test target declaration",
+            test_path.display()
+        )
+    })?;
     let target_path = resolve_target_path(test_path, &target_decl.target)?;
     let target_program = parse_program_file(&target_path)?;
     validate_standalone_test_program(test_path, &target_path, &test_program)?;
@@ -176,7 +179,10 @@ fn discover_suite_from_standalone_test(
     finalize_suite(target_path, merged_program)
 }
 
-fn finalize_suite(target_path: PathBuf, merged_program: Program) -> Result<DiscoveredSuite, String> {
+fn finalize_suite(
+    target_path: PathBuf,
+    merged_program: Program,
+) -> Result<DiscoveredSuite, String> {
     let tests = collect_tests(&merged_program)?;
     if tests.is_empty() {
         return Err(format!(
@@ -212,7 +218,9 @@ fn resolve_target_path(test_file: &Path, raw_target: &str) -> Result<PathBuf, St
     })
 }
 
-fn discover_standalone_tests_for_target(target_path: &Path) -> Result<Vec<(PathBuf, Program)>, String> {
+fn discover_standalone_tests_for_target(
+    target_path: &Path,
+) -> Result<Vec<(PathBuf, Program)>, String> {
     let base_dir = target_path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", target_path.display()))?;
@@ -260,7 +268,9 @@ fn discover_standalone_tests_for_target(target_path: &Path) -> Result<Vec<(PathB
 }
 
 fn collect_ko_files(dir: &Path, out: &mut BTreeSet<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(dir).map_err(|err| format!("failed to read {}: {err}", dir.display()))? {
+    for entry in
+        fs::read_dir(dir).map_err(|err| format!("failed to read {}: {err}", dir.display()))?
+    {
         let entry = entry.map_err(|err| format!("failed to read directory entry: {err}"))?;
         let path = entry.path();
         if path.is_dir() {
@@ -372,7 +382,8 @@ fn compile_suite(suite: &DiscoveredSuite) -> Result<CompiledSuite, String> {
         ..CompilerOptions::default()
     };
     let compiler = ivm::KotodamaCompiler::new_with_options(opts);
-    let (code, _manifest, report) = compiler.compile_program_with_manifest_and_report(&suite.merged_program)?;
+    let (code, _manifest, report) =
+        compiler.compile_program_with_manifest_and_report(&suite.merged_program)?;
     let metadata = ProgramMetadata::parse(&code)
         .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
     let pc_base = metadata.literal_prefix_len() as u64;
@@ -413,7 +424,11 @@ fn compile_suite(suite: &DiscoveredSuite) -> Result<CompiledSuite, String> {
     })
 }
 
-fn build_coverage_functions(program: &Program, report: &CompileReport, pc_base: u64) -> Vec<CoverageFunction> {
+fn build_coverage_functions(
+    program: &Program,
+    report: &CompileReport,
+    pc_base: u64,
+) -> Vec<CoverageFunction> {
     let test_names = program
         .items
         .iter()
@@ -466,7 +481,10 @@ fn normalize_user_function_name(name: &str) -> Option<&str> {
     Some(name)
 }
 
-fn execute_suite(compiled: &CompiledSuite, trace_mode: TraceMode) -> Result<Vec<TestRunResult>, String> {
+fn execute_suite(
+    compiled: &CompiledSuite,
+    trace_mode: TraceMode,
+) -> Result<Vec<TestRunResult>, String> {
     let mut results = Vec::with_capacity(compiled.tests.len());
     for test in &compiled.tests {
         let host = build_host_for_fixture(&compiled.fixtures, test.fixture.as_deref())?;
@@ -546,7 +564,8 @@ fn apply_fixture_action(
             expect_arg_count(action, 1)?;
             let domain = eval_domain_expr(&action.args[0])?;
             let caller = host.caller_subject();
-            host.wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+            host.wsv
+                .grant_permission(&caller, PermissionToken::RegisterDomain);
             if host.wsv.register_domain(&caller, domain.clone()) {
                 return Ok(());
             }
@@ -582,12 +601,15 @@ fn apply_fixture_action(
             let caller = host.caller_subject();
             host.wsv
                 .grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-            let _ = host
-                .wsv
-                .register_asset_definition(&caller, asset.clone(), Mintable::Infinitely);
+            let _ =
+                host.wsv
+                    .register_asset_definition(&caller, asset.clone(), Mintable::Infinitely);
             host.wsv
                 .grant_permission(&caller, PermissionToken::MintAsset(asset.clone()));
-            if host.wsv.mint(&caller, account.clone(), asset.clone(), amount.clone()) {
+            if host
+                .wsv
+                .mint(&caller, account.clone(), asset.clone(), amount.clone())
+            {
                 return Ok(());
             }
             Err(format!(
@@ -602,10 +624,8 @@ fn apply_fixture_action(
             host.wsv.add_account_unchecked(account.clone());
             let caller = host.caller_subject();
             if caller != account {
-                host.wsv.grant_permission(
-                    &caller,
-                    PermissionToken::SetAccountDetail(account.clone()),
-                );
+                host.wsv
+                    .grant_permission(&caller, PermissionToken::SetAccountDetail(account.clone()));
             }
             if host.wsv.set_account_detail(&caller, &account, &key, value) {
                 return Ok(());
@@ -693,8 +713,9 @@ fn eval_asset_definition_expr(expr: &Expr) -> Result<AssetDefinitionId, String> 
 
 fn eval_name_expr(expr: &Expr) -> Result<Name, String> {
     match expr {
-        Expr::String(raw) | Expr::Ident(raw) => Name::from_str(raw)
-            .map_err(|_| format!("invalid name `{raw}`")),
+        Expr::String(raw) | Expr::Ident(raw) => {
+            Name::from_str(raw).map_err(|_| format!("invalid name `{raw}`"))
+        }
         Expr::Call { name, args } if name == "name" => {
             if args.len() != 1 {
                 return Err("`name` expects exactly one argument".to_string());
@@ -803,8 +824,8 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
                 return Err("`name` expects exactly one argument".to_string());
             }
             let name = eval_name_expr(expr)?;
-            let bytes = norito::to_bytes(&name)
-                .map_err(|err| format!("failed to encode name: {err}"))?;
+            let bytes =
+                norito::to_bytes(&name).map_err(|err| format!("failed to encode name: {err}"))?;
             Ok(make_tlv(PointerType::Name, &bytes))
         }
         other => Err(format!("unsupported fixture value expression `{other:?}`")),
@@ -822,7 +843,8 @@ fn eval_json_payload(args: &[Expr]) -> Result<String, String> {
 }
 
 fn make_norito_envelope<T: Encode>(value: &T) -> Result<Vec<u8>, String> {
-    let bytes = norito::to_bytes(value).map_err(|err| format!("failed to encode Norito value: {err}"))?;
+    let bytes =
+        norito::to_bytes(value).map_err(|err| format!("failed to encode Norito value: {err}"))?;
     Ok(make_tlv(PointerType::NoritoBytes, &bytes))
 }
 
@@ -844,10 +866,7 @@ fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
             raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
                 .map(|address| address.subject_id())
         })
-        .or_else(|_| {
-            raw.parse::<iroha_crypto::PublicKey>()
-                .map(AccountId::new)
-        })
+        .or_else(|_| raw.parse::<iroha_crypto::PublicKey>().map(AccountId::new))
         .map_err(|_| format!("invalid account id `{raw}`"))
 }
 
@@ -870,19 +889,27 @@ fn parse_permission_token_name(raw: &str) -> Result<PermissionToken, String> {
         return Ok(PermissionToken::RegisterAssetDefinition);
     }
     if let Some(rest) = raw.strip_prefix("read_assets:") {
-        return Ok(PermissionToken::ReadAccountAssets(parse_account_literal(rest)?));
+        return Ok(PermissionToken::ReadAccountAssets(parse_account_literal(
+            rest,
+        )?));
     }
     if let Some(rest) = raw.strip_prefix("add_signatory:") {
         return Ok(PermissionToken::AddSignatory(parse_account_literal(rest)?));
     }
     if let Some(rest) = raw.strip_prefix("remove_signatory:") {
-        return Ok(PermissionToken::RemoveSignatory(parse_account_literal(rest)?));
+        return Ok(PermissionToken::RemoveSignatory(parse_account_literal(
+            rest,
+        )?));
     }
     if let Some(rest) = raw.strip_prefix("set_account_quorum:") {
-        return Ok(PermissionToken::SetAccountQuorum(parse_account_literal(rest)?));
+        return Ok(PermissionToken::SetAccountQuorum(parse_account_literal(
+            rest,
+        )?));
     }
     if let Some(rest) = raw.strip_prefix("set_account_detail:") {
-        return Ok(PermissionToken::SetAccountDetail(parse_account_literal(rest)?));
+        return Ok(PermissionToken::SetAccountDetail(parse_account_literal(
+            rest,
+        )?));
     }
     if let Some(rest) = raw.strip_prefix("register_zk_asset:") {
         return Ok(PermissionToken::RegisterZkAsset(
@@ -931,7 +958,8 @@ fn parse_permission_token_name(raw: &str) -> Result<PermissionToken, String> {
 }
 
 fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
-    let value: Value = json::from_str(raw).map_err(|err| format!("invalid permission json: {err}"))?;
+    let value: Value =
+        json::from_str(raw).map_err(|err| format!("invalid permission json: {err}"))?;
     let map = value
         .as_object()
         .ok_or_else(|| "permission json must be an object".to_string())?;
@@ -991,9 +1019,7 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
         "manage_permissions" => Ok(PermissionToken::ManagePermissions),
         "manage_triggers" => Ok(PermissionToken::ManageTriggers),
         "manage_peers" => Ok(PermissionToken::ManagePeers),
-        "custom" => Ok(PermissionToken::Custom(
-            target("name")?.to_string(),
-        )),
+        "custom" => Ok(PermissionToken::Custom(target("name")?.to_string())),
         other => Err(format!("unsupported permission type `{other}`")),
     }
 }
@@ -1036,7 +1062,11 @@ fn print_run_summary(target_path: &Path, results: &[TestRunResult]) {
     let passed = results.iter().filter(|result| result.passed).count();
     println!(
         "\nresult: {}. {} passed; {} failed",
-        if passed == results.len() { "ok" } else { "FAILED" },
+        if passed == results.len() {
+            "ok"
+        } else {
+            "FAILED"
+        },
         passed,
         results.len().saturating_sub(passed)
     );
@@ -1080,8 +1110,7 @@ fn print_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) {
         };
         println!(
             "{covered:>7}  {:>4}  {}",
-            function.line,
-            function.display_name
+            function.line, function.display_name
         );
     }
 }
@@ -1104,15 +1133,11 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
     println!("\nprofile:");
     for result in results {
         for (cycle, entry) in result.delta_trace.iter().enumerate() {
-            let source = compiled
-                .report
-                .source_map
-                .iter()
-                .find(|map_entry| {
-                    let start = compiled.pc_base.saturating_add(map_entry.pc_start);
-                    let end = compiled.pc_base.saturating_add(map_entry.pc_end);
-                    start <= entry.pc && entry.pc < end
-                });
+            let source = compiled.report.source_map.iter().find(|map_entry| {
+                let start = compiled.pc_base.saturating_add(map_entry.pc_start);
+                let end = compiled.pc_base.saturating_add(map_entry.pc_end);
+                start <= entry.pc && entry.pc < end
+            });
             let value = json::object(vec![
                 ("test".to_string(), Value::from(result.name.clone())),
                 ("cycle".to_string(), Value::from(cycle as u64)),
@@ -1120,12 +1145,16 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
                 (
                     "function".to_string(),
                     source
-                        .and_then(|map_entry| normalize_user_function_name(&map_entry.function_name))
+                        .and_then(|map_entry| {
+                            normalize_user_function_name(&map_entry.function_name)
+                        })
                         .map_or(Value::Null, |name| Value::from(name.to_string())),
                 ),
                 (
                     "line".to_string(),
-                    source.map_or(Value::Null, |map_entry| Value::from(map_entry.source.line as u64)),
+                    source.map_or(Value::Null, |map_entry| {
+                        Value::from(map_entry.source.line as u64)
+                    }),
                 ),
                 (
                     "changed_registers".to_string(),
@@ -1152,4 +1181,474 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new() -> Self {
+            let nonce = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "koto_test_bin_{}_{}_{}",
+                std::process::id(),
+                timestamp,
+                nonce
+            ));
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn write(&self, relative: &str, contents: &str) -> PathBuf {
+            let path = self.path.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent dir");
+            }
+            fs::write(&path, contents).expect("write temp file");
+            path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn test_function(name: &str, fixture: Option<&str>) -> Item {
+        Item::Function(ivm::kotodama::ast::Function {
+            name: name.to_string(),
+            params: Vec::new(),
+            ret_ty: None,
+            body: ivm::kotodama::ast::Block {
+                statements: Vec::new(),
+            },
+            modifiers: ivm::kotodama::ast::FunctionModifiers {
+                is_test: true,
+                test_fixture: fixture.map(str::to_string),
+                ..Default::default()
+            },
+            location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
+        })
+    }
+
+    #[test]
+    fn parse_args_accepts_supported_subcommands() {
+        let (command, path) = parse_args(vec![
+            "coverage".to_string(),
+            "contracts/demo.ko".to_string(),
+        ])
+        .expect("parse args");
+        assert_eq!(command, Command::Coverage);
+        assert_eq!(path, PathBuf::from("contracts/demo.ko"));
+    }
+
+    #[test]
+    fn parse_args_rejects_unknown_subcommand_and_missing_path() {
+        let err = parse_args(vec!["wat".to_string(), "demo.ko".to_string()])
+            .expect_err("unknown command should fail");
+        assert!(err.contains("unknown subcommand"));
+
+        let err = parse_args(vec!["run".to_string()]).expect_err("missing path should fail");
+        assert!(err.contains("usage: koto_test"));
+    }
+
+    #[test]
+    fn discover_suite_merges_inline_and_matching_standalone_tests() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "contracts/demo.ko",
+            r#"
+            fn increment(x: int) -> int { return x + 1; }
+
+            #[test]
+            fn inline() {
+              assert_eq(increment(1), 2);
+            }
+            "#,
+        );
+        temp.write(
+            "contracts/demo.test.ko",
+            r#"
+            koto_test { target: "demo.ko" }
+
+            #[test]
+            fn standalone() {
+              assert_eq(increment(2), 3);
+            }
+            "#,
+        );
+        temp.write("contracts/other.ko", "fn other() {}");
+        temp.write(
+            "contracts/tests/ignored.test.ko",
+            r#"
+            koto_test { target: "../other.ko" }
+
+            #[test]
+            fn ignored() {}
+            "#,
+        );
+
+        let suite = discover_suite(&target).expect("discover suite");
+        let mut names = suite
+            .tests
+            .iter()
+            .map(|test| test.name.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["inline".to_string(), "standalone".to_string()]);
+    }
+
+    #[test]
+    fn discover_suite_from_standalone_input_uses_target_program() {
+        let temp = TestTempDir::new();
+        temp.write(
+            "contracts/demo.ko",
+            r#"
+            fn increment(x: int) -> int { return x + 1; }
+            "#,
+        );
+        let standalone = temp.write(
+            "contracts/demo.test.ko",
+            r#"
+            koto_test { target: "demo.ko" }
+
+            #[test]
+            fn smoke() {
+              assert_eq(increment(2), 3);
+            }
+            "#,
+        );
+
+        let suite = discover_suite(&standalone).expect("discover suite from standalone input");
+        assert_eq!(
+            suite.target_path.file_name().and_then(|name| name.to_str()),
+            Some("demo.ko")
+        );
+        assert_eq!(suite.tests.len(), 1);
+        assert_eq!(suite.tests[0].name, "smoke");
+    }
+
+    #[test]
+    fn validate_standalone_test_program_rejects_public_functions() {
+        let temp = TestTempDir::new();
+        let target = fs::canonicalize(temp.write("demo.ko", "fn helper() {}")).expect("target");
+        let test_file = temp.write(
+            "demo.test.ko",
+            r#"
+            koto_test { target: "demo.ko" }
+
+            kotoage fn not_local() {}
+            "#,
+        );
+        let program = parse_program_file(&test_file).expect("parse standalone test");
+        let err = validate_standalone_test_program(&test_file, &target, &program)
+            .expect_err("public function should fail validation");
+        assert!(err.contains("non-local function"));
+    }
+
+    #[test]
+    fn finalize_suite_rejects_program_without_tests() {
+        let program = Program {
+            items: vec![Item::Function(ivm::kotodama::ast::Function {
+                name: "helper".to_string(),
+                params: Vec::new(),
+                ret_ty: None,
+                body: ivm::kotodama::ast::Block {
+                    statements: Vec::new(),
+                },
+                modifiers: Default::default(),
+                location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
+            })],
+            contract_meta: None,
+            test_target: None,
+            fixtures: Vec::new(),
+        };
+        let err = finalize_suite(PathBuf::from("/tmp/demo.ko"), program)
+            .err()
+            .expect("program without tests should fail");
+        assert!(err.contains("no #[test] Kotodama functions"));
+    }
+
+    #[test]
+    fn compile_suite_excludes_test_functions_from_coverage() {
+        let program = parser::parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn smoke() {
+                    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+            "#,
+        )
+        .expect("parse program");
+        let suite = DiscoveredSuite {
+            target_path: PathBuf::from("/tmp/demo.ko"),
+            merged_program: program,
+            tests: vec![TestCase {
+                name: "smoke".to_string(),
+                fixture: None,
+                line: 6,
+            }],
+            fixtures: HashMap::new(),
+        };
+
+        let compiled = compile_suite(&suite).expect("compile suite");
+        assert_eq!(compiled.tests.len(), 1);
+        let names = compiled
+            .coverage_functions
+            .iter()
+            .map(|function| function.display_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["run"]);
+    }
+
+    #[test]
+    fn build_fixture_map_rejects_duplicate_names() {
+        let fixtures = vec![
+            FixtureDecl {
+                name: "seeded".to_string(),
+                actions: Vec::new(),
+            },
+            FixtureDecl {
+                name: "seeded".to_string(),
+                actions: Vec::new(),
+            },
+        ];
+        let err = build_fixture_map(&fixtures).expect_err("duplicate fixtures should fail");
+        assert!(err.contains("duplicate fixture"));
+    }
+
+    #[test]
+    fn apply_fixture_action_rejects_unknown_action() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host =
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+        let mut public_inputs = BTreeMap::new();
+        let err = apply_fixture_action(
+            &FixtureAction {
+                name: "wat".to_string(),
+                args: Vec::new(),
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect_err("unknown fixture action should fail");
+        assert!(err.contains("unknown fixture action"));
+    }
+
+    #[test]
+    fn apply_fixture_action_populates_state_and_public_inputs() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host =
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+        let mut public_inputs = BTreeMap::new();
+
+        apply_fixture_action(
+            &FixtureAction {
+                name: "state_set".to_string(),
+                args: vec![Expr::String("demo/counter".to_string()), Expr::Number(7)],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("apply state_set");
+        apply_fixture_action(
+            &FixtureAction {
+                name: "public_input".to_string(),
+                args: vec![
+                    Expr::Call {
+                        name: "name".to_string(),
+                        args: vec![Expr::String("trigger_event_json".to_string())],
+                    },
+                    Expr::Call {
+                        name: "json".to_string(),
+                        args: vec![Expr::String("{\"count\":7}".to_string())],
+                    },
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("apply public_input");
+
+        assert_eq!(
+            host.wsv.sc_get("demo/counter").expect("seeded state"),
+            make_norito_envelope(&7i64).expect("encoded value"),
+        );
+        let trigger_name: Name = "trigger_event_json".parse().expect("name");
+        let trigger_payload = public_inputs
+            .get(&trigger_name)
+            .expect("trigger payload present");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(trigger_payload).expect("valid tlv");
+        assert_eq!(tlv.type_id, PointerType::Json);
+    }
+
+    #[test]
+    fn build_host_for_fixture_rejects_unknown_fixture() {
+        let err = build_host_for_fixture(&HashMap::new(), Some("missing"))
+            .err()
+            .expect("unknown fixture should fail");
+        assert!(err.contains("unknown fixture"));
+    }
+
+    #[test]
+    fn build_host_for_fixture_applies_bound_caller() {
+        let fixture = FixtureDecl {
+            name: "seeded".to_string(),
+            actions: vec![
+                FixtureAction {
+                    name: "caller".to_string(),
+                    args: vec![Expr::String(DEFAULT_CALLER.to_string())],
+                },
+                FixtureAction {
+                    name: "state_set".to_string(),
+                    args: vec![
+                        Expr::String("demo/value".to_string()),
+                        Expr::String("hello".to_string()),
+                    ],
+                },
+            ],
+        };
+        let fixtures = HashMap::from([(fixture.name.clone(), fixture)]);
+
+        let host = build_host_for_fixture(&fixtures, Some("seeded")).expect("build host");
+        assert_eq!(
+            host.caller_subject(),
+            parse_account_literal(DEFAULT_CALLER).expect("caller")
+        );
+        assert_eq!(
+            host.wsv.sc_get("demo/value").expect("state value"),
+            make_norito_envelope(&"hello").expect("encoded string"),
+        );
+    }
+
+    #[test]
+    fn helper_parsers_reject_invalid_numeric_and_mintability() {
+        let err = eval_numeric_expr(&Expr::Number(-1)).expect_err("negative amount should fail");
+        assert!(err.contains("negative balances are not allowed"));
+
+        let err = eval_mintable_expr(&Expr::String("sometimes".to_string()))
+            .expect_err("invalid mintability should fail");
+        assert!(err.contains("unsupported mintability"));
+
+        let err = expect_arg_count(
+            &FixtureAction {
+                name: "caller".to_string(),
+                args: Vec::new(),
+            },
+            1,
+        )
+        .expect_err("wrong arg count should fail");
+        assert!(err.contains("expects 1 arguments"));
+    }
+
+    #[test]
+    fn parse_permission_helpers_cover_targeted_and_json_forms() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        let asset = AssetDefinitionId::new(domain, "rose".parse().expect("name"));
+        let token = parse_permission_token_name(&format!("mint_asset:{asset}"))
+            .expect("parse mint asset token");
+        assert!(matches!(token, PermissionToken::MintAsset(id) if id == asset));
+
+        let token = parse_permission_token_json(r#"{"type":"custom","name":"demo.permission"}"#)
+            .expect("parse custom permission json");
+        assert!(matches!(token, PermissionToken::Custom(name) if name == "demo.permission"));
+
+        let err = parse_permission_token_json(r#"{"target":"missing-type"}"#)
+            .expect_err("missing type should fail");
+        assert!(err.contains("missing `type`"));
+    }
+
+    #[test]
+    fn permission_and_json_helpers_reject_invalid_inputs() {
+        let err = parse_permission_token_name("mint_asset:not-an-asset")
+            .expect_err("invalid targeted permission should fail");
+        assert!(err.contains("invalid asset definition id"));
+
+        let err = eval_json_payload(&[Expr::Number(7)]).expect_err("non-string json should fail");
+        assert!(err.contains("expects a string payload"));
+    }
+
+    #[test]
+    fn eval_envelope_expr_encodes_pointer_variants() {
+        let account_ptr = eval_envelope_expr(&Expr::Call {
+            name: "account_id".to_string(),
+            args: vec![Expr::String(DEFAULT_CALLER.to_string())],
+        })
+        .expect("account envelope");
+        let account_tlv = ivm::pointer_abi::validate_tlv_bytes(&account_ptr).expect("account tlv");
+        assert_eq!(account_tlv.type_id, PointerType::AccountId);
+
+        let name_ptr = eval_envelope_expr(&Expr::Call {
+            name: "name".to_string(),
+            args: vec![Expr::String("cursor".to_string())],
+        })
+        .expect("name envelope");
+        let name_tlv = ivm::pointer_abi::validate_tlv_bytes(&name_ptr).expect("name tlv");
+        assert_eq!(name_tlv.type_id, PointerType::Name);
+    }
+
+    #[test]
+    fn render_failure_without_diagnostic_falls_back_to_debug_error() {
+        let vm = IVM::new(u64::MAX);
+        let rendered = render_failure(&vm, &ivm::VMError::DecodeError);
+        assert!(rendered.contains("DecodeError"));
+    }
+
+    #[test]
+    fn coverage_helper_functions_handle_internal_and_boundary_cases() {
+        assert_eq!(
+            normalize_user_function_name("__entrypoint_impl__run"),
+            Some("run")
+        );
+        assert_eq!(normalize_user_function_name("__lowered_internal"), None);
+        assert_eq!(normalize_user_function_name("run"), Some("run"));
+
+        let function = CoverageFunction {
+            display_name: "run".to_string(),
+            line: 3,
+            pc_start: 10,
+            pc_end: 20,
+        };
+        let executed = HashSet::from([9_u64, 10, 19, 20]);
+        assert!(function_hit(&function, &executed));
+        assert_eq!(percentage(0, 0), 100.0);
+        assert_eq!(percentage(1, 4), 25.0);
+    }
+
+    #[test]
+    fn collect_tests_rejects_duplicate_test_names() {
+        let program = Program {
+            items: vec![
+                test_function("smoke", None),
+                test_function("smoke", Some("seeded")),
+            ],
+            contract_meta: None,
+            test_target: None,
+            fixtures: Vec::new(),
+        };
+        let err = collect_tests(&program).expect_err("duplicate test names should fail");
+        assert!(err.contains("duplicate test function"));
+    }
 }
