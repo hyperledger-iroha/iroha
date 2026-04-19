@@ -213,7 +213,7 @@ pub struct NameTombstoneStateV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct TokenValue {
-    /// Settlement asset identifier (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
+    /// Settlement asset-holding identifier (`<asset-definition-id>#<account-id>`).
     pub asset_id: String,
     /// Amount expressed in the asset's native units.
     pub amount: u128,
@@ -564,7 +564,7 @@ pub struct SuffixPolicyV1 {
     pub referral_cap_bps: u16,
     /// Reserved labels enforced by governance.
     pub reserved_labels: Vec<ReservedNameV1>,
-    /// Asset required for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
+    /// Asset holding required for settlement (`<asset-definition-id>#<account-id>`).
     pub payment_asset_id: String,
     /// Pricing tiers advertised by the steward.
     pub pricing: Vec<PriceTierV1>,
@@ -603,6 +603,7 @@ pub mod fixtures {
     /// Deterministic default policy fixture used in docs/tests.
     pub fn default_policy() -> SuffixPolicyV1 {
         let steward = steward_account();
+        let payment_asset_id = format!("61CtjvNd9T3THAR65GsMVHr82Bjc#{steward}");
         SuffixPolicyV1 {
             suffix_id: 0x0001,
             suffix: "sora".to_string(),
@@ -619,11 +620,11 @@ pub mod fixtures {
                 release_at_ms: None,
                 note: "Protocol reserved".to_string(),
             }],
-            payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
+            payment_asset_id: payment_asset_id.clone(),
             pricing: vec![PriceTierV1 {
                 tier_id: 0,
                 label_regex: "^[a-z0-9]{3,}$".to_string(),
-                base_price: TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120),
+                base_price: TokenValue::new(payment_asset_id, 120),
                 auction_kind: AuctionKind::VickreyCommitReveal,
                 dutch_floor: None,
                 min_duration_years: 1,
@@ -674,5 +675,18 @@ mod tests {
             "expected reserved labels"
         );
         assert_eq!(policy.status, super::SuffixStatus::Active);
+    }
+
+    #[test]
+    fn default_policy_uses_settlement_holding_for_pricing() {
+        let policy = fixtures::default_policy();
+        assert_eq!(
+            policy.payment_asset_id,
+            format!("61CtjvNd9T3THAR65GsMVHr82Bjc#{}", policy.steward)
+        );
+        assert_eq!(
+            policy.pricing[0].base_price.asset_id,
+            policy.payment_asset_id
+        );
     }
 }
