@@ -112651,6 +112651,7 @@ async fn zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_tim
 async fn zero_vote_quorum_timeout_keeps_pending_when_local_precommit_was_emitted() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();
@@ -112809,6 +112810,7 @@ async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_othe
 async fn zero_vote_quorum_timeout_keeps_pending_while_single_validator_awaits_first_vote() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+    let _view_change_guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
 
     let view = actor.state.view();

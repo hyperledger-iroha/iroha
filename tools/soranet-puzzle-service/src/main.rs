@@ -35,7 +35,7 @@ use norito::{
     json,
 };
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
-use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
+use soranet_pq::{MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use soranet_relay::config::{
     ConfigError as RelayConfigError, HandshakePolicy, PowConfig, RelayConfig,
 };
@@ -1235,9 +1235,16 @@ fn load_signed_ticket_secret(opts: &SignedTicketSecretOptions) -> Result<Option<
 
 fn validate_signed_ticket_keypair(public_key: &[u8], secret_key: &[u8]) -> Result<()> {
     let probe = b"soranet.pow.signed_ticket.key_check";
-    let signature = sign_mldsa(MlDsaSuite::MlDsa44, secret_key, probe)
+    let signature = sign_mldsa_from_os(MlDsaSuite::MlDsa44, secret_key, &[], probe)
         .wrap_err("failed to sign probe with signed ticket secret key")?;
-    verify_mldsa(MlDsaSuite::MlDsa44, public_key, probe, signature.as_bytes()).wrap_err(
+    verify_mldsa(
+        MlDsaSuite::MlDsa44,
+        public_key,
+        &[],
+        probe,
+        signature.as_bytes(),
+    )
+    .wrap_err(
         "pow.signed_ticket_public_key_hex does not match the provided signed ticket secret key",
     )
 }
@@ -1271,7 +1278,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use iroha_crypto::soranet::{pow::ChallengeBinding, token::AdmissionTokenVerifier};
-    use soranet_pq::generate_mldsa_keypair;
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
 
     use super::*;
 

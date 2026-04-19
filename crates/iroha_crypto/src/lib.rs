@@ -180,9 +180,9 @@ impl KeyPair {
                 secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into()
             }
             Algorithm::MlDsa => {
-                use pqcrypto_mldsa::mldsa65 as dilithium;
+                use pqcrypto_mldsa::mldsa65;
                 use pqcrypto_traits::sign::PublicKey as _;
-                let (pk, sk) = dilithium::keypair();
+                let (pk, sk) = mldsa65::keypair();
                 let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes())
                     .expect("valid mldsa public key bytes");
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::MlDsa(
@@ -248,7 +248,7 @@ impl KeyPair {
                 secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into()
             }
             Algorithm::MlDsa => {
-                let (public, private) = mldsa_seed::dilithium3::keypair_from_seed(&seed)
+                let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(&seed)
                     .expect("seeded ML-DSA key generation must produce a valid key pair");
                 KeyPair::new(public, private)
                     .expect("seeded ML-DSA key pair should pass validation")
@@ -332,13 +332,13 @@ impl KeyPair {
         }
 
         if algorithm == Algorithm::MlDsa {
-            use pqcrypto_mldsa::mldsa65 as dilithium;
+            use pqcrypto_mldsa::mldsa65;
             use pqcrypto_traits::sign::PublicKey as _;
 
             use crate::secrecy::ExposeSecret;
 
             let pk_bytes = public_key.to_bytes().1;
-            let dilithium_pk = dilithium::PublicKey::from_bytes(pk_bytes)
+            let mldsa_pk = mldsa65::PublicKey::from_bytes(pk_bytes)
                 .map_err(|_| Error::KeyGen(String::from("Invalid ML-DSA public key")))?;
 
             let secret_bytes = match private_key.0.expose_secret() {
@@ -346,11 +346,11 @@ impl KeyPair {
                 _ => unreachable!("Algorithm is ML-DSA"),
             };
 
-            let dilithium_secret_key = secret_bytes.as_secret();
+            let mldsa_secret_key = secret_bytes.as_secret();
 
             let probe_message = b"iroha:ml-dsa:keypair-check";
-            let probe_signature = dilithium::detached_sign(probe_message, dilithium_secret_key);
-            if dilithium::verify_detached_signature(&probe_signature, probe_message, &dilithium_pk)
+            let probe_signature = mldsa65::detached_sign(probe_message, mldsa_secret_key);
+            if mldsa65::verify_detached_signature(&probe_signature, probe_message, &mldsa_pk)
                 .is_err()
             {
                 return Err(Error::KeyGen(String::from("Key pair mismatch")));
@@ -497,12 +497,12 @@ impl PublicKeyFull {
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
                 .map(PublicKeyFull::Secp256k1),
             Algorithm::MlDsa => {
-                use pqcrypto_mldsa::mldsa65 as dilithium;
+                use pqcrypto_mldsa::mldsa65;
                 use pqcrypto_traits::sign::PublicKey as _;
-                if payload.len() != dilithium::public_key_bytes() {
+                if payload.len() != mldsa65::public_key_bytes() {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
                 }
-                let pk = dilithium::PublicKey::from_bytes(payload)
+                let pk = mldsa65::PublicKey::from_bytes(payload)
                     .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
                 Ok(PublicKeyFull::MlDsa(pk.as_bytes().to_vec()))
             }
@@ -647,7 +647,7 @@ pub fn secp256k1_verify_batch_deterministic(
     }
 }
 
-/// Deterministic PQC (ML‑DSA Dilithium3) batch verification wrapper.
+/// Deterministic ML-DSA-65 batch verification wrapper.
 /// Verifies each signature independently.
 ///
 /// # Errors
@@ -659,7 +659,7 @@ pub fn pqc_verify_batch_deterministic(
     public_keys: &[&[u8]],
     _seed32: [u8; 32],
 ) -> Result<(), Error> {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
+    use pqcrypto_mldsa::mldsa65;
     use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 
     if messages.is_empty()
@@ -667,8 +667,8 @@ pub fn pqc_verify_batch_deterministic(
     {
         return Err(Error::BadSignature);
     }
-    let exp_sig = dilithium::signature_bytes();
-    let exp_pk = dilithium::public_key_bytes();
+    let exp_sig = mldsa65::signature_bytes();
+    let exp_pk = mldsa65::public_key_bytes();
     for ((m, s), pk) in messages
         .iter()
         .zip(signatures.iter())
@@ -677,15 +677,15 @@ pub fn pqc_verify_batch_deterministic(
         if s.len() != exp_sig || pk.len() != exp_pk {
             return Err(Error::BadSignature);
         }
-        let sig = match dilithium::DetachedSignature::from_bytes(s) {
+        let sig = match mldsa65::DetachedSignature::from_bytes(s) {
             Ok(v) => v,
             Err(_) => return Err(Error::BadSignature),
         };
-        let vk = match dilithium::PublicKey::from_bytes(pk) {
+        let vk = match mldsa65::PublicKey::from_bytes(pk) {
             Ok(v) => v,
             Err(_) => return Err(Error::BadSignature),
         };
-        if dilithium::verify_detached_signature(&sig, m, &vk).is_err() {
+        if mldsa65::verify_detached_signature(&sig, m, &vk).is_err() {
             return Err(Error::BadSignature);
         }
     }
@@ -1247,7 +1247,7 @@ pub fn ed25519_verify_aggregate(
     ed25519_verify_batch_deterministic(messages, signatures, public_keys, [0u8; 32])
 }
 
-/// Aggregate-style check for ML‑DSA (Dilithium3): verifies each signature on the shared or unique message.
+/// Aggregate-style check for ML-DSA-65: verifies each signature on the shared or unique message.
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] when the inputs are inconsistent or any signature fails verification.
@@ -1256,7 +1256,7 @@ pub fn pqc_verify_aggregate(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    // For Dilithium3 there is no standard aggregate signature; fall back to per-sig check.
+    // ML-DSA has no standard aggregate signature; fall back to per-signature checks.
     if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
         return Err(Error::BadSignature);
     }
@@ -1682,7 +1682,7 @@ impl From<PrivateKey> for PublicKey {
                     PrivateKeyInner::MlDsa(sk) => sk.as_secret(),
                     _ => unreachable!("algorithm() returned MlDsa"),
                 };
-                mldsa_seed::dilithium3::public_key_from_secret(secret)
+                mldsa_seed::mldsa65::public_key_from_secret(secret)
                     .expect("ML-DSA secret key should derive a valid public key")
             };
             return derived;
@@ -1757,10 +1757,10 @@ impl MlDsaSecretKey {
     }
 
     fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        use pqcrypto_mldsa::mldsa65 as dilithium;
+        use pqcrypto_mldsa::mldsa65;
         use pqcrypto_traits::sign::DetachedSignature as _;
 
-        let sig = dilithium::detached_sign(payload, self.as_secret());
+        let sig = mldsa65::detached_sign(payload, self.as_secret());
         sig.as_bytes().to_vec()
     }
 
@@ -2568,7 +2568,7 @@ mod tests {
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
         use pqcrypto_traits::sign::SecretKey as _;
 
-        use crate::mldsa_seed::dilithium3 as seeded;
+        use crate::mldsa_seed::mldsa65 as seeded;
 
         let (_, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
@@ -2591,10 +2591,10 @@ mod tests {
 
     #[test]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
-        use pqcrypto_mldsa::mldsa65 as dilithium;
+        use pqcrypto_mldsa::mldsa65;
         use pqcrypto_traits::sign::PublicKey as _;
 
-        let (pk, _) = dilithium::keypair();
+        let (pk, _) = mldsa65::keypair();
         let parsed = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes());
         assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
 

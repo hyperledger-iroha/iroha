@@ -19,7 +19,7 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use rand::{CryptoRng, RngCore};
-use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
+use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
@@ -244,7 +244,7 @@ impl AdmissionToken {
             &nonce,
             &issuer_fingerprint,
         );
-        let signature = sign_mldsa(suite, issuer_secret_key, &body)
+        let signature = sign_mldsa_from_os(suite, issuer_secret_key, &[], &body)
             .map_err(MintError::Signature)?
             .as_bytes()
             .to_vec();
@@ -371,6 +371,7 @@ impl AdmissionTokenVerifier {
         verify_mldsa(
             self.suite,
             &self.public_key,
+            &[],
             &token.body_bytes(),
             token.signature(),
         )
@@ -945,7 +946,7 @@ pub fn frame_looks_like_token(frame: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::generate_mldsa_keypair;
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
 
     use super::*;

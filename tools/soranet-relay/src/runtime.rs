@@ -4104,7 +4104,7 @@ mod tests {
     };
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::NamedTempFile;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt, duplex},

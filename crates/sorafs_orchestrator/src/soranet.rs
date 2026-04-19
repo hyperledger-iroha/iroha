@@ -2493,7 +2493,7 @@ mod tests {
     };
     use iroha_primitives::numeric::Numeric;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
     use super::*;
 

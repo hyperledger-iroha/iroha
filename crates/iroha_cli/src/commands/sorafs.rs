@@ -12131,7 +12131,7 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         fmt::Display,
         fs,

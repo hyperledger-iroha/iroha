@@ -1,7 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
-pub mod dilithium3 {
+pub mod mldsa65 {
     use core::{
+        array,
         convert::TryFrom,
         ptr::{addr_of, addr_of_mut},
     };
@@ -9,7 +10,7 @@ pub mod dilithium3 {
     use hkdf::Hkdf;
     use pqcrypto_mldsa::ffi;
     use sha2::Sha512;
-    use zeroize::Zeroize;
+    use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
     use crate::{Algorithm, Error, PrivateKey, PublicKey};
 
@@ -21,10 +22,11 @@ pub mod dilithium3 {
     const K: usize = 6;
 
     const HKDF_SALT: &[u8] = b"iroha:ml-dsa:keygen:v1";
+    // Preserve the original domain label so existing seeded ML-DSA keys remain stable.
     const HKDF_INFO: &[u8] = b"iroha:ml-dsa:dilithium3:keypair";
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Poly {
         coeffs: [i32; N],
     }
@@ -36,7 +38,7 @@ pub mod dilithium3 {
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Polyvecl {
         vec: [Poly; L],
     }
@@ -44,13 +46,13 @@ pub mod dilithium3 {
     impl Default for Polyvecl {
         fn default() -> Self {
             Self {
-                vec: [Poly::default(); L],
+                vec: array::from_fn(|_| Poly::default()),
             }
         }
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
     struct Polyveck {
         vec: [Poly; K],
     }
@@ -58,16 +60,14 @@ pub mod dilithium3 {
     impl Default for Polyveck {
         fn default() -> Self {
             Self {
-                vec: [Poly::default(); K],
+                vec: array::from_fn(|_| Poly::default()),
             }
         }
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
-        let mut seed_material = derive_seed_material(seed);
-        let result = keypair_from_seed_material(&seed_material);
-        seed_material.zeroize();
-        result
+        let seed_material = Zeroizing::new(derive_seed_material(seed));
+        keypair_from_seed_material(&seed_material)
     }
 
     #[allow(unsafe_code)]
@@ -82,9 +82,9 @@ pub mod dilithium3 {
             )));
         }
 
-        let mut rho = [0u8; SEEDBYTES];
-        let mut tr = [0u8; TRBYTES];
-        let mut key = [0u8; SEEDBYTES];
+        let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
+        let mut tr = Zeroizing::new([0u8; TRBYTES]);
+        let mut key = Zeroizing::new([0u8; SEEDBYTES]);
         let mut t0 = Polyveck::default();
         let mut s1 = Polyvecl::default();
         let mut s2 = Polyveck::default();
@@ -106,7 +106,7 @@ pub mod dilithium3 {
             PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
         }
 
-        let mut s1hat = s1;
+        let mut s1hat = s1.clone();
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }
@@ -135,9 +135,6 @@ pub mod dilithium3 {
         }
 
         if t0_check != t0 {
-            rho.zeroize();
-            tr.zeroize();
-            key.zeroize();
             return Err(Error::KeyGen(String::from(
                 "Inconsistent ML-DSA secret key components",
             )));
@@ -147,10 +144,6 @@ pub mod dilithium3 {
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_pack_pk(pk_bytes.as_mut_ptr(), rho.as_ptr(), addr_of!(t1));
         }
-
-        rho.zeroize();
-        tr.zeroize();
-        key.zeroize();
 
         PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))
@@ -168,7 +161,7 @@ pub mod dilithium3 {
     fn keypair_from_seed_material(
         seed_material: &[u8; SEEDBYTES],
     ) -> Result<(PublicKey, PrivateKey), Error> {
-        let mut expanded = [0u8; 2 * SEEDBYTES + CRHBYTES];
+        let mut expanded = Zeroizing::new([0u8; 2 * SEEDBYTES + CRHBYTES]);
         unsafe {
             shake256(
                 expanded.as_mut_ptr(),
@@ -200,7 +193,7 @@ pub mod dilithium3 {
             );
         }
 
-        let mut s1hat = s1;
+        let mut s1hat = s1.clone();
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }
@@ -237,12 +230,12 @@ pub mod dilithium3 {
             );
         }
 
-        let mut tr = [0u8; TRBYTES];
+        let mut tr = Zeroizing::new([0u8; TRBYTES]);
         unsafe {
             shake256(tr.as_mut_ptr(), tr.len(), pk_bytes.as_ptr(), pk_bytes.len());
         }
 
-        let mut sk_bytes = [0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES];
+        let mut sk_bytes = Zeroizing::new([0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES]);
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_pack_sk(
                 sk_bytes.as_mut_ptr(),
@@ -255,12 +248,9 @@ pub mod dilithium3 {
             );
         }
 
-        expanded.zeroize();
-        tr.zeroize();
-
         let public_key = PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))?;
-        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, &sk_bytes)
+        let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, &sk_bytes[..])
             .map_err(|err| Error::KeyGen(err.to_string()))?;
 
         Ok((public_key, private_key))
@@ -318,5 +308,50 @@ pub mod dilithium3 {
             sk: *const u8,
         );
         fn shake256(output: *mut u8, outlen: usize, input: *const u8, inlen: usize);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use pqcrypto_mldsa::mldsa65;
+        use pqcrypto_traits::sign::SecretKey as _;
+
+        use super::*;
+
+        #[test]
+        fn seeded_public_key_recovers_from_secret_key() {
+            let (public, private) =
+                keypair_from_seed(b"iroha:ml-dsa-seed:recover").expect("seeded keypair");
+            let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+                .expect("valid ML-DSA secret bytes");
+
+            let recovered = public_key_from_secret(&secret).expect("recover public key");
+
+            assert_eq!(public, recovered);
+        }
+
+        #[test]
+        fn public_key_from_secret_rejects_tampered_secret_components() {
+            let (_, private) =
+                keypair_from_seed(b"iroha:ml-dsa-seed:tamper").expect("seeded keypair");
+            let mut secret_bytes = private.to_bytes().1;
+            let last = secret_bytes
+                .last_mut()
+                .expect("ML-DSA secret key has at least one byte");
+            *last ^= 0x01;
+            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
+                .expect("length-valid ML-DSA secret bytes");
+
+            let err = public_key_from_secret(&secret).expect_err("tampered secret is inconsistent");
+
+            assert!(matches!(err, Error::KeyGen(message) if message.contains("Inconsistent")));
+        }
+
+        #[test]
+        fn seed_material_changes_with_seed_input() {
+            let first = derive_seed_material(b"iroha:ml-dsa-seed:first");
+            let second = derive_seed_material(b"iroha:ml-dsa-seed:second");
+
+            assert_ne!(first, second);
+        }
     }
 }

@@ -726,15 +726,15 @@ fn run_kem_validation(
 
 #[cfg(test)]
 mod tests {
-    use soranet_pq::{encapsulate_mlkem, generate_mlkem_keypair};
+    use soranet_pq::{encapsulate_mlkem_from_os, generate_mlkem_keypair_from_os};
 
     use super::*;
 
     #[test]
     fn run_kem_validation_accepts_valid_materials() {
         let suite = MlKemSuite::MlKem768;
-        let keys = generate_mlkem_keypair(suite);
-        let (_, ciphertext) = encapsulate_mlkem(suite, keys.public_key()).unwrap();
+        let keys = generate_mlkem_keypair_from_os(suite).expect("ML-KEM keypair");
+        let (_, ciphertext) = encapsulate_mlkem_from_os(suite, keys.public_key()).unwrap();
         let messages = run_kem_validation(
             suite,
             Some(keys.public_key()),
