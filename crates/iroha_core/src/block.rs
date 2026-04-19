@@ -9905,7 +9905,7 @@ pub(crate) mod valid {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl AsMut<SignedBlock> for ValidBlock {
         fn as_mut(&mut self) -> &mut SignedBlock {
             &mut self.block
@@ -12973,7 +12973,7 @@ mod commit {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl AsMut<SignedBlock> for CommittedBlock {
         fn as_mut(&mut self) -> &mut SignedBlock {
             self.0.as_mut()
