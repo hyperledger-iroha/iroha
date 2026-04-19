@@ -84,6 +84,7 @@ impl Default for MockToriiData {
         };
 
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,

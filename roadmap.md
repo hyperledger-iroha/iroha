@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Mochi telemetry status build metadata):
+The Mochi mock/status test fixtures now initialize the new
+`TelemetryStatus.build` field everywhere they still used exhaustive struct
+literals, which keeps the integration mock Torii server and the `mochi-core` /
+`mochi-ui` test targets aligned with the expanded telemetry schema. The same
+pass also updates the `mochi-core` smoke-event tests to use
+`DataSpaceId::UNIVERSAL`, matching the current dataspace ID API.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/src/mock_torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-ui-egui/src/gui.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo check -p mochi-integration`
+  - `cargo check -p mochi-core --tests`
+  - `cargo check -p mochi-ui --tests`
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
+
 Latest sync (2026-04-19 Python RWA classmethod fixtures):
 The Python Rust binding RWA classmethod tests now use canonical
 `hash$domain.dataspace` literals (`commodities.universal`) for transfer,

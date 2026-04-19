@@ -5946,7 +5946,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Expired,
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -6009,7 +6009,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(rejection),
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -7638,6 +7638,7 @@ mod tests {
             return;
         };
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,
@@ -7693,6 +7694,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener address");
 
         let initial = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 10,
             blocks_non_empty: 8,
@@ -7718,6 +7720,7 @@ mod tests {
             da_receipt_cursors: Vec::new(),
         };
         let updated = TelemetryStatus {
+            build: Default::default(),
             peers: 3,
             blocks: 11,
             blocks_non_empty: 9,

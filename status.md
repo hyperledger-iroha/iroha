@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Mochi telemetry status build metadata
+- `mochi/mochi-integration/src/mock_torii.rs` now seeds the new
+  `TelemetryStatus.build` field when constructing the default mocked `/status`
+  payload, keeping the mock Torii fixture aligned with the current telemetry
+  schema.
+- `mochi/mochi-core/src/torii.rs` and `mochi/mochi-ui-egui/src/gui.rs` now do
+  the same in their explicit test-only `TelemetryStatus` literals, and the
+  smoke-event tests in `mochi-core` now use `DataSpaceId::UNIVERSAL`, matching
+  the current dataspace ID API.
+- Focused validation for this slice:
+  - `cargo check -p mochi-integration`
+  - `cargo check -p mochi-core --tests`
+  - `cargo check -p mochi-ui --tests`
+
 ## 2026-04-19 Follow-up: Python RWA classmethod fixtures
 - `python/iroha_python/iroha_python_rs/src/lib.rs` now uses fully qualified
   `commodities.universal` RWA domain literals in the Python binding classmethod
