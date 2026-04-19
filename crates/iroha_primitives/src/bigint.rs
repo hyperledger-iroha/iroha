@@ -383,7 +383,7 @@ mod tests {
         let zero = BigInt::zero();
         assert!(zero.is_zero());
         assert!(!zero.is_negative());
-        assert_eq!(zero.bit_len(), 8);
+        assert_eq!(zero.bit_len(), 0);
 
         let one = BigInt::one();
         assert!(!one.is_zero());
