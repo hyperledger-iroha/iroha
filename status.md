@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-18
 
+## 2026-04-18 Follow-up: IVM envelope permission literal resync
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_roles_triggers_envelope.rs`
+  now builds the direct `mint_asset` permission targets from the canonical
+  `AssetDefinitionId` string instead of the removed `rose#domain` seed-literal
+  form, matching the current mock WSV permission parser.
+- The role/permission/trigger envelope regression is green again:
+  `envelope_roles_permissions_triggers` now grants and revokes the same
+  canonical asset permission it asserts against.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_roles_triggers_envelope -- --nocapture`
+
 ## 2026-04-18 Follow-up: SoraNet PQ derand backend wiring
 - `crates/soranet_pq` now consumes caller-provided hedged RNG output for
   ML-KEM key generation, ML-KEM encapsulation, ML-DSA key generation, and
