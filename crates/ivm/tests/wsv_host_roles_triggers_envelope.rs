@@ -83,6 +83,10 @@ fn envelope_roles_permissions_triggers() {
         "wonderland",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
     ));
+    let rose = iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
@@ -145,20 +149,17 @@ fn envelope_roles_permissions_triggers() {
             "payload",
             json_object([
                 ("account_id", json_value(&alice)),
-                ("permission", json_value("mint_asset:rose#domain")),
+                ("permission", json_value(&format!("mint_asset:{rose}"))),
             ]),
         ),
     ]);
     run_env(&mut vm, mint_perm_env);
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
-    assert!(host.wsv.has_permission(
-        &alice,
-        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap()
-        ))
-    ));
+    assert!(
+        host.wsv
+            .has_permission(&alice, &PermissionToken::MintAsset(rose.clone()))
+    );
 
     let revoke_perm_env = json_object([
         ("type", json_value("wsv.revoke_permission")),
@@ -170,7 +171,7 @@ fn envelope_roles_permissions_triggers() {
                     "permission",
                     json_object([
                         ("type", json_value("mint_asset")),
-                        ("target", json_value("rose#domain")),
+                        ("target", json_value(&rose.to_string())),
                     ]),
                 ),
             ]),
@@ -179,13 +180,11 @@ fn envelope_roles_permissions_triggers() {
     run_env(&mut vm, revoke_perm_env);
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
-    assert!(!host.wsv.has_permission(
-        &alice,
-        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap()
-        ))
-    ));
+    assert!(
+        !host
+            .wsv
+            .has_permission(&alice, &PermissionToken::MintAsset(rose.clone()))
+    );
 
     // 3) Trigger lifecycle: create -> disable -> remove
     let trig_name = "my_trigger";

@@ -36,6 +36,18 @@ Last updated: 2026-04-19
     `const_vec::tests::matches_vec_encoding` and
     `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
 
+## 2026-04-18 Follow-up: IVM envelope permission literal resync
+- `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_roles_triggers_envelope.rs`
+  now builds the direct `mint_asset` permission targets from the canonical
+  `AssetDefinitionId` string instead of the removed `rose#domain` seed-literal
+  form, matching the current mock WSV permission parser.
+- The role/permission/trigger envelope regression is green again:
+  `envelope_roles_permissions_triggers` now grants and revokes the same
+  canonical asset permission it asserts against.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_roles_triggers_envelope -- --nocapture`
+
 ## 2026-04-18 Follow-up: SoraNet PQ derand backend wiring
 - `crates/soranet_pq` now consumes caller-provided hedged RNG output for
   ML-KEM key generation, ML-KEM encapsulation, ML-DSA key generation, and
@@ -169,6 +181,39 @@ Last updated: 2026-04-19
   - `cargo fmt --all`
   - `cargo test -p soranet-handshake-harness simulate_writes_frames_and_telemetry -- --nocapture`
   - `cargo test -p soranet-handshake-harness`
+
+## 2026-04-18 Follow-up: autoscale mixed-run stabilization and parliament permission visibility
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/nexus/autoscale_localnet.rs`
+  now treats post-contraction `Approved`/`Committed`/`Applied`/`Rejected`/`Expired`
+  sample statuses as valid post-cycle progress, so retry paths do not fail just
+  because block counters lag the sampled transaction outcomes.
+- The autoscale localnet tests now serialize access to the shared
+  `LOAD_TX_SEQUENCE` static with a process-local mutex. That removes the
+  cross-test interference where one autoscale test could reset the round-robin
+  load sequence while another was still running under the same test binary.
+- The single-cycle autoscale profile now starts at the same 96-transaction
+  load used by the repeated-cycle path. The earlier 48-transaction starting
+  burst was too weak to reliably trigger lane expansion in the combined
+  `nexus_autoscale_` slice.
+- Retry cooldown clearance is now scoped to the cases that actually benefit
+  from it: first-cycle retries and the first attempt of later cycles. That
+  preserves the single-cycle recovery path without stalling repeated-cycle
+  retries on a fully idle chain.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sora_parliament_lifecycle_smoke.rs`
+  now submits governance permission grants and waits for permission visibility
+  via `FindPermissionsByAccountId` instead of relying on
+  `submit_all_blocking(...)` to observe final confirmation. The smoke now gets
+  past the previous 900-second stall at “grant governance proposal/enact
+  permissions to alice”.
+- Added focused helper coverage in the parliament smoke for permission-grant
+  grouping/deduplication.
+- Focused validation completed:
+  - `cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests:: -- --nocapture`
+  - `cargo test -p integration_tests --test nexus_and_streaming helper_tests::group_permission_grants_by_account_deduplicates_permissions -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming sora_parliament_lifecycle_smoke::sora_parliament_lifecycle_smoke -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_expands_and_contracts_lanes_in_localnet -- --test-threads=1 --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_repeats_expand_contract_cycles_in_localnet -- --test-threads=1 --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)" cargo test -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_ -- --nocapture`
 
 ## 2026-04-18 Follow-up: grouped Nexus/streaming fixture regeneration
 - Added `/Users/takemiyamakoto/dev/iroha/integration_tests/src/bin/refresh_nexus_streaming_fixtures.rs`,

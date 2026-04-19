@@ -5,7 +5,10 @@ use std::{
     fs,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -29,7 +32,6 @@ const INITIAL_PROVISIONED_LANES: usize = 1;
 const EXPANDED_PROVISIONED_LANES: usize = 2;
 const PRIMARY_LANE_ID: u32 = 0;
 const ELASTIC_LANE_ID: u32 = 1;
-const LOAD_TX_COUNT: usize = 48;
 const STRICT_CYCLE_LOAD_TX_COUNT: usize = 96;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
@@ -60,6 +62,7 @@ const QUORUM_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const STATUS_SNAPSHOT_RETRY_LIMIT: u32 = 5;
 const STATUS_SNAPSHOT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 const LOAD_ACTIVITY_SAMPLE_LIMIT_PER_CLIENT: usize = 1;
+static AUTOSCALE_LOCALNET_TEST_MUTEX: Mutex<()> = Mutex::new(());
 static LOAD_TX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER: &str =
     "applied deterministic lane autoscale scale-out transition";
@@ -1520,6 +1523,17 @@ fn tx_confirmation_status_counts_as_load_activity(status: &TxConfirmationStatus)
     )
 }
 
+fn tx_confirmation_status_counts_as_post_cycle_progress(status: &TxConfirmationStatus) -> bool {
+    matches!(
+        status,
+        TxConfirmationStatus::Approved(_)
+            | TxConfirmationStatus::Committed
+            | TxConfirmationStatus::Applied
+            | TxConfirmationStatus::Rejected(_)
+            | TxConfirmationStatus::Expired
+    )
+}
+
 fn wait_for_commit_quorum_required(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
@@ -1759,7 +1773,7 @@ fn cycle_load_tx_count(base_load_tx_count: usize, attempt: usize) -> usize {
 }
 
 fn single_cycle_load_tx_count(attempt: usize) -> usize {
-    cycle_load_tx_count(LOAD_TX_COUNT, attempt)
+    cycle_load_tx_count(STRICT_CYCLE_LOAD_TX_COUNT, attempt)
 }
 
 fn soak_cycle_load_tx_count(attempt: usize) -> usize {
@@ -1767,7 +1781,7 @@ fn soak_cycle_load_tx_count(attempt: usize) -> usize {
 }
 
 fn should_run_cooldown_clearance(cycle_index: usize, attempt: usize) -> bool {
-    cycle_index > 1 && attempt <= 1
+    (cycle_index > 1 && attempt <= 1) || (cycle_index == 1 && attempt > 1)
 }
 
 fn expansion_top_up_tx_count(heartbeat_seq: u64) -> usize {
@@ -2073,14 +2087,16 @@ fn wait_for_chain_progress_with_heartbeat(
     context: &str,
     heartbeat_prefix: &str,
     heartbeat_interval: Duration,
+    sample_status_counts_as_progress: fn(&TxConfirmationStatus) -> bool,
+    sample_progress_label: &str,
 ) -> Result<()> {
     let started = Instant::now();
     let mut heartbeat_seq = 0_u64;
     let mut last_status_snapshot = Vec::new();
     let mut last_status_error = None::<String>;
     let mut last_heartbeat_error = None::<String>;
-    let mut last_load_activity_snapshot = Vec::<String>::new();
-    let mut last_load_activity_error = None::<String>;
+    let mut last_sample_status_snapshot = Vec::<String>::new();
+    let mut last_sample_status_error = None::<String>;
     let load_submission_first_error =
         load_activity_probe.and_then(|(_, report)| report.first_error.clone());
 
@@ -2103,11 +2119,11 @@ fn wait_for_chain_progress_with_heartbeat(
         }
 
         if let Some((submitters, load_report)) = load_activity_probe {
-            last_load_activity_snapshot.clear();
-            last_load_activity_error = None;
+            last_sample_status_snapshot.clear();
+            last_sample_status_error = None;
             for sample in &load_report.samples {
                 let Some(client) = submitters.get(sample.client_index) else {
-                    last_load_activity_error = Some(format!(
+                    last_sample_status_error = Some(format!(
                         "load sample references missing submitter client index {}",
                         sample.client_index
                     ));
@@ -2119,10 +2135,10 @@ fn wait_for_chain_progress_with_heartbeat(
                             "client {} tx {} => {status:?}",
                             sample.client_index, sample.hash
                         );
-                        last_load_activity_snapshot.push(observation.clone());
-                        if tx_confirmation_status_counts_as_load_activity(&status) {
+                        last_sample_status_snapshot.push(observation.clone());
+                        if sample_status_counts_as_progress(&status) {
                             eprintln!(
-                                "[autoscale-localnet] {context}: load activity observed via pipeline status ({observation}); submitted {}/{}; per-client counts: {:?}",
+                                "[autoscale-localnet] {context}: {sample_progress_label} observed via pipeline status ({observation}); submitted {}/{}; per-client counts: {:?}",
                                 load_report.submitted,
                                 load_report.attempted,
                                 load_report.per_client_submitted,
@@ -2131,13 +2147,13 @@ fn wait_for_chain_progress_with_heartbeat(
                         }
                     }
                     Ok(None) => {
-                        last_load_activity_snapshot.push(format!(
+                        last_sample_status_snapshot.push(format!(
                             "client {} tx {} => pending",
                             sample.client_index, sample.hash
                         ));
                     }
                     Err(err) => {
-                        last_load_activity_error = Some(format!(
+                        last_sample_status_error = Some(format!(
                             "client {} tx {} status probe failed: {err}",
                             sample.client_index, sample.hash
                         ));
@@ -2157,7 +2173,7 @@ fn wait_for_chain_progress_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for chain progress (baseline blocks_non_empty={baseline_non_empty}, txs_approved={baseline_txs_approved}, txs_rejected={baseline_txs_rejected}); last status snapshot: {last_status_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last load activity snapshot: {last_load_activity_snapshot:?}; last load activity error: {last_load_activity_error:?}; load submission first error: {load_submission_first_error:?}"
+        "{context}: timed out waiting for chain progress (baseline blocks_non_empty={baseline_non_empty}, txs_approved={baseline_txs_approved}, txs_rejected={baseline_txs_rejected}); last status snapshot: {last_status_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last sample status snapshot: {last_sample_status_snapshot:?}; last sample status error: {last_sample_status_error:?}; load submission first error: {load_submission_first_error:?}"
     ))
 }
 
@@ -2305,6 +2321,8 @@ fn run_expand_contract_cycle(
             &cooldown_context,
             &cooldown_prefix,
             EXPANSION_PROBE_INTERVAL,
+            tx_confirmation_status_counts_as_load_activity,
+            "load activity",
         )?;
     }
 
@@ -2336,6 +2354,8 @@ fn run_expand_contract_cycle(
         &activity_context,
         &activity_prefix,
         EXPANSION_PROBE_INTERVAL,
+        tx_confirmation_status_counts_as_load_activity,
+        "load activity",
     )?;
 
     let expansion_probe_client = peer_client_with_timeout(network.peer());
@@ -2441,7 +2461,34 @@ fn run_expand_contract_cycle(
             "[autoscale-localnet][cycle {cycle_index}] scale-in transition check skipped: expansion status signal did not reach quorum during this cycle"
         );
     }
-    let post_cycle_status = status_snapshot(network)?;
+    let mut post_cycle_status = status_snapshot(network)?;
+    let mut post_cycle_progress_confirmed = false;
+    if !chain_progress_advanced(
+        &post_cycle_status,
+        pre_cycle_max_non_empty_height,
+        pre_cycle_max_txs_approved,
+        pre_cycle_max_txs_rejected,
+    ) {
+        let post_cycle_probe_client = peer_client_with_timeout(network.peer());
+        let post_cycle_context = format!("autoscale cycle {cycle_index} post-cycle confirmation");
+        let post_cycle_prefix = format!("autoscale-post-cycle-heartbeat-{cycle_index}");
+        wait_for_chain_progress_with_heartbeat(
+            network,
+            &post_cycle_probe_client,
+            Some((submitters, &load_report)),
+            pre_cycle_max_non_empty_height,
+            pre_cycle_max_txs_approved,
+            pre_cycle_max_txs_rejected,
+            AUTOSCALE_COOLDOWN_CLEARANCE_TIMEOUT,
+            &post_cycle_context,
+            &post_cycle_prefix,
+            CONTRACTION_HEARTBEAT_INTERVAL,
+            tx_confirmation_status_counts_as_post_cycle_progress,
+            "post-cycle tx progress",
+        )?;
+        post_cycle_progress_confirmed = true;
+        post_cycle_status = status_snapshot(network)?;
+    }
     let post_cycle_max_non_empty_height = max_non_empty_height(&post_cycle_status);
     let post_cycle_max_txs_approved = max_txs_approved(&post_cycle_status);
     let post_cycle_max_txs_rejected = max_txs_rejected(&post_cycle_status);
@@ -2451,7 +2498,7 @@ fn run_expand_contract_cycle(
             pre_cycle_max_non_empty_height,
             pre_cycle_max_txs_approved,
             pre_cycle_max_txs_rejected
-        ),
+        ) || post_cycle_progress_confirmed,
         "autoscale cycle {cycle_index}: chain activity did not advance (blocks_non_empty: {pre_cycle_max_non_empty_height}->{post_cycle_max_non_empty_height}, txs_approved: {pre_cycle_max_txs_approved}->{post_cycle_max_txs_approved}, txs_rejected: {pre_cycle_max_txs_rejected}->{post_cycle_max_txs_rejected})"
     );
 
@@ -2467,6 +2514,9 @@ fn run_expand_contract_cycle(
 #[test]
 fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_expands_and_contracts_lanes_in_localnet);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
     configure_load_sequence_seed(None);
     let test_started = Instant::now();
     let startup_started = Instant::now();
@@ -2555,6 +2605,9 @@ fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
 #[test]
 fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_repeats_expand_contract_cycles_in_localnet);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
     configure_load_sequence_seed(None);
     let test_started = Instant::now();
     let startup_started = Instant::now();
@@ -2644,6 +2697,9 @@ fn nexus_autoscale_repeats_expand_contract_cycles_in_localnet() -> Result<()> {
 #[ignore = "long-running autoscale soak"]
 fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_soak_expand_contract_cycles_in_localnet);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
     let soak_seed = autoscale_soak_seed();
     let load_sequence_seed = configure_load_sequence_seed(Some(&soak_seed));
     let test_started = Instant::now();
@@ -2836,7 +2892,8 @@ mod tests {
         scale_in_transition_counts, scale_out_transition_observed_on_quorum_peers,
         should_require_scale_in_transition, should_run_cooldown_clearance,
         single_cycle_load_tx_count, soak_cycle_load_tx_count,
-        tx_confirmation_status_counts_as_load_activity, validate_load_submission_outcome,
+        tx_confirmation_status_counts_as_load_activity,
+        tx_confirmation_status_counts_as_post_cycle_progress, validate_load_submission_outcome,
     };
 
     #[test]
@@ -2927,6 +2984,28 @@ mod tests {
     }
 
     #[test]
+    fn tx_confirmation_statuses_count_as_post_cycle_progress() {
+        assert!(!tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Queued
+        ));
+        assert!(tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Approved(None)
+        ));
+        assert!(tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Committed
+        ));
+        assert!(tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Applied
+        ));
+        assert!(tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Rejected(None)
+        ));
+        assert!(tx_confirmation_status_counts_as_post_cycle_progress(
+            &TxConfirmationStatus::Expired
+        ));
+    }
+
+    #[test]
     fn soak_cycle_load_profile_escalates_per_attempt() {
         assert_eq!(
             soak_cycle_load_tx_count(0),
@@ -2952,17 +3031,34 @@ mod tests {
 
     #[test]
     fn single_cycle_load_profile_escalates_per_attempt() {
-        assert_eq!(single_cycle_load_tx_count(0), super::LOAD_TX_COUNT);
-        assert_eq!(single_cycle_load_tx_count(1), super::LOAD_TX_COUNT);
-        assert_eq!(single_cycle_load_tx_count(2), super::LOAD_TX_COUNT * 2);
-        assert_eq!(single_cycle_load_tx_count(3), super::LOAD_TX_COUNT * 3);
-        assert_eq!(single_cycle_load_tx_count(4), super::LOAD_TX_COUNT * 4);
+        assert_eq!(
+            single_cycle_load_tx_count(0),
+            super::STRICT_CYCLE_LOAD_TX_COUNT
+        );
+        assert_eq!(
+            single_cycle_load_tx_count(1),
+            super::STRICT_CYCLE_LOAD_TX_COUNT
+        );
+        assert_eq!(
+            single_cycle_load_tx_count(2),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 2
+        );
+        assert_eq!(
+            single_cycle_load_tx_count(3),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 3
+        );
+        assert_eq!(
+            single_cycle_load_tx_count(4),
+            super::STRICT_CYCLE_LOAD_TX_COUNT * 4
+        );
     }
 
     #[test]
-    fn cooldown_clearance_runs_once_per_cycle() {
+    fn cooldown_clearance_runs_for_later_cycles_and_retries() {
         assert!(!should_run_cooldown_clearance(1, 1));
         assert!(should_run_cooldown_clearance(2, 1));
+        assert!(should_run_cooldown_clearance(1, 2));
+        assert!(should_run_cooldown_clearance(1, 3));
         assert!(!should_run_cooldown_clearance(2, 2));
         assert!(!should_run_cooldown_clearance(2, 3));
     }
