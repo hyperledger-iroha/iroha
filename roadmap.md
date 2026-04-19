@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Sumeragi DA view-zero missing-leader recovery):
+Sumeragi's DA-enabled empty-frontier `MissingQc` path now preserves the first
+view-0 timeout as a recovery-arm event, then allows the same controller to
+rotate once it reaches `RotateArmed`. This removes the stall where a killed
+view-0 leader could leave commit QC stuck below the next height indefinitely.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_da_view_zero_after_missing_qc_recovery_is_armed -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture`
+    (`1 passed`; 144.39s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_view_change_lock_convergence -- --nocapture`
+    (`1 passed`; 50.62s)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+- open work after this slice:
+  - none for the reported
+    `sumeragi_idle_view_change_recovers_after_leader_shutdown` and
+    `sumeragi_view_change_lock_convergence` failures
+
 Latest sync (2026-04-19 big integer numeric coverage):
 `iroha_primitives` now has broader focused coverage around the variable-width
 numeric primitives. `BigInt` tests cover helper semantics, checked subtraction
