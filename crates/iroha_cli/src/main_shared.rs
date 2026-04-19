@@ -2970,6 +2970,7 @@ mod asset {
                 to: to.to_string(),
                 quantity: Numeric::new(5, 0),
                 ensure_destination,
+                no_wait: false,
             };
             (args, to, asset_id)
         }
