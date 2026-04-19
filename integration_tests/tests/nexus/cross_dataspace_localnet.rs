@@ -2858,20 +2858,37 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, Algorithm, KeyPair, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
-        bounded_observer_request_timeout, cross_dataspace_gas_account_id,
-        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
-        expected_lane_binding_for_peer, is_inconclusive_blocking_submit_error,
-        is_inconclusive_committed_outcome_error, nexus_fee_asset_definition_id,
-        parse_positive_usize_override, render_error_with_debug, routed_header_string,
-        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
+        ALICE_ID, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX, KeyPair,
+        NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
+        TOTAL_PEERS, VALIDATORS_PER_LANE, bounded_observer_request_timeout,
+        cross_dataspace_gas_account_id, duration_min_avg_max_secs,
+        expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
+        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
+        render_error_with_debug, routed_header_string, stake_asset_definition_id,
+        stake_asset_id_literal, validator_authority_account_for_peer,
     };
+    use iroha::data_model::da::commitment::{DaProofPolicyBundle, DaProofScheme};
     use norito::json::Value as JsonValue;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::{
         fmt::{Debug, Display, Formatter, Result as FmtResult},
+        panic,
         time::{Duration, Instant},
     };
+
+    fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
+        (0..peer_count)
+            .map(|index| {
+                let mut seed = vec![0_u8; 32];
+                seed[0] = 0xD1;
+                seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+                let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+                PeerId::new(key_pair.public_key().clone())
+            })
+            .collect()
+    }
 
     #[test]
     fn parse_positive_usize_override_uses_positive_input() {
@@ -2898,6 +2915,62 @@ mod tests {
             fee_definition_id.to_string(),
             "stake and fee helpers should not collapse cross-dataspace asset domains"
         );
+    }
+
+    #[test]
+    fn multilane_da_policy_bundle_preserves_lane_dataspace_order() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
+
+        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.policy_hash, expected_hash);
+        assert_eq!(bundle.policies.len(), 3);
+        assert_eq!(bundle.policies[0].lane_id.as_u32(), NEXUS_LANE_INDEX);
+        assert_eq!(bundle.policies[0].dataspace_id.as_u64(), NEXUS_ID_U64);
+        assert_eq!(bundle.policies[0].alias, "lane-nexus");
+        assert_eq!(bundle.policies[0].proof_scheme, DaProofScheme::MerkleSha256);
+        assert_eq!(bundle.policies[1].lane_id.as_u32(), DS1_LANE_INDEX);
+        assert_eq!(bundle.policies[1].dataspace_id.as_u64(), DS1_ID_U64);
+        assert_eq!(bundle.policies[1].alias, "lane-ds1");
+        assert_eq!(bundle.policies[2].lane_id.as_u32(), DS2_LANE_INDEX);
+        assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
+        assert_eq!(bundle.policies[2].alias, "lane-ds2");
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_covers_all_lane_buckets() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].len(), 12 + TOTAL_PEERS * 5);
+        assert_eq!(
+            expected_lane_binding_for_peer(0, &topology[0]).peer_id,
+            topology[0].to_string()
+        );
+        assert_eq!(
+            expected_lane_binding_for_peer(VALIDATORS_PER_LANE, &topology[VALIDATORS_PER_LANE])
+                .peer_id,
+            topology[VALIDATORS_PER_LANE].to_string()
+        );
+        assert_eq!(
+            expected_lane_binding_for_peer(
+                VALIDATORS_PER_LANE * 2,
+                &topology[VALIDATORS_PER_LANE * 2],
+            )
+            .peer_id,
+            topology[VALIDATORS_PER_LANE * 2].to_string()
+        );
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_rejects_wrong_peer_count() {
+        let topology = deterministic_topology(TOTAL_PEERS - 1);
+
+        let result =
+            panic::catch_unwind(|| npos_multilane_genesis_post_topology_transactions(&topology));
+
+        assert!(result.is_err());
     }
 
     #[test]

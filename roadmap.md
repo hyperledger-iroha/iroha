@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 calendar boundary coverage):
+`crates/iroha_primitives/src/calendar.rs` now directly covers UTC
+month-boundary edge cases: end-of-day anchor times, invalid anchor days across
+public helper entry points, previous-period overflow at the Unix epoch,
+year-boundary month transitions, invalid month rejection, leap-century February
+lengths, civil-date roundtrips, and invalid day/month conversion errors.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/calendar.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives calendar::tests -- --nocapture` (`15 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
 Latest sync (2026-04-19 primitive container API coverage):
 `iroha_primitives` now has broader focused coverage around the small container
 wrappers. `UniqueVec` tests cover duplicate ownership, empty/trailing-comma
