@@ -195,6 +195,16 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_next_u32_replays() {
+        let seed = HedgedRngSeed::from_entropy([0x43; 32]);
+        let mut first = deterministic_chacha20_rng(seed.clone(), b"next-u32");
+        let mut second = deterministic_chacha20_rng(seed, b"next-u32");
+
+        assert_eq!(first.next_u32(), second.next_u32());
+        assert_eq!(first.next_u32(), second.next_u32());
+    }
+
+    #[test]
     fn entropy_status_affects_stream() {
         let seed = HedgedRngSeed::from_entropy([0x24; 32]);
         let os = [0x55; 32];
@@ -270,5 +280,29 @@ mod tests {
         let seed = HedgedRngSeed::from_entropy(raw);
 
         assert_eq!(seed.as_bytes(), &raw);
+    }
+
+    #[test]
+    fn os_seed_and_rng_constructors_produce_streams() {
+        let seed = HedgedRngSeed::from_os().expect("OS RNG seed should be available");
+        assert_eq!(seed.as_bytes().len(), 32);
+
+        let mut rng = hedged_chacha20_rng_from_os(b"os-constructor")
+            .expect("hedged RNG from OS seed should construct");
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+
+        assert!(matches!(
+            rng.entropy_status(),
+            HedgedEntropyStatus::MixedOsEntropy | HedgedEntropyStatus::OsEntropyUnavailable
+        ));
+    }
+
+    #[test]
+    fn rng_error_display_is_stable() {
+        assert_eq!(
+            RngError.to_string(),
+            "operating-system RNG failed while drawing hedged RNG seed material"
+        );
     }
 }

@@ -119,6 +119,21 @@ mod mldsa_tests {
     }
 
     #[test]
+    fn mldsa_signature_payload_bytes_roundtrip() {
+        let kp = KeyPair::from_seed(
+            b"ml-dsa-signature-payload-roundtrip".to_vec(),
+            Algorithm::MlDsa,
+        );
+        let message = b"ml-dsa signature payload roundtrip";
+        let signature = Signature::new(kp.private_key(), message);
+
+        let decoded = Signature::from_bytes(signature.payload());
+
+        assert_eq!(decoded.payload(), signature.payload());
+        assert!(decoded.verify(kp.public_key(), message).is_ok());
+    }
+
+    #[test]
     fn mldsa_key_parsers_reject_invalid_lengths() {
         let public = PublicKey::from_bytes(Algorithm::MlDsa, &[0u8; 8]);
         let private = PrivateKey::from_bytes(Algorithm::MlDsa, &[0u8; 8]);
@@ -139,6 +154,16 @@ mod mldsa_tests {
     }
 
     #[test]
+    fn mldsa_public_key_bytes_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-public-key-bytes".to_vec(), Algorithm::MlDsa);
+        let (algorithm, payload) = kp.public_key().to_bytes();
+
+        let decoded = PublicKey::from_bytes(algorithm, payload).expect("valid ML-DSA public key");
+
+        assert_eq!(decoded, kp.public_key().clone());
+    }
+
+    #[test]
     fn malformed_mldsa_prefixed_public_key_is_rejected() {
         let parsed = "ml-dsa:not-hex".parse::<PublicKey>();
 
@@ -154,6 +179,21 @@ mod mldsa_tests {
             PrivateKey::from_bytes(algorithm, &secret_bytes).expect("valid ML-DSA private key");
 
         assert_eq!(decoded, kp.private_key().clone());
+    }
+
+    #[test]
+    fn mldsa_public_and_private_key_hex_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-key-hex-roundtrip".to_vec(), Algorithm::MlDsa);
+        let (public_algorithm, public_bytes) = kp.public_key().to_bytes();
+        let (private_algorithm, private_bytes) = kp.private_key().to_bytes();
+
+        let public =
+            PublicKey::from_hex(public_algorithm, hex::encode(public_bytes)).expect("public hex");
+        let private = PrivateKey::from_hex(private_algorithm, hex::encode(&private_bytes))
+            .expect("private hex");
+
+        assert_eq!(public, kp.public_key().clone());
+        assert_eq!(private, kp.private_key().clone());
     }
 
     #[test]
