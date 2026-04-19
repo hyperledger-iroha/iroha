@@ -7911,6 +7911,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_drains_post_tick_payloads() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
