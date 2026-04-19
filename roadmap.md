@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 big integer numeric coverage):
+`iroha_primitives` now has broader focused coverage around the variable-width
+numeric primitives. `BigInt` tests cover helper semantics, checked subtraction
+and division, zero-divisor rejection, `pow10` bounds, two's-complement overflow
+rejection, direct decode consumed lengths and short payload errors, plus JSON
+roundtrip and invalid-field behavior. `BigNumeric` tests cover constructor and
+accessor paths, scale-aligned addition, negative addition, parse errors, JSON
+error fields, direct decode consumed lengths, and oversized decoded-scale
+rejection.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/bigint.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/big_numeric.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives bigint::tests` (`13 passed`)
+  - `cargo test -p iroha_primitives big_numeric::tests` (`10 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`200 passed`; `numeric_inspect`
+    `1 passed`; doctests `1 passed; 1 ignored`)
+  - `git diff --check`
+
 Latest sync (2026-04-19 calendar boundary coverage):
 `crates/iroha_primitives/src/calendar.rs` now directly covers UTC
 month-boundary edge cases: end-of-day anchor times, invalid anchor days across
@@ -132,20 +156,36 @@ zero remaining-client timeout slicing, unrelated fallback phrase negatives, and
 unknown fanout route-source rejection. This pass adds deterministic fixture
 coverage for stake/fee asset helper separation, Alice-backed gas-account
 selection, validator authority derivation, and expected lane binding
-construction.
+construction. The latest coverage also pins generated DA proof-policy
+lane/dataspace ordering, policy-hash determinism and order sensitivity, full
+post-topology genesis instruction counts, deterministic genesis output for a
+stable roster, representative lane-bucket bindings, and rejection of incomplete
+topology rosters. The newest parser-focused tests cover lane-validator snapshot
+active/inactive filtering, total preservation, and malformed response failures
+for non-object payloads, missing totals, missing item arrays, missing validator
+literals, missing peer IDs, missing status fields, and non-object validator
+entries. The newest helper assertions also cover query-only root-path routed
+contexts, local/missing route-source rejection in the proxy-only fanout helper,
+the wrong-ingress raw versioned signed-transaction envelope used for Torii
+submission, non-array permission/manifest/account-asset collection rejection,
+manifest status-field shape filtering, signed/decimal-like invalid
+soak-iteration overrides, exact divided observer timeout slices between the
+floor and cap, non-POST HTTP wording that must stay conclusive, and
+rejection-reason rendering that appends debug details when display text is
+generic.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`24 passed; 212 filtered out`)
+    (`34 passed; 222 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`15 passed; 221 filtered out`)
+    (`25 passed; 231 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 Latest sync (2026-04-19 ConstVec manual fallback coverage):
