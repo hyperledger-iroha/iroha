@@ -1493,10 +1493,18 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 #[cfg(test)]
 mod tests {
     use super::{
-        RoutedJsonResponse, routed_json_empty_body_is_transient, routed_json_response_is_transient,
+        AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DataSpaceId, DomainId, LaneId,
+        RoutedJsonResponse, account_assets_response_contains, expect_proxy_fanout_headers,
+        expect_proxy_route_headers, manifest_response_contains_dataspace,
+        manifest_response_contains_status, permission_response_contains, routed_header_string,
+        routed_json_empty_body_is_transient, routed_json_response_is_transient,
+        routed_response_context,
     };
     use norito::json::Value as JsonValue;
-    use reqwest::StatusCode as HttpStatusCode;
+    use reqwest::{
+        StatusCode as HttpStatusCode,
+        header::{HeaderMap, HeaderValue},
+    };
 
     fn routed_json_response(
         status: HttpStatusCode,
@@ -1513,10 +1521,371 @@ mod tests {
         }
     }
 
+    fn routed_json_response_with_route(
+        routed_by: Option<&str>,
+        route_lane_id: Option<&str>,
+        route_dataspace_id: Option<&str>,
+    ) -> RoutedJsonResponse {
+        RoutedJsonResponse {
+            status: HttpStatusCode::OK,
+            body: JsonValue::Null,
+            body_text: String::new(),
+            routed_by: routed_by.map(ToOwned::to_owned),
+            route_lane_id: route_lane_id.map(ToOwned::to_owned),
+            route_dataspace_id: route_dataspace_id.map(ToOwned::to_owned),
+        }
+    }
+
+    fn ds2_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("nexus", "universal").expect("asset domain"),
+            "ds2coin".parse().expect("asset name"),
+        )
+    }
+
+    #[test]
+    fn routed_response_context_includes_path_query_and_route_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iroha-routed-by", HeaderValue::from_static("proxy"));
+        headers.insert("x-iroha-route-lane-id", HeaderValue::from_static("2"));
+        headers.insert("x-iroha-route-dataspace-id", HeaderValue::from_static("7"));
+        let path_segments = vec!["v1".to_owned(), "transactions".to_owned()];
+        let query_pairs = vec![
+            ("account".to_owned(), "alice".to_owned()),
+            ("dataspace".to_owned(), "2".to_owned()),
+        ];
+
+        let context = routed_response_context(
+            HttpStatusCode::ACCEPTED,
+            &headers,
+            &path_segments,
+            &query_pairs,
+        );
+
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-routed-by"),
+            Some("proxy".to_owned())
+        );
+        assert!(context.contains("status=202 Accepted"));
+        assert!(context.contains("path=/v1/transactions?account=alice&dataspace=2"));
+        assert!(context.contains(r#"routed_by=Some("proxy")"#));
+        assert!(context.contains(r#"route_lane_id=Some("2")"#));
+        assert!(context.contains(r#"route_dataspace_id=Some("7")"#));
+    }
+
+    #[test]
+    fn routed_response_context_formats_root_path_without_query_or_headers() {
+        let context = routed_response_context(HttpStatusCode::OK, &HeaderMap::new(), &[], &[]);
+
+        assert!(context.contains("status=200 OK"));
+        assert!(context.contains("path=/"));
+        assert!(context.contains("routed_by=None"));
+        assert!(context.contains("route_lane_id=None"));
+        assert!(context.contains("route_dataspace_id=None"));
+    }
+
+    #[test]
+    fn routed_header_string_ignores_non_utf8_header_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-iroha-route-lane-id",
+            HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
+        );
+
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-route-lane-id"),
+            None
+        );
+    }
+
+    #[test]
+    fn expect_proxy_route_headers_accepts_exact_lane_dataspace() {
+        let response = routed_json_response_with_route(
+            Some("proxy"),
+            Some(&DS1_LANE_INDEX.to_string()),
+            Some(&DS1_ID_U64.to_string()),
+        );
+
+        expect_proxy_route_headers(
+            &response,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "ds1 routed response",
+        )
+        .expect("matching route headers should pass");
+
+        let wrong_dataspace = routed_json_response_with_route(
+            Some("proxy"),
+            Some(&DS1_LANE_INDEX.to_string()),
+            Some(&DS2_ID_U64.to_string()),
+        );
+        let err = expect_proxy_route_headers(
+            &wrong_dataspace,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "ds1 routed response",
+        )
+        .expect_err("wrong dataspace header should fail");
+
+        assert!(err.to_string().contains("expected routed dataspace 1"));
+    }
+
+    #[test]
+    fn expect_proxy_route_headers_rejects_missing_proxy_and_wrong_lane() {
+        let local_response = routed_json_response_with_route(
+            Some("local"),
+            Some(&DS1_LANE_INDEX.to_string()),
+            Some(&DS1_ID_U64.to_string()),
+        );
+        let err = expect_proxy_route_headers(
+            &local_response,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "local response",
+        )
+        .expect_err("local response should not satisfy proxy route headers");
+        assert!(err.to_string().contains("expected proxied read"));
+
+        let wrong_lane = routed_json_response_with_route(
+            Some("proxy"),
+            Some(&(DS1_LANE_INDEX + 1).to_string()),
+            Some(&DS1_ID_U64.to_string()),
+        );
+        let err = expect_proxy_route_headers(
+            &wrong_lane,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "wrong lane response",
+        )
+        .expect_err("wrong lane header should fail");
+        assert!(err.to_string().contains("expected routed lane 1"));
+    }
+
+    #[test]
+    fn expect_proxy_fanout_headers_requires_proxy_without_singular_route() {
+        let response = routed_json_response_with_route(Some("proxy"), None, None);
+
+        expect_proxy_fanout_headers(&response, "fanout permissions")
+            .expect("fanout response without singular route should pass");
+
+        let singular_route =
+            routed_json_response_with_route(Some("proxy"), Some(&DS1_LANE_INDEX.to_string()), None);
+        let err = expect_proxy_fanout_headers(&singular_route, "fanout permissions")
+            .expect_err("fanout response with singular route should fail");
+
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose singular route lane")
+        );
+
+        let singular_dataspace =
+            routed_json_response_with_route(Some("proxy"), None, Some(&DS2_ID_U64.to_string()));
+        let err = expect_proxy_fanout_headers(&singular_dataspace, "fanout permissions")
+            .expect_err("fanout response with singular dataspace should fail");
+
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose singular route dataspace")
+        );
+    }
+
+    #[test]
+    fn permission_response_contains_matches_name_and_dataspace_payload() {
+        let body = norito::json!({
+            "items": [
+                {
+                    "name": "CanPublishSpaceDirectoryManifest",
+                    "payload": { "dataspace": DS2_ID_U64 },
+                },
+                {
+                    "name": "OtherPermission",
+                    "payload": { "dataspace": DS1_ID_U64 },
+                },
+            ],
+        });
+
+        assert!(
+            permission_response_contains(
+                &body,
+                "CanPublishSpaceDirectoryManifest",
+                |payload| payload.get("dataspace").and_then(JsonValue::as_u64) == Some(DS2_ID_U64),
+                "permission response",
+            )
+            .expect("permission response should decode")
+        );
+        assert!(
+            !permission_response_contains(
+                &body,
+                "CanPublishSpaceDirectoryManifest",
+                |payload| payload.get("dataspace").and_then(JsonValue::as_u64) == Some(DS1_ID_U64),
+                "permission response",
+            )
+            .expect("permission response should decode")
+        );
+
+        let err = permission_response_contains(
+            &norito::json!({}),
+            "CanPublishSpaceDirectoryManifest",
+            |_| true,
+            "permission response",
+        )
+        .expect_err("missing permission items should fail");
+        assert!(
+            err.to_string()
+                .contains("permission response missing items array")
+        );
+    }
+
+    #[test]
+    fn permission_response_contains_ignores_wrong_names_and_missing_payloads() {
+        let body = norito::json!({
+            "items": [
+                { "name": "CanPublishSpaceDirectoryManifest" },
+                { "name": "OtherPermission", "payload": { "dataspace": DS2_ID_U64 } },
+            ],
+        });
+
+        assert!(
+            !permission_response_contains(
+                &body,
+                "CanPublishSpaceDirectoryManifest",
+                |payload| payload.get("dataspace").and_then(JsonValue::as_u64) == Some(DS2_ID_U64),
+                "permission response",
+            )
+            .expect("permission response should decode")
+        );
+    }
+
+    #[test]
+    fn manifest_response_helpers_match_dataspace_and_status() {
+        let body = norito::json!({
+            "manifests": [
+                { "dataspace_id": DS1_ID_U64, "status": "Pending" },
+                { "dataspace_id": DS2_ID_U64, "status": "Active" },
+            ],
+        });
+
+        assert!(
+            manifest_response_contains_status(
+                &body,
+                DataSpaceId::new(DS2_ID_U64),
+                "Active",
+                "manifest response",
+            )
+            .expect("manifest response should decode")
+        );
+        assert!(
+            !manifest_response_contains_status(
+                &body,
+                DataSpaceId::new(DS1_ID_U64),
+                "Active",
+                "manifest response",
+            )
+            .expect("manifest response should decode")
+        );
+        assert!(
+            manifest_response_contains_dataspace(
+                &body,
+                DataSpaceId::new(DS1_ID_U64),
+                "manifest response",
+            )
+            .expect("manifest response should decode")
+        );
+
+        let err = manifest_response_contains_dataspace(
+            &norito::json!({}),
+            DataSpaceId::new(DS1_ID_U64),
+            "manifest response",
+        )
+        .expect_err("missing manifest array should fail");
+        assert!(
+            err.to_string()
+                .contains("manifest response missing manifests array")
+        );
+    }
+
+    #[test]
+    fn manifest_response_contains_status_requires_manifest_array() {
+        let err = manifest_response_contains_status(
+            &norito::json!({ "items": [] }),
+            DataSpaceId::new(DS2_ID_U64),
+            "Active",
+            "manifest response",
+        )
+        .expect_err("missing manifest array should fail");
+
+        assert!(
+            err.to_string()
+                .contains("manifest response missing manifests array")
+        );
+    }
+
+    #[test]
+    fn account_assets_response_contains_matches_asset_definition_literal() {
+        let asset_definition_id = ds2_asset_definition_id();
+        let asset_literal = asset_definition_id.to_string();
+        let other_asset_literal = AssetDefinitionId::new(
+            DomainId::try_new("nexus", "universal").expect("asset domain"),
+            "othercoin".parse().expect("asset name"),
+        )
+        .to_string();
+        let body = norito::json!({
+            "items": [
+                { "asset": asset_literal },
+            ],
+        });
+        let other_body = norito::json!({
+            "items": [
+                { "asset": other_asset_literal },
+            ],
+        });
+
+        assert!(
+            account_assets_response_contains(&body, &asset_definition_id, "account assets")
+                .expect("account assets response should decode")
+        );
+        assert!(
+            !account_assets_response_contains(&other_body, &asset_definition_id, "account assets")
+                .expect("account assets response should decode")
+        );
+
+        let err =
+            account_assets_response_contains(&norito::json!({}), &asset_definition_id, "assets")
+                .expect_err("missing account assets items should fail");
+        assert!(
+            err.to_string()
+                .contains("account assets response missing items array")
+        );
+    }
+
+    #[test]
+    fn account_assets_response_contains_ignores_non_string_assets() {
+        let asset_definition_id = ds2_asset_definition_id();
+        let body = norito::json!({
+            "items": [
+                { "asset": DS2_ID_U64 },
+                { "not_asset": asset_definition_id.to_string() },
+            ],
+        });
+
+        assert!(
+            !account_assets_response_contains(&body, &asset_definition_id, "account assets")
+                .expect("account assets response should decode")
+        );
+    }
+
     #[test]
     fn routed_json_empty_body_is_transient_for_empty_timeout_statuses() {
         assert!(routed_json_empty_body_is_transient(
             HttpStatusCode::REQUEST_TIMEOUT,
+            b""
+        ));
+        assert!(routed_json_empty_body_is_transient(
+            HttpStatusCode::BAD_GATEWAY,
+            b""
+        ));
+        assert!(routed_json_empty_body_is_transient(
+            HttpStatusCode::SERVICE_UNAVAILABLE,
             b""
         ));
         assert!(routed_json_empty_body_is_transient(
