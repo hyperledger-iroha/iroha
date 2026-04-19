@@ -2,6 +2,143 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Mochi readiness status decoding):
+Mochi now accepts framed Norito `/status` payloads in the Torii client and
+still falls back to the older bare-payload decode path, which fixes the mock
+Torii readiness smoke after the status endpoint started returning
+`norito::to_bytes(...)` output. The same pass also preserves the first decoded
+block/event stream receiver so startup-time decode failures are surfaced to the
+initial readiness subscriber instead of being dropped and later reported as
+timeouts.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/torii.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core fetch_status_decodes_ -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p mochi-integration --test readiness_smoke -- --nocapture`
+    (`3 passed`)
+- open work after this slice:
+  - rerun broader Mochi or workspace validation during a longer clean window
+
+Latest sync (2026-04-19 Mochi telemetry status build metadata):
+The Mochi mock/status test fixtures now initialize the new
+`TelemetryStatus.build` field everywhere they still used exhaustive struct
+literals, which keeps the integration mock Torii server and the `mochi-core` /
+`mochi-ui` test targets aligned with the expanded telemetry schema. The same
+pass also updates the `mochi-core` smoke-event tests to use
+`DataSpaceId::UNIVERSAL`, matching the current dataspace ID API.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-integration/src/mock_torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/torii.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-ui-egui/src/gui.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo check -p mochi-integration`
+  - `cargo check -p mochi-core --tests`
+  - `cargo check -p mochi-ui --tests`
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
+
+Latest sync (2026-04-19 Sumeragi DA view-zero missing-leader recovery):
+Sumeragi's DA-enabled empty-frontier `MissingQc` path now preserves the first
+view-0 timeout as a recovery-arm event, then allows the same controller to
+rotate once it reaches `RotateArmed`. This removes the stall where a killed
+view-0 leader could leave commit QC stuck below the next height indefinitely.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_da_view_zero_after_missing_qc_recovery_is_armed -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture`
+    (`1 passed`; 144.39s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_view_change_lock_convergence -- --nocapture`
+    (`1 passed`; 50.62s)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+- open work after this slice:
+  - none for the reported
+    `sumeragi_idle_view_change_recovers_after_leader_shutdown` and
+    `sumeragi_view_change_lock_convergence` failures
+
+Latest sync (2026-04-19 big integer numeric coverage):
+`iroha_primitives` now has broader focused coverage around the variable-width
+numeric primitives. `BigInt` tests cover helper semantics, checked subtraction
+and division, zero-divisor rejection, `pow10` bounds, two's-complement overflow
+rejection, direct decode consumed lengths and short payload errors, plus JSON
+roundtrip and invalid-field behavior. `BigNumeric` tests cover constructor and
+accessor paths, scale-aligned addition, negative addition, parse errors, JSON
+error fields, direct decode consumed lengths, and oversized decoded-scale
+rejection.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/bigint.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/big_numeric.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives bigint::tests` (`13 passed`)
+  - `cargo test -p iroha_primitives big_numeric::tests` (`10 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`200 passed`; `numeric_inspect`
+    `1 passed`; doctests `1 passed; 1 ignored`)
+  - `git diff --check`
+
+Latest sync (2026-04-19 calendar boundary coverage):
+`crates/iroha_primitives/src/calendar.rs` now directly covers UTC
+month-boundary edge cases: end-of-day anchor times, invalid anchor days across
+public helper entry points, previous-period overflow at the Unix epoch,
+year-boundary month transitions, invalid month rejection, leap-century February
+lengths, civil-date roundtrips, and invalid day/month conversion errors.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/calendar.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives calendar::tests -- --nocapture` (`15 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
+Latest sync (2026-04-19 Python RWA classmethod fixtures):
+The Python Rust binding RWA classmethod tests now use canonical
+`hash$domain.dataspace` literals (`commodities.universal`) for transfer,
+parent, controls, and scalar RWA operations. The register payload also supplies
+the fully qualified domain value expected by `DomainId`, and the merge fixture
+now passes valid JSON to `json.loads` instead of an escaped-brace Rust format
+template.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_python_rs rwa -- --nocapture` (`4 passed`)
+  - `cargo test -p iroha_python_rs -- --nocapture` (`33 passed`)
+- open work after this slice:
+  - none for the reported Python RWA classmethod failures
+
 Latest sync (2026-04-19 SoraNet gateway billing fixture asset IDs):
 The default SoraNet gateway M1 and M2 bundle configs now pass the canonical
 billing asset definition ID (`4cuvDVPuLBKJyN6dPbRQhmLh68sU`) into the xtask
@@ -11,10 +148,10 @@ matches the current `AssetDefinitionId` parser contract used by
 failing before it can emit summaries.
 
 - shipped in:
-  - `/Users/takemiyamakoto/dev/iroha/configs/soranet/gateway_m1/alpha_config.json`
-  - `/Users/takemiyamakoto/dev/iroha/configs/soranet/gateway_m2/beta_config.json`
-  - `/Users/takemiyamakoto/dev/iroha/status.md`
-  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/configs/soranet/gateway_m1/alpha_config.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/configs/soranet/gateway_m2/beta_config.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo test -p xtask --test soranet_gateway_m1 soranet_gateway_m1_bundle_is_emitted -- --nocapture`
   - `cargo test -p xtask --test soranet_gateway_m2 soranet_gateway_m2_pipeline_emits_beta_and_ga -- --nocapture`
@@ -113,20 +250,36 @@ zero remaining-client timeout slicing, unrelated fallback phrase negatives, and
 unknown fanout route-source rejection. This pass adds deterministic fixture
 coverage for stake/fee asset helper separation, Alice-backed gas-account
 selection, validator authority derivation, and expected lane binding
-construction.
+construction. The latest coverage also pins generated DA proof-policy
+lane/dataspace ordering, policy-hash determinism and order sensitivity, full
+post-topology genesis instruction counts, deterministic genesis output for a
+stable roster, representative lane-bucket bindings, and rejection of incomplete
+topology rosters. The newest parser-focused tests cover lane-validator snapshot
+active/inactive filtering, total preservation, and malformed response failures
+for non-object payloads, missing totals, missing item arrays, missing validator
+literals, missing peer IDs, missing status fields, and non-object validator
+entries. The newest helper assertions also cover query-only root-path routed
+contexts, local/missing route-source rejection in the proxy-only fanout helper,
+the wrong-ingress raw versioned signed-transaction envelope used for Torii
+submission, non-array permission/manifest/account-asset collection rejection,
+manifest status-field shape filtering, signed/decimal-like invalid
+soak-iteration overrides, exact divided observer timeout slices between the
+floor and cap, non-POST HTTP wording that must stay conclusive, and
+rejection-reason rendering that appends debug details when display text is
+generic.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
-  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`24 passed; 212 filtered out`)
+    (`34 passed; 222 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`15 passed; 221 filtered out`)
+    (`25 passed; 231 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 Latest sync (2026-04-19 ConstVec manual fallback coverage):

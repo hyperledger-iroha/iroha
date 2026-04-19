@@ -5584,9 +5584,14 @@ pub(crate) mod valid {
                                     metrics.inc_pipeline_sig_bls_result(aggregate_lane, true, ok);
                                 }
                                 if !ok {
-                                    // Bisection within the same-message group
-                                    group_fail = bisect_same(slc.clone());
-                                    break;
+                                    // Bisection within the same-message group. If every
+                                    // individual signature passes, the aggregate was not usable
+                                    // for this group (for example, duplicate signer keys); keep
+                                    // checking the remaining independent groups.
+                                    if let Some(idx) = bisect_same(slc.clone()) {
+                                        group_fail = Some(idx);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -9900,7 +9905,7 @@ pub(crate) mod valid {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl AsMut<SignedBlock> for ValidBlock {
         fn as_mut(&mut self) -> &mut SignedBlock {
             &mut self.block
@@ -12968,7 +12973,7 @@ mod commit {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     impl AsMut<SignedBlock> for CommittedBlock {
         fn as_mut(&mut self) -> &mut SignedBlock {
             self.0.as_mut()

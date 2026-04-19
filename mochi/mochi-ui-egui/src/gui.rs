@@ -15280,6 +15280,7 @@ mod tests {
         let now = Instant::now();
 
         let initial = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 10,
             blocks_non_empty: 8,
@@ -15323,6 +15324,7 @@ mod tests {
         assert!(membership_summary.contains("hash ABABABABABABABAB..."));
 
         let updated = TelemetryStatus {
+            build: Default::default(),
             peers: 3,
             blocks: 11,
             blocks_non_empty: 9,
@@ -15389,6 +15391,7 @@ mod tests {
         let now = Instant::now();
 
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 10,
             blocks_non_empty: 8,

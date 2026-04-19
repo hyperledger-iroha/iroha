@@ -2,6 +2,110 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Mochi readiness status decoding
+- `mochi/mochi-core/src/torii.rs` now decodes `/status` responses through the
+  framed Norito path first and falls back to the legacy bare-payload decoder,
+  so Mochi accepts the mock Torii status payload emitted by
+  `norito::to_bytes(...)` without regressing older fixtures.
+- The same file now keeps the first decoded block/event stream receiver alive
+  for the first subscriber, preserving startup-time decode failures instead of
+  dropping them before readiness smoke attaches and timing out later.
+- `mochi/mochi-core/src/torii.rs` also adds focused coverage for framed
+  `/status` payload decoding alongside the existing bare-payload test.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core fetch_status_decodes_ -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p mochi-integration --test readiness_smoke -- --nocapture`
+    (`3 passed`)
+
+## 2026-04-19 Follow-up: Mochi telemetry status build metadata
+- `mochi/mochi-integration/src/mock_torii.rs` now seeds the new
+  `TelemetryStatus.build` field when constructing the default mocked `/status`
+  payload, keeping the mock Torii fixture aligned with the current telemetry
+  schema.
+- `mochi/mochi-core/src/torii.rs` and `mochi/mochi-ui-egui/src/gui.rs` now do
+  the same in their explicit test-only `TelemetryStatus` literals, and the
+  smoke-event tests in `mochi-core` now use `DataSpaceId::UNIVERSAL`, matching
+  the current dataspace ID API.
+- Focused validation for this slice:
+  - `cargo check -p mochi-integration`
+  - `cargo check -p mochi-core --tests`
+  - `cargo check -p mochi-ui --tests`
+
+## 2026-04-19 Follow-up: Sumeragi DA view-zero missing-leader recovery
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now lets the DA
+  empty-frontier `MissingQc` path at view `0` rotate after the existing
+  frontier recovery controller has reached `RotateArmed`. The first timeout
+  still only arms recovery, preserving the bounded commit-skew guard for
+  DA-enabled frontiers.
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` adds a focused
+  regression proving that an exhausted `missing_qc` recovery advances view `0`
+  and arms the forced next-view proposal path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_da_view_zero_after_missing_qc_recovery_is_armed -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_recovery -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_attempt -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture`
+    (`1 passed`; 144.39s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_view_change_lock_convergence -- --nocapture`
+    (`1 passed`; 50.62s)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-04-19 Follow-up: big integer numeric coverage
+- `crates/iroha_primitives/src/bigint.rs` now has focused unit coverage for
+  zero/one/sign helpers, absolute value and negation, subtraction, division with
+  remainder, zero-divisor rejection, `pow10` bounds, two's-complement overflow
+  rejection, direct `DecodeFromSlice` consumed-length reporting, short payload
+  errors, JSON roundtrips, and exact invalid-field names for bad JSON input.
+- `crates/iroha_primitives/src/big_numeric.rs` now covers constructor scale
+  rejection, mantissa/scale accessors, cross-scale addition, negative addition
+  results, parser errors for invalid characters and oversized scales, JSON
+  roundtrips and invalid-field errors, direct `DecodeFromSlice` consumed-length
+  reporting, and oversized decoded-scale rejection.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives bigint::tests` (`13 passed`)
+  - `cargo test -p iroha_primitives big_numeric::tests` (`10 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`200 passed`; `numeric_inspect`
+    `1 passed`; doctests `1 passed; 1 ignored`)
+  - `git diff --check`
+
+## 2026-04-19 Follow-up: calendar boundary coverage
+- `crates/iroha_primitives/src/calendar.rs` now has focused regressions for UTC
+  month-boundary helpers. The new tests cover end-of-day anchor times, invalid
+  anchor days across public helper entry points, previous-period overflow at
+  the Unix epoch, month transitions across year boundaries, invalid month
+  rejection, leap-century February lengths, civil-date roundtrips, and invalid
+  day/month conversion errors.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives calendar::tests -- --nocapture` (`15 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
+## 2026-04-19 Follow-up: Python RWA classmethod fixtures
+- `python/iroha_python/iroha_python_rs/src/lib.rs` now uses fully qualified
+  `commodities.universal` RWA domain literals in the Python binding classmethod
+  tests, matching `RwaId` parsing through `DomainId::parse_fully_qualified`.
+- The `merge_rwas` Python fixture JSON now uses normal object braces instead
+  of escaped `{{ ... }}` braces, so `json.loads` receives valid JSON before the
+  payload is converted into `MergeRwas`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_python_rs rwa -- --nocapture` (`4 passed`)
+  - `cargo test -p iroha_python_rs -- --nocapture` (`33 passed`)
+
 ## 2026-04-19 Follow-up: SoraNet gateway billing fixture asset IDs
 - `configs/soranet/gateway_m1/alpha_config.json` and
   `configs/soranet/gateway_m2/beta_config.json` now use the canonical
@@ -107,6 +211,25 @@ Last updated: 2026-04-19
 - This pass adds fixture-helper coverage for wrong-ingress setup invariants:
   stake/fee asset helper separation, Alice-backed routing probe gas account
   selection, and deterministic validator binding derivation from peer IDs.
+- The wrong-ingress helper suite now also covers the generated DA proof-policy
+  bundle lane/dataspace ordering, policy-hash determinism and order
+  sensitivity, full post-topology genesis instruction count, deterministic
+  genesis output for a stable roster, and the expected panic for incomplete
+  topology rosters.
+- The same wrong-ingress coverage now pins lane-validator snapshot parsing:
+  active-only binding extraction, total preservation, and malformed response
+  failures for non-object payloads, missing totals, missing item arrays, and
+  missing validator status fields, missing peer IDs, and non-object validator
+  entries.
+- The wrong-ingress helper suite now also covers the raw versioned signed
+  transaction envelope used for Torii submission, asserting the v1 prefix and
+  exact adaptive payload roundtrip through the raw signed-transaction decoder.
+- Additional wrong-ingress helper assertions cover query-only root-path routed
+  response contexts plus local/missing route-source rejection in the proxy-only
+  fanout header helper.
+- The wrong-ingress JSON helpers now also reject non-array collection payloads
+  for permissions, manifests, and account assets, and ignore manifest records
+  with missing or non-string status fields.
 - This improves coverage without starting another localnet; the existing
   end-to-end wrong-ingress localnet remains the behavioral regression for real
   cross-dataspace routing.
@@ -123,13 +246,30 @@ Last updated: 2026-04-19
 - The atomic-swap helper suite now also pins stake/fee asset helper separation,
   Alice-backed gas-account selection, deterministic validator authority
   derivation, and expected lane binding construction.
+- The atomic-swap suite now mirrors the DA/genesis setup coverage as well:
+  lane/dataspace proof-policy ordering, policy-hash determinism and order
+  sensitivity, full post-topology genesis instruction count, deterministic
+  genesis output for a stable roster, representative lane-bucket bindings, and
+  wrong-peer-count rejection.
+- The atomic-swap helper suite now mirrors lane-validator snapshot coverage,
+  including active/inactive filtering, total preservation, and malformed
+  response failures for missing totals, missing items, missing validator
+  literals, missing peer IDs, missing status fields, and non-object validator
+  entries.
+- The atomic-swap fallback helpers now also cover observer timeout floor
+  application for tiny per-client slices and rejection-reason rendering that
+  appends debug details when the display text is generic.
+- The atomic-swap parsing helpers now also cover signed/decimal-like invalid
+  override values for cross-dataspace soak iteration parsing, exact divided
+  observer timeout slices between the floor and cap, and non-POST HTTP wording
+  that must remain a conclusive submit failure.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`24 passed; 212 filtered out`)
+    (`34 passed; 222 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`15 passed; 221 filtered out`)
+    (`25 passed; 231 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 ## 2026-04-19 Follow-up: ConstVec manual fallback coverage

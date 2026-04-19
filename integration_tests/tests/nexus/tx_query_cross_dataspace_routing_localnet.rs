@@ -1493,20 +1493,30 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, Algorithm, AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64,
-        DataSpaceId, DomainId, KeyPair, LaneId, PeerId, RoutedJsonResponse,
-        account_assets_response_contains, expect_proxy_fanout_headers, expect_proxy_route_headers,
-        expected_lane_binding_for_peer, manifest_response_contains_dataspace,
-        manifest_response_contains_status, nexus_fee_asset_definition_id,
-        permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
+        ALICE_ID, ALICE_KEYPAIR, Algorithm, AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX,
+        DS2_ID_U64, DS2_LANE_INDEX, DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair,
+        LaneId, Level, Log, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId, RoutedJsonResponse,
+        SignedTransaction, TOTAL_PEERS, account_assets_response_contains,
+        encode_versioned_signed_transaction, expect_proxy_fanout_headers,
+        expect_proxy_route_headers, expected_lane_binding_for_peer, lane_validator_snapshot,
+        manifest_response_contains_dataspace, manifest_response_contains_status,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        npos_multilane_genesis_post_topology_transactions, permission_response_contains,
+        routed_header_string, routed_json_empty_body_is_transient,
         routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
     };
-    use norito::json::Value as JsonValue;
+    use iroha::data_model::{
+        ChainId,
+        da::commitment::{DaProofPolicyBundle, DaProofScheme},
+        transaction::TransactionBuilder,
+    };
+    use norito::{core::DecodeFromSlice, json::Value as JsonValue};
     use reqwest::{
         StatusCode as HttpStatusCode,
         header::{HeaderMap, HeaderValue},
     };
+    use std::panic;
 
     fn routed_json_response(
         status: HttpStatusCode,
@@ -1545,6 +1555,18 @@ mod tests {
         )
     }
 
+    fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
+        (0..peer_count)
+            .map(|index| {
+                let mut seed = vec![0_u8; 32];
+                seed[0] = 0xE1;
+                seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+                let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+                PeerId::new(key_pair.public_key().clone())
+            })
+            .collect()
+    }
+
     #[test]
     fn fixture_asset_helpers_keep_stake_and_fee_ids_distinct() {
         let stake_definition_id = stake_asset_definition_id();
@@ -1559,6 +1581,65 @@ mod tests {
     }
 
     #[test]
+    fn multilane_da_policy_bundle_matches_wrong_ingress_topology() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
+
+        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.policy_hash, expected_hash);
+        assert_eq!(bundle.policies.len(), 3);
+        assert_eq!(bundle.policies[0].lane_id.as_u32(), NEXUS_LANE_INDEX);
+        assert_eq!(bundle.policies[0].dataspace_id.as_u64(), NEXUS_ID_U64);
+        assert_eq!(bundle.policies[0].alias, "lane-nexus");
+        assert_eq!(bundle.policies[0].proof_scheme, DaProofScheme::MerkleSha256);
+        assert_eq!(bundle.policies[1].lane_id.as_u32(), DS1_LANE_INDEX);
+        assert_eq!(bundle.policies[1].dataspace_id.as_u64(), DS1_ID_U64);
+        assert_eq!(bundle.policies[1].alias, "lane-ds1");
+        assert_eq!(bundle.policies[2].lane_id.as_u32(), DS2_LANE_INDEX);
+        assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
+        assert_eq!(bundle.policies[2].alias, "lane-ds2");
+    }
+
+    #[test]
+    fn multilane_da_policy_bundle_hash_changes_when_policy_order_changes() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let mut reversed_policies = bundle.policies.clone();
+        reversed_policies.reverse();
+        let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
+
+        assert_eq!(bundle, multilane_da_proof_policy_bundle());
+        assert_ne!(bundle.policy_hash, reversed_hash);
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].len(), 12 + TOTAL_PEERS * 5);
+        assert_eq!(
+            expected_lane_binding_for_peer(0, &topology[0]).peer_id,
+            topology[0].to_string()
+        );
+
+        let short_topology = deterministic_topology(TOTAL_PEERS - 1);
+        let result = panic::catch_unwind(|| {
+            npos_multilane_genesis_post_topology_transactions(&short_topology)
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_is_stable_for_same_wrong_ingress_roster() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let first = npos_multilane_genesis_post_topology_transactions(&topology);
+        let second = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+
+    #[test]
     fn routing_probe_gas_account_uses_alice_subject() {
         let gas_account = routing_probe_gas_account_id();
 
@@ -1567,6 +1648,28 @@ mod tests {
             gas_account.canonical_i105().expect("gas account i105"),
             ALICE_ID.canonical_i105().expect("alice i105")
         );
+    }
+
+    #[test]
+    fn versioned_signed_transaction_encoder_prefixes_v1_and_roundtrips_payload() {
+        let chain_id: ChainId = "cross-dataspace-route-encoder".parse().expect("chain id");
+        let transaction = TransactionBuilder::new(chain_id, ALICE_ID.clone())
+            .with_instructions([Log::new(
+                Level::INFO,
+                "wrong ingress route envelope".to_owned(),
+            )])
+            .sign(ALICE_KEYPAIR.private_key());
+        let adaptive_payload = norito::codec::encode_adaptive(&transaction);
+
+        let encoded = encode_versioned_signed_transaction(&transaction);
+        let (decoded, decoded_len) = SignedTransaction::decode_from_slice(&encoded[1..])
+            .expect("adaptive signed transaction should decode from raw slice");
+
+        assert_eq!(encoded.first(), Some(&1));
+        assert_eq!(encoded.len(), adaptive_payload.len() + 1);
+        assert_eq!(&encoded[1..], adaptive_payload.as_slice());
+        assert_eq!(decoded_len, adaptive_payload.len());
+        assert_eq!(decoded, transaction);
     }
 
     #[test]
@@ -1591,6 +1694,79 @@ mod tests {
             validator_authority_account_for_peer(5),
             validator_authority_account_for_peer(6)
         );
+    }
+
+    #[test]
+    fn lane_validator_snapshot_filters_active_bindings_and_preserves_total() {
+        let body = norito::json!({
+            "total": 2,
+            "items": [
+                {
+                    "validator": "validator-a",
+                    "peer_id": "peer-a",
+                    "status": { "type": "Active" },
+                },
+                {
+                    "validator": "validator-b",
+                    "peer_id": "peer-b",
+                    "status": { "type": "Pending" },
+                },
+            ],
+        });
+
+        let (total, active) =
+            lane_validator_snapshot(&body, "lane validators").expect("lane snapshot should parse");
+
+        assert_eq!(total, 2);
+        assert_eq!(active.len(), 1);
+        assert!(active.contains(&ExpectedLaneValidatorBinding {
+            validator: "validator-a".to_owned(),
+            peer_id: "peer-a".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn lane_validator_snapshot_rejects_malformed_payloads() {
+        for (body, expected) in [
+            (JsonValue::Null, "lane validator response is not an object"),
+            (
+                norito::json!({ "items": [] }),
+                "lane validator response is missing total",
+            ),
+            (
+                norito::json!({ "total": 1 }),
+                "lane validator response is missing items",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "peer_id": "peer-a" }],
+                }),
+                "validator entry missing status.type",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "status": { "type": "Active" } }],
+                }),
+                "validator entry missing peer_id literal",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [7],
+                }),
+                "validator entry is not an object",
+            ),
+        ] {
+            let err = lane_validator_snapshot(&body, "lane validators")
+                .expect_err("malformed lane snapshot should fail");
+
+            assert!(
+                err.to_string().contains(expected),
+                "expected `{expected}` in `{err}`"
+            );
+        }
     }
 
     #[test]
@@ -1632,6 +1808,19 @@ mod tests {
         assert!(context.contains("routed_by=None"));
         assert!(context.contains("route_lane_id=None"));
         assert!(context.contains("route_dataspace_id=None"));
+    }
+
+    #[test]
+    fn routed_response_context_formats_root_path_with_query() {
+        let context = routed_response_context(
+            HttpStatusCode::BAD_GATEWAY,
+            &HeaderMap::new(),
+            &[],
+            &[("dataspace".to_owned(), DS2_ID_U64.to_string())],
+        );
+
+        assert!(context.contains("status=502 Bad Gateway"));
+        assert!(context.contains("path=/?dataspace=2"));
     }
 
     #[test]
@@ -1743,6 +1932,16 @@ mod tests {
         expect_proxy_fanout_headers(&response, "fanout permissions")
             .expect("fanout response without singular route should pass");
 
+        let local_response = routed_json_response_with_route(Some("local"), None, None);
+        let err = expect_proxy_fanout_headers(&local_response, "fanout permissions")
+            .expect_err("local fanout response should fail for proxy-only helper");
+        assert!(err.to_string().contains("expected proxied fanout read"));
+
+        let missing_route_source = routed_json_response_with_route(None, None, None);
+        let err = expect_proxy_fanout_headers(&missing_route_source, "fanout permissions")
+            .expect_err("missing fanout route source should fail");
+        assert!(err.to_string().contains("expected proxied fanout read"));
+
         let singular_route =
             routed_json_response_with_route(Some("proxy"), Some(&DS1_LANE_INDEX.to_string()), None);
         let err = expect_proxy_fanout_headers(&singular_route, "fanout permissions")
@@ -1817,6 +2016,7 @@ mod tests {
             "items": [
                 { "name": "CanPublishSpaceDirectoryManifest" },
                 { "name": "OtherPermission", "payload": { "dataspace": DS2_ID_U64 } },
+                { "name": DS2_ID_U64, "payload": { "dataspace": DS2_ID_U64 } },
             ],
         });
 
@@ -1828,6 +2028,49 @@ mod tests {
                 "permission response",
             )
             .expect("permission response should decode")
+        );
+    }
+
+    #[test]
+    fn response_helpers_reject_non_array_collections() {
+        let asset_definition_id = ds2_asset_definition_id();
+
+        let permission_err = permission_response_contains(
+            &norito::json!({ "items": {} }),
+            "CanPublishSpaceDirectoryManifest",
+            |_| true,
+            "permission response",
+        )
+        .expect_err("non-array permissions should fail");
+        assert!(
+            permission_err
+                .to_string()
+                .contains("permission response missing items array")
+        );
+
+        let manifest_err = manifest_response_contains_status(
+            &norito::json!({ "manifests": {} }),
+            DataSpaceId::new(DS2_ID_U64),
+            "Active",
+            "manifest response",
+        )
+        .expect_err("non-array manifests should fail");
+        assert!(
+            manifest_err
+                .to_string()
+                .contains("manifest response missing manifests array")
+        );
+
+        let assets_err = account_assets_response_contains(
+            &norito::json!({ "items": {} }),
+            &asset_definition_id,
+            "account assets",
+        )
+        .expect_err("non-array assets should fail");
+        assert!(
+            assets_err
+                .to_string()
+                .contains("account assets response missing items array")
         );
     }
 
@@ -1908,6 +2151,27 @@ mod tests {
             !manifest_response_contains_dataspace(
                 &body,
                 DataSpaceId::new(DS2_ID_U64),
+                "manifest response",
+            )
+            .expect("manifest response should decode")
+        );
+    }
+
+    #[test]
+    fn manifest_response_contains_status_ignores_missing_or_non_string_statuses() {
+        let body = norito::json!({
+            "manifests": [
+                { "dataspace_id": DS2_ID_U64, "status": true },
+                { "dataspace_id": DS2_ID_U64 },
+                { "dataspace_id": DS1_ID_U64, "status": "Active" },
+            ],
+        });
+
+        assert!(
+            !manifest_response_contains_status(
+                &body,
+                DataSpaceId::new(DS2_ID_U64),
+                "Active",
                 "manifest response",
             )
             .expect("manifest response should decode")

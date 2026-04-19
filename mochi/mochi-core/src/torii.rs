@@ -2710,8 +2710,10 @@ impl ToriiClient {
         }
 
         let body = response.bytes().await?;
-        norito::codec::decode_adaptive(body.as_ref())
-            .map_err(|err| ToriiError::Decode(err.to_string()))
+        decode_norito_with_alignment(body.as_ref()).or_else(|_| {
+            norito::codec::decode_adaptive(body.as_ref())
+                .map_err(|err| ToriiError::Decode(err.to_string()))
+        })
     }
 
     /// Fetch a telemetry snapshot together with derived metrics.
@@ -3617,17 +3619,18 @@ pub enum BlockStreamEvent {
 }
 
 /// High-level helper that consumes WebSocket frames and publishes decoded blocks.
-#[derive(Debug)]
 pub struct BlockStream {
     subscription: WsSubscription,
     sender: broadcast::Sender<BlockStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<BlockStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
 
 impl BlockStream {
     fn new(subscription: WsSubscription) -> Self {
         let mut receiver = subscription.subscribe();
-        let (sender, _receiver) = broadcast::channel(128);
+        let (sender, _) = broadcast::channel(128);
+        let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
 
         let decode_handle = tokio::spawn(async move {
@@ -3701,13 +3704,18 @@ impl BlockStream {
         Self {
             subscription,
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             decode_handle,
         }
     }
 
     /// Acquire a receiver for decoded block events.
     pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .expect("block stream receiver lock poisoned")
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
 
     /// Abort both the raw WebSocket subscription and decoder task.
@@ -4228,17 +4236,18 @@ pub enum EventStreamEvent {
 }
 
 /// High-level helper that consumes WebSocket frames and publishes decoded events.
-#[derive(Debug)]
 pub struct EventStream {
     subscription: WsSubscription,
     sender: broadcast::Sender<EventStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
 
 impl EventStream {
     fn new(subscription: WsSubscription) -> Self {
         let mut receiver = subscription.subscribe();
-        let (sender, _receiver) = broadcast::channel(128);
+        let (sender, _) = broadcast::channel(128);
+        let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
 
         let decode_handle = tokio::spawn(async move {
@@ -4306,13 +4315,18 @@ impl EventStream {
         Self {
             subscription,
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             decode_handle,
         }
     }
 
     /// Acquire a receiver for decoded events.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .expect("event stream receiver lock poisoned")
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
 
     /// Abort both the raw WebSocket subscription and decoder task.
@@ -5946,7 +5960,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Expired,
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -6009,7 +6023,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(rejection),
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -7638,6 +7652,7 @@ mod tests {
             return;
         };
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,
@@ -7682,6 +7697,57 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn fetch_status_decodes_framed_norito_payload() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+
+        let status = TelemetryStatus {
+            build: Default::default(),
+            peers: 2,
+            blocks: 5,
+            blocks_non_empty: 3,
+            commit_time_ms: 42,
+            da_reschedule_total: 0,
+            txs_approved: 7,
+            txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
+            uptime: Uptime(Duration::from_secs(123)),
+            view_changes: 0,
+            queue_size: 4,
+            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
+            stack: iroha_telemetry::metrics::StackStatus::default(),
+            sumeragi: None,
+            governance: GovernanceStatus::default(),
+            teu_lane_commit: Vec::new(),
+            teu_dataspace_backlog: Vec::new(),
+            tx_gossip: TxGossipSnapshot::default(),
+            sorafs_micropayments: Vec::new(),
+            taikai_alias_rotations: Vec::new(),
+            taikai_ingest: Vec::new(),
+            da_receipt_cursors: Vec::new(),
+        };
+        let encoded = norito::to_bytes(&status).expect("encode framed status");
+
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/status")
+                .header("accept", NORITO_MIME_TYPE);
+            then.status(200)
+                .header("content-type", NORITO_MIME_TYPE)
+                .body(encoded.clone());
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let decoded = client.fetch_status().await.expect("status");
+
+        mock.assert();
+        assert_eq!(decoded.blocks, status.blocks);
+        assert_eq!(decoded.queue_size, status.queue_size);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         let listener = match handle_bind_result(
             TcpListener::bind("127.0.0.1:0").await,
@@ -7693,6 +7759,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener address");
 
         let initial = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 10,
             blocks_non_empty: 8,
@@ -7718,6 +7785,7 @@ mod tests {
             da_receipt_cursors: Vec::new(),
         };
         let updated = TelemetryStatus {
+            build: Default::default(),
             peers: 3,
             blocks: 11,
             blocks_non_empty: 9,
