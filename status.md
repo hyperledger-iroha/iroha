@@ -26,6 +26,20 @@ Last updated: 2026-04-19
   - `cargo test -p ivm --lib zk_verify_label_mapping_covers_single_envelope_syscalls -- --nocapture`
   - `cargo test -p ivm --lib zk_curve_allowlist_tracks_host_curve_family -- --nocapture`
 
+## 2026-04-19 Follow-up: SNS catalog asset-holding fixture
+- `docs/examples/sns/suffix_catalog_v1.json` now uses owner-qualified
+  asset-holding literals for `payment_asset_id`, pricing base prices, and the
+  Dutch floor entry so the snapshot matches the current `AssetId::parse_literal`
+  verifier contract.
+- Refreshed `docs/examples/sns/suffix_catalog_v1.sha256` and updated the
+  English SNS source/portal docs to describe `payment_asset_id` as
+  `<base58-asset-definition-id>#<i105-account-id>`.
+- Focused validation for this slice:
+  - `./target/debug/xtask sns-catalog-verify --allow-missing-checksum`
+  - `./target/debug/xtask sns-catalog-verify`
+  - `cargo test -p xtask sns_catalog_verify_passes_with_defaults -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-19 Follow-up: cross-dataspace transaction routing helper coverage
 - `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
   now has additional pure helper regressions for wrong-ingress

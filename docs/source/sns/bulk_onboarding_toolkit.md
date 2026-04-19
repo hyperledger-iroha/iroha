@@ -29,7 +29,7 @@ The parser requires the following header row (order is flexible):
 | `suffix_id` | ✅ | Numeric namespace identifier (`0x1001` account-alias, `0x1002` domain, `0x1003` dataspace; decimal or `0x` hex accepted). |
 | `owner` | ✅ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ✅ | Integer `1..=255`. |
-| `payment_asset_id` | ✅ | Settlement asset (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
+| `payment_asset_id` | ✅ | Settlement asset-holding id (`<base58-asset-definition-id>#<i105-account-id>`). |
 | `payment_gross` / `payment_net` | ✅ | Unsigned integers representing asset-native units. |
 | `settlement_tx` | ✅ | JSON value or literal string describing the payment transaction/hash. |
 | `payment_payer` | ✅ | AccountId that authorised the payment. |
