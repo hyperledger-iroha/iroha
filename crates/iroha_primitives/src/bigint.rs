@@ -377,4 +377,106 @@ mod tests {
         let parsed: BigInt = s.parse().expect("parse");
         assert_eq!(v, parsed);
     }
+
+    #[test]
+    fn zero_one_sign_abs_neg_and_bit_len() {
+        let zero = BigInt::zero();
+        assert!(zero.is_zero());
+        assert!(!zero.is_negative());
+        assert_eq!(zero.bit_len(), 8);
+
+        let one = BigInt::one();
+        assert!(!one.is_zero());
+        assert!(!one.is_negative());
+        assert_eq!(one.bit_len(), 1);
+
+        let negative = BigInt::from_i128(-42);
+        assert!(negative.is_negative());
+        assert_eq!(negative.abs(), BigInt::from_i128(42));
+        assert_eq!(negative.neg(), BigInt::from_i128(42));
+    }
+
+    #[test]
+    fn checked_sub_and_div_rem_basic() {
+        let a = BigInt::from_i128(10);
+        let b = BigInt::from_i128(13);
+        assert_eq!(a.checked_sub(&b).unwrap(), BigInt::from_i128(-3));
+
+        let dividend = BigInt::from_i128(17);
+        let divisor = BigInt::from_i128(5);
+        let (quotient, remainder) = dividend.checked_div_rem(&divisor).unwrap();
+        assert_eq!(quotient, BigInt::from_i128(3));
+        assert_eq!(remainder, BigInt::from_i128(2));
+    }
+
+    #[test]
+    fn checked_div_rem_rejects_zero_divisor() {
+        let err = BigInt::from_i128(17)
+            .checked_div_rem(&BigInt::zero())
+            .expect_err("division by zero should be rejected");
+
+        assert_eq!(err, BigIntError::DivisionByZero);
+    }
+
+    #[test]
+    fn pow10_obeys_bit_limit() {
+        assert_eq!(BigInt::pow10(0).unwrap(), BigInt::one());
+        assert_eq!(BigInt::pow10(2).unwrap(), BigInt::from_i128(100));
+        assert!(BigInt::pow10(200).is_none());
+    }
+
+    #[test]
+    fn from_twos_bytes_rejects_overflow() {
+        let mut bytes = vec![0_u8; MAX_BYTES + 1];
+        bytes[MAX_BYTES] = 0x7f;
+
+        let err = BigInt::from_twos_bytes(&bytes).expect_err("513-bit value must overflow");
+        assert_eq!(err, BigIntError::Overflow);
+    }
+
+    #[test]
+    fn decode_from_slice_rejects_short_payload() {
+        let mut bytes = norito::codec::Encode::encode(&4_u32);
+        bytes.extend([1_u8, 2]);
+
+        let err = <BigInt as DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("declared payload length should be enforced");
+        match err {
+            ncore::Error::Message(message) => assert_eq!(message, "buffer too short"),
+            other => panic!("unexpected decode error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_from_slice_reports_used_bytes() {
+        let value = BigInt::from_i128(-9_876_543_210);
+        let mut bytes = norito::codec::Encode::encode(&value);
+        let encoded_len = bytes.len();
+        bytes.extend([0xaa, 0xbb]);
+
+        let (decoded, used) =
+            <BigInt as DecodeFromSlice>::decode_from_slice(&bytes).expect("decode");
+        assert_eq!(decoded, value);
+        assert_eq!(used, encoded_len);
+    }
+
+    #[test]
+    fn json_roundtrip_and_invalid_error_field() {
+        let value = BigInt::from_i128(-123_456_789);
+        let json = norito::json::to_json(&value).expect("serialize");
+        assert_eq!(json, "\"-123456789\"");
+
+        let decoded: BigInt = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, value);
+
+        let err = norito::json::from_str::<BigInt>("\"not-a-number\"")
+            .expect_err("invalid bigint string should be rejected");
+        match err {
+            json::Error::InvalidField { field, message } => {
+                assert_eq!(field, "bigint");
+                assert!(message.contains("invalid bigint `not-a-number`"));
+            }
+            other => panic!("unexpected JSON error: {other:?}"),
+        }
+    }
 }

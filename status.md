@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: calendar boundary coverage
+- `crates/iroha_primitives/src/calendar.rs` now has focused regressions for UTC
+  month-boundary helpers. The new tests cover end-of-day anchor times, invalid
+  anchor days across public helper entry points, previous-period overflow at
+  the Unix epoch, month transitions across year boundaries, invalid month
+  rejection, leap-century February lengths, civil-date roundtrips, and invalid
+  day/month conversion errors.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives calendar::tests -- --nocapture` (`15 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
 ## 2026-04-19 Follow-up: primitive container API coverage
 - `crates/iroha_primitives/src/unique_vec.rs` now has additional unit coverage
   for duplicate push ownership, empty/trailing-comma macro construction,
