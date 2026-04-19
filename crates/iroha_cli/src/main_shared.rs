@@ -2255,9 +2255,12 @@ mod asset {
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
                         iroha::data_model::isi::Mint::asset_numeric(args.quantity, id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to mint numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to mint numeric asset")
                 }
                 Burn(args) => {
                     let id = args
@@ -2265,9 +2268,12 @@ mod asset {
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
                         iroha::data_model::isi::Burn::asset_numeric(args.quantity, id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to burn numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to burn numeric asset")
                 }
                 Transfer(args) => {
                     let id = args
@@ -2284,9 +2290,12 @@ mod asset {
 
                     let instructions =
                         asset_transfer_instructions(id, &args, &to, policy.as_ref())?;
-                    context
-                        .finish(instructions)
-                        .wrap_err("Failed to transfer numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed(instructions)
+                    } else {
+                        context.finish(instructions)
+                    };
+                    submit.wrap_err("Failed to transfer numeric asset")
                 }
             }
         }
@@ -2789,6 +2798,9 @@ mod asset {
         /// Attempt to register the destination when implicit receive is disabled.
         #[arg(long)]
         pub ensure_destination: bool,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        pub no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -2826,6 +2838,9 @@ mod asset {
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        pub no_wait: bool,
     }
 
     impl Id {

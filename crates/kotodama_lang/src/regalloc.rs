@@ -399,6 +399,26 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*entrypoint);
             f(*payload);
         }
+        InvokeEntrypointAs {
+            actor,
+            entrypoint,
+            payload,
+            ..
+        }
+        | ExpectRejectAs {
+            actor,
+            entrypoint,
+            payload,
+        } => {
+            f(*actor);
+            f(*entrypoint);
+            f(*payload);
+        }
+        ActorAccount { actor, .. } | ActorPublicKey { actor, .. } => f(*actor),
+        ActorSign { actor, message, .. } => {
+            f(*actor);
+            f(*message);
+        }
         ResolveAccountAlias { alias, .. } => f(*alias),
         Abs { src, .. } => f(*src),
         Isqrt { src, .. } => f(*src),
@@ -805,6 +825,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::CallContract { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
+        | Instr::ActorAccount { dest, .. }
+        | Instr::ActorPublicKey { dest, .. }
+        | Instr::ActorSign { dest, .. }
         | Instr::Copy { dest, .. }
         | Instr::PointerFromString { dest, .. }
         | Instr::PointerToNorito { dest, .. }
@@ -854,7 +877,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::BuildSubmitBallotInline { dest, .. } => Some(*dest),
         Instr::BuildUnshieldInline { dest, .. } => Some(*dest),
         Instr::VendorExecuteQuery { dest, .. } => Some(*dest),
-        Instr::Call { dest, .. } => dest.as_ref().copied(),
+        Instr::Call { dest, .. } | Instr::InvokeEntrypointAs { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }
         | Instr::RevokePermission { .. }
         | Instr::RegisterAsset { .. }
@@ -902,7 +925,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::UseAssetHandle { .. }
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
-        | Instr::TransferBatchEnd => None,
+        | Instr::TransferBatchEnd
+        | Instr::ExpectRejectAs { .. } => None,
         Instr::CallMulti { .. } | Instr::MapLoadPair { .. } => None,
     }
 }

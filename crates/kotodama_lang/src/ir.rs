@@ -523,6 +523,34 @@ pub enum Instr {
     GetTriggerEvent {
         dest: Temp,
     },
+    /// Test-only nested runtime entrypoint call as a named fixture actor.
+    InvokeEntrypointAs {
+        dest: Option<Temp>,
+        actor: Temp,
+        entrypoint: Temp,
+        payload: Temp,
+        returns_pointer: bool,
+    },
+    /// Test-only assertion that a named actor's runtime entrypoint call rejects.
+    ExpectRejectAs {
+        actor: Temp,
+        entrypoint: Temp,
+        payload: Temp,
+    },
+    /// Test-only actor registry lookup helpers.
+    ActorAccount {
+        dest: Temp,
+        actor: Temp,
+    },
+    ActorPublicKey {
+        dest: Temp,
+        actor: Temp,
+    },
+    ActorSign {
+        dest: Temp,
+        actor: Temp,
+        message: Temp,
+    },
     /// ZK verify syscalls with NoritoBytes TLV pointer in r10.
     ZkVerify {
         /// Syscall number (0x60..0x63)
@@ -1460,6 +1488,16 @@ fn lower_invoke_entrypoint_call(
 
     ctx.start_block(join_bb);
     result
+}
+
+fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest,
+        kind: DataRefKind::Blob,
+        value: value.to_string(),
+    });
+    dest
 }
 
 fn lower_entrypoint_param(
@@ -3457,6 +3495,98 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::GetTriggerEvent { dest: t });
                     t
+                }
+                "invoke_entrypoint_as" => {
+                    let actor = match &args[0].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("invoke_entrypoint_as actor must be a literal string"),
+                    };
+                    let entrypoint = match &args[1].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("invoke_entrypoint_as entrypoint must be a literal string"),
+                    };
+                    let payload = lower_expr(ctx, &args[2], vars);
+                    match &expr.ty {
+                        semantic::Type::Unit => {
+                            ctx.current_instr(Instr::InvokeEntrypointAs {
+                                dest: None,
+                                actor,
+                                entrypoint,
+                                payload,
+                                returns_pointer: false,
+                            });
+                            let t = ctx.new_temp();
+                            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                            t
+                        }
+                        semantic::Type::Tuple(_) => {
+                            panic!("invoke_entrypoint_as does not support tuple returns")
+                        }
+                        _ => {
+                            let dest = ctx.new_temp();
+                            ctx.current_instr(Instr::InvokeEntrypointAs {
+                                dest: Some(dest),
+                                actor,
+                                entrypoint,
+                                payload,
+                                returns_pointer: semantic::is_pointer_type(&expr.ty)
+                                    || semantic::is_blob_like(&expr.ty)
+                                    || expr.ty == semantic::Type::Json,
+                            });
+                            dest
+                        }
+                    }
+                }
+                "expect_reject_as" => {
+                    let actor = match &args[0].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("expect_reject_as actor must be a literal string"),
+                    };
+                    let entrypoint = match &args[1].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("expect_reject_as entrypoint must be a literal string"),
+                    };
+                    let payload = lower_expr(ctx, &args[2], vars);
+                    ctx.current_instr(Instr::ExpectRejectAs {
+                        actor,
+                        entrypoint,
+                        payload,
+                    });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "actor_account" => {
+                    let actor = match &args[0].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("actor_account actor must be a literal string"),
+                    };
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ActorAccount { dest, actor });
+                    dest
+                }
+                "actor_public_key" => {
+                    let actor = match &args[0].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("actor_public_key actor must be a literal string"),
+                    };
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ActorPublicKey { dest, actor });
+                    dest
+                }
+                "actor_sign" => {
+                    let actor = match &args[0].expr {
+                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                        _ => panic!("actor_sign actor must be a literal string"),
+                    };
+                    let message = lower_expr(ctx, &args[1], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ActorSign {
+                        dest,
+                        actor,
+                        message,
+                    });
+                    dest
                 }
                 "isqrt" => {
                     let v = lower_expr_as_int(ctx, &args[0], vars);
@@ -5532,6 +5662,100 @@ mod tests {
             saw_tuple_pack,
             "tuple invoke_entrypoint should pack multi-return values"
         );
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
+        let src = r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                    expect_reject_as("issuer", "run", json("{\"count\": -1}"));
+                    let _ = next;
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse invoke_entrypoint_as");
+        let typed = analyze(&prog).expect("analyze invoke_entrypoint_as");
+        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint_as");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_run")
+            .expect("test function");
+
+        let mut saw_invoke = false;
+        let mut saw_expect_reject = false;
+        for block in &test_fn.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::InvokeEntrypointAs {
+                        dest: Some(_),
+                        returns_pointer,
+                        ..
+                    } => {
+                        saw_invoke = true;
+                        assert!(
+                            !returns_pointer,
+                            "int-returning invoke_entrypoint_as should stay scalar"
+                        );
+                    }
+                    Instr::ExpectRejectAs { .. } => saw_expect_reject = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_invoke, "expected InvokeEntrypointAs in lowered test");
+        assert!(saw_expect_reject, "expected ExpectRejectAs in lowered test");
+    }
+
+    #[test]
+    fn actor_helpers_lower_to_test_host_intrinsics() {
+        let src = r#"
+            seiyaku Demo {
+                #[test]
+                fn drive_helpers() {
+                    let acct = actor_account("issuer");
+                    let pk = actor_public_key("issuer");
+                    let sig = actor_sign("issuer", b"demo");
+                    let _ = (acct, pk, sig);
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse actor helpers");
+        let typed = analyze(&prog).expect("analyze actor helpers");
+        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower actor helpers");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_helpers")
+            .expect("test function");
+
+        let mut saw_actor_account = false;
+        let mut saw_actor_public_key = false;
+        let mut saw_actor_sign = false;
+        for block in &test_fn.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::ActorAccount { .. } => saw_actor_account = true,
+                    Instr::ActorPublicKey { .. } => saw_actor_public_key = true,
+                    Instr::ActorSign { .. } => saw_actor_sign = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_actor_account, "expected ActorAccount in lowered test");
+        assert!(
+            saw_actor_public_key,
+            "expected ActorPublicKey in lowered test"
+        );
+        assert!(saw_actor_sign, "expected ActorSign in lowered test");
     }
 
     #[test]

@@ -70,6 +70,11 @@ const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
+const TEST_SYSCALL_ACTOR_ACCOUNT: u8 = 0xF8;
+const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u8 = 0xF9;
+const TEST_SYSCALL_ACTOR_SIGN: u8 = 0xFA;
+const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u8 = 0xFB;
+const TEST_SYSCALL_EXPECT_REJECT_AS: u8 = 0xFC;
 
 #[derive(Clone)]
 struct AccessSets {
@@ -2069,6 +2074,14 @@ seiyaku StagedMintRequest {
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
                         }
                     }
+                    if let ir::Instr::ActorAccount { dest, .. } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Account);
+                    }
+                    if let ir::Instr::ActorPublicKey { dest, .. }
+                    | ir::Instr::ActorSign { dest, .. } = instr
+                    {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
+                    }
                     if let ir::Instr::LoadVar { dest, name } = instr
                         && let Some(param_idx) = func.params.iter().position(|p| p == name)
                     {
@@ -3237,6 +3250,14 @@ impl Compiler {
                             let hex = hex::encode(tlv_bytes);
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
                         }
+                    }
+                    if let ir::Instr::ActorAccount { dest, .. } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Account);
+                    }
+                    if let ir::Instr::ActorPublicKey { dest, .. }
+                    | ir::Instr::ActorSign { dest, .. } = instr
+                    {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
                     }
                     if let ir::Instr::LoadVar { dest, name } = instr
                         && let Some(param_idx) = func.params.iter().position(|p| p == name)
@@ -5351,6 +5372,198 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_GET_PUBLIC_INPUT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::InvokeEntrypointAs {
+                            dest,
+                            actor,
+                            entrypoint,
+                            payload,
+                            returns_pointer,
+                        } => {
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::Blob, entrypoint_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(entrypoint, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, rs, 0)?);
+                            }
+                            if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
+                                    emit_literal_stub(
+                                        &mut code,
+                                        &mut fixups,
+                                        12,
+                                        data_key_for_pointer(*kind, payload_raw),
+                                    );
+                                } else {
+                                    let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                                }
+                            } else {
+                                let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                            }
+                            push_word(
+                                &mut code,
+                                encode_addi(13, 0, if *returns_pointer { 1 } else { 0 })?,
+                            );
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                TEST_SYSCALL_INVOKE_ENTRYPOINT_AS,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            if let Some(dest) = dest {
+                                let (rd, spilled, imm) = dst_reg(dest);
+                                push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                spill_back(dest, rd, spilled, imm, &mut code)?;
+                            }
+                        }
+                        Instr::ExpectRejectAs {
+                            actor,
+                            entrypoint,
+                            payload,
+                        } => {
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::Blob, entrypoint_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(entrypoint, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, rs, 0)?);
+                            }
+                            if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
+                                    emit_literal_stub(
+                                        &mut code,
+                                        &mut fixups,
+                                        12,
+                                        data_key_for_pointer(*kind, payload_raw),
+                                    );
+                                } else {
+                                    let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                                }
+                            } else {
+                                let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                TEST_SYSCALL_EXPECT_REJECT_AS,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::ActorAccount { dest, actor } => {
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                TEST_SYSCALL_ACTOR_ACCOUNT,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ActorPublicKey { dest, actor } => {
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                TEST_SYSCALL_ACTOR_PUBLIC_KEY,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::ActorSign {
+                            dest,
+                            actor,
+                            message,
+                        } => {
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            if let Some(message_raw) = string_map.get(&(func_idx, *message)) {
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *message)) {
+                                    emit_literal_stub(
+                                        &mut code,
+                                        &mut fixups,
+                                        11,
+                                        data_key_for_pointer(*kind, message_raw),
+                                    );
+                                } else {
+                                    let rs_message = src_reg(message, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(11, rs_message, 0)?);
+                                }
+                            } else {
+                                let rs_message = src_reg(message, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, rs_message, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                TEST_SYSCALL_ACTOR_SIGN,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -8636,6 +8849,11 @@ fn record_isi_access(
         // AXT/ZK helpers carry opaque payloads; fall back to wildcard.
         ir::Instr::RegisterPeer { .. }
         | ir::Instr::UnregisterPeer { .. }
+        | ir::Instr::InvokeEntrypointAs { .. }
+        | ir::Instr::ExpectRejectAs { .. }
+        | ir::Instr::ActorAccount { .. }
+        | ir::Instr::ActorPublicKey { .. }
+        | ir::Instr::ActorSign { .. }
         | ir::Instr::SubscriptionBill
         | ir::Instr::SubscriptionRecordUsage
         | ir::Instr::BuildSubmitBallotInline { .. }
@@ -9186,6 +9404,11 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
             | ir::Instr::CallContract { .. }
+            | ir::Instr::InvokeEntrypointAs { .. }
+            | ir::Instr::ExpectRejectAs { .. }
+            | ir::Instr::ActorAccount { .. }
+            | ir::Instr::ActorPublicKey { .. }
+            | ir::Instr::ActorSign { .. }
             | ir::Instr::SubscriptionBill
             | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }
