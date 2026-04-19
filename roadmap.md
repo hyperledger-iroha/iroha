@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 MOCHI bundle package lookup):
+`xtask mochi-bundle` no longer depends on the stale `mochi-ui-egui` Cargo
+package id. The bundle build now addresses the desktop shell by manifest path
+and the `mochi` binary target, matching the current `mochi-ui` package name
+while preserving the existing bundle layout.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/xtask/src/mochi.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `rustfmt --check --edition 2024 xtask/src/mochi.rs`
+  - `cargo test -p xtask --test mochi_bundle -- --nocapture`
+  - `cargo test -p xtask mochi_ui_manifest_path_declares_packaged_binary -- --nocapture`
+- open work after this slice:
+  - rerun broader `xtask` or workspace validation during a longer clean window
+
 Latest sync (2026-04-18 ConstVec malformed query guard):
 Torii query decoding no longer lets the manual unpacked `ConstVec` fallback
 reserve memory from an impossible wire count. The regression was reproduced
