@@ -31,6 +31,23 @@ bodies.
   - add a Torii-level malformed-query regression once the query fixture can be
     kept small and stable
 
+Latest sync (2026-04-18 IVM envelope permission literal resync):
+`crates/ivm/tests/wsv_host_roles_triggers_envelope.rs` now uses the canonical
+`AssetDefinitionId` string for `wsv.grant_permission` / `wsv.revoke_permission`
+envelopes instead of the removed `rose#domain` seed literal, so the envelope
+regression matches the current mock WSV permission parser again.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_roles_triggers_envelope.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_roles_triggers_envelope -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-18 SoraNet PQ derand backend wiring):
 `soranet_pq` now routes hedged RNG output into ML-KEM and ML-DSA operations by
 calling the PQClean derandomized hooks that pqcrypto 0.1.x does not expose in
