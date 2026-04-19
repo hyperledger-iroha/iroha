@@ -3505,6 +3505,9 @@ mod tests {
 
     use super::*;
 
+    const SAMPLE_RWA_ID: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
+
     fn ensure_python() {
         static INIT: OnceCell<()> = OnceCell::new();
         INIT.get_or_init(|| {
@@ -3751,7 +3754,7 @@ mod tests {
             let instruction = Instruction::transfer_rwa(
                 &instruction_type,
                 &source,
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                SAMPLE_RWA_ID,
                 quantity.as_any(),
                 &destination,
             )
@@ -3777,12 +3780,7 @@ mod tests {
                 transfer.destination,
                 parse_account_id(&destination).expect("destination parses")
             );
-            assert_eq!(
-                transfer.rwa,
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
-                    .parse()
-                    .expect("rwa id parses")
-            );
+            assert_eq!(transfer.rwa, SAMPLE_RWA_ID.parse().expect("rwa id parses"));
             assert_eq!(
                 transfer.quantity,
                 Numeric::from_str("1.25").expect("numeric parses")
@@ -3800,7 +3798,7 @@ mod tests {
                 .call_method1(
                     "loads",
                     (r#"{
-                        "domain": "commodities",
+                        "domain": "commodities.universal",
                         "quantity": "10.5",
                         "spec": {"scale": 1},
                         "primary_reference": "vault-cert-001",
@@ -3895,17 +3893,17 @@ mod tests {
             let merge_payload = json_module
                 .call_method1(
                     "loads",
-                    (r#"{{
+                    (r#"{
                             "parents": [
-                                {{
-                                    "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                                {
+                                    "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal",
                                     "quantity": "1.500"
-                                }}
+                                }
                             ],
                             "primary_reference": "blend-cert-007",
                             "status": "blended",
-                            "metadata": {{"grade": "A"}}
-                        }}"#,),
+                            "metadata": {"grade": "A"}
+                        }"#,),
                 )
                 .expect("merge payload loads");
             let merge_instruction =
@@ -3957,7 +3955,7 @@ mod tests {
                 .expect("controls payload loads");
             let controls_instruction = Instruction::set_rwa_controls(
                 &instruction_type,
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                SAMPLE_RWA_ID,
                 controls_payload.as_any(),
             )
             .expect("controls build");
@@ -3988,8 +3986,7 @@ mod tests {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
-            let rwa_id =
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+            let rwa_id = SAMPLE_RWA_ID;
             let destination = canonical_i105_from_seed(0x44);
 
             let redeem = Instruction::redeem_rwa(
