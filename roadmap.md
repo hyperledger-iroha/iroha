@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 SoraNet gateway billing fixture asset IDs):
+The default SoraNet gateway M1 and M2 bundle configs now pass the canonical
+billing asset definition ID (`4cuvDVPuLBKJyN6dPbRQhmLh68sU`) into the xtask
+billing projection path instead of the stale `xor#wonderland` literal. This
+matches the current `AssetDefinitionId` parser contract used by
+`xtask soranet-gateway-billing` and keeps default bundle generation from
+failing before it can emit summaries.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranet/gateway_m1/alpha_config.json`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranet/gateway_m2/beta_config.json`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p xtask --test soranet_gateway_m1 soranet_gateway_m1_bundle_is_emitted -- --nocapture`
+  - `cargo test -p xtask --test soranet_gateway_m2 soranet_gateway_m2_pipeline_emits_beta_and_ga -- --nocapture`
+- open work after this slice:
+  - rerun broader `cargo test -p xtask` or workspace validation during a longer
+    clean window
+
 Latest sync (2026-04-19 DefaultHost Halo2 open-verify gating):
 `crates/ivm/src/host.rs` now runs the real Halo2 open verifier for the
 single-envelope verify syscalls on `DefaultHost` instead of returning the old
