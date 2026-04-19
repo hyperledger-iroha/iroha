@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Mochi readiness status decoding):
+Mochi now accepts framed Norito `/status` payloads in the Torii client and
+still falls back to the older bare-payload decode path, which fixes the mock
+Torii readiness smoke after the status endpoint started returning
+`norito::to_bytes(...)` output. The same pass also preserves the first decoded
+block/event stream receiver so startup-time decode failures are surfaced to the
+initial readiness subscriber instead of being dropped and later reported as
+timeouts.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/torii.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core fetch_status_decodes_ -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p mochi-integration --test readiness_smoke -- --nocapture`
+    (`3 passed`)
+- open work after this slice:
+  - rerun broader Mochi or workspace validation during a longer clean window
+
 Latest sync (2026-04-19 Mochi telemetry status build metadata):
 The Mochi mock/status test fixtures now initialize the new
 `TelemetryStatus.build` field everywhere they still used exhaustive struct
