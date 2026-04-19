@@ -289,7 +289,7 @@ impl RegLog {
 }
 
 /// Snapshot of the VM state for one cycle used when generating ZK proofs.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisterState {
     pub pc: u64,
     pub gpr: [u64; 256],
@@ -318,7 +318,7 @@ pub struct DeltaTraceLog {
 }
 
 /// One compact trace entry.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeltaEntry {
     pub pc: u64,
     pub changes: Vec<(usize, u64, bool)>,

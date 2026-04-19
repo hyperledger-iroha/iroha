@@ -1135,6 +1135,13 @@ struct FetchedOp {
     simple: Option<SimpleInstruction>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceMode {
+    Off,
+    PcOnly,
+    DeltaRegisters,
+}
+
 pub struct IVM {
     pub registers: Registers,
     // The vector register file has been folded into `registers`. Vector
@@ -1153,6 +1160,9 @@ pub struct IVM {
     reg_log: zk::RegLog,
     trace_log: DeltaTraceLog,
     step_log: zk::StepLog,
+    trace_mode: TraceMode,
+    pc_trace: Vec<u64>,
+    delta_trace: zk::DeltaTraceLog,
     vector_enabled: bool,
     /// Maximum number of 64-bit lanes supported natively by the host CPU.
     max_vector_lanes: usize,
@@ -1224,6 +1234,9 @@ impl Clone for IVM {
             reg_log: self.reg_log.clone(),
             trace_log: self.trace_log.clone(),
             step_log: self.step_log.clone(),
+            trace_mode: self.trace_mode,
+            pc_trace: self.pc_trace.clone(),
+            delta_trace: self.delta_trace.clone(),
             vector_enabled: self.vector_enabled,
             max_vector_lanes: self.max_vector_lanes,
             vector_length: self.vector_length,
@@ -1535,6 +1548,9 @@ impl IVM {
             reg_log: zk::RegLog::default(),
             trace_log: DeltaTraceLog::default(),
             step_log: zk::StepLog::default(),
+            trace_mode: TraceMode::Off,
+            pc_trace: Vec::new(),
+            delta_trace: zk::DeltaTraceLog::default(),
             vector_enabled: false,
             max_vector_lanes,
             vector_length: default_vector_length(),
@@ -2274,6 +2290,8 @@ impl IVM {
         self.reg_log = zk::RegLog::default();
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
+        self.pc_trace.clear();
+        self.delta_trace = zk::DeltaTraceLog::default();
         self.cycles = 0;
         if !instruction_region.is_empty() {
             let decoded =
@@ -2913,6 +2931,8 @@ impl IVM {
         self.reg_log = zk::RegLog::default();
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
+        self.pc_trace.clear();
+        self.delta_trace = zk::DeltaTraceLog::default();
         // Gas remaining is not reset here; set_gas_limit should be called if needed.
         self.vector_length = if self.metadata.vector_length == 0 {
             default_vector_length()
@@ -3028,6 +3048,24 @@ impl IVM {
         }
     }
 
+    pub fn trace_mode(&self) -> TraceMode {
+        self.trace_mode
+    }
+
+    pub fn set_trace_mode(&mut self, mode: TraceMode) {
+        self.trace_mode = mode;
+        self.pc_trace.clear();
+        self.delta_trace = zk::DeltaTraceLog::default();
+    }
+
+    pub fn trace_pcs(&self) -> &[u64] {
+        &self.pc_trace
+    }
+
+    pub fn delta_register_trace(&self) -> &[zk::DeltaEntry] {
+        &self.delta_trace.entries
+    }
+
     /// Access the register trace collected during the last run when zero-knowledge padding was enabled.
     pub fn register_trace(&self) -> Vec<RegisterState> {
         self.trace_log.expand()
@@ -3064,6 +3102,21 @@ impl IVM {
                 self.memory.current_root(),
             );
             *last_logged_cycle += 1;
+        }
+    }
+
+    #[inline]
+    fn record_runtime_trace(&mut self) {
+        match self.trace_mode {
+            TraceMode::Off => {}
+            TraceMode::PcOnly => self.pc_trace.push(self.pc),
+            TraceMode::DeltaRegisters => {
+                self.delta_trace.record(
+                    self.pc,
+                    self.registers.snapshot(),
+                    self.registers.snapshot_tags(),
+                );
+            }
         }
     }
 
@@ -3111,6 +3164,8 @@ impl IVM {
                 self.trace_log = DeltaTraceLog::default();
                 self.step_log = zk::StepLog::default();
             }
+            self.pc_trace.clear();
+            self.delta_trace = zk::DeltaTraceLog::default();
 
             let mut last_logged_cycle = 0;
             // Fetch-Decode-Execute loop
@@ -3131,6 +3186,7 @@ impl IVM {
                 if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
                     return Err(VMError::ExceededMaxCycles);
                 }
+                self.record_runtime_trace();
                 let fetched = self.fetch_instruction()?;
                 let instr = fetched.inst;
                 let length = fetched.len;

@@ -40,14 +40,19 @@ type ParseResult<T> = Result<T, ParseError>;
 type ForEachMapBinding = (String, Option<String>, Expr, Option<usize>);
 
 #[derive(Default)]
-struct AccessHints {
+struct FunctionAttributes {
     reads: Vec<String>,
     writes: Vec<String>,
+    is_test: bool,
+    test_fixture: Option<String>,
 }
 
-impl AccessHints {
+impl FunctionAttributes {
     fn is_empty(&self) -> bool {
-        self.reads.is_empty() && self.writes.is_empty()
+        self.reads.is_empty()
+            && self.writes.is_empty()
+            && !self.is_test
+            && self.test_fixture.is_none()
     }
 }
 
@@ -69,6 +74,8 @@ struct Parser<'a> {
     pos: usize,
     source: &'a str,
     contract_meta: Option<ContractMeta>,
+    test_target: Option<TestTargetDecl>,
+    fixtures: Vec<FixtureDecl>,
 }
 
 impl<'a> Parser<'a> {
@@ -78,6 +85,8 @@ impl<'a> Parser<'a> {
             pos: 0,
             source,
             contract_meta: None,
+            test_target: None,
+            fixtures: Vec::new(),
         }
     }
 
@@ -278,7 +287,7 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> ParseResult<Program> {
         let mut items = Vec::new();
         while !self.peek(TokenKind::EOF) {
-            let access_hints = self.parse_access_attributes()?;
+            let attrs = self.parse_function_attributes()?;
             if self.peek(TokenKind::Fn) {
                 self.bump();
                 items.push(self.parse_fn_loose(
@@ -287,40 +296,42 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Free,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Struct) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_struct_def()?);
             } else if self.peek(TokenKind::Const) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_const_decl()?);
             } else if self.peek(TokenKind::Seiyaku) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 let mut contract_items = self.parse_contract()?;
                 items.append(&mut contract_items);
             } else if self.peek(TokenKind::State) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_state_decl()?);
@@ -333,8 +344,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Free,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
@@ -346,8 +359,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::View,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -358,8 +373,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -370,15 +387,34 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
-            } else if self.peek_ident_n(0, "kotoba") {
-                if !access_hints.is_empty() {
+            } else if self.peek_ident_n(0, "fixture") {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                let fixture = self.parse_fixture_decl()?;
+                self.fixtures.push(fixture);
+            } else if self.peek_ident_n(0, "koto_test") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
+                    ));
+                }
+                self.parse_test_target_decl()?;
+            } else if self.peek_ident_n(0, "kotoba") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_kotoba_block()?);
@@ -390,6 +426,8 @@ impl<'a> Parser<'a> {
         Ok(Program {
             items,
             contract_meta: self.contract_meta.clone(),
+            test_target: self.test_target.clone(),
+            fixtures: self.fixtures.clone(),
         })
     }
 
@@ -399,44 +437,44 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let mut items = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
-            let access_hints = self.parse_access_attributes()?;
+            let attrs = self.parse_function_attributes()?;
             if self.peek(TokenKind::Meta) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 self.parse_meta_block()?;
             } else if self.peek(TokenKind::Struct) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_struct_def()?);
             } else if self.peek(TokenKind::Const) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_const_decl()?);
             } else if self.peek(TokenKind::State) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_state_decl()?);
             } else if self.peek_ident_n(0, "register_trigger") || self.peek_ident_n(0, "trigger") {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_trigger_decl()?);
@@ -448,8 +486,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Contract,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
@@ -461,8 +501,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Contract,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
@@ -474,8 +516,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::View,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -486,8 +530,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -498,15 +544,26 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
-            } else if self.peek_ident_n(0, "kotoba") {
-                if !access_hints.is_empty() {
+            } else if self.peek_ident_n(0, "fixture") {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                let fixture = self.parse_fixture_decl()?;
+                self.fixtures.push(fixture);
+            } else if self.peek_ident_n(0, "kotoba") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_kotoba_block()?);
@@ -849,8 +906,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_access_attributes(&mut self) -> ParseResult<AccessHints> {
-        let mut hints = AccessHints::default();
+    fn parse_function_attributes(&mut self) -> ParseResult<FunctionAttributes> {
+        let mut attrs = FunctionAttributes::default();
         while self.peek(TokenKind::Hash) {
             self.bump(); // '#'
             self.expect(TokenKind::LBracket)?;
@@ -860,44 +917,18 @@ impl<'a> Parser<'a> {
             } else {
                 return Err(self.error(attr_tok, "expected attribute identifier"));
             };
-            if attr_name != "access" {
-                return Err(self.error(attr_tok, "expected attribute `access`"));
-            }
-            self.expect(TokenKind::LParen)?;
-            let mut parsed_any = false;
-            while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
-                let key = self.expect_ident()?;
-                self.expect(TokenKind::Equal)?;
-                let mut values = self.parse_access_value_list()?;
-                match key.as_str() {
-                    "read" => hints.reads.append(&mut values),
-                    "write" => hints.writes.append(&mut values),
-                    _ => {
-                        return Err(ParseError {
-                            message: format!("unknown access list `{key}`"),
-                            line: self.tokens[self.pos.saturating_sub(1)].line,
-                            column: self.tokens[self.pos.saturating_sub(1)].column,
-                            snippet: String::new(),
-                        });
-                    }
-                }
-                parsed_any = true;
-                if self.peek(TokenKind::Comma) {
-                    self.bump();
+            match attr_name.as_str() {
+                "access" => self.parse_access_attribute_body(&mut attrs)?,
+                "test" | "テスト" => self.parse_test_attribute_body(&mut attrs)?,
+                _ => {
+                    return Err(
+                        self.error(attr_tok, "expected attribute `access`, `test`, or `テスト`")
+                    );
                 }
             }
-            if !parsed_any {
-                return Err(ParseError {
-                    message: "access attribute must include read/write entries".into(),
-                    line: self.tokens[self.pos.saturating_sub(1)].line,
-                    column: self.tokens[self.pos.saturating_sub(1)].column,
-                    snippet: String::new(),
-                });
-            }
-            self.expect(TokenKind::RParen)?;
             self.expect(TokenKind::RBracket)?;
         }
-        Ok(hints)
+        Ok(attrs)
     }
 
     fn parse_access_value_list(&mut self) -> ParseResult<Vec<String>> {
@@ -924,6 +955,150 @@ impl<'a> Parser<'a> {
             TokenKind::String(s) => Ok(vec![s]),
             _ => Err(self.error(tok, "string literal")),
         }
+    }
+
+    fn parse_access_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
+        self.expect(TokenKind::LParen)?;
+        let mut parsed_any = false;
+        while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Equal)?;
+            let mut values = self.parse_access_value_list()?;
+            match key.as_str() {
+                "read" => attrs.reads.append(&mut values),
+                "write" => attrs.writes.append(&mut values),
+                _ => {
+                    return Err(ParseError {
+                        message: format!("unknown access list `{key}`"),
+                        line: self.tokens[self.pos.saturating_sub(1)].line,
+                        column: self.tokens[self.pos.saturating_sub(1)].column,
+                        snippet: String::new(),
+                    });
+                }
+            }
+            parsed_any = true;
+            if self.peek(TokenKind::Comma) {
+                self.bump();
+            }
+        }
+        if !parsed_any {
+            return Err(ParseError {
+                message: "access attribute must include read/write entries".into(),
+                line: self.tokens[self.pos.saturating_sub(1)].line,
+                column: self.tokens[self.pos.saturating_sub(1)].column,
+                snippet: String::new(),
+            });
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(())
+    }
+
+    fn parse_test_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
+        attrs.is_test = true;
+        if !self.peek(TokenKind::LParen) {
+            return Ok(());
+        }
+        self.bump(); // '('
+        while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Equal)?;
+            match key.as_str() {
+                "fixture" => {
+                    if attrs.test_fixture.is_some() {
+                        return Err(ParseError {
+                            message: "duplicate fixture binding in test attribute".into(),
+                            line: self.tokens[self.pos.saturating_sub(1)].line,
+                            column: self.tokens[self.pos.saturating_sub(1)].column,
+                            snippet: String::new(),
+                        });
+                    }
+                    attrs.test_fixture = Some(self.expect_ident_or_string()?);
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: format!("unknown test attribute option `{key}`"),
+                        line: self.tokens[self.pos.saturating_sub(1)].line,
+                        column: self.tokens[self.pos.saturating_sub(1)].column,
+                        snippet: String::new(),
+                    });
+                }
+            }
+            if self.peek(TokenKind::Comma) {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(())
+    }
+
+    fn parse_test_target_decl(&mut self) -> ParseResult<()> {
+        let tok = self.bump();
+        if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "koto_test") {
+            return Err(self.error(tok, "koto_test"));
+        }
+        self.expect(TokenKind::LBrace)?;
+        let mut target = None;
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Colon)?;
+            match key.as_str() {
+                "target" => target = Some(self.expect_ident_or_string()?),
+                _ => {
+                    return Err(
+                        self.error(self.tokens[self.pos.saturating_sub(1)].clone(), "target")
+                    );
+                }
+            }
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace)?;
+        let target = target.ok_or_else(|| ParseError {
+            message: "koto_test block requires `target: \"...\"`".into(),
+            line: tok.line,
+            column: tok.column,
+            snippet: String::new(),
+        })?;
+        self.test_target = Some(TestTargetDecl { target });
+        Ok(())
+    }
+
+    fn parse_fixture_decl(&mut self) -> ParseResult<FixtureDecl> {
+        let tok = self.bump();
+        if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "fixture") {
+            return Err(self.error(tok, "fixture"));
+        }
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut actions = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let action_name = self.expect_ident()?;
+            self.expect(TokenKind::LParen)?;
+            let mut args = Vec::new();
+            if !self.peek(TokenKind::RParen) {
+                loop {
+                    args.push(self.parse_expr()?);
+                    if self.peek(TokenKind::Comma) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+            if self.peek(TokenKind::Semicolon) {
+                self.bump();
+            }
+            actions.push(FixtureAction {
+                name: action_name,
+                args,
+            });
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(FixtureDecl { name, actions })
     }
 
     fn parse_meta_block(&mut self) -> ParseResult<()> {
@@ -3012,5 +3187,60 @@ mod tests {
             })
             .expect("trigger present");
         assert!(matches!(trigger.filter, TriggerFilter::Pipeline(_)));
+    }
+
+    #[test]
+    fn parse_koto_test_target_fixture_and_test_binding() {
+        let src = r#"
+        koto_test { target: "contracts/demo.ko" }
+
+        fixture seeded {
+            caller(account!("alice@wonderland"));
+            grant_permission("register_domain");
+        }
+
+        #[test(fixture="seeded")]
+        fn smoke() {}
+        "#;
+        let prog = parse(src).expect("parse koto_test program");
+        assert_eq!(
+            prog.test_target
+                .as_ref()
+                .map(|target| target.target.as_str()),
+            Some("contracts/demo.ko")
+        );
+        assert_eq!(prog.fixtures.len(), 1);
+        assert_eq!(prog.fixtures[0].name, "seeded");
+        assert_eq!(prog.fixtures[0].actions.len(), 2);
+
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert!(func.modifiers.is_test);
+        assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
+    }
+
+    #[test]
+    fn parse_unicode_test_attribute() {
+        let src = r#"
+        #[テスト]
+        fn smoke() {}
+        "#;
+        let prog = parse(src).expect("parse unicode test attribute");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert!(func.modifiers.is_test);
+        assert_eq!(func.modifiers.test_fixture, None);
     }
 }

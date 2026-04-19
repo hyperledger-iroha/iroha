@@ -586,6 +586,13 @@ impl Default for Compiler {
 }
 
 /// Options controlling metadata emitted by the compiler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompilerMode {
+    Production,
+    Test,
+}
+
+/// Options controlling metadata emitted by the compiler.
 #[derive(Clone, Debug)]
 pub struct CompilerOptions {
     /// ABI version to encode in the program header. Controls syscall policy and pointer‑ABI.
@@ -606,6 +613,8 @@ pub struct CompilerOptions {
     pub emit_debug: bool,
     /// Optional logical source path embedded into compiler debug metadata.
     pub debug_source_name: Option<String>,
+    /// Controls whether test-only syntax is stripped before compilation.
+    pub mode: CompilerMode,
 }
 
 impl Default for CompilerOptions {
@@ -620,6 +629,7 @@ impl Default for CompilerOptions {
             enforce_on_chain_profile: true,
             emit_debug: true,
             debug_source_name: None,
+            mode: CompilerMode::Production,
         }
     }
 }
@@ -2922,6 +2932,52 @@ pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
     ))
 }
 
+#[cfg(test)]
+mod test_mode_tests {
+    use super::*;
+
+    #[test]
+    fn production_mode_strips_test_functions_from_debug_report() {
+        let src = r#"
+        fn helper() {}
+
+        #[test]
+        fn smoke() {}
+        "#;
+
+        let production = Compiler::new_with_options(CompilerOptions::default());
+        let (_code, manifest, report) = production
+            .compile_source_with_manifest_and_report(src)
+            .expect("compile in production mode");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "smoke")
+        );
+        assert!(
+            manifest
+                .entrypoints
+                .as_ref()
+                .is_none_or(|entrypoints| entrypoints.iter().all(|entry| entry.name != "smoke"))
+        );
+
+        let test_mode = Compiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        });
+        let (_code, _manifest, report) = test_mode
+            .compile_source_with_manifest_and_report(src)
+            .expect("compile in test mode");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "smoke")
+        );
+    }
+}
+
 impl Compiler {
     /// Create a new compiler instance.
     pub fn new() -> Self {
@@ -2977,7 +3033,11 @@ impl Compiler {
     }
 
     fn compile_program(&self, program: &Program) -> Result<CompilationArtifacts, String> {
-        let typed = semantic::analyze(program)
+        let compiled_program = match self.opts.mode {
+            CompilerMode::Production => program.stripped_for_production(),
+            CompilerMode::Test => program.clone(),
+        };
+        let typed = semantic::analyze(&compiled_program)
             .map_err(|e| i18n::translate(self.lang, Message::SemanticError(&e.message)))?;
         if self.opts.enforce_on_chain_profile
             && let Err(violations) = policy::enforce_on_chain_profile(&typed)
@@ -2999,7 +3059,11 @@ impl Compiler {
         if abi_version != 1 {
             return Err(format!("unsupported abi_version {abi_version}; expected 1"));
         }
-        let ir_prog = ir::lower_with_cap(&typed, self.opts.dynamic_iter_cap as usize)?;
+        let ir_prog = ir::lower_with_cap_and_test_mode(
+            &typed,
+            self.opts.dynamic_iter_cap as usize,
+            self.opts.mode == CompilerMode::Test,
+        )?;
         let durable_enabled = abi_version >= 1;
         // Choose the default entrypoint used when the VM starts execution at offset 0.
         // Trigger contracts must boot into their callback entrypoint, not a preceding private helper.

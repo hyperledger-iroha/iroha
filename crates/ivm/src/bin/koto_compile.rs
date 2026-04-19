@@ -14,7 +14,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use ivm::kotodama::compiler::{AccessHintDiagnostics, CompileReport};
+use ivm::kotodama::compiler::{AccessHintDiagnostics, CompileReport, CompilerMode};
 use ivm::{KotodamaCompiler, ProgramMetadata, kotodama};
 use norito::json::{self, Value};
 
@@ -236,7 +236,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] \\");
     eprintln!(
-        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--strip-debug] [--no-lint] [--deny-lint-warnings]"
+        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
     );
     eprintln!("  koto_compile --explain <code>");
     eprintln!("\nNotes:");
@@ -278,6 +278,7 @@ fn main() {
     let mut emit_source_map: Option<String> = None;
     let mut emit_budget_report: Option<String> = None;
     let mut strip_debug = false;
+    let mut mode = CompilerMode::Production;
     let mut explain: Option<String> = None;
 
     let mut i = 0;
@@ -374,6 +375,21 @@ fn main() {
                 strip_debug = true;
                 i += 1;
             }
+            "--mode" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--mode expects one of: production, test");
+                    std::process::exit(2);
+                }
+                mode = match args[i + 1].as_str() {
+                    "production" => CompilerMode::Production,
+                    "test" => CompilerMode::Test,
+                    other => {
+                        eprintln!("unsupported compiler mode: {other}");
+                        std::process::exit(2);
+                    }
+                };
+                i += 2;
+            }
             "--force-zk" => {
                 force_zk = true;
                 i += 1;
@@ -460,6 +476,7 @@ fn main() {
     opts.force_vector = force_vector;
     opts.emit_debug = !strip_debug;
     opts.debug_source_name = normalize_debug_source_name(&input_path);
+    opts.mode = mode;
 
     let source = match std::fs::read_to_string(&input_path) {
         Ok(s) => s,

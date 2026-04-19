@@ -191,6 +191,7 @@ thread_local! {
     static STATE_ENV: RefCell<IndexMap<String, Type>> = RefCell::new(IndexMap::new());
     static CONST_ENV: RefCell<IndexMap<String, TypedExpr>> = RefCell::new(IndexMap::new());
     static FUNCTION_RETURNS: RefCell<HashMap<String, Type>> = RefCell::new(HashMap::new());
+    static FUNCTION_MODIFIERS: RefCell<HashMap<String, FunctionModifiers>> = RefCell::new(HashMap::new());
     static FUNCTION_PARAMS: RefCell<HashMap<String, Vec<TypedParam>>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
     static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
@@ -249,6 +250,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     CONST_ENV.with(|env| env.borrow_mut().clear());
+    FUNCTION_MODIFIERS.with(|env| env.borrow_mut().clear());
     FUNCTION_PARAMS.with(|env| env.borrow_mut().clear());
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow_mut().take();
@@ -306,6 +308,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
         .collect();
     STATE_ENV.with(|env| env.replace(resolved_state));
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
+    FUNCTION_MODIFIERS.with(|env| env.replace(fn_modifiers.clone()));
     let mut fn_params: HashMap<String, Vec<TypedParam>> = HashMap::new();
     for item in &program.items {
         let Item::Function(f) = item else { continue };
@@ -1686,6 +1689,42 @@ fn bind_tuple_fields_rec(
 }
 
 fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
+    if func.modifiers.is_test {
+        if !func.params.is_empty() {
+            return Err(SemanticError {
+                message: format!("test function `{}` must not declare parameters", func.name),
+            });
+        }
+        if func.ret_ty.is_some() {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` must not declare a return type",
+                    func.name
+                ),
+            });
+        }
+        if func.modifiers.visibility != FunctionVisibility::Internal
+            || !matches!(
+                func.modifiers.kind,
+                FunctionKind::Free | FunctionKind::Contract
+            )
+        {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` must be declared as a local `fn`",
+                    func.name
+                ),
+            });
+        }
+        if func.modifiers.permission.is_some() {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` cannot declare a permission modifier",
+                    func.name
+                ),
+            });
+        }
+    }
     let mut vars = HashMap::new();
     let mut param_names = Vec::new();
     let mut param_types = Vec::new();
@@ -1772,6 +1811,90 @@ fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
         });
     }
     Ok(())
+}
+
+fn current_function_is_test() -> bool {
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow()
+            .as_ref()
+            .is_some_and(|modifiers| modifiers.is_test)
+    })
+}
+
+fn function_is_runtime_entrypoint(modifiers: &FunctionModifiers) -> bool {
+    modifiers.visibility == FunctionVisibility::Public
+        || matches!(
+            modifiers.kind,
+            FunctionKind::View | FunctionKind::Hajimari | FunctionKind::Kaizen
+        )
+}
+
+fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::String(raw) => Some(raw.clone()),
+        Expr::Call { name, args } if normalize_namespaced(name) == "name" && args.len() == 1 => {
+            match &args[0] {
+                Expr::String(raw) => Some(raw.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn analyze_invoke_entrypoint_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`invoke_entrypoint` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 2 {
+        return Err(SemanticError {
+            message: "invoke_entrypoint expects (string|Name literal, Json)".into(),
+        });
+    }
+
+    let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "invoke_entrypoint requires a literal entrypoint name such as \"run\" or name(\"run\")"
+                .into(),
+    })?;
+    let payload = analyze_expr(&args[1], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "invoke_entrypoint expects a Json payload as its second argument".into(),
+        });
+    }
+
+    let Some(modifiers) = FUNCTION_MODIFIERS.with(|env| env.borrow().get(&target_name).cloned())
+    else {
+        return Err(SemanticError {
+            message: format!("invoke_entrypoint targets unknown function `{target_name}`"),
+        });
+    };
+    if !function_is_runtime_entrypoint(&modifiers) {
+        return Err(SemanticError {
+            message: format!(
+                "invoke_entrypoint may only target public/view/hajimari/kaizen entrypoints, got `{target_name}`"
+            ),
+        });
+    }
+
+    let ret_ty = FUNCTION_RETURNS
+        .with(|env| env.borrow().get(&target_name).cloned())
+        .unwrap_or(Type::Unit);
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: format!("__invoke_entrypoint__{target_name}"),
+            args: vec![payload],
+        },
+        ty: ret_ty,
+    })
 }
 
 fn analyze_block(
@@ -3523,6 +3646,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         })
                     }
                 };
+            }
+
+            if name == "invoke_entrypoint" {
+                return analyze_invoke_entrypoint_call(args, vars);
             }
 
             // Struct constructor call: `StructName(arg1, arg2, ...)`
@@ -7417,6 +7544,128 @@ mod tests {
             err.message.contains("cannot use `trigger_event` here"),
             "unexpected error message: {}",
             err.message
+        );
+    }
+
+    #[test]
+    fn invoke_entrypoint_accepts_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+            "#,
+        )
+        .expect("parse invoke_entrypoint");
+        analyze(&program).expect("invoke_entrypoint in tests should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                fn helper() {
+                    let _next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse non-test invoke_entrypoint");
+        let err = analyze(&program).expect_err("non-test invoke_entrypoint should fail");
+        assert!(err.message.contains("only available inside #[test]"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_accepts_name_literal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint(name("run"), json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+            "#,
+        )
+        .expect("parse name literal invoke_entrypoint");
+        analyze(&program).expect("name literal invoke_entrypoint should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_literal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                #[test]
+                fn drive_run() {
+                    let target = "run";
+                    let _next = invoke_entrypoint(target, json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse dynamic target invoke_entrypoint");
+        let err = analyze(&program).expect_err("dynamic target should fail");
+        assert!(err.message.contains("requires a literal entrypoint name"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_json_payload() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                #[test]
+                fn drive_run() {
+                    let _next = invoke_entrypoint("run", 7);
+                }
+            }
+            "#,
+        )
+        .expect("parse non-json payload invoke_entrypoint");
+        let err = analyze(&program).expect_err("non-json payload should fail");
+        assert!(err.message.contains("expects a Json payload"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_internal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                fn helper() -> int { return 7; }
+
+                #[test]
+                fn drive_run() {
+                    let _next = invoke_entrypoint("helper", json("{}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse internal target invoke_entrypoint");
+        let err = analyze(&program).expect_err("internal target should fail");
+        assert!(
+            err.message
+                .contains("may only target public/view/hajimari/kaizen")
         );
     }
 
