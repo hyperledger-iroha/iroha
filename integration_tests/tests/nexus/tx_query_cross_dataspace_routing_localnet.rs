@@ -1662,6 +1662,31 @@ mod tests {
     }
 
     #[test]
+    fn expect_proxy_route_headers_rejects_missing_lane_or_dataspace() {
+        let missing_lane =
+            routed_json_response_with_route(Some("proxy"), None, Some(&DS1_ID_U64.to_string()));
+        let err = expect_proxy_route_headers(
+            &missing_lane,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "missing lane response",
+        )
+        .expect_err("missing lane header should fail");
+        assert!(err.to_string().contains("expected routed lane 1"));
+
+        let missing_dataspace =
+            routed_json_response_with_route(Some("proxy"), Some(&DS1_LANE_INDEX.to_string()), None);
+        let err = expect_proxy_route_headers(
+            &missing_dataspace,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "missing dataspace response",
+        )
+        .expect_err("missing dataspace header should fail");
+        assert!(err.to_string().contains("expected routed dataspace 1"));
+    }
+
+    #[test]
     fn expect_proxy_fanout_headers_requires_proxy_without_singular_route() {
         let response = routed_json_response_with_route(Some("proxy"), None, None);
 
@@ -1821,6 +1846,25 @@ mod tests {
     }
 
     #[test]
+    fn manifest_response_contains_dataspace_ignores_missing_or_non_numeric_ids() {
+        let body = norito::json!({
+            "manifests": [
+                { "dataspace_id": "2", "status": "Active" },
+                { "status": "Active" },
+            ],
+        });
+
+        assert!(
+            !manifest_response_contains_dataspace(
+                &body,
+                DataSpaceId::new(DS2_ID_U64),
+                "manifest response",
+            )
+            .expect("manifest response should decode")
+        );
+    }
+
+    #[test]
     fn account_assets_response_contains_matches_asset_definition_literal() {
         let asset_definition_id = ds2_asset_definition_id();
         let asset_literal = asset_definition_id.to_string();
@@ -1861,10 +1905,27 @@ mod tests {
     #[test]
     fn account_assets_response_contains_ignores_non_string_assets() {
         let asset_definition_id = ds2_asset_definition_id();
+        let asset_literal = asset_definition_id.to_string();
         let body = norito::json!({
             "items": [
                 { "asset": DS2_ID_U64 },
-                { "not_asset": asset_definition_id.to_string() },
+                { "not_asset": asset_literal },
+            ],
+        });
+
+        assert!(
+            !account_assets_response_contains(&body, &asset_definition_id, "account assets")
+                .expect("account assets response should decode")
+        );
+    }
+
+    #[test]
+    fn account_assets_response_contains_requires_exact_asset_literal() {
+        let asset_definition_id = ds2_asset_definition_id();
+        let asset_literal = format!("{}#dataspace:{}", asset_definition_id, DS2_ID_U64);
+        let body = norito::json!({
+            "items": [
+                { "asset": asset_literal },
             ],
         });
 
@@ -1928,6 +1989,14 @@ mod tests {
     #[test]
     fn routed_json_response_is_not_transient_for_non_retryable_empty_statuses() {
         let response = routed_json_response(HttpStatusCode::NOT_FOUND, JsonValue::Null, "");
+
+        assert!(!routed_json_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_json_response_is_not_transient_when_null_body_text_is_non_empty() {
+        let response =
+            routed_json_response(HttpStatusCode::GATEWAY_TIMEOUT, JsonValue::Null, "timeout");
 
         assert!(!routed_json_response_is_transient(&response));
     }
