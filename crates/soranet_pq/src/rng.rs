@@ -241,4 +241,34 @@ mod tests {
         );
         assert_eq!(first_bytes, second_bytes);
     }
+
+    #[test]
+    fn deterministic_constructor_personalization_changes_public_stream() {
+        let seed = HedgedRngSeed::from_entropy([0xD8; 32]);
+        let mut first = deterministic_chacha20_rng(seed.clone(), b"fixture-stream-a");
+        let mut second = deterministic_chacha20_rng(seed, b"fixture-stream-b");
+        let mut first_bytes = [0u8; 64];
+        let mut second_bytes = [0u8; 64];
+
+        first.fill_bytes(&mut first_bytes);
+        second.fill_bytes(&mut second_bytes);
+
+        assert_eq!(
+            first.entropy_status(),
+            HedgedEntropyStatus::OsEntropyUnavailable
+        );
+        assert_eq!(
+            second.entropy_status(),
+            HedgedEntropyStatus::OsEntropyUnavailable
+        );
+        assert_ne!(first_bytes, second_bytes);
+    }
+
+    #[test]
+    fn seed_from_entropy_exposes_original_seed_bytes() {
+        let raw = [0xA9; 32];
+        let seed = HedgedRngSeed::from_entropy(raw);
+
+        assert_eq!(seed.as_bytes(), &raw);
+    }
 }
