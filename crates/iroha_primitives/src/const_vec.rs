@@ -1203,8 +1203,8 @@ mod tests {
     };
 
     use super::{
-        ConstVec, decode_const_vec_manual, decode_const_vec_manual_unpacked,
-        decode_const_vec_recover, ncore, reencode_and_verify,
+        ConstVec, decode_const_vec_manual, decode_const_vec_manual_elem,
+        decode_const_vec_manual_unpacked, decode_const_vec_recover, ncore, reencode_and_verify,
     };
 
     #[repr(transparent)]
@@ -1588,6 +1588,20 @@ mod tests {
     }
 
     #[test]
+    fn manual_unpacked_rejects_truncated_later_element_header() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&[0; 7]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("truncated second element header should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
     fn manual_unpacked_rejects_truncated_element_payload() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1_u64.to_le_bytes());
@@ -1596,6 +1610,44 @@ mod tests {
 
         let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
             .expect_err("truncated element payload should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_later_invalid_element_body() {
+        let bytes = manual_unpacked_payload(&[&[5], &[]]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("invalid second u8 element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_wrong_scalar_element_length() {
+        let bytes = manual_unpacked_payload(&[&[0x12]]);
+
+        let err = decode_const_vec_manual_unpacked::<u16>(&bytes)
+            .expect_err("short u16 element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_elem_decodes_scalar() {
+        let bytes = 0xCAFE_u16.to_le_bytes();
+
+        let decoded = decode_const_vec_manual_elem::<u16>(&bytes, 0)
+            .expect("manual element should decode scalar bytes");
+
+        assert_eq!(decoded, 0xCAFE);
+    }
+
+    #[test]
+    fn manual_unpacked_elem_rejects_short_scalar() {
+        let err = decode_const_vec_manual_elem::<u16>(&[0xFE], 1)
+            .expect_err("short scalar element should be rejected");
 
         assert!(matches!(err, ncore::Error::LengthMismatch));
     }
