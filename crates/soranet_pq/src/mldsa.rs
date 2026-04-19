@@ -385,6 +385,25 @@ mod tests {
     }
 
     #[test]
+    fn from_os_helpers_sign_and_verify() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair =
+            generate_mldsa_keypair_from_os(suite).expect("OS-backed ML-DSA keypair generation");
+        let message = b"OS-backed ML-DSA signing";
+        let signature = sign_mldsa_from_os(suite, keypair.secret_key(), b"", message)
+            .expect("OS-backed ML-DSA signing");
+
+        verify_mldsa(
+            suite,
+            keypair.public_key(),
+            b"",
+            message,
+            signature.as_bytes(),
+        )
+        .expect("OS-backed ML-DSA signature verifies");
+    }
+
+    #[test]
     fn seeded_keypair_is_deterministic() {
         for suite in [
             MlDsaSuite::MlDsa44,
@@ -591,6 +610,17 @@ mod tests {
     }
 
     #[test]
+    fn bad_encoding_display_includes_kind_and_lengths() {
+        let err = verify_mldsa(MlDsaSuite::MlDsa65, &[0u8; 9], b"", b"message", &[0u8; 8])
+            .expect_err("short public key must fail before signature decoding");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("ML-DSA-65 public key"));
+        assert!(rendered.contains("9"));
+        assert!(rendered.contains("1952"));
+    }
+
+    #[test]
     fn max_context_length_signs_and_verifies() {
         let suite = MlDsaSuite::MlDsa44;
         let keypair = generate_mldsa_keypair_from_seed(
@@ -742,6 +772,16 @@ mod tests {
     }
 
     #[test]
+    fn context_too_long_display_includes_length() {
+        let err = MlDsaError::ContextTooLong { len: 300 };
+
+        assert_eq!(
+            err.to_string(),
+            "ML-DSA context length must be at most 255 bytes, found 300"
+        );
+    }
+
+    #[test]
     fn reject_modified_message() {
         let mut rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([0x44; 32]),
@@ -778,6 +818,35 @@ mod tests {
             MlDsaError::VerificationFailed(VerificationError::InvalidSignature) => {}
             _ => panic!("unexpected error"),
         }
+    }
+
+    #[test]
+    fn reject_modified_signature() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF6; 32]),
+            b"modified-signature-keypair",
+        )
+        .expect("seeded keypair generation should succeed");
+        let mut sign_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF7; 32]),
+            b"modified-signature-sign",
+        );
+        let message = b"signature tamper target";
+        let mut signature = sign_mldsa(suite, keypair.secret_key(), b"", message, &mut sign_rng)
+            .expect("signature succeeds")
+            .as_bytes()
+            .to_vec();
+        signature[0] ^= 0x01;
+
+        let err = verify_mldsa(suite, keypair.public_key(), b"", message, &signature)
+            .expect_err("modified signature must fail");
+
+        assert!(matches!(
+            err,
+            MlDsaError::VerificationFailed(VerificationError::InvalidSignature)
+        ));
     }
 
     #[test]
