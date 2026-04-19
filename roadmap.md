@@ -2,6 +2,47 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 primitive container API coverage):
+`iroha_primitives` now has broader focused coverage around the small container
+wrappers. `UniqueVec` tests cover duplicate ownership, empty/trailing-comma
+macro construction, borrow and iterator behavior, conversion back to `Vec`,
+Norito layout parity with the inner vector, and JSON duplicate error details.
+`SmallStr` and `SmallVec` tests cover constructor/display/prefix paths, direct
+slice decode consumed lengths, mutation APIs, conversion/iteration paths,
+truncated element rejection, and zero-length payload-context deserialization.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/unique_vec.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/small.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives unique_vec::tests` (`18 passed`)
+  - `cargo test -p iroha_primitives small::tests` (`13 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`177 passed`; `numeric_inspect`
+    `1 passed`; doctests `1 passed; 1 ignored`)
+
+Latest sync (2026-04-19 TimeSource mock clock coverage):
+`crates/iroha_primitives/src/time.rs` now directly covers the mock clock API:
+`TimeSource::new_mock` start-time wiring, exact mock UNIX/system-time
+conversion, shared state across cloned handles and sources, `set` combined with
+`advance` / `rewind`, and bounded system-clock assertions for `new_system`,
+`default`, `get_system_time`, and `now` / `get_unix_time`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/time.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives time::tests -- --nocapture` (`6 passed`)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo test -p iroha_primitives -- --nocapture`
+    (`177 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
 Latest sync (2026-04-19 DefaultHost Halo2 open-verify gating):
 `crates/ivm/src/host.rs` now runs the real Halo2 open verifier for the
 single-envelope verify syscalls on `DefaultHost` instead of returning the old
@@ -49,7 +90,10 @@ display+debug error rendering. The newest assertions add missing route-header
 fields, non-numeric/missing manifest dataspace IDs, exact asset-literal
 matching, non-empty null-body retry rejection, single-sample timing summaries,
 zero remaining-client timeout slicing, unrelated fallback phrase negatives, and
-unknown fanout route-source rejection.
+unknown fanout route-source rejection. This pass adds deterministic fixture
+coverage for stake/fee asset helper separation, Alice-backed gas-account
+selection, validator authority derivation, and expected lane binding
+construction.
 
 - shipped in:
   - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
@@ -60,9 +104,9 @@ unknown fanout route-source rejection.
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`21 passed; 208 filtered out`)
+    (`24 passed; 212 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`11 passed; 218 filtered out`)
+    (`15 passed; 221 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 Latest sync (2026-04-19 ConstVec manual fallback coverage):
