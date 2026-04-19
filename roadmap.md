@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Python RWA classmethod fixtures):
+The Python Rust binding RWA classmethod tests now use canonical
+`hash$domain.dataspace` literals (`commodities.universal`) for transfer,
+parent, controls, and scalar RWA operations. The register payload also supplies
+the fully qualified domain value expected by `DomainId`, and the merge fixture
+now passes valid JSON to `json.loads` instead of an escaped-brace Rust format
+template.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_python_rs rwa -- --nocapture` (`4 passed`)
+  - `cargo test -p iroha_python_rs -- --nocapture` (`33 passed`)
+- open work after this slice:
+  - none for the reported Python RWA classmethod failures
+
 Latest sync (2026-04-19 SoraNet gateway billing fixture asset IDs):
 The default SoraNet gateway M1 and M2 bundle configs now pass the canonical
 billing asset definition ID (`4cuvDVPuLBKJyN6dPbRQhmLh68sU`) into the xtask
