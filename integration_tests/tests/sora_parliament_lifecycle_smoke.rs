@@ -28,7 +28,7 @@ use iroha::data_model::{
         Account, AssetDefinitionId, FindAssetById, FindAssetsDefinitions, FindDomains, Grant, Mint,
         QueryBuilderExt, Register, Transfer,
     },
-    query::account::prelude::FindAccounts,
+    query::{account::prelude::FindAccounts, permission::prelude::FindPermissionsByAccountId},
     runtime::RuntimeUpgradeManifest,
     smart_contract::{
         ContractAddress,
@@ -441,6 +441,142 @@ async fn wait_for_account_registration(
             ));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn group_permission_grants_by_account(
+    grants: &[(iroha::data_model::account::AccountId, Permission)],
+) -> Vec<(iroha::data_model::account::AccountId, Vec<Permission>)> {
+    let mut grouped = Vec::<(iroha::data_model::account::AccountId, Vec<Permission>)>::new();
+    for (account_id, permission) in grants {
+        if let Some((_, permissions)) = grouped
+            .iter_mut()
+            .find(|(existing_account, _)| existing_account == account_id)
+        {
+            if !permissions.iter().any(|existing| existing == permission) {
+                permissions.push(permission.clone());
+            }
+        } else {
+            grouped.push((account_id.clone(), vec![permission.clone()]));
+        }
+    }
+    grouped
+}
+
+async fn wait_for_account_permissions(
+    client: &Client,
+    account_id: &iroha::data_model::account::AccountId,
+    required_permissions: &[Permission],
+    timeout: Duration,
+    context: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_observed = Vec::new();
+    loop {
+        let mut last_error = None::<String>;
+        match client
+            .query(FindPermissionsByAccountId::new(account_id.clone()))
+            .execute_all()
+        {
+            Ok(permissions) => {
+                let all_present = required_permissions
+                    .iter()
+                    .all(|required| permissions.iter().any(|permission| permission == required));
+                last_observed = permissions;
+                if all_present {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        if Instant::now() >= deadline {
+            let suffix = last_error
+                .map(|err| format!("; last permission query error: {err}"))
+                .unwrap_or_default();
+            return Err(eyre!(
+                "{context}: timed out waiting for permissions on `{account_id}`; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn submit_permission_grants_and_wait(
+    client: &Client,
+    grants: Vec<(iroha::data_model::account::AccountId, Permission)>,
+    timeout: Duration,
+    submit_context: &str,
+    wait_context: &str,
+) -> Result<()> {
+    if grants.is_empty() {
+        return Ok(());
+    }
+    let required_permissions = group_permission_grants_by_account(&grants);
+    let tx_hash = client
+        .submit_all(
+            grants
+                .into_iter()
+                .map(|(account_id, permission)| Grant::account_permission(permission, account_id)),
+        )
+        .wrap_err_with(|| submit_context.to_owned())?;
+    for (account_id, permissions) in required_permissions {
+        wait_for_account_permissions(client, &account_id, &permissions, timeout, wait_context)
+            .await
+            .wrap_err_with(|| {
+                let tx_status = client.get_transaction_status(tx_hash).ok().flatten();
+                format!(
+                    "{wait_context}; permission grant tx hash {tx_hash}; tx status {tx_status:?}"
+                )
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn group_permission_grants_by_account_deduplicates_permissions() {
+        let other_account = gen_account_in("wonderland").0;
+        let enact_perm: Permission = CanEnactGovernance.into();
+        let propose_perm: Permission = CanProposeContractDeployment {
+            contract_address: governance_contract_address(FIRST_CONTRACT_ID),
+        }
+        .into();
+        let grouped = group_permission_grants_by_account(&[
+            (ALICE_ID.clone(), enact_perm.clone()),
+            (ALICE_ID.clone(), enact_perm.clone()),
+            (ALICE_ID.clone(), propose_perm.clone()),
+            (other_account.clone(), enact_perm.clone()),
+        ]);
+
+        assert_eq!(grouped.len(), 2);
+        let alice_permissions = grouped
+            .iter()
+            .find(|(account_id, _)| account_id == &*ALICE_ID)
+            .map(|(_, permissions)| permissions)
+            .expect("alice permissions should be grouped");
+        assert_eq!(alice_permissions.len(), 2);
+        assert!(
+            alice_permissions
+                .iter()
+                .any(|permission| permission == &enact_perm)
+        );
+        assert!(
+            alice_permissions
+                .iter()
+                .any(|permission| permission == &propose_perm)
+        );
+
+        let other_permissions = grouped
+            .iter()
+            .find(|(account_id, _)| account_id == &other_account)
+            .map(|(_, permissions)| permissions)
+            .expect("other account permissions should be grouped");
+        assert_eq!(other_permissions, &vec![enact_perm]);
     }
 }
 
@@ -1027,13 +1163,19 @@ async fn setup_hostile_fixture(
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
-    alice
-        .submit_all_blocking([
-            Grant::account_permission(deploy_perm, ALICE_ID.clone()),
-            Grant::account_permission(runtime_perm, ALICE_ID.clone()),
-            Grant::account_permission(enact_perm, ALICE_ID.clone()),
-        ])
-        .wrap_err("grant hostile-fixture governance permissions to alice")?;
+    submit_permission_grants_and_wait(
+        &alice,
+        vec![
+            (ALICE_ID.clone(), deploy_perm),
+            (ALICE_ID.clone(), runtime_perm),
+            (ALICE_ID.clone(), enact_perm),
+        ],
+        Duration::from_secs(180),
+        "submit hostile-fixture governance permission grants to alice",
+        "wait for hostile-fixture governance permissions on alice",
+    )
+    .await
+    .wrap_err("grant hostile-fixture governance permissions to alice")?;
 
     alice
         .submit_all_blocking(
@@ -1267,13 +1409,19 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
-    alice
-        .submit_all_blocking([
-            Grant::account_permission(propose_perm, ALICE_ID.clone()),
-            Grant::account_permission(reject_propose_perm, ALICE_ID.clone()),
-            Grant::account_permission(enact_perm, ALICE_ID.clone()),
-        ])
-        .wrap_err("grant governance proposal/enact permissions to alice")?;
+    submit_permission_grants_and_wait(
+        &alice,
+        vec![
+            (ALICE_ID.clone(), propose_perm),
+            (ALICE_ID.clone(), reject_propose_perm),
+            (ALICE_ID.clone(), enact_perm),
+        ],
+        Duration::from_secs(180),
+        "submit governance proposal/enact permission grants to alice",
+        "wait for governance proposal/enact permissions on alice",
+    )
+    .await
+    .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
         .submit_all_blocking(
@@ -1359,22 +1507,31 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     }
     eprintln!("sora smoke: proposer funding minted");
 
-    alice
-        .submit_all_blocking(citizens.iter().flat_map(|(account_id, _)| {
-            let first_ballot_perm: Permission = CanSubmitGovernanceBallot {
-                referendum_id: referendum_id.clone(),
-            }
-            .into();
-            let second_ballot_perm: Permission = CanSubmitGovernanceBallot {
-                referendum_id: reject_referendum_id.clone(),
-            }
-            .into();
-            [
-                Grant::account_permission(first_ballot_perm, account_id.clone()),
-                Grant::account_permission(second_ballot_perm, account_id.clone()),
-            ]
-        }))
-        .wrap_err("grant ballot permissions for both referenda")?;
+    submit_permission_grants_and_wait(
+        &alice,
+        citizens
+            .iter()
+            .flat_map(|(account_id, _)| {
+                let first_ballot_perm: Permission = CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                }
+                .into();
+                let second_ballot_perm: Permission = CanSubmitGovernanceBallot {
+                    referendum_id: reject_referendum_id.clone(),
+                }
+                .into();
+                [
+                    (account_id.clone(), first_ballot_perm),
+                    (account_id.clone(), second_ballot_perm),
+                ]
+            })
+            .collect(),
+        Duration::from_secs(180),
+        "submit ballot permission grants for both referenda",
+        "wait for ballot permissions for both referenda",
+    )
+    .await
+    .wrap_err("grant ballot permissions for both referenda")?;
 
     alice
         .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
@@ -2261,16 +2418,24 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     let deploy_referendum_id = deploy_proposal_id_hex.clone();
 
     let deploy_voters: Vec<_> = fixture.attackers.iter().take(6).collect();
-    fixture
-        .alice
-        .submit_all(deploy_voters.iter().map(|(account_id, _)| {
-            let ballot_perm: Permission = CanSubmitGovernanceBallot {
-                referendum_id: deploy_referendum_id.clone(),
-            }
-            .into();
-            Grant::account_permission(ballot_perm, account_id.clone())
-        }))
-        .wrap_err("grant hostile deploy referendum ballot permissions")?;
+    submit_permission_grants_and_wait(
+        &fixture.alice,
+        deploy_voters
+            .iter()
+            .map(|(account_id, _)| {
+                let ballot_perm: Permission = CanSubmitGovernanceBallot {
+                    referendum_id: deploy_referendum_id.clone(),
+                }
+                .into();
+                (account_id.clone(), ballot_perm)
+            })
+            .collect(),
+        Duration::from_secs(180),
+        "submit hostile deploy referendum ballot permission grants",
+        "wait for hostile deploy referendum ballot permissions",
+    )
+    .await
+    .wrap_err("grant hostile deploy referendum ballot permissions")?;
 
     fixture
         .alice
@@ -2421,16 +2586,24 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     let runtime_proposal_id_hex = hex::encode(runtime_proposal_id);
     let runtime_referendum_id = runtime_proposal_id_hex.clone();
     let runtime_voters: Vec<_> = fixture.attackers.iter().skip(6).take(6).collect();
-    fixture
-        .alice
-        .submit_all(runtime_voters.iter().map(|(account_id, _)| {
-            let ballot_perm: Permission = CanSubmitGovernanceBallot {
-                referendum_id: runtime_referendum_id.clone(),
-            }
-            .into();
-            Grant::account_permission(ballot_perm, account_id.clone())
-        }))
-        .wrap_err("grant hostile runtime referendum ballot permissions")?;
+    submit_permission_grants_and_wait(
+        &fixture.alice,
+        runtime_voters
+            .iter()
+            .map(|(account_id, _)| {
+                let ballot_perm: Permission = CanSubmitGovernanceBallot {
+                    referendum_id: runtime_referendum_id.clone(),
+                }
+                .into();
+                (account_id.clone(), ballot_perm)
+            })
+            .collect(),
+        Duration::from_secs(180),
+        "submit hostile runtime referendum ballot permission grants",
+        "wait for hostile runtime referendum ballot permissions",
+    )
+    .await
+    .wrap_err("grant hostile runtime referendum ballot permissions")?;
 
     fixture
         .alice

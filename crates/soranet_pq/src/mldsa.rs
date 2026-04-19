@@ -469,6 +469,88 @@ mod tests {
     }
 
     #[test]
+    fn signing_personalization_changes_signature() {
+        let suite = MlDsaSuite::MlDsa65;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xEA; 32]),
+            b"personalized-sign-keygen",
+        )
+        .expect("seeded keypair generation should succeed");
+        let mut first_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xEB; 32]),
+            b"personalized-sign-a",
+        );
+        let mut second_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xEB; 32]),
+            b"personalized-sign-b",
+        );
+        let context = b"soranet-pq:personalized-sign";
+        let message = b"same message and key, different signing coins";
+
+        let first = sign_mldsa(
+            suite,
+            keypair.secret_key(),
+            context,
+            message,
+            &mut first_rng,
+        )
+        .expect("first signature succeeds");
+        let second = sign_mldsa(
+            suite,
+            keypair.secret_key(),
+            context,
+            message,
+            &mut second_rng,
+        )
+        .expect("second signature succeeds");
+
+        assert_ne!(first.as_bytes(), second.as_bytes());
+        verify_mldsa(
+            suite,
+            keypair.public_key(),
+            context,
+            message,
+            first.as_bytes(),
+        )
+        .expect("first signature verifies");
+        verify_mldsa(
+            suite,
+            keypair.public_key(),
+            context,
+            message,
+            second.as_bytes(),
+        )
+        .expect("second signature verifies");
+    }
+
+    #[test]
+    fn generated_keypairs_and_signatures_match_suite_lengths() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let keypair = generate_mldsa_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0xEC); 32]),
+                b"length-keygen",
+            )
+            .expect("seeded keypair generation should succeed");
+            let mut rng = deterministic_chacha20_rng(
+                HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0xEF); 32]),
+                b"length-sign",
+            );
+            let signature = sign_mldsa(suite, keypair.secret_key(), b"", b"length-check", &mut rng)
+                .expect("signature succeeds");
+
+            assert_eq!(keypair.public_key().len(), suite.public_key_len());
+            assert_eq!(keypair.secret_key().len(), suite.secret_key_len());
+            assert_eq!(signature.as_bytes().len(), suite.signature_len());
+        }
+    }
+
+    #[test]
     fn sign_rejects_invalid_secret_key_length() {
         let mut rng = deterministic_chacha20_rng(
             HedgedRngSeed::from_entropy([0xE3; 32]),
@@ -506,6 +588,74 @@ mod tests {
             MlDsaError::BadEncoding(err) => assert!(err.kind.contains("signature")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn max_context_length_signs_and_verifies() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xE5; 32]),
+            b"max-context-keygen",
+        )
+        .expect("seeded keypair generation should succeed");
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE6; 32]),
+            b"max-context-sign",
+        );
+        let context = vec![0xA5; ML_DSA_CONTEXT_MAX_LEN];
+        let message = b"maximum context length";
+
+        let signature = sign_mldsa(suite, keypair.secret_key(), &context, message, &mut rng)
+            .expect("max context signs");
+        verify_mldsa(
+            suite,
+            keypair.public_key(),
+            &context,
+            message,
+            signature.as_bytes(),
+        )
+        .expect("max context verifies");
+    }
+
+    #[test]
+    fn empty_context_and_message_sign_and_verify() {
+        let suite = MlDsaSuite::MlDsa87;
+        let keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF4; 32]),
+            b"empty-message-keygen",
+        )
+        .expect("seeded keypair generation should succeed");
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF5; 32]),
+            b"empty-message-sign",
+        );
+
+        let signature = sign_mldsa(suite, keypair.secret_key(), b"", b"", &mut rng)
+            .expect("empty message signs");
+
+        verify_mldsa(suite, keypair.public_key(), b"", b"", signature.as_bytes())
+            .expect("empty message verifies");
+    }
+
+    #[test]
+    fn suite_ids_roundtrip_and_reject_unknown() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            assert!(suite.public_key_len() > 0);
+            assert!(suite.secret_key_len() > suite.public_key_len());
+            assert!(suite.signature_len() > 0);
+            assert!(matches!(
+                MlDsaSuite::from_suite_id(suite.suite_id()),
+                Some(recovered) if recovered.suite_id() == suite.suite_id()
+            ));
+        }
+
+        assert!(MlDsaSuite::from_suite_id(0xFF).is_none());
     }
 
     #[test]
@@ -553,6 +703,45 @@ mod tests {
     }
 
     #[test]
+    fn sign_rejects_long_context_before_bad_secret_length() {
+        let mut sign_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF0; 32]),
+            b"mldsa-context-before-secret",
+        );
+        let context = vec![0u8; ML_DSA_CONTEXT_MAX_LEN + 1];
+
+        let err = sign_mldsa(
+            MlDsaSuite::MlDsa44,
+            &[],
+            &context,
+            b"message",
+            &mut sign_rng,
+        )
+        .expect_err("context length must be checked before secret length");
+
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_long_context_before_bad_key_lengths() {
+        let context = vec![0u8; ML_DSA_CONTEXT_MAX_LEN + 1];
+        let err = verify_mldsa(MlDsaSuite::MlDsa44, &[], &context, b"message", &[])
+            .expect_err("context length must be checked first");
+
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+    }
+
+    #[test]
     fn reject_modified_message() {
         let mut rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([0x44; 32]),
@@ -589,6 +778,51 @@ mod tests {
             MlDsaError::VerificationFailed(VerificationError::InvalidSignature) => {}
             _ => panic!("unexpected error"),
         }
+    }
+
+    #[test]
+    fn reject_wrong_public_key() {
+        let suite = MlDsaSuite::MlDsa65;
+        let signing_keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF1; 32]),
+            b"wrong-public-key-signing",
+        )
+        .expect("signing keypair generation should succeed");
+        let verifying_keypair = generate_mldsa_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xF2; 32]),
+            b"wrong-public-key-verifying",
+        )
+        .expect("verifying keypair generation should succeed");
+        let mut sign_rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF3; 32]),
+            b"wrong-public-key-sign",
+        );
+        let message = b"wrong public key must not verify";
+        let context = b"soranet-pq:test";
+        let signature = sign_mldsa(
+            suite,
+            signing_keypair.secret_key(),
+            context,
+            message,
+            &mut sign_rng,
+        )
+        .expect("signature succeeds");
+
+        let err = verify_mldsa(
+            suite,
+            verifying_keypair.public_key(),
+            context,
+            message,
+            signature.as_bytes(),
+        )
+        .expect_err("signature must fail under a different public key");
+
+        assert!(matches!(
+            err,
+            MlDsaError::VerificationFailed(VerificationError::InvalidSignature)
+        ));
     }
 
     #[test]

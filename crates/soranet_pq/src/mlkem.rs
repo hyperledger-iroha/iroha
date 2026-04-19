@@ -735,7 +735,7 @@ mod mlkem_ffi {
 
 #[cfg(test)]
 mod tests {
-    use crate::hedged_chacha20_rng;
+    use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
 
     use super::*;
 
@@ -877,6 +877,88 @@ mod tests {
     }
 
     #[test]
+    fn decapsulation_with_wrong_secret_does_not_match_sender_secret() {
+        let suite = MlKemSuite::MlKem768;
+        let recipient = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDC; 32]),
+            b"wrong-secret-recipient",
+        );
+        let wrong_recipient = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDD; 32]),
+            b"wrong-secret-recipient",
+        );
+        let (sender_shared, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            recipient.public_key(),
+            HedgedRngSeed::from_entropy([0xDE; 32]),
+            b"wrong-secret-enc",
+        )
+        .expect("encapsulation succeeds");
+
+        let wrong_shared =
+            decapsulate_mlkem(suite, wrong_recipient.secret_key(), ciphertext.as_bytes())
+                .expect("ML-KEM decapsulation returns an implicit-rejection secret");
+
+        assert_ne!(sender_shared.as_bytes(), wrong_shared.as_bytes());
+    }
+
+    #[test]
+    fn encapsulation_rejects_public_key_from_different_suite() {
+        let keypair = generate_mlkem_keypair_from_seed(
+            MlKemSuite::MlKem512,
+            HedgedRngSeed::from_entropy([0xDF; 32]),
+            b"wrong-suite-public-key",
+        );
+        let mut rng =
+            deterministic_chacha20_rng(HedgedRngSeed::from_entropy([0xE7; 32]), b"wrong-suite-enc");
+
+        let err = encapsulate_mlkem(MlKemSuite::MlKem768, keypair.public_key(), &mut rng)
+            .expect_err("ML-KEM-512 public key must not validate as ML-KEM-768");
+
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn validation_accepts_generated_exact_lengths() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xE0); 32]),
+                b"exact-length-keygen",
+            );
+            let (_, ciphertext) = encapsulate_mlkem_from_seed(
+                suite,
+                keys.public_key(),
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xE8); 32]),
+                b"exact-length-enc",
+            )
+            .expect("encapsulation succeeds");
+
+            validate_mlkem_public_key(suite, keys.public_key()).expect("public key validates");
+            validate_mlkem_secret_key(suite, keys.secret_key()).expect("secret key validates");
+            validate_mlkem_ciphertext(suite, ciphertext.as_bytes()).expect("ciphertext validates");
+        }
+    }
+
+    #[test]
+    fn metadata_names_are_unique_across_suites() {
+        let names: Vec<_> = MlKemSuite::ALL
+            .iter()
+            .map(|suite| suite.metadata().name)
+            .collect();
+
+        assert_eq!(names.len(), 3);
+        assert_ne!(names[0], names[1]);
+        assert_ne!(names[0], names[2]);
+        assert_ne!(names[1], names[2]);
+    }
+
+    #[test]
     fn mlkem_parameters_align_with_bindings() {
         let params = mlkem_parameters(MlKemSuite::MlKem768);
         assert_eq!(params.public_key, MLKEM768_PUBLIC_KEY_BYTES);
@@ -889,6 +971,42 @@ mod tests {
     fn validation_rejects_short_inputs() {
         let res = validate_mlkem_public_key(MlKemSuite::MlKem1024, &[0u8; 16]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn validation_error_display_includes_kind_and_lengths() {
+        let err = validate_mlkem_secret_key(MlKemSuite::MlKem768, &[0u8; 7])
+            .expect_err("short secret key must be rejected");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("ML-KEM-768 secret key"));
+        assert!(rendered.contains("7"));
+        assert!(rendered.contains("2400"));
+    }
+
+    #[test]
+    fn validation_rejects_long_inputs_for_each_kind() {
+        let suite = MlKemSuite::MlKem512;
+        let long_public = vec![0u8; suite.public_key_len() + 1];
+        let long_secret = vec![0u8; suite.secret_key_len() + 1];
+        let long_ciphertext = vec![0u8; suite.ciphertext_len() + 1];
+
+        for (label, result) in [
+            ("public key", validate_mlkem_public_key(suite, &long_public)),
+            ("secret key", validate_mlkem_secret_key(suite, &long_secret)),
+            (
+                "ciphertext",
+                validate_mlkem_ciphertext(suite, &long_ciphertext),
+            ),
+        ] {
+            match result {
+                Err(MlKemError::BadEncoding { kind, .. }) => assert!(
+                    kind.contains(label),
+                    "expected {kind:?} to mention {label:?}"
+                ),
+                other => panic!("unexpected validation result for {label}: {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -917,6 +1035,7 @@ mod tests {
             let metadata = suite.metadata();
             assert_eq!(metadata.suite, suite);
             assert_eq!(suite.kem_id(), metadata.kem_id);
+            assert_eq!(metadata, mlkem_metadata(suite));
             let recovered =
                 MlKemSuite::from_kem_id(metadata.kem_id).expect("supported kem identifier");
             assert_eq!(recovered, suite);
@@ -982,5 +1101,19 @@ mod tests {
         );
         let err = MlKemSuite::from_str("unknown-suite").unwrap_err();
         assert_eq!(err, SuiteParseError("unknown-suite".to_string()));
+    }
+
+    #[test]
+    fn suite_parse_error_display_preserves_input() {
+        let err = MlKemSuite::from_str("mlkem999").unwrap_err();
+
+        assert_eq!(err.to_string(), "unknown ML-KEM suite 'mlkem999'");
+    }
+
+    #[test]
+    fn suite_display_uses_canonical_lowercase_names() {
+        assert_eq!(MlKemSuite::MlKem512.to_string(), "mlkem512");
+        assert_eq!(MlKemSuite::MlKem768.to_string(), "mlkem768");
+        assert_eq!(MlKemSuite::MlKem1024.to_string(), "mlkem1024");
     }
 }
