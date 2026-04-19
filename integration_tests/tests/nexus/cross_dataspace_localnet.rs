@@ -2901,6 +2901,16 @@ mod tests {
     }
 
     #[test]
+    fn duration_min_avg_max_secs_handles_single_sample() {
+        let (min, avg, max) =
+            duration_min_avg_max_secs(&[Duration::from_millis(250)]).expect("duration summary");
+
+        assert_eq!(min, 0.25);
+        assert_eq!(avg, 0.25);
+        assert_eq!(max, 0.25);
+    }
+
+    #[test]
     fn bounded_observer_request_timeout_handles_exhausted_and_large_budgets() {
         let exhausted = bounded_observer_request_timeout(
             Instant::now() - Duration::from_secs(10),
@@ -2921,6 +2931,17 @@ mod tests {
         assert!(
             short_budget <= Duration::from_millis(500),
             "short remaining budgets should not be inflated by the floor"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_treats_zero_remaining_clients_as_one() {
+        let timeout =
+            bounded_observer_request_timeout(Instant::now(), OBSERVER_QUERY_TIMEOUT_CAP * 3, 0);
+
+        assert!(
+            timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
+            "zero remaining clients should still apply the per-peer cap"
         );
     }
 
@@ -2951,6 +2972,25 @@ mod tests {
     }
 
     #[test]
+    fn tx_fallback_error_classifiers_ignore_unrelated_phrases() {
+        for error_text in [
+            "queued transaction was rejected by validation",
+            "failed to send http GET request",
+            "submitter thread completed normally",
+            "transaction status timeout was not configured",
+        ] {
+            assert!(
+                !is_inconclusive_blocking_submit_error(error_text),
+                "{error_text} should stay conclusive"
+            );
+        }
+
+        assert!(!is_inconclusive_committed_outcome_error(
+            "waiting for committed transaction outcome succeeded"
+        ));
+    }
+
+    #[test]
     fn fanout_header_helper_accepts_local_and_proxy_without_singular_route() {
         for routed_by in ["local", "proxy"] {
             let response = RoutedJsonGetResponse {
@@ -2972,6 +3012,16 @@ mod tests {
         };
         let err = expect_local_or_proxy_fanout_headers(&missing_route_source, "fanout")
             .expect_err("missing route source should fail");
+        assert!(err.to_string().contains("expected local or proxy fanout"));
+
+        let unknown_route_source = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("remote".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&unknown_route_source, "fanout")
+            .expect_err("unknown route source should fail");
         assert!(err.to_string().contains("expected local or proxy fanout"));
 
         let singular_route = RoutedJsonGetResponse {

@@ -1229,6 +1229,23 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct InexactByte(u8);
+
+    impl norito::NoritoSerialize for InexactByte {
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            Some(1)
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            None
+        }
+    }
+
     #[test]
     fn encode_decode_round_trip() {
         let bytes = vec![1u8, 2, 3, 4, 5];
@@ -1261,7 +1278,7 @@ mod tests {
         let passthrough = align_payload_for::<u32>(&bytes, 1).expect("align=1 should pass through");
 
         assert!(passthrough.realigned.is_none());
-        assert_eq!(passthrough.as_slice(), bytes);
+        assert_eq!(passthrough.as_slice(), bytes.as_slice());
         assert_eq!(passthrough.as_slice().as_ptr(), bytes.as_ptr());
 
         let empty = align_payload_for::<u32>(&[], 8).expect("empty payload should not realign");
@@ -1346,12 +1363,12 @@ mod tests {
 
     #[test]
     fn try_deserialize_honors_zero_length_payload_context() {
-        let min_len = core::mem::size_of::<ncore::Archived<ConstVec<u8>>>();
-        let bytes = vec![0_u8; min_len.max(1)];
-        let archived = ncore::archived_from_slice_unchecked::<ConstVec<u8>>(&bytes);
-        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), 0);
+        let value = ConstVec::from(vec![1_u8, 2, 3]);
+        let framed = norito::core::to_bytes(&value).expect("frame const vec");
+        let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
+        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(framed.as_slice(), 0);
 
-        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived.as_ref())
+        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived)
             .expect("zero logical payload should decode as empty");
 
         assert!(decoded.is_empty());
@@ -1515,7 +1532,7 @@ mod tests {
     #[test]
     fn unpacked_encoded_len_exact_is_none_when_element_exact_len_is_unknown() {
         let _guard = ncore::DecodeFlagsGuard::enter(0);
-        let value = ConstVec::from(vec![InexactBytes(vec![1, 2, 3]), InexactBytes(vec![4, 5])]);
+        let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
         let mut bytes = Vec::new();
 
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
@@ -1528,10 +1545,7 @@ mod tests {
     fn packed_encoded_len_exact_serializes_elements_with_unknown_exact_len() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![
-            InexactBytes(vec![1, 2, 3]),
-            InexactBytes(vec![4, 5, 6, 7]),
-        ]);
+        let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
         let mut bytes = Vec::new();
 
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
@@ -1626,10 +1640,7 @@ mod tests {
     fn packed_seq_lengths_support_inexact_elements() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
-        let value = ConstVec::from(vec![
-            InexactBytes(vec![1, 2, 3]),
-            InexactBytes(vec![4, 5, 6, 7]),
-        ]);
+        let value = ConstVec::from(vec![InexactByte(4), InexactByte(5)]);
         let mut bytes = Vec::new();
 
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");

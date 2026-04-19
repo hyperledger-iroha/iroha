@@ -11,7 +11,16 @@ permission payload filtering by dataspace, manifest status/dataspace matching,
 and account-asset response matching by canonical asset-definition literal. The
 atomic-swap localnet module also now covers duration summaries, inconclusive
 submit/history fallback classification, local/proxy fanout header validation,
-and routed header extraction.
+and routed header extraction. The latest pass adds negative and edge coverage
+for root-path routed contexts, non-UTF8/binary headers, missing-proxy and
+wrong-lane rejection, singular fanout dataspace rejection, missing permission
+payloads, missing manifest arrays, non-string account-asset entries, retryable
+empty-body routed statuses, exhausted/large/short observer timeout slices, and
+display+debug error rendering. The newest assertions add missing route-header
+fields, non-numeric/missing manifest dataspace IDs, exact asset-literal
+matching, non-empty null-body retry rejection, single-sample timing summaries,
+zero remaining-client timeout slicing, unrelated fallback phrase negatives, and
+unknown fanout route-source rejection.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
@@ -22,9 +31,9 @@ and routed header extraction.
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`11 passed; 199 filtered out`)
+    (`21 passed; 208 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`6 passed; 208 filtered out`)
+    (`11 passed; 218 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 Latest sync (2026-04-19 ConstVec manual fallback coverage):
@@ -37,7 +46,11 @@ partial element headers, and too-short payloads. The stale byte-vector and
 compatibility-length assertions now pin the current length-prefixed layout. The
 latest pass also covers `ToConstVec` / iterator order, the legacy unpacked byte
 layout, direct empty payload decoding, recovery from a misaligned fallback
-error, and integrated `reencode_and_verify` accept/reject paths.
+error, and integrated `reencode_and_verify` accept/reject paths. The newest
+pass covers realignment helpers, direct realigned decode, zero-length payload
+context deserialization, direct `DecodeFromSlice` consumed-length reporting,
+JSON roundtrip, empty/default `ConstVec` behavior, and encoded-length
+hint/exact behavior for legacy, packed, and inexact-element layouts.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
@@ -45,10 +58,11 @@ error, and integrated `reencode_and_verify` accept/reject paths.
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
-  - `cargo test -p iroha_primitives manual_unpacked` (`26 passed`)
-  - `cargo test -p iroha_primitives const_vec::tests` (`46 passed`)
+  - `cargo test -p iroha_primitives manual_unpacked` (`27 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`60 passed`)
   - `cargo fmt --all -- --check`
-  - `cargo test -p iroha_primitives` (`148 passed`; doctests `1 passed; 1 ignored`)
+  - `cargo test -p iroha_primitives`
+    (`162 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
 
 Latest sync (2026-04-19 MOCHI bundle package lookup):
 `xtask mochi-bundle` no longer depends on the stale `mochi-ui-egui` Cargo
