@@ -2858,10 +2858,13 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        OBSERVER_QUERY_TIMEOUT_CAP, RoutedJsonGetResponse, bounded_observer_request_timeout,
+        ALICE_ID, Algorithm, KeyPair, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
+        bounded_observer_request_timeout, cross_dataspace_gas_account_id,
         duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
-        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        expected_lane_binding_for_peer, is_inconclusive_blocking_submit_error,
+        is_inconclusive_committed_outcome_error, nexus_fee_asset_definition_id,
         parse_positive_usize_override, render_error_with_debug, routed_header_string,
+        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
     };
     use norito::json::Value as JsonValue;
     use reqwest::header::{HeaderMap, HeaderValue};
@@ -2882,6 +2885,62 @@ mod tests {
         assert_eq!(parse_positive_usize_override(Some("0"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
+    }
+
+    #[test]
+    fn asset_definition_helpers_keep_stake_and_fee_domains_distinct() {
+        let stake_definition_id = stake_asset_definition_id();
+        let fee_definition_id = nexus_fee_asset_definition_id();
+
+        assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
+        assert_ne!(
+            stake_definition_id.to_string(),
+            fee_definition_id.to_string(),
+            "stake and fee helpers should not collapse cross-dataspace asset domains"
+        );
+    }
+
+    #[test]
+    fn cross_dataspace_gas_account_uses_alice_canonical_subject() {
+        let gas_account = cross_dataspace_gas_account_id();
+
+        assert_eq!(gas_account, ALICE_ID.clone());
+        assert_eq!(
+            gas_account.canonical_i105().expect("gas account i105"),
+            ALICE_ID.canonical_i105().expect("alice i105")
+        );
+    }
+
+    #[test]
+    fn validator_authority_account_for_peer_is_deterministic_and_indexed() {
+        let first = validator_authority_account_for_peer(2);
+        let repeated = validator_authority_account_for_peer(2);
+        let next = validator_authority_account_for_peer(3);
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, next);
+        assert!(
+            !first
+                .canonical_i105()
+                .expect("validator account")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn expected_lane_binding_for_peer_pairs_validator_and_peer_id() {
+        let mut seed = vec![0_u8; 32];
+        seed[0] = 0xA5;
+        let peer_key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
+
+        let binding = expected_lane_binding_for_peer(4, &peer_id);
+
+        assert_eq!(binding.peer_id, peer_id.to_string());
+        assert_eq!(
+            binding.validator,
+            validator_authority_account_for_peer(4).to_string()
+        );
     }
 
     #[test]
