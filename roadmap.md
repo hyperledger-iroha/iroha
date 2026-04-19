@@ -21,6 +21,26 @@ lengths, civil-date roundtrips, and invalid day/month conversion errors.
   - `cargo test -p iroha_primitives -- --nocapture`
     (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
 
+Latest sync (2026-04-19 SoraNet gateway billing fixture asset IDs):
+The default SoraNet gateway M1 and M2 bundle configs now pass the canonical
+billing asset definition ID (`4cuvDVPuLBKJyN6dPbRQhmLh68sU`) into the xtask
+billing projection path instead of the stale `xor#wonderland` literal. This
+matches the current `AssetDefinitionId` parser contract used by
+`xtask soranet-gateway-billing` and keeps default bundle generation from
+failing before it can emit summaries.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/configs/soranet/gateway_m1/alpha_config.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/configs/soranet/gateway_m2/beta_config.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p xtask --test soranet_gateway_m1 soranet_gateway_m1_bundle_is_emitted -- --nocapture`
+  - `cargo test -p xtask --test soranet_gateway_m2 soranet_gateway_m2_pipeline_emits_beta_and_ga -- --nocapture`
+- open work after this slice:
+  - rerun broader `cargo test -p xtask` or workspace validation during a longer
+    clean window
+
 Latest sync (2026-04-19 primitive container API coverage):
 `iroha_primitives` now has broader focused coverage around the small container
 wrappers. `UniqueVec` tests cover duplicate ownership, empty/trailing-comma
@@ -31,10 +51,10 @@ slice decode consumed lengths, mutation APIs, conversion/iteration paths,
 truncated element rejection, and zero-length payload-context deserialization.
 
 - shipped in:
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/unique_vec.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/small.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_primitives/src/unique_vec.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_primitives/src/small.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo test -p iroha_primitives unique_vec::tests` (`18 passed`)
@@ -51,9 +71,9 @@ conversion, shared state across cloned handles and sources, `set` combined with
 `default`, `get_system_time`, and `now` / `get_unix_time`.
 
 - shipped in:
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/time.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_primitives/src/time.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo test -p iroha_primitives time::tests -- --nocapture` (`6 passed`)

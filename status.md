@@ -17,6 +17,18 @@ Last updated: 2026-04-19
   - `cargo test -p iroha_primitives -- --nocapture`
     (`184 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
 
+## 2026-04-19 Follow-up: SoraNet gateway billing fixture asset IDs
+- `configs/soranet/gateway_m1/alpha_config.json` and
+  `configs/soranet/gateway_m2/beta_config.json` now use the canonical
+  `4cuvDVPuLBKJyN6dPbRQhmLh68sU` asset definition ID for billing ledger
+  projections instead of the stale `xor#wonderland` display literal.
+- This keeps the default M1/M2 bundle configs aligned with
+  `xtask soranet-gateway-billing`, which parses billing projection assets as
+  canonical `AssetDefinitionId` values before emitting transfer batches.
+- Focused validation for this slice:
+  - `cargo test -p xtask --test soranet_gateway_m1 soranet_gateway_m1_bundle_is_emitted -- --nocapture`
+  - `cargo test -p xtask --test soranet_gateway_m2 soranet_gateway_m2_pipeline_emits_beta_and_ga -- --nocapture`
+
 ## 2026-04-19 Follow-up: primitive container API coverage
 - `crates/iroha_primitives/src/unique_vec.rs` now has additional unit coverage
   for duplicate push ownership, empty/trailing-comma macro construction,

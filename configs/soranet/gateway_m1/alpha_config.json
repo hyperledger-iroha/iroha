@@ -1,7 +1,7 @@
 {
   "billing": {
     "allow_hard_cap": true,
-    "asset": "xor#wonderland",
+    "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
     "payer": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
