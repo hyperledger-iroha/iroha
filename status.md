@@ -2,6 +2,54 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: cross-dataspace transaction routing helper coverage
+- `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  now has additional pure helper regressions for wrong-ingress
+  cross-dataspace transaction/query routing. The new cases pin routed response
+  context/header extraction, exact lane/dataspace header enforcement, fanout
+  responses that must not expose singular route headers, permission payload
+  filtering by dataspace, manifest status/dataspace matching, and account-asset
+  response matching by canonical asset-definition literal.
+- This improves coverage without starting another localnet; the existing
+  end-to-end wrong-ingress localnet remains the behavioral regression for real
+  cross-dataspace routing.
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` also now has
+  focused coverage for the atomic-swap transaction fallback helpers: duration
+  min/avg/max summaries, inconclusive submit/history error classification,
+  local/proxy fanout header validation, and routed header extraction.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
+    (`11 passed; 199 filtered out`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
+    (`6 passed; 208 filtered out`)
+  - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
+
+## 2026-04-19 Follow-up: ConstVec manual fallback coverage
+- `crates/iroha_primitives/src/const_vec.rs` now has additional focused
+  regressions for manual unpacked `ConstVec` query payloads. The new coverage
+  exercises the outer recovery helper on a length-prefixed payload, the direct
+  slice decoder's zero-count/trailing-bytes guard, and the helper that compares
+  canonical/provided payloads while ignoring element length words.
+- The payload comparison tests now pin both the accepted compatibility case and
+  rejection paths for changed payload bytes, changed count headers, total length
+  mismatches, partial element headers, and too-short payloads.
+- The older byte-vector and compatibility-length assertions now match the
+  current length-prefixed `ConstVec` layout instead of expecting raw `Vec<u8>`
+  byte parity or missing exact lengths.
+- The latest coverage also pins `ToConstVec` / iterator order, the legacy
+  unpacked byte layout with fixed-width element length words, direct empty
+  payload decoding, recovery from a misaligned fallback error, and integrated
+  `reencode_and_verify` acceptance/rejection for clobbered length words versus
+  changed payload bytes.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives manual_unpacked` (`26 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`46 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives` (`148 passed`; doctests `1 passed; 1 ignored`)
+
 ## 2026-04-19 Follow-up: MOCHI bundle package lookup
 - `xtask/src/mochi.rs` now builds the packaged MOCHI desktop binary through
   `--manifest-path mochi/mochi-ui-egui/Cargo.toml --bin mochi` instead of the
@@ -63,9 +111,8 @@ Last updated: 2026-04-19
 - Focused validation for this slice:
   - `cargo fmt --all -- --check`
   - `cargo test -p iroha_primitives manual_unpacked` (`16 passed`)
-  - `cargo test -p iroha_primitives` currently still fails the pre-existing
-    `const_vec::tests::matches_vec_encoding` and
-    `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
+  - Broader `cargo test -p iroha_primitives` validation is covered by the
+    2026-04-19 manual fallback coverage follow-up.
 
 ## 2026-04-18 Follow-up: IVM envelope permission literal resync
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_roles_triggers_envelope.rs`
