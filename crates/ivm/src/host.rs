@@ -323,6 +323,151 @@ impl DefaultHost {
         self.sm_enabled = enabled;
     }
 
+    fn expected_zk_verify_label(number: u32) -> Option<&'static str> {
+        match number {
+            syscalls::SYSCALL_ZK_VERIFY_TRANSFER => Some(LABEL_TRANSFER),
+            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => Some(LABEL_UNSHIELD),
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => Some(LABEL_VOTE_BALLOT),
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => Some(LABEL_VOTE_TALLY),
+            _ => None,
+        }
+    }
+
+    fn zk_curve_allowed(&self, curve: iroha_zkp_halo2::ZkCurveId) -> bool {
+        match self.zk_cfg.curve {
+            ZkCurve::Pallas | ZkCurve::Pasta => matches!(
+                curve,
+                iroha_zkp_halo2::ZkCurveId::Pallas | iroha_zkp_halo2::ZkCurveId::Pasta
+            ),
+            ZkCurve::Goldilocks => curve == iroha_zkp_halo2::ZkCurveId::Goldilocks,
+            ZkCurve::Bn254 => curve == iroha_zkp_halo2::ZkCurveId::Bn254,
+        }
+    }
+
+    fn map_zk_open_error(error: &iroha_zkp_halo2::Error) -> u64 {
+        match error {
+            iroha_zkp_halo2::Error::CurveMismatch { .. } => ERR_CURVE,
+            iroha_zkp_halo2::Error::EnvelopeLimitExceeded { limit: "max_k", .. } => ERR_K,
+            iroha_zkp_halo2::Error::EnvelopeLimitExceeded {
+                limit: "transcript_label_len",
+                ..
+            } => ERR_TRANSCRIPT_LABEL,
+            iroha_zkp_halo2::Error::UnsupportedBackend { .. } => ERR_BACKEND,
+            iroha_zkp_halo2::Error::VerificationFailed => ERR_VERIFY,
+            _ => ERR_DECODE,
+        }
+    }
+
+    fn verify_zk_open_envelope(&self, number: u32, payload: &[u8]) -> Result<bool, u64> {
+        use iroha_zkp_halo2::{
+            OpenVerifyEnvelope, OpenVerifyLimits, Transcript,
+            backend::{bn254, pallas},
+            norito_helpers::{self as nh, DecodedEnvelope},
+        };
+
+        if payload.len() > self.zk_cfg.max_envelope_bytes {
+            return Err(ERR_ENVELOPE_SIZE);
+        }
+        if !self.zk_cfg.enabled {
+            return Err(ERR_DISABLED);
+        }
+        if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
+            return Err(ERR_BACKEND);
+        }
+
+        let env: OpenVerifyEnvelope = decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
+        if env.transcript_label.len() > self.zk_cfg.max_transcript_label_len {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+        if self.zk_cfg.enforce_transcript_label_ascii && !env.transcript_label.is_ascii() {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+        let expected_label = Self::expected_zk_verify_label(number).ok_or(ERR_DECODE)?;
+        if env.transcript_label != expected_label {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+
+        let proof_bytes = norito::to_bytes(&env.proof).map_err(|_| ERR_DECODE)?;
+        if proof_bytes.len() > self.zk_cfg.max_proof_bytes {
+            return Err(ERR_PROOF_LEN);
+        }
+
+        let curve = iroha_zkp_halo2::ZkCurveId::from_u16(env.params.curve_id);
+        if env.params.curve_id != env.public.curve_id || !self.zk_curve_allowed(curve) {
+            return Err(ERR_CURVE);
+        }
+
+        let decoded = nh::decode_envelope_with_limits(
+            &env,
+            OpenVerifyLimits {
+                max_k: Some(self.zk_cfg.max_k),
+                max_transcript_label_len: Some(self.zk_cfg.max_transcript_label_len),
+            },
+        )
+        .map_err(|error| Self::map_zk_open_error(&error))?;
+
+        let mut transcript = Transcript::new(&env.transcript_label);
+        let metadata = env.transcript_metadata();
+        let result = match decoded {
+            DecodedEnvelope::Pallas {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => pallas::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            DecodedEnvelope::Bn254 {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => bn254::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            #[cfg(feature = "goldilocks_backend")]
+            DecodedEnvelope::Goldilocks {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => iroha_zkp_halo2::backend::goldilocks::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            #[cfg(not(feature = "goldilocks_backend"))]
+            DecodedEnvelope::Goldilocks => {
+                return Err(ERR_BACKEND);
+            }
+        };
+
+        match result {
+            Ok(()) => Ok(true),
+            Err(iroha_zkp_halo2::Error::VerificationFailed) => Ok(false),
+            Err(error) => Err(Self::map_zk_open_error(&error)),
+        }
+    }
+
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
             return Err(VMError::PermissionDenied);
@@ -1999,20 +2144,28 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                // ZK proof verification is implemented by the node host (CoreHost). The
-                // standalone IVM host only reports the syscall as disabled.
+                // The standalone IVM host supports direct Halo2 opening verification for
+                // single-envelope syscalls so tests can exercise the real gating surface
+                // without a full node host.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_ENVELOPE_SIZE);
-                    return Ok(0);
+                match self.verify_zk_open_envelope(number, tlv.payload) {
+                    Ok(true) => {
+                        vm.set_register(10, 1);
+                        vm.set_register(11, 0);
+                    }
+                    Ok(false) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ERR_VERIFY);
+                    }
+                    Err(status) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, status);
+                    }
                 }
-                vm.set_register(10, 0);
-                vm.set_register(11, ERR_DISABLED);
                 Ok(0)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
@@ -2144,6 +2297,42 @@ mod tests {
     fn downcast_default_host() {
         let mut host: Box<dyn IVMHost + Send> = Box::new(DefaultHost::new());
         assert!(host.as_any().downcast_mut::<DefaultHost>().is_some());
+    }
+
+    #[test]
+    fn zk_verify_label_mapping_covers_single_envelope_syscalls() {
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_TRANSFER),
+            Some(LABEL_TRANSFER)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD),
+            Some(LABEL_UNSHIELD)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT),
+            Some(LABEL_VOTE_BALLOT)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY),
+            Some(LABEL_VOTE_TALLY)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_BATCH),
+            None
+        );
+    }
+
+    #[test]
+    fn zk_curve_allowlist_tracks_host_curve_family() {
+        let pallas_host = DefaultHost::new();
+        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
+        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pasta));
+        assert!(!pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
+
+        let bn254_host = DefaultHost::new().with_zk_curve_str("bn254");
+        assert!(bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
+        assert!(!bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
     }
 
     #[test]

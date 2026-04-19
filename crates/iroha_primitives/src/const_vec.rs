@@ -1203,8 +1203,10 @@ mod tests {
     };
 
     use super::{
-        ConstVec, decode_const_vec_manual, decode_const_vec_manual_unpacked,
-        decode_const_vec_recover, ncore, reencode_and_verify,
+        ConstVec, RealignedSlice, ToConstVec, align_payload_for, decode_const_vec_from_slice,
+        decode_const_vec_manual, decode_const_vec_manual_elem, decode_const_vec_manual_unpacked,
+        decode_const_vec_realigned, decode_const_vec_recover, ncore,
+        payload_matches_ignoring_vec_lengths, reencode_and_verify,
     };
 
     #[repr(transparent)]
@@ -1217,7 +1219,26 @@ mod tests {
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
-            self.0.encoded_len_hint()
+            let mut bytes = Vec::new();
+            self.serialize(&mut bytes).ok()?;
+            Some(bytes.len())
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            None
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct InexactByte(u8);
+
+    impl norito::NoritoSerialize for InexactByte {
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            Some(1)
         }
 
         fn encoded_len_exact(&self) -> Option<usize> {
@@ -1251,6 +1272,84 @@ mod tests {
     }
 
     #[test]
+    fn align_payload_for_keeps_original_when_realigning_is_unnecessary() {
+        let bytes = [1_u8, 2, 3, 4];
+
+        let passthrough = align_payload_for::<u32>(&bytes, 1).expect("align=1 should pass through");
+
+        assert!(passthrough.realigned.is_none());
+        assert_eq!(passthrough.as_slice(), bytes.as_slice());
+        assert_eq!(passthrough.as_slice().as_ptr(), bytes.as_ptr());
+
+        let empty = align_payload_for::<u32>(&[], 8).expect("empty payload should not realign");
+        assert!(empty.realigned.is_none());
+        assert!(empty.as_slice().is_empty());
+    }
+
+    #[test]
+    fn align_payload_for_realigns_misaligned_payload() {
+        let storage = [0xA5_u8; 32];
+        let align = 8usize;
+        let base = storage.as_ptr() as usize;
+        let offset = (1..align)
+            .find(|offset| offset + 8 <= storage.len() && !(base + offset).is_multiple_of(align))
+            .expect("misaligned offset");
+        let payload = &storage[offset..offset + 8];
+
+        let aligned =
+            align_payload_for::<u64>(payload, align).expect("misaligned payload should realign");
+
+        assert!(aligned.realigned.is_some());
+        assert_eq!(aligned.as_slice(), payload);
+        assert_eq!((aligned.as_slice().as_ptr() as usize) % align, 0);
+    }
+
+    #[test]
+    fn realigned_slice_rejects_invalid_alignment() {
+        let err = match RealignedSlice::new(&[1_u8, 2, 3], 3) {
+            Ok(_) => panic!("non-power-of-two alignment should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn realigned_decode_path_roundtrips_const_vec_payload() {
+        let bytes = ConstVec::from(vec![11_u8, 12, 13]).encode();
+
+        let decoded =
+            decode_const_vec_realigned::<u8>(&bytes, 16).expect("realigned decode should succeed");
+
+        assert_eq!(decoded.into_vec(), vec![11, 12, 13]);
+    }
+
+    #[test]
+    fn to_const_vec_and_iterators_preserve_order() {
+        let source = [3_u16, 5, 8, 13];
+        let value = source.as_slice().to_const_vec();
+
+        assert_eq!(value.as_ref(), source.as_slice());
+        assert_eq!(
+            (&value).into_iter().copied().collect::<Vec<_>>(),
+            source.to_vec()
+        );
+        assert_eq!(value.into_iter().collect::<Vec<_>>(), source.to_vec());
+    }
+
+    #[test]
+    fn new_empty_default_and_deref_are_empty() {
+        let explicit = ConstVec::<u8>::new_empty();
+        let default = ConstVec::<u8>::default();
+        let empty: &[u8] = &[];
+
+        assert!(explicit.is_empty());
+        assert!(default.is_empty());
+        assert_eq!(&*explicit, empty);
+        assert_eq!(explicit.into_vec(), Vec::<u8>::new());
+    }
+
+    #[test]
     fn norito_header_round_trip() {
         let bytes = vec![0xAAu8, 0xBB, 0xCC];
         let value = ConstVec::new(bytes.clone());
@@ -1263,20 +1362,84 @@ mod tests {
     }
 
     #[test]
-    fn matches_vec_encoding() {
+    fn try_deserialize_honors_zero_length_payload_context() {
+        let value = ConstVec::from(vec![1_u8, 2, 3]);
+        let framed = norito::core::to_bytes(&value).expect("frame const vec");
+        let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
+        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(framed.as_slice(), 0);
+
+        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived)
+            .expect("zero logical payload should decode as empty");
+
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn decode_from_slice_reports_used_bytes() {
+        let items = vec![vec![1_u8, 2], vec![3_u8, 4, 5]];
+        let bytes = ConstVec::from(items.clone()).encode();
+
+        let (decoded, used) =
+            <ConstVec<Vec<u8>> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode const vec from slice");
+
+        assert_eq!(decoded.into_vec(), items);
+        assert_eq!(used, bytes.len());
+    }
+
+    #[test]
+    fn byte_const_vec_uses_length_prefixed_elements() {
         let bytes = vec![1u8, 2, 3, 4, 5, 6, 7];
         let as_const = ConstVec::new(bytes.clone());
         let const_bytes = as_const.encode();
 
         let vec_bytes = bytes.encode();
-        assert_eq!(
+        assert_ne!(
             const_bytes, vec_bytes,
-            "ConstVec encoding diverges from Vec"
+            "ConstVec<u8> should keep per-element length words in the canonical unpacked layout"
         );
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        for byte in &bytes {
+            expected.push(1);
+            expected.push(*byte);
+        }
+        assert_eq!(const_bytes, expected);
 
         let mut cursor = const_bytes.as_slice();
-        let roundtrip = Vec::<u8>::decode(&mut cursor).expect("decode vec");
-        assert_eq!(roundtrip, bytes);
+        let roundtrip = ConstVec::<u8>::decode(&mut cursor).expect("decode const vec");
+        assert_eq!(roundtrip.into_vec(), bytes);
+    }
+
+    #[test]
+    fn legacy_unpacked_byte_const_vec_uses_fixed_length_words() {
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
+        let bytes = vec![0xA1_u8, 0xB2];
+        let value = ConstVec::from(bytes.clone());
+        let mut encoded = Vec::new();
+
+        NoritoSerialize::serialize(&value, &mut encoded).expect("serialize legacy const vec");
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        for byte in bytes {
+            expected.extend_from_slice(&1_u64.to_le_bytes());
+            expected.push(byte);
+        }
+        assert_eq!(encoded, expected);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_roundtrip_preserves_const_vec_items() {
+        let value = ConstVec::from(vec![3_u16, 5, 8]);
+
+        let json = norito::json::to_json(&value).expect("serialize const vec json");
+        let decoded: ConstVec<u16> =
+            norito::json::from_json(&json).expect("deserialize const vec json");
+
+        assert_eq!(json, "[3,5,8]");
+        assert_eq!(decoded.into_vec(), vec![3, 5, 8]);
     }
 
     #[cfg(feature = "compact-len")]
@@ -1367,6 +1530,31 @@ mod tests {
     }
 
     #[test]
+    fn unpacked_encoded_len_exact_is_none_when_element_exact_len_is_unknown() {
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
+        let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
+        let mut bytes = Vec::new();
+
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+
+        assert_eq!(value.encoded_len_exact(), None);
+        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+    }
+
+    #[test]
+    fn packed_encoded_len_exact_serializes_elements_with_unknown_exact_len() {
+        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
+        let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
+        let mut bytes = Vec::new();
+
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+
+        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+    }
+
+    #[test]
     fn encoded_len_exact_matches_packed_seq() {
         let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6, 7]]);
         let mut bytes = Vec::new();
@@ -1417,11 +1605,24 @@ mod tests {
         {
             let _guard = ncore::DecodeFlagsGuard::enter(0);
             NoritoSerialize::serialize(&value, &mut bytes).expect("serialize compat const vec");
-            assert!(
-                value.encoded_len_exact().is_none(),
-                "ConstVec exact length is no longer reported under canonical layout"
+            assert_eq!(
+                value.encoded_len_exact(),
+                Some(bytes.len()),
+                "ConstVec exact length should match the compatibility unpacked payload"
             );
         }
+    }
+
+    #[test]
+    fn encoded_len_hint_matches_legacy_unpacked_layout() {
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
+        let value = ConstVec::from(vec![0x0102_u16, 0x0304]);
+        let mut bytes = Vec::new();
+
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+
+        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
     }
 
     #[test]
@@ -1436,6 +1637,19 @@ mod tests {
     }
 
     #[test]
+    fn packed_seq_lengths_support_inexact_elements() {
+        let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
+        let value = ConstVec::from(vec![InexactByte(4), InexactByte(5)]);
+        let mut bytes = Vec::new();
+
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+
+        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+    }
+
+    #[test]
     fn reencode_and_verify_respects_packed_seq() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
@@ -1444,6 +1658,33 @@ mod tests {
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
         let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
         assert_eq!(len, bytes.len());
+    }
+
+    #[test]
+    fn reencode_and_verify_accepts_clobbered_unpacked_length_words() {
+        let _guard = ncore::DecodeFlagsGuard::enter(0);
+        let value = ConstVec::from(vec![vec![1_u8, 2, 3], vec![4_u8, 5]]);
+        let mut bytes = Vec::new();
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        bytes[8..16].copy_from_slice(&99_u64.to_le_bytes());
+
+        let len = reencode_and_verify(value.as_ref(), &bytes)
+            .expect("payload match should ignore clobbered outer length word");
+
+        assert_eq!(len, bytes.len());
+    }
+
+    #[test]
+    fn reencode_and_verify_rejects_payload_divergence() {
+        let value = ConstVec::from(vec![1_u8, 2, 3]);
+        let mut bytes = value.encode();
+        let last = bytes.last_mut().expect("payload byte");
+        *last ^= 0xFF;
+
+        let err = reencode_and_verify(value.as_ref(), &bytes)
+            .expect_err("changed payload byte should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
     }
 
     #[test]
@@ -1516,6 +1757,36 @@ mod tests {
     }
 
     #[test]
+    fn manual_unpacked_with_recovery_decodes_length_prefixed_payload() {
+        let bytes = manual_unpacked_payload(&[&[4], &[5]]);
+
+        let decoded = super::decode_const_vec_with_recovery::<u8>(&bytes)
+            .expect("recovery path should decode manual unpacked payload");
+
+        assert_eq!(decoded.into_vec(), vec![4, 5]);
+    }
+
+    #[test]
+    fn realigned_decode_decodes_manual_unpacked_payload() {
+        let bytes = manual_unpacked_payload(&[&[11], &[12]]);
+
+        let decoded = super::decode_const_vec_realigned::<u8>(&bytes, 16)
+            .expect("realigned decode should recover manual unpacked payload");
+
+        assert_eq!(decoded.into_vec(), vec![11, 12]);
+    }
+
+    #[test]
+    fn realigned_decode_rejects_invalid_alignment() {
+        let bytes = 0_u64.to_le_bytes();
+
+        let err = super::decode_const_vec_realigned::<u8>(&bytes, 3)
+            .expect_err("non-power-of-two alignment should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
     fn manual_unpacked_decodes_non_byte_scalars() {
         let expected = vec![0x1234_u16, 0xABCD_u16];
         let bytes = manual_unpacked_payload_from_values(&expected);
@@ -1545,6 +1816,42 @@ mod tests {
             .expect("manual unpacked fallback should recover from length mismatch");
 
         assert_eq!(decoded.into_vec(), vec![7, 8]);
+    }
+
+    #[test]
+    fn manual_unpacked_recover_handles_misaligned_error() {
+        let bytes = manual_unpacked_payload(&[&[9], &[10]]);
+
+        let decoded = decode_const_vec_recover::<u8>(
+            ncore::Error::Misaligned { align: 8, addr: 1 },
+            &bytes,
+            false,
+        )
+        .expect("manual unpacked fallback should recover after misalignment");
+
+        assert_eq!(decoded.into_vec(), vec![9, 10]);
+    }
+
+    #[test]
+    fn manual_unpacked_from_slice_decodes_empty_payload() {
+        let bytes = 0_u64.to_le_bytes();
+
+        let decoded = decode_const_vec_from_slice::<u8>(&bytes)
+            .expect("empty payload should decode through direct slice path");
+
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn manual_unpacked_from_slice_rejects_zero_count_with_trailing_payload() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.push(0xAA);
+
+        let err = decode_const_vec_from_slice::<u8>(&bytes)
+            .expect_err("zero count with trailing payload should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
     }
 
     #[test]
@@ -1588,6 +1895,20 @@ mod tests {
     }
 
     #[test]
+    fn manual_unpacked_rejects_truncated_later_element_header() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&[0; 7]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("truncated second element header should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
     fn manual_unpacked_rejects_truncated_element_payload() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1_u64.to_le_bytes());
@@ -1596,6 +1917,114 @@ mod tests {
 
         let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
             .expect_err("truncated element payload should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_later_invalid_element_body() {
+        let bytes = manual_unpacked_payload(&[&[5], &[]]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("invalid second u8 element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_wrong_scalar_element_length() {
+        let bytes = manual_unpacked_payload(&[&[0x12]]);
+
+        let err = decode_const_vec_manual_unpacked::<u16>(&bytes)
+            .expect_err("short u16 element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_elem_decodes_scalar() {
+        let bytes = 0xCAFE_u16.to_le_bytes();
+
+        let decoded = decode_const_vec_manual_elem::<u16>(&bytes, 0)
+            .expect("manual element should decode scalar bytes");
+
+        assert_eq!(decoded, 0xCAFE);
+    }
+
+    #[test]
+    fn manual_unpacked_elem_rejects_short_scalar() {
+        let err = decode_const_vec_manual_elem::<u16>(&[0xFE], 1)
+            .expect_err("short scalar element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_ignores_element_length_words() {
+        let canonical = manual_unpacked_payload(&[&[1, 2], &[3]]);
+        let mut provided = canonical.clone();
+        provided[8..16].copy_from_slice(&99_u64.to_le_bytes());
+        provided[18..26].copy_from_slice(&42_u64.to_le_bytes());
+
+        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
+            .expect("payload comparison should succeed");
+
+        assert!(matches);
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_rejects_different_payload() {
+        let canonical = manual_unpacked_payload(&[&[1, 2], &[3]]);
+        let mut provided = canonical.clone();
+        let last = provided.last_mut().expect("payload byte");
+        *last ^= 0xFF;
+
+        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
+            .expect("payload comparison should complete");
+
+        assert!(!matches);
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_rejects_different_count_header() {
+        let canonical = manual_unpacked_payload(&[&[1]]);
+        let mut provided = canonical.clone();
+        provided[..8].copy_from_slice(&2_u64.to_le_bytes());
+
+        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
+            .expect("payload comparison should complete");
+
+        assert!(!matches);
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_rejects_length_mismatch() {
+        let canonical = manual_unpacked_payload(&[&[1]]);
+        let mut provided = canonical.clone();
+        provided.push(0);
+
+        let matches = payload_matches_ignoring_vec_lengths(&canonical, &provided)
+            .expect("payload comparison should complete");
+
+        assert!(!matches);
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_rejects_partial_element_header() {
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(&1_u64.to_le_bytes());
+        canonical.extend_from_slice(&[0; 7]);
+
+        let matches = payload_matches_ignoring_vec_lengths(&canonical, &canonical)
+            .expect("payload comparison should complete");
+
+        assert!(!matches);
+    }
+
+    #[test]
+    fn manual_unpacked_payload_match_rejects_too_short_payload() {
+        let err = payload_matches_ignoring_vec_lengths(&[0; 7], &[0; 7])
+            .expect_err("short payload should report length mismatch");
 
         assert!(matches!(err, ncore::Error::LengthMismatch));
     }
