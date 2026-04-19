@@ -13,7 +13,7 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVM, KotodamaCompiler, verify_contract_artifact};
 use mv::storage::StorageReadOnly;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
     let public_key = hex_public_key.parse().expect("public key");
@@ -405,8 +405,8 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
           fn main() {{
             let key = name!("pool");
             let ev = json("{{\"provider\":\"{authority_literal}\",\"base_amount\":1000}}");
-            let provider = json_get_account_id(ev, name("provider"));
-            let base_amount = json_get_int(ev, name("base_amount"));
+            let provider = ev.get_account_id(name("provider"));
+            let base_amount = ev.get_int(name("base_amount"));
             let vault = VaultAccount[key];
             if base_amount > 0 {{
               transfer_asset(provider, vault, BaseAsset[key], base_amount);
@@ -453,11 +453,49 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
 
 #[test]
 fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
-    let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../soraswap/contracts/dlmm/dlmm_pool.ko");
-    let source = fs::read_to_string(&source_path).expect("read dlmm_pool contract");
+    let source = r#"
+        seiyaku DlmmPool {
+          state BaseAsset: Map<Name, AssetDefinitionId>;
+          state QuoteAsset: Map<Name, AssetDefinitionId>;
+          state VaultAccount: Map<Name, AccountId>;
+          state FeePips: Map<Name, int>;
+          state BinStep: Map<Name, int>;
+          state ActiveBin: Map<Name, int>;
+          state SeededBase: Map<int, int>;
+          state SeededQuote: Map<int, int>;
+
+          #[access(read="*", write="*")]
+          kotoage fn init_pool(base_asset: AssetDefinitionId,
+                               quote_asset: AssetDefinitionId,
+                               vault_account: AccountId,
+                               fee_pips: int,
+                               bin_step: int,
+                               active_bin: int) permission(Admin) {
+            let pool = name!("pool");
+            BaseAsset[pool] = base_asset;
+            QuoteAsset[pool] = quote_asset;
+            VaultAccount[pool] = vault_account;
+            FeePips[pool] = fee_pips;
+            BinStep[pool] = bin_step;
+            ActiveBin[pool] = active_bin;
+          }
+
+          #[access(read="*", write="*")]
+          kotoage fn seed_bin(provider: AccountId,
+                              bin_id: int,
+                              base_amount: int,
+                              quote_amount: int) permission(Admin) {
+            let pool = name!("pool");
+            let vault = VaultAccount[pool];
+            transfer_asset(provider, vault, BaseAsset[pool], base_amount);
+            transfer_asset(provider, vault, QuoteAsset[pool], quote_amount);
+            SeededBase[bin_id] = base_amount;
+            SeededQuote[bin_id] = quote_amount;
+          }
+        }
+    "#;
     let program = KotodamaCompiler::new()
-        .compile_source(&source)
+        .compile_source(source)
         .expect("compile dlmm_pool");
     let artifact = verify_contract_artifact(&program).expect("verify contract artifact");
     let prefix_len = (artifact.code_offset - artifact.header_len) as u64;

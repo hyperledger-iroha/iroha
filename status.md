@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Kotodama pointer-ABI fixture resync
+- `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs` now uses the current
+  Kotodama JSON method helpers (`ev.get_account_id(...)` and
+  `ev.get_int(...)`) in the event-fed pointer-state transfer regression.
+- The DLMM seed-bin entrypoint regression is self-contained and no longer
+  depends on a sibling `soraswap/contracts/dlmm/dlmm_pool.ko` checkout. The
+  embedded DLMM-shaped fixture preserves the `init_pool` and `seed_bin`
+  entrypoints, writes durable pool state through pointer-typed maps, reloads
+  that state in a second VM, and queues the two expected `transfer_asset`
+  instructions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test kotodama_pointer_abi_apply -- --nocapture`
+
 ## 2026-04-18 Follow-up: ConstVec malformed query guard
 - Reproduced the Torii allocator abort on `2d837b67c8` when a stale
   `f966f916b9` CLI sends a query to the newer node. A matching `2d837b67c8`
