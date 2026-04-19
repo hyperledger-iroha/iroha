@@ -770,6 +770,19 @@ mod tests {
     }
 
     #[test]
+    fn from_os_helpers_roundtrip() {
+        let suite = MlKemSuite::MlKem512;
+        let keypair =
+            generate_mlkem_keypair_from_os(suite).expect("OS-backed ML-KEM keypair generation");
+        let (sender_shared, ciphertext) = encapsulate_mlkem_from_os(suite, keypair.public_key())
+            .expect("OS-backed ML-KEM encapsulation");
+        let receiver_shared = decapsulate_mlkem(suite, keypair.secret_key(), ciphertext.as_bytes())
+            .expect("ML-KEM decapsulation");
+
+        assert_eq!(sender_shared.as_bytes(), receiver_shared.as_bytes());
+    }
+
+    #[test]
     fn seeded_keypair_is_deterministic() {
         for suite in MlKemSuite::ALL {
             let seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xA0); 32]);
@@ -902,6 +915,30 @@ mod tests {
                 .expect("ML-KEM decapsulation returns an implicit-rejection secret");
 
         assert_ne!(sender_shared.as_bytes(), wrong_shared.as_bytes());
+    }
+
+    #[test]
+    fn decapsulation_with_tampered_ciphertext_does_not_match_sender_secret() {
+        let suite = MlKemSuite::MlKem768;
+        let recipient = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xD1; 32]),
+            b"tampered-ciphertext-recipient",
+        );
+        let (sender_shared, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            recipient.public_key(),
+            HedgedRngSeed::from_entropy([0xD2; 32]),
+            b"tampered-ciphertext-enc",
+        )
+        .expect("encapsulation succeeds");
+        let mut tampered = ciphertext.as_bytes().to_vec();
+        tampered[0] ^= 0x80;
+
+        let tampered_shared = decapsulate_mlkem(suite, recipient.secret_key(), &tampered)
+            .expect("ML-KEM decapsulation returns an implicit-rejection secret");
+
+        assert_ne!(sender_shared.as_bytes(), tampered_shared.as_bytes());
     }
 
     #[test]
@@ -1092,11 +1129,19 @@ mod tests {
             MlKemSuite::MlKem512
         );
         assert_eq!(
+            MlKemSuite::from_str("kyber512").unwrap(),
+            MlKemSuite::MlKem512
+        );
+        assert_eq!(
             MlKemSuite::from_str("KYBER768").unwrap(),
             MlKemSuite::MlKem768
         );
         assert_eq!(
             MlKemSuite::from_str("MlKeM1024").unwrap(),
+            MlKemSuite::MlKem1024
+        );
+        assert_eq!(
+            MlKemSuite::from_str("KyBeR1024").unwrap(),
             MlKemSuite::MlKem1024
         );
         let err = MlKemSuite::from_str("unknown-suite").unwrap_err();
