@@ -9,6 +9,7 @@ Contents
 - Declarations and Modules
 - Contract Container and Metadata
 - Functions and Parameters
+- Local Testing
 - Statements
 - Expressions
 - Builtins and Pointer-ABI Constructors
@@ -86,6 +87,44 @@ Top-level items
 Visibility
 - `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
 - Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
+- Local test attributes: `#[test]`, `#[テスト]`, and `#[test(fixture="name")]` mark local-only unit tests. These functions must be internal, zero-argument, and return no value. They are accepted by the parser in regular `.ko` files and are stripped automatically in production compilation mode.
+
+## Local Testing
+
+Kotodama test functions are local tooling only. They are not part of the on-chain manifest and should be compiled with the `koto_test` harness or with `koto_compile --mode test` when inspection/debug metadata should include test code.
+
+Inline test example
+```ko
+fn increment(x: int) -> int { return x + 1; }
+
+#[test]
+fn smoke() {
+  assert_eq(increment(1), 2);
+}
+```
+
+Standalone test-file example
+```ko
+koto_test { target: "contracts/demo.ko" }
+
+fixture seeded {
+  caller("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+}
+
+#[test(fixture="seeded")]
+fn smoke() {
+  assert_eq(increment(4), 5);
+}
+```
+
+Fixture blocks are interpreted by the local harness, not by the deployable contract artifact. Current fixture actions are declarative setup helpers such as `caller(...)`, `register_account(...)`, `grant_permission(...)`, `register_domain(...)`, `register_asset_definition(...)`, `set_balance(...)`, `set_account_detail(...)`, `state_set(...)`, and `public_input(...)`.
+
+Tooling
+- `koto_compile --mode production`: default, strips `#[test]`, fixtures, and standalone `koto_test` headers before semantic/codegen phases.
+- `koto_compile --mode test`: keeps test-only items in the local artifact/debug report.
+- `koto_test run <path>`: discovers inline tests plus matching standalone `*.test.ko` / `tests/**/*.ko` files and runs each test in isolation.
+- `koto_test coverage <path>`: runs the same suite and reports bytecode-region/function coverage for non-test functions.
+- `koto_test profile <path>`: emits JSONL runtime traces with PCs, function mapping, and changed registers.
 
 ## Contract Container and Metadata
 
