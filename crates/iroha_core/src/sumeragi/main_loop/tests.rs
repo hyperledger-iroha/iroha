@@ -72736,6 +72736,133 @@ async fn force_view_change_if_idle_uses_round_age_after_queue_timer_refreshes() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_rotates_da_view_zero_after_missing_qc_recovery_is_armed() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    actor.highest_qc = Some(committed_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    assert_eq!(
+        height,
+        committed_height.saturating_add(1),
+        "test requires the contiguous frontier"
+    );
+
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let recovery_window = actor
+        .frontier_recovery_window()
+        .max(Duration::from_millis(1));
+    let round_start = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(recovery_window)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, round_start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: round_start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+    actor.frontier_slot = None;
+
+    let recovery_started_at = now
+        .checked_sub(
+            super::saturating_mul_duration(recovery_window, 3)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let rotate_armed_at = now
+        .checked_sub(recovery_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: rotate_armed_at,
+        last_progress_at: recovery_started_at,
+        last_dependency_progress_at: None,
+        last_action_at: Some(rotate_armed_at),
+        no_progress_windows: 3,
+        cleanup_done: true,
+        last_view: current_view,
+        last_rotation_view: None,
+        last_cause: "missing_qc",
+    });
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "armed DA view-0 missing-leader recovery must be allowed to rotate"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "recovery exhaustion should advance the view"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "the rotation should still be recorded as MissingQc"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .forced_view_after_timeout
+            .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
+        "rotating the exhausted recovery should arm proposal selection for the next view"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_near_quorum_missing_payload()
  {
     let _worker_guard = super::status::worker_queue_test_guard();
