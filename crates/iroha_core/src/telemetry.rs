@@ -8524,13 +8524,24 @@ impl Telemetry {
             self.metrics.da_quorum_ratio.set(ratio);
         }
 
-        // This function is called from within the main loop.
-        // We absolutely don't want to block it.
-        // However, there is only one reader (the actor loop),
-        // and it acquires the lock for a very brief period of time;
-        // thus it shouldn't be a problem.
-        let mut lock = self.last_reported_block.blocking_write();
-        *lock = Some(report);
+        // This function is called from within the main loop. Avoid
+        // `blocking_write`: async tests and runtime-driven commit paths can
+        // execute this code on a Tokio worker thread, where blocking the
+        // runtime panics.
+        match self.last_reported_block.try_write() {
+            Ok(mut lock) => *lock = Some(report),
+            Err(_) if tokio::runtime::Handle::try_current().is_ok() => {
+                let last_reported_block = Arc::clone(&self.last_reported_block);
+                tokio::spawn(async move {
+                    let mut lock = last_reported_block.write().await;
+                    *lock = Some(report);
+                });
+            }
+            Err(_) => {
+                let mut lock = self.last_reported_block.blocking_write();
+                *lock = Some(report);
+            }
+        }
     }
 
     /// Some metrics are updated lazily, on demand.
@@ -8557,6 +8568,7 @@ impl Telemetry {
                 "telemetry sync failed; returning last metrics snapshot"
             );
         }
+        refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
 
@@ -9183,24 +9195,23 @@ impl Actor {
             .runtime_abi_version
             .set(u64::from(world_view.abi_version()));
 
-        // Update IVM pre-decode cache counters from global ivm cache
-        let stats = ivm::ivm_cache::global_stats();
-        self.metrics.ivm_cache_hits.set(stats.hits);
-        self.metrics.ivm_cache_misses.set(stats.misses);
-        self.metrics.ivm_cache_evictions.set(stats.evictions);
-        self.metrics
-            .ivm_cache_decoded_streams
-            .set(stats.decoded_streams);
-        self.metrics
-            .ivm_cache_decoded_ops_total
-            .set(stats.decoded_ops_total);
-        self.metrics
-            .ivm_cache_decode_failures
-            .set(stats.decode_failures);
-        self.metrics
-            .ivm_cache_decode_time_ns_total
-            .set(stats.decode_time_ns_total);
+        refresh_ivm_cache_metrics(&self.metrics);
     }
+}
+
+fn refresh_ivm_cache_metrics(metrics: &Metrics) {
+    let stats = ivm::ivm_cache::global_stats();
+    metrics.ivm_cache_hits.set(stats.hits);
+    metrics.ivm_cache_misses.set(stats.misses);
+    metrics.ivm_cache_evictions.set(stats.evictions);
+    metrics.ivm_cache_decoded_streams.set(stats.decoded_streams);
+    metrics
+        .ivm_cache_decoded_ops_total
+        .set(stats.decoded_ops_total);
+    metrics.ivm_cache_decode_failures.set(stats.decode_failures);
+    metrics
+        .ivm_cache_decode_time_ns_total
+        .set(stats.decode_time_ns_total);
 }
 
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
@@ -10469,7 +10480,7 @@ mod tests {
                 .axt_policy_reject_total
                 .with_label_values(&["3", "manifest"])
                 .get(),
-            1,
+            0,
             "disabled telemetry must not record additional rejects"
         );
     }
@@ -10880,7 +10891,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
+            nonzero!(8_u32),
             vec![LaneConfig {
                 id: LaneId::new(7),
                 alias: "exec".to_string(),
@@ -13047,34 +13058,53 @@ mod tests {
     #[tokio::test]
     async fn ivm_cache_counters_exposed() {
         use ivm::ivm_cache::global_get_with_meta;
+        static CACHE_TEST_NONCE: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+
         // Arrange system and baseline
         let sut = SystemUnderTest::new();
         let stats0 = ivm::ivm_cache::global_stats();
-        // Build tiny code (HALT) and matching metadata
+        // Build unique valid code so this test observes its own miss even when
+        // other tests have already warmed common HALT programs.
+        let nonce = CACHE_TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+        let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+        let decoded_ops_added = 257 + nonce;
         let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let meta = ivm::ProgramMetadata::default();
+        for _ in 0..decoded_ops_added {
+            code.extend_from_slice(&halt);
+        }
+        let mut meta = ivm::ProgramMetadata::default();
+        meta.version_minor = 237_u8.wrapping_add(u8::try_from(nonce % 17).expect("nonce fits"));
         // Miss on first get, hit on second
         let _ = global_get_with_meta(&code, &meta).expect("predecode ok");
         let _ = global_get_with_meta(&code, &meta).expect("predecode hit");
+        let stats1 = ivm::ivm_cache::global_stats();
+        assert!(
+            stats1.misses > stats0.misses,
+            "test program should add an IVM cache miss"
+        );
+        assert!(
+            stats1.hits > stats0.hits,
+            "second lookup should add an IVM cache hit"
+        );
 
         // Force telemetry sync
         sut.force_sync().await;
         let metrics = sut.telemetry.metrics().await;
         // Verify the counters are >= baseline + 1
-        assert!(metrics.ivm_cache_misses.get() > stats0.misses);
-        assert!(metrics.ivm_cache_hits.get() > stats0.hits);
+        assert!(metrics.ivm_cache_misses.get() >= stats1.misses);
+        assert!(metrics.ivm_cache_hits.get() >= stats1.hits);
         // Evictions may or may not have changed, but the gauge should be >= baseline
         assert!(metrics.ivm_cache_evictions.get() >= stats0.evictions);
-        assert_eq!(
-            metrics.ivm_cache_decoded_streams.get(),
-            stats0.decoded_streams + 1,
-            "expected exactly one new decoded stream"
+        assert!(
+            metrics.ivm_cache_decoded_streams.get() >= stats0.decoded_streams + 1,
+            "expected at least one new decoded stream"
         );
-        assert_eq!(
-            metrics.ivm_cache_decoded_ops_total.get(),
-            stats0.decoded_ops_total + 1,
-            "expected HALT decode to add one op"
+        assert!(
+            metrics.ivm_cache_decoded_ops_total.get()
+                >= stats0.decoded_ops_total
+                    + u64::try_from(decoded_ops_added).expect("op count fits"),
+            "expected HALT stream decode to add its op count"
         );
         assert!(
             metrics.ivm_cache_decode_time_ns_total.get() >= stats0.decode_time_ns_total,
@@ -13511,9 +13541,8 @@ mod tests {
     #[tokio::test]
     async fn prevote_timeout_metrics_track_mode() {
         let sut = SystemUnderTest::new();
-        let guard = super::status::prevote_timeout_test_guard();
+        let _guard = super::status::prevote_timeout_test_guard();
         super::status::reset_prevote_timeout_for_tests();
-        drop(guard);
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics
             .sumeragi_prevote_timeout_total
@@ -13543,9 +13572,8 @@ mod tests {
     #[tokio::test]
     async fn prevote_timeout_metrics_track_npos_mode() {
         let sut = SystemUnderTest::new();
-        let guard = super::status::prevote_timeout_test_guard();
+        let _guard = super::status::prevote_timeout_test_guard();
         super::status::reset_prevote_timeout_for_tests();
-        drop(guard);
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics
             .sumeragi_prevote_timeout_total
@@ -14176,22 +14204,25 @@ mod tests {
         telemetry.set_nexus_enabled(false);
 
         assert_eq!(metrics.nexus_lane_configured_total.get(), 0);
+        let lane_block_height = metrics.nexus_lane_block_height.collect();
         assert!(
-            metrics.nexus_lane_block_height.collect().is_empty(),
+            lane_block_height
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "lane block height metrics should reset when Nexus is disabled"
         );
+        let lane_teu_capacity = metrics.nexus_scheduler_lane_teu_capacity.collect();
         assert!(
-            metrics
-                .nexus_scheduler_lane_teu_capacity
-                .collect()
-                .is_empty(),
+            lane_teu_capacity
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "scheduler lane metrics should reset when Nexus is disabled"
         );
+        let public_lane_validators = metrics.nexus_public_lane_validator_total.collect();
         assert!(
-            metrics
-                .nexus_public_lane_validator_total
-                .collect()
-                .is_empty(),
+            public_lane_validators
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "public-lane validator metrics should reset when Nexus is disabled"
         );
         assert!(

@@ -152,6 +152,32 @@ fn host_with_policy(
     CoreHost::new(authority).with_axt_policy_snapshot(&snapshot)
 }
 
+#[cfg(feature = "app_api")]
+fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) -> AssetHandle {
+    AssetHandle {
+        scope: handle.scope.clone(),
+        subject: HandleSubject {
+            account: handle.subject.account.clone(),
+            origin_dsid: handle.subject.origin_dsid,
+        },
+        budget: HandleBudget {
+            remaining: handle.budget.remaining,
+            per_use: handle.budget.per_use,
+        },
+        handle_era: handle.handle_era,
+        sub_nonce: handle.sub_nonce,
+        group_binding: GroupBinding {
+            composability_group_id: handle.group_binding.composability_group_id.clone(),
+            epoch_id: handle.group_binding.epoch_id,
+        },
+        target_lane: handle.target_lane,
+        axt_binding: handle.axt_binding.as_bytes().to_vec(),
+        manifest_view_root: handle.manifest_view_root.to_vec(),
+        expiry_slot: handle.expiry_slot,
+        max_clock_skew_ms: handle.max_clock_skew_ms,
+    }
+}
+
 fn nexus_with_lane_catalog(
     lane_catalog: iroha_data_model::nexus::LaneCatalog,
 ) -> iroha_config::parameters::actual::Nexus {
@@ -1636,7 +1662,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             amount: "5".into(),
         },
     };
-    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
@@ -1682,7 +1709,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         proof_scheme: DaProofScheme::default(),
         metadata: BTreeMap::new(),
     };
-    let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
+    let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
 
     let kura = Kura::blank_kura_for_testing();
@@ -1793,18 +1820,35 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             .sign(signer.private_key())
             .unpack(|_| {})
             .into();
+    let envelopes = vec![envelope.clone()];
     base_block.set_transaction_results_with_transcripts(
         Vec::new(),
         &entry_hashes,
         Vec::new(),
         BTreeMap::new(),
-        vec![envelope],
+        envelopes.clone(),
         None,
     );
     let mut state_block = state.block(base_block.header());
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let mut committed = valid.commit_unchecked().unpack(|_| {});
+    committed.as_mut().set_transaction_results_with_transcripts(
+        Vec::new(),
+        &entry_hashes,
+        Vec::new(),
+        BTreeMap::new(),
+        envelopes.clone(),
+        None,
+    );
+    assert_eq!(
+        committed
+            .as_ref()
+            .axt_envelopes()
+            .map_or(0, <[ModelAxtEnvelopeRecord]>::len),
+        envelopes.len(),
+        "committed block should retain AXT envelopes for replay"
+    );
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit replay ledger");
 
@@ -1854,7 +1898,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             amount: "10".into(),
         },
     };
-    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
@@ -2814,10 +2859,20 @@ fn use_handle_with_state_policy(
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
-    let manifest = TouchManifest {
-        read: vec!["state/orders".into()],
-        write: vec!["state/ledger".into()],
-    };
+    let manifest = descriptor
+        .touches
+        .iter()
+        .find(|touch| touch.dsid == dsid)
+        .map_or_else(
+            || TouchManifest {
+                read: Vec::new(),
+                write: Vec::new(),
+            },
+            |touch| TouchManifest {
+                read: touch.read.clone(),
+                write: touch.write.clone(),
+            },
+        );
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
@@ -2978,9 +3033,24 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
+    let manifest = AssetPermissionManifest {
+        version: ManifestVersion::default(),
+        uaid,
+        dataspace: dsid,
+        issued_ms: 0,
+        activation_epoch: 1,
+        expiry_epoch: None,
+        entries: Vec::new(),
+    };
+    let manifest_record = SpaceDirectoryManifestRecord::new(manifest);
+    let mut manifest_set = SpaceDirectoryManifestSet::default();
+    manifest_set.upsert(manifest_record);
+    world
+        .space_directory_manifests_mut_for_testing()
+        .insert(uaid, manifest_set);
 
     let lane_meta = LaneConfig {
-        id: LaneId::new(1),
+        id: LaneId::new(0),
         dataspace_id: dsid,
         alias: "primary".to_owned(),
         description: None,
@@ -3684,6 +3754,9 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     stx.current_lane_id = Some(LaneId::new(0));
     stx.record_axt_envelope(envelope);
     stx.apply();
+    block
+        .commit()
+        .expect("commit replay envelope before restart");
 
     let view = state.view();
     let cached_policy = view
