@@ -32473,10 +32473,16 @@ impl Actor {
                     && current_view == 0
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
                 {
+                    let allow_recovery_rotation = self.frontier_recovery.is_some_and(|state| {
+                        state.frontier_height == height
+                            && state.last_cause == "missing_qc"
+                            && matches!(state.phase, FrontierRecoveryPhase::RotateArmed)
+                    });
                     debug!(
                         height,
                         view = current_view,
                         committed_height,
+                        allow_recovery_rotation,
                         "routing empty contiguous-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
                     );
                     return matches!(
@@ -32486,7 +32492,7 @@ impl Actor {
                             current_view,
                             proposal_seen,
                             false,
-                            false,
+                            allow_recovery_rotation,
                             now,
                         ),
                         FrontierRecoveryAdvance::Rotate
