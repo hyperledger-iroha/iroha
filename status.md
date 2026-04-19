@@ -14,6 +14,23 @@ Last updated: 2026-04-19
   - `cargo test -p xtask --test mochi_bundle -- --nocapture`
   - `cargo test -p xtask mochi_ui_manifest_path_declares_packaged_binary -- --nocapture`
 
+## 2026-04-19 Follow-up: mock WSV unshield JSON compatibility
+- `crates/iroha_data_model/src/isi/zk.rs` now defaults
+  `iroha_data_model::isi::zk::Unshield.outputs` during decode, so JSON
+  envelopes that omit optional private change commitments no longer fail with
+  `NoritoInvalid` before the mock-host permission / verify latch checks run.
+- `crates/iroha_data_model/tests/unshield_json_defaults.rs` adds direct
+  coverage for the missing-`outputs` JSON compatibility case.
+- `crates/ivm/tests/wsv_verify_latch_unshield.rs` now builds the current
+  `iroha_data_model::zk::OpenVerifyEnvelope` wire payload expected by
+  `WsvHost`, keeping the mock-host verify-latch tests aligned with the
+  documented syscall contract.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test unshield_json_defaults -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_zk_perm_and_events -- --nocapture`
+  - `cargo test -p ivm --test wsv_verify_latch_unshield -- --nocapture`
+
 ## 2026-04-19 Follow-up: Kotodama pointer-ABI fixture resync
 - `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs` now uses the current
   Kotodama JSON method helpers (`ev.get_account_id(...)` and
@@ -39,11 +56,13 @@ Last updated: 2026-04-19
   `try_reserve` for the bounded allocation path. Unit coverage now exercises
   empty vectors, successful `u8`, `u16`, and nested `Vec<u8>` manual unpacked
   decoding, recovery from length mismatch, non-recoverable error preservation,
-  short count headers, impossible counts, overflowing element lengths, truncated
-  element payloads, and invalid element bodies.
+  direct manual element decode success/failure, short count headers, impossible
+  counts, overflowing element lengths, truncated first and later element
+  payloads, truncated later element headers, and invalid first and later element
+  bodies.
 - Focused validation for this slice:
   - `cargo fmt --all -- --check`
-  - `cargo test -p iroha_primitives manual_unpacked` (`11 passed`)
+  - `cargo test -p iroha_primitives manual_unpacked` (`16 passed`)
   - `cargo test -p iroha_primitives` currently still fails the pre-existing
     `const_vec::tests::matches_vec_encoding` and
     `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
@@ -104,6 +123,17 @@ Last updated: 2026-04-19
   and empty-context/empty-message ML-DSA signing. The `iroha_crypto` ML-DSA
   keypair integration test now also covers malformed prefixed public-key input
   and private-key byte roundtrips.
+- A sixth focused pass raises `soranet_pq` to 91 unit tests by covering
+  OS-backed hedged RNG construction, ML-KEM `_from_os` keygen/encapsulation
+  roundtrips, and ML-DSA `_from_os` keygen/sign/verify flow. The
+  `iroha_crypto` ML-DSA keypair integration test now also covers public-key byte
+  roundtrips.
+- A seventh focused pass raises `soranet_pq` to 97 unit tests by covering
+  deterministic `next_u32` replay, `RngError` display text, ML-KEM tampered
+  ciphertext implicit rejection, Kyber alias parsing, ML-DSA bad-encoding and
+  context-length display text, and direct modified-signature rejection. The
+  `iroha_crypto` ML-DSA keypair integration test now also covers signature
+  payload byte roundtrips and public/private key hex roundtrips.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
@@ -415,12 +445,14 @@ Last updated: 2026-04-19
 - Additional FASTPQ helper coverage now covers canonical parameter-version catalogue ordering and non-catalogue rejection, role-grant/revoke operation-size hints, order-sensitive fallback roots, multi-query materialisation, and single-round FRI query-chain accept/reject paths.
 - Further FASTPQ helper coverage now covers `canonical_with_modes` unknown-parameter rejection, materialised commitment/PublicIO preservation, exact-boundary `VerifyLimits` acceptance, AIR next-row/composition path limit rejection, and FRI query-chain nonzero final-offset success/failure.
 - The newest FASTPQ proof tests also cover direct FRI challenge/layer length mismatch branches, malformed round/final FRI root decoding, and Norito proof encode/decode roundtrips.
+- FASTPQ digest coverage now pins parameter-mismatch fail-fast behavior, trace commitment binding to parameter name, trace dimensions, column count, leaf digests, fused parent roots, and the little-endian length-prefix helper.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`93 passed`)
+  - `cargo test -p fastpq_prover digest::tests:: -- --nocapture` (`6 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_ -- --nocapture`
