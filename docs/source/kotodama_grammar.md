@@ -103,6 +103,22 @@ fn smoke() {
 }
 ```
 
+Runtime-style entrypoint example
+```ko
+seiyaku Demo {
+  #[access(read="*", write="*")]
+  kotoage fn run(count: int) -> int { return count + 1; }
+
+  #[test]
+  fn smoke_runtime_path() {
+    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
+    assert_eq(next, 8);
+  }
+}
+```
+
+`invoke_entrypoint(...)` is only available inside `#[test]` functions. It drives the real public/view entrypoint wrapper in test mode, so payload decoding follows the same `Json` ABI path as normal runtime execution.
+
 Standalone test-file example
 ```ko
 koto_test { target: "contracts/demo.ko" }

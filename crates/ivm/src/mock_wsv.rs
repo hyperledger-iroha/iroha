@@ -7193,8 +7193,9 @@ mod tests_null_decode {
         );
         let input_name: Name = "trigger_event_json".parse().expect("public input name");
         let input_value = make_tlv(PointerType::Json, br#"{"kind":"manual"}"#);
-        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_public_inputs(BTreeMap::from([(input_name.clone(), input_value.clone())]));
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_public_inputs(BTreeMap::from([(input_name.clone(), input_value.clone())]));
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -7205,7 +7206,10 @@ mod tests_null_decode {
         vm.set_register(10, name_ptr);
         call_syscall(&mut vm, syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("get public input");
 
-        let out = vm.memory.validate_tlv(vm.register(10)).expect("validate output tlv");
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("validate output tlv");
         assert_eq!(out.type_id, PointerType::Json);
         assert_eq!(out.payload, br#"{"kind":"manual"}"#);
     }

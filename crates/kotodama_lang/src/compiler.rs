@@ -2949,14 +2949,18 @@ mod test_mode_tests {
         let (_code, manifest, report) = production
             .compile_source_with_manifest_and_report(src)
             .expect("compile in production mode");
-        assert!(report
-            .source_map
-            .iter()
-            .all(|entry| entry.function_name != "smoke"));
-        assert!(manifest
-            .entrypoints
-            .as_ref()
-            .is_none_or(|entrypoints| entrypoints.iter().all(|entry| entry.name != "smoke")));
+        assert!(
+            report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "smoke")
+        );
+        assert!(
+            manifest
+                .entrypoints
+                .as_ref()
+                .is_none_or(|entrypoints| entrypoints.iter().all(|entry| entry.name != "smoke"))
+        );
 
         let test_mode = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
@@ -2965,10 +2969,12 @@ mod test_mode_tests {
         let (_code, _manifest, report) = test_mode
             .compile_source_with_manifest_and_report(src)
             .expect("compile in test mode");
-        assert!(report
-            .source_map
-            .iter()
-            .any(|entry| entry.function_name == "smoke"));
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "smoke")
+        );
     }
 }
 
@@ -3053,7 +3059,11 @@ impl Compiler {
         if abi_version != 1 {
             return Err(format!("unsupported abi_version {abi_version}; expected 1"));
         }
-        let ir_prog = ir::lower_with_cap(&typed, self.opts.dynamic_iter_cap as usize)?;
+        let ir_prog = ir::lower_with_cap_and_test_mode(
+            &typed,
+            self.opts.dynamic_iter_cap as usize,
+            self.opts.mode == CompilerMode::Test,
+        )?;
         let durable_enabled = abi_version >= 1;
         // Choose the default entrypoint used when the VM starts execution at offset 0.
         // Trigger contracts must boot into their callback entrypoint, not a preceding private helper.
