@@ -309,4 +309,49 @@ pub mod mldsa65 {
         );
         fn shake256(output: *mut u8, outlen: usize, input: *const u8, inlen: usize);
     }
+
+    #[cfg(test)]
+    mod tests {
+        use pqcrypto_mldsa::mldsa65;
+        use pqcrypto_traits::sign::SecretKey as _;
+
+        use super::*;
+
+        #[test]
+        fn seeded_public_key_recovers_from_secret_key() {
+            let (public, private) =
+                keypair_from_seed(b"iroha:ml-dsa-seed:recover").expect("seeded keypair");
+            let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+                .expect("valid ML-DSA secret bytes");
+
+            let recovered = public_key_from_secret(&secret).expect("recover public key");
+
+            assert_eq!(public, recovered);
+        }
+
+        #[test]
+        fn public_key_from_secret_rejects_tampered_secret_components() {
+            let (_, private) =
+                keypair_from_seed(b"iroha:ml-dsa-seed:tamper").expect("seeded keypair");
+            let mut secret_bytes = private.to_bytes().1;
+            let last = secret_bytes
+                .last_mut()
+                .expect("ML-DSA secret key has at least one byte");
+            *last ^= 0x01;
+            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
+                .expect("length-valid ML-DSA secret bytes");
+
+            let err = public_key_from_secret(&secret).expect_err("tampered secret is inconsistent");
+
+            assert!(matches!(err, Error::KeyGen(message) if message.contains("Inconsistent")));
+        }
+
+        #[test]
+        fn seed_material_changes_with_seed_input() {
+            let first = derive_seed_material(b"iroha:ml-dsa-seed:first");
+            let second = derive_seed_material(b"iroha:ml-dsa-seed:second");
+
+            assert_ne!(first, second);
+        }
+    }
 }
