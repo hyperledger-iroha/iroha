@@ -20455,3 +20455,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## 2026-04-17 Permission Cache Replay Follow-up
 1. Completed: `state::permission_cache_tests::permission_cache_rebuilds_after_restart` now builds replay-valid post-height-2 blocks with embedded previous-roster evidence and no longer depends on libtest's default worker stack.
 2. No additional roadmap item was opened from this fix; the focused `iroha_core` permission-cache replay regression is green.
+
+## 2026-04-19 Integration Failure Sweep Follow-up
+1. Completed: the reported `fast_dsl`, scheduler TEU default-lane, and threshold escrow contract-state regressions are fixed and covered by focused integration validation.
+2. No additional roadmap item was opened from this sweep; the remaining validation gap is the normal multi-hour full workspace test run.
