@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Mochi supervisor Kagami and stream fixture sync
+- `mochi/mochi-integration/src/bin/kagami_mock.rs` now matches the current
+  supervisor CLI contract: it accepts `--version`, `--chain-id`,
+  `--consensus-mode`, profile / VRF passthrough flags, and emits a canonical
+  minimal genesis JSON payload instead of rejecting the newer `kagami`
+  invocation shape.
+- `mochi/mochi-core/src/torii.rs` now decodes framed signed-block payloads on
+  the block stream before falling back to legacy bare versioned bytes, which
+  restores canonical block-stream coverage after the block fixtures were
+  refreshed.
+- Refreshed the stale Mochi Torii replay block/event fixtures, extended the
+  replay status fixture with the current governance counters, and updated the
+  supervisor integration assertions for addr literals, signed-genesis config
+  paths, and the interleaved Torii/P2P port-allocation invariant.
+- Focused validation for this slice:
+  - `cargo test -p mochi-integration`
+    (`17 passed`)
+  - `cargo test -p mochi-core canonical_block_fixture_roundtrips_via_wire_helpers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core block_stream_end_to_end_decodes_canonical_block -- --nocapture`
+    (`1 passed`)
+
 ## 2026-04-19 Follow-up: Mochi readiness status decoding
 - `mochi/mochi-core/src/torii.rs` now decodes `/status` responses through the
   framed Norito path first and falls back to the legacy bare-payload decoder,
@@ -25435,3 +25457,14 @@ Last updated: 2026-04-19
   - `cargo test -p iroha_core --lib block_sync_qc_lock_override_handles_missing_locked_payload -- --nocapture`
   - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
   - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.
+
+## 2026-04-19 Integration Failure Sweep
+- Fixed the `fast_dsl` workspace build by importing Norito's `DecodeFromSlice` extension trait in the `iroha_genesis` `tx_decode` diagnostic binary.
+- Updated the scheduler default-lane regression to use a fallback transaction without an inherent dataspace target, keeping the test focused on policy default routing instead of account-metadata dataspace routing.
+- Scoped threshold escrow contract-state reads by the deployed contract address so `/v1/contracts/state` queries read the same per-instance namespace used by contract execution.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo check --workspace --features fast_dsl`
+  - `cargo test -p integration_tests queue_uses_default_lane_when_no_rule_matches -- --nocapture`
+  - `cargo test -p integration_tests threshold_escrow -- --nocapture`
+  - `cargo test -p integration_tests workspace_builds_with_fast_dsl_feature -- --nocapture`
