@@ -1,0 +1,35 @@
+koto_test { target: "19_contract_flow_test.ko" }
+
+fixture actors {
+  actor(
+    "issuer",
+    account_id("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"),
+    "0x0909090909090909090909090909090909090909090909090909090909090909"
+  );
+}
+
+#[test(fixture="actors")]
+fn actor_helpers_roundtrip() {
+  let acct = actor_account("issuer");
+  assert(acct == account_id("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"));
+
+  let pk = actor_public_key("issuer");
+  let sig = actor_sign("issuer", b"native-flow");
+  assert(tlv_len(pk) > 0);
+  assert(tlv_len(sig) > 0);
+}
+
+#[test(fixture="actors")]
+fn invoke_entrypoint_as_runs_the_contract() {
+  invoke_entrypoint_as("issuer", "hajimari", json("{}"));
+  invoke_entrypoint_as("issuer", "increment", json("{}"));
+  assert(counter == 5);
+
+  invoke_entrypoint_as("issuer", "remember_caller", json("{}"));
+  assert(last_actor == account_id("sorauﾛ1QEnRヰ7Dﾑzmg1ﾊｻ4ﾈAcckｻsafiｳヱufｴｻｻPﾆｴﾖﾁﾉDR1Y5PX"));
+}
+
+#[test(fixture="actors")]
+fn expect_reject_as_captures_contract_rejection() {
+  expect_reject_as("issuer", "reject_me", json("{}"));
+}

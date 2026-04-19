@@ -1,0 +1,24 @@
+seiyaku ContractFlowExample {
+  state int counter;
+  state AccountId last_actor;
+
+  #[access(read="*", write="*")]
+  hajimari() {
+    counter = 1;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn increment() {
+    counter = counter + 4;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn remember_caller() {
+    last_actor = authority();
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn reject_me() {
+    require(false);
+  }
+}

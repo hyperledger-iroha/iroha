@@ -113,6 +113,9 @@ enabled = true
 [confidential]
 enabled = true
 
+[zk.halo2]
+enabled = true
+
 [pipeline.gas]
 # `gas_asset_id` transaction metadata is canonicalized to the Base58 asset
 # definition id before execution. The live XOR alias `xor#universal` resolves to

@@ -2593,6 +2593,72 @@ impl IVM {
         Ok(Memory::INPUT_START + off)
     }
 
+    /// Validate a pointer-ABI TLV in any readable region and return its decoded view.
+    pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
+        let hdr = self
+            .memory
+            .load_region(ptr, 7)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        let envelope = self
+            .memory
+            .load_region(ptr, total as u64)
+            .map_err(|_| VMError::NoritoInvalid)?;
+
+        match crate::pointer_abi::validate_tlv_bytes(envelope) {
+            Ok(tlv) => {
+                if let Some((policy, abi_version)) = crate::pointer_abi::current_policy() {
+                    let unsupported_abi = abi_version != 1;
+                    let disallowed_type =
+                        !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id);
+                    if unsupported_abi || disallowed_type {
+                        return Err(VMError::AbiTypeNotAllowed {
+                            abi: abi_version,
+                            type_id: tlv.type_id as u16,
+                        });
+                    }
+                }
+                Ok(tlv)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Validate a pointer-ABI TLV in the INPUT region and return its decoded view.
+    pub fn validate_input_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
+        self.memory.validate_tlv(ptr)
+    }
+
+    /// Clone a validated TLV from any readable region into an owned buffer.
+    pub fn clone_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
+        let tlv = self.validate_tlv(ptr)?;
+        let mut out = Vec::with_capacity(7 + tlv.payload.len() + iroha_crypto::Hash::LENGTH);
+        out.extend_from_slice(&(tlv.type_id as u16).to_be_bytes());
+        out.push(tlv.version);
+        out.extend_from_slice(&(tlv.payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(tlv.payload);
+        let hash: [u8; 32] = iroha_crypto::Hash::new(tlv.payload).into();
+        out.extend_from_slice(&hash);
+        Ok(out)
+    }
+
+    /// Clone a validated INPUT TLV into an owned buffer.
+    pub fn clone_input_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
+        let tlv = self.validate_input_tlv(ptr)?;
+        let mut out = Vec::with_capacity(7 + tlv.payload.len() + iroha_crypto::Hash::LENGTH);
+        out.extend_from_slice(&(tlv.type_id as u16).to_be_bytes());
+        out.push(tlv.version);
+        out.extend_from_slice(&(tlv.payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(tlv.payload);
+        let hash: [u8; 32] = iroha_crypto::Hash::new(tlv.payload).into();
+        out.extend_from_slice(&hash);
+        Ok(out)
+    }
+
     /// Recompute the simple INPUT bump pointer based on existing TLVs.
     ///
     /// Scans the INPUT region from the start and advances `input_bump_next`

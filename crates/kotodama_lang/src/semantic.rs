@@ -1842,6 +1842,13 @@ fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
     }
 }
 
+fn typed_string_literal(value: String) -> TypedExpr {
+    TypedExpr {
+        expr: ExprKind::String(value),
+        ty: Type::String,
+    }
+}
+
 fn analyze_invoke_entrypoint_call(
     args: &[Expr],
     vars: &mut HashMap<String, Type>,
@@ -1894,6 +1901,204 @@ fn analyze_invoke_entrypoint_call(
             args: vec![payload],
         },
         ty: ret_ty,
+    })
+}
+
+fn runtime_entrypoint_return_type(target_name: &str) -> Result<Type, SemanticError> {
+    let Some(modifiers) = FUNCTION_MODIFIERS.with(|env| env.borrow().get(target_name).cloned())
+    else {
+        return Err(SemanticError {
+            message: format!("unknown runtime entrypoint `{target_name}`"),
+        });
+    };
+    if !function_is_runtime_entrypoint(&modifiers) {
+        return Err(SemanticError {
+            message: format!(
+                "runtime test helpers may only target public/view/hajimari/kaizen entrypoints, got `{target_name}`"
+            ),
+        });
+    }
+    Ok(FUNCTION_RETURNS
+        .with(|env| env.borrow().get(target_name).cloned())
+        .unwrap_or(Type::Unit))
+}
+
+fn analyze_invoke_entrypoint_as_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`invoke_entrypoint_as` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 3 {
+        return Err(SemanticError {
+            message: "invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message: "invoke_entrypoint_as requires a literal actor alias such as \"issuer\" or name(\"issuer\")".into(),
+    })?;
+    let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        message: "invoke_entrypoint_as requires a literal entrypoint name such as \"run\" or name(\"run\")".into(),
+    })?;
+    let payload = analyze_expr(&args[2], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "invoke_entrypoint_as expects a Json payload as its third argument".into(),
+        });
+    }
+    let ret_ty = runtime_entrypoint_return_type(&target_name)?;
+    if matches!(ret_ty, Type::Tuple(_)) {
+        return Err(SemanticError {
+            message: format!(
+                "invoke_entrypoint_as does not yet support tuple-returning entrypoints (`{target_name}`)"
+            ),
+        });
+    }
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "invoke_entrypoint_as".to_string(),
+            args: vec![
+                typed_string_literal(actor),
+                typed_string_literal(target_name),
+                payload,
+            ],
+        },
+        ty: ret_ty,
+    })
+}
+
+fn analyze_expect_reject_as_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`expect_reject_as` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 3 {
+        return Err(SemanticError {
+            message: "expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "expect_reject_as requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        message:
+            "expect_reject_as requires a literal entrypoint name such as \"run\" or name(\"run\")"
+                .into(),
+    })?;
+    let payload = analyze_expr(&args[2], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "expect_reject_as expects a Json payload as its third argument".into(),
+        });
+    }
+    let _ = runtime_entrypoint_return_type(&target_name)?;
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "expect_reject_as".to_string(),
+            args: vec![
+                typed_string_literal(actor),
+                typed_string_literal(target_name),
+                payload,
+            ],
+        },
+        ty: Type::Unit,
+    })
+}
+
+fn analyze_actor_account_call(args: &[Expr]) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_account` is only available inside #[test] Kotodama functions".into(),
+        });
+    }
+    if args.len() != 1 {
+        return Err(SemanticError {
+            message: "actor_account expects (string|Name literal actor)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "actor_account requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_account".to_string(),
+            args: vec![typed_string_literal(actor)],
+        },
+        ty: Type::AccountId,
+    })
+}
+
+fn analyze_actor_public_key_call(args: &[Expr]) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_public_key` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 1 {
+        return Err(SemanticError {
+            message: "actor_public_key expects (string|Name literal actor)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "actor_public_key requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_public_key".to_string(),
+            args: vec![typed_string_literal(actor)],
+        },
+        ty: Type::Bytes,
+    })
+}
+
+fn analyze_actor_sign_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_sign` is only available inside #[test] Kotodama functions".into(),
+        });
+    }
+    if args.len() != 2 {
+        return Err(SemanticError {
+            message: "actor_sign expects (string|Name literal actor, Blob|bytes)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message: "actor_sign requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+            .into(),
+    })?;
+    let message = analyze_expr(&args[1], vars)?;
+    if !is_blob_like(&message.ty) {
+        return Err(SemanticError {
+            message: "actor_sign expects the message as Blob|bytes".into(),
+        });
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_sign".to_string(),
+            args: vec![typed_string_literal(actor), message],
+        },
+        ty: Type::Bytes,
     })
 }
 
@@ -3650,6 +3855,21 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
 
             if name == "invoke_entrypoint" {
                 return analyze_invoke_entrypoint_call(args, vars);
+            }
+            if name == "invoke_entrypoint_as" {
+                return analyze_invoke_entrypoint_as_call(args, vars);
+            }
+            if name == "expect_reject_as" {
+                return analyze_expect_reject_as_call(args, vars);
+            }
+            if name == "actor_account" {
+                return analyze_actor_account_call(args);
+            }
+            if name == "actor_public_key" {
+                return analyze_actor_public_key_call(args);
+            }
+            if name == "actor_sign" {
+                return analyze_actor_sign_call(args, vars);
             }
 
             // Struct constructor call: `StructName(arg1, arg2, ...)`
@@ -7667,6 +7887,69 @@ mod tests {
             err.message
                 .contains("may only target public/view/hajimari/kaizen")
         );
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                    let acct = actor_account("issuer");
+                    let pk = actor_public_key("issuer");
+                    let sig = actor_sign("issuer", b"demo");
+                    expect_reject_as("issuer", "run", json("{\"count\": -1}"));
+                    let _ = (next, acct, pk, sig);
+                }
+            }
+            "#,
+        )
+        .expect("parse invoke_entrypoint_as");
+        analyze(&program).expect("test helpers should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_rejects_tuple_returning_targets() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+
+                #[test]
+                fn drive_run() {
+                    let _pair = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse tuple invoke_entrypoint_as");
+        let err = analyze(&program).expect_err("tuple-returning target should fail");
+        assert!(
+            err.message
+                .contains("does not yet support tuple-returning entrypoints")
+        );
+    }
+
+    #[test]
+    fn actor_helpers_reject_non_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                fn helper() {
+                    let _acct = actor_account("issuer");
+                }
+            }
+            "#,
+        )
+        .expect("parse non-test actor helper");
+        let err = analyze(&program).expect_err("actor helper outside test should fail");
+        assert!(err.message.contains("only available inside #[test]"));
     }
 
     #[test]

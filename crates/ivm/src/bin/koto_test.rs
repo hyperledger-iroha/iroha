@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
@@ -6,11 +7,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
+use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{json::Json, numeric::Numeric};
 use ivm::{
-    AccountId, AssetDefinitionId, DomainId, IVM, MockWorldStateView, PermissionToken, PointerType,
-    ProgramMetadata, TraceMode, WsvHost,
+    AccountId, AssetDefinitionId, DomainId, IVM, IVMHost, MockWorldStateView, PermissionToken,
+    PointerType, ProgramMetadata, TraceMode, WsvHost,
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, FunctionVisibility, Item, Program},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
@@ -23,6 +27,17 @@ use norito::json::{self, Value};
 const DEFAULT_CALLER: &str =
     "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
+const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = 0xF8;
+const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = 0xF9;
+const TEST_SYSCALL_ACTOR_SIGN: u32 = 0xFA;
+const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 = 0xFB;
+const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = 0xFC;
+
+#[derive(Clone)]
+struct FixtureActor {
+    account: AccountId,
+    seed: Option<[u8; 32]>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
@@ -40,6 +55,7 @@ struct TestCase {
 
 struct DiscoveredSuite {
     target_path: PathBuf,
+    target_program: Program,
     merged_program: Program,
     tests: Vec<TestCase>,
     fixtures: HashMap<String, FixtureDecl>,
@@ -47,8 +63,10 @@ struct DiscoveredSuite {
 
 struct CompiledSuite {
     code: Vec<u8>,
+    runtime_code: Vec<u8>,
     report: CompileReport,
     pc_base: u64,
+    runtime_entrypoints: HashMap<String, u64>,
     tests: Vec<CompiledTestCase>,
     fixtures: HashMap<String, FixtureDecl>,
     coverage_functions: Vec<CoverageFunction>,
@@ -78,6 +96,17 @@ struct TestRunResult {
     failure: Option<String>,
     trace_pcs: Vec<u64>,
     delta_trace: Vec<ivm::zk::DeltaEntry>,
+}
+
+struct KotoTestHost {
+    inner: WsvHost,
+    actors: HashMap<String, FixtureActor>,
+    base_public_inputs: BTreeMap<Name, Vec<u8>>,
+    entrypoints: HashMap<String, u64>,
+    program: Vec<u8>,
+    last_test_error: Option<String>,
+    supplemental_trace_pcs: Vec<u64>,
+    supplemental_delta_trace: Vec<ivm::zk::DeltaEntry>,
 }
 
 fn main() {
@@ -155,7 +184,7 @@ fn discover_suite_from_target(
             .extend(test_program.fixtures.into_iter());
     }
     merged_program.test_target = None;
-    finalize_suite(path.to_path_buf(), merged_program)
+    finalize_suite(path.to_path_buf(), target_program, merged_program)
 }
 
 fn discover_suite_from_standalone_test(
@@ -172,15 +201,16 @@ fn discover_suite_from_standalone_test(
     let target_program = parse_program_file(&target_path)?;
     validate_standalone_test_program(test_path, &target_path, &test_program)?;
 
-    let mut merged_program = target_program;
+    let mut merged_program = target_program.clone();
     merged_program.items.extend(test_program.items);
     merged_program.fixtures.extend(test_program.fixtures);
     merged_program.test_target = None;
-    finalize_suite(target_path, merged_program)
+    finalize_suite(target_path, target_program, merged_program)
 }
 
 fn finalize_suite(
     target_path: PathBuf,
+    target_program: Program,
     merged_program: Program,
 ) -> Result<DiscoveredSuite, String> {
     let tests = collect_tests(&merged_program)?;
@@ -193,6 +223,7 @@ fn finalize_suite(
     let fixtures = build_fixture_map(&merged_program.fixtures)?;
     Ok(DiscoveredSuite {
         target_path,
+        target_program,
         merged_program,
         tests,
         fixtures,
@@ -376,23 +407,49 @@ fn build_fixture_map(fixtures: &[FixtureDecl]) -> Result<HashMap<String, Fixture
 }
 
 fn compile_suite(suite: &DiscoveredSuite) -> Result<CompiledSuite, String> {
-    let opts = CompilerOptions {
+    let test_opts = CompilerOptions {
         mode: CompilerMode::Test,
         debug_source_name: Some(suite.target_path.display().to_string()),
         ..CompilerOptions::default()
     };
-    let compiler = ivm::KotodamaCompiler::new_with_options(opts);
-    let (code, _manifest, report) =
-        compiler.compile_program_with_manifest_and_report(&suite.merged_program)?;
+    let test_compiler = ivm::KotodamaCompiler::new_with_options(test_opts);
+    let (code, _manifest, test_report) =
+        test_compiler.compile_program_with_manifest_and_report(&suite.merged_program)?;
+    let runtime_opts = CompilerOptions {
+        debug_source_name: Some(suite.target_path.display().to_string()),
+        ..CompilerOptions::default()
+    };
+    let runtime_compiler = ivm::KotodamaCompiler::new_with_options(runtime_opts);
+    let (runtime_code, _runtime_manifest, runtime_report) =
+        runtime_compiler.compile_program_with_manifest_and_report(&suite.target_program)?;
     let metadata = ProgramMetadata::parse(&code)
         .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
-    let pc_base = metadata.literal_prefix_len() as u64;
+    let test_pc_base = metadata.literal_prefix_len() as u64;
+    let runtime_metadata = ProgramMetadata::parse(&runtime_code)
+        .map_err(|err| format!("failed to parse runtime program metadata: {err:?}"))?;
+    let runtime_pc_base = runtime_metadata.literal_prefix_len() as u64;
+    let runtime_entrypoints = runtime_metadata
+        .contract_interface
+        .as_ref()
+        .map(|interface| {
+            interface
+                .entrypoints
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.name.clone(),
+                        runtime_pc_base.saturating_add(entry.entry_pc),
+                    )
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
 
     let mut test_pcs = HashMap::new();
-    for entry in &report.source_map {
+    for entry in &test_report.source_map {
         test_pcs
             .entry(entry.function_name.clone())
-            .or_insert(pc_base.saturating_add(entry.pc_start));
+            .or_insert(test_pc_base.saturating_add(entry.pc_start));
     }
 
     let tests = suite
@@ -412,12 +469,15 @@ fn compile_suite(suite: &DiscoveredSuite) -> Result<CompiledSuite, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let coverage_functions = build_coverage_functions(&suite.merged_program, &report, pc_base);
+    let coverage_functions =
+        build_coverage_functions(&suite.target_program, &runtime_report, runtime_pc_base);
 
     Ok(CompiledSuite {
         code,
-        report,
-        pc_base,
+        runtime_code,
+        report: runtime_report,
+        pc_base: runtime_pc_base,
+        runtime_entrypoints,
         tests,
         fixtures: suite.fixtures.clone(),
         coverage_functions,
@@ -485,24 +545,31 @@ fn execute_suite(
     compiled: &CompiledSuite,
     trace_mode: TraceMode,
 ) -> Result<Vec<TestRunResult>, String> {
+    let parsed = ProgramMetadata::parse(&compiled.code)
+        .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
+    let suite_return_pc = (compiled.code.len().saturating_sub(parsed.header_len)) as u64;
     let mut results = Vec::with_capacity(compiled.tests.len());
     for test in &compiled.tests {
-        let host = build_host_for_fixture(&compiled.fixtures, test.fixture.as_deref())?;
+        let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
         let mut vm = IVM::new(u64::MAX);
-        vm.set_host(host);
         vm.load_program(&compiled.code)
             .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
+        vm.set_register(1, suite_return_pc);
         vm.set_program_counter(test.pc)
             .map_err(|err| format!("failed to jump to test `{}`: {err:?}", test.name))?;
         vm.set_trace_mode(trace_mode);
 
         let started = Instant::now();
-        let outcome = vm.run();
+        let outcome = vm.run_with_host(&mut host);
         let elapsed = started.elapsed();
         let passed = outcome.is_ok();
-        let failure = outcome.err().map(|err| render_failure(&vm, &err));
-        let trace_pcs = vm.trace_pcs().to_vec();
-        let delta_trace = vm.delta_register_trace().to_vec();
+        let failure = outcome
+            .err()
+            .map(|err| render_failure(&vm, host.last_test_error(), &err));
+        let mut trace_pcs = vm.trace_pcs().to_vec();
+        trace_pcs.extend_from_slice(host.supplemental_trace_pcs());
+        let mut delta_trace = vm.delta_register_trace().to_vec();
+        delta_trace.extend_from_slice(host.supplemental_delta_trace());
 
         results.push(TestRunResult {
             name: test.name.clone(),
@@ -518,30 +585,55 @@ fn execute_suite(
 }
 
 fn build_host_for_fixture(
-    fixtures: &HashMap<String, FixtureDecl>,
+    compiled: &CompiledSuite,
     fixture_name: Option<&str>,
-) -> Result<WsvHost, String> {
+) -> Result<KotoTestHost, String> {
     let caller = parse_account_literal(DEFAULT_CALLER)?;
-    let mut host = WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+    let base_host =
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+    let mut host = KotoTestHost::new(
+        base_host,
+        compiled.runtime_code.clone(),
+        compiled.runtime_entrypoints.clone(),
+    );
     let mut public_inputs = BTreeMap::new();
     if let Some(name) = fixture_name {
-        let fixture = fixtures
+        let fixture = compiled
+            .fixtures
             .get(name)
             .ok_or_else(|| format!("unknown fixture `{name}`"))?;
         for action in &fixture.actions {
             apply_fixture_action(action, &mut host, &mut public_inputs)?;
         }
     }
-    host.set_public_inputs(public_inputs);
+    host.base_public_inputs = public_inputs.clone();
+    host.inner_mut().set_public_inputs(public_inputs);
     Ok(host)
 }
 
 fn apply_fixture_action(
     action: &FixtureAction,
-    host: &mut WsvHost,
+    host: &mut KotoTestHost,
     public_inputs: &mut BTreeMap<Name, Vec<u8>>,
 ) -> Result<(), String> {
     match action.name.as_str() {
+        "actor" => {
+            if !(2..=3).contains(&action.args.len()) {
+                return Err("fixture action `actor` expects 2 or 3 arguments".to_string());
+            }
+            let alias = eval_actor_alias_expr(&action.args[0])?;
+            let account = eval_account_expr(&action.args[1])?;
+            let seed = if action.args.len() == 3 {
+                Some(eval_seed_expr(&action.args[2])?)
+            } else {
+                None
+            };
+            host.register_actor(alias.clone(), account)?;
+            if let Some(seed) = seed {
+                host.set_actor_seed(&alias, seed)?;
+            }
+            Ok(())
+        }
         "caller" => {
             expect_arg_count(action, 1)?;
             host.set_caller_subject(eval_account_expr(&action.args[0])?);
@@ -550,23 +642,36 @@ fn apply_fixture_action(
         "register_account" => {
             expect_arg_count(action, 1)?;
             let account = eval_account_expr(&action.args[0])?;
-            host.wsv.add_account_unchecked(account);
+            host.inner_mut().wsv.add_account_unchecked(account);
             Ok(())
         }
         "grant_permission" => {
-            expect_arg_count(action, 1)?;
-            let permission = eval_permission_expr(&action.args[0])?;
-            let caller = host.caller_subject();
-            host.wsv.grant_permission(&caller, permission);
-            Ok(())
+            if action.args.len() == 1 {
+                let permission = eval_permission_expr(&action.args[0])?;
+                let caller = host.caller_subject();
+                host.inner_mut().wsv.grant_permission(&caller, permission);
+                return Ok(());
+            }
+            if action.args.len() == 2 {
+                let alias = eval_actor_alias_expr(&action.args[0])?;
+                let permission = eval_permission_expr(&action.args[1])?;
+                let account = host
+                    .actor_account(&alias)
+                    .ok_or_else(|| format!("unknown actor `{alias}`"))?;
+                host.inner_mut().wsv.grant_permission(&account, permission);
+                return Ok(());
+            }
+            return Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string());
         }
         "register_domain" => {
             expect_arg_count(action, 1)?;
             let domain = eval_domain_expr(&action.args[0])?;
             let caller = host.caller_subject();
-            host.wsv
+            let inner = host.inner_mut();
+            inner
+                .wsv
                 .grant_permission(&caller, PermissionToken::RegisterDomain);
-            if host.wsv.register_domain(&caller, domain.clone()) {
+            if inner.wsv.register_domain(&caller, domain.clone()) {
                 return Ok(());
             }
             Err(format!("failed to register domain `{domain}`"))
@@ -585,9 +690,11 @@ fn apply_fixture_action(
                 Mintable::Infinitely
             };
             let caller = host.caller_subject();
-            host.wsv
+            let inner = host.inner_mut();
+            inner
+                .wsv
                 .grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-            let _ = host
+            let _ = inner
                 .wsv
                 .register_asset_definition(&caller, asset.clone(), mintable);
             Ok(())
@@ -597,16 +704,20 @@ fn apply_fixture_action(
             let account = eval_account_expr(&action.args[0])?;
             let asset = eval_asset_definition_expr(&action.args[1])?;
             let amount = eval_numeric_expr(&action.args[2])?;
-            host.wsv.add_account_unchecked(account.clone());
             let caller = host.caller_subject();
-            host.wsv
+            let inner = host.inner_mut();
+            inner.wsv.add_account_unchecked(account.clone());
+            inner
+                .wsv
                 .grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
             let _ =
-                host.wsv
+                inner
+                    .wsv
                     .register_asset_definition(&caller, asset.clone(), Mintable::Infinitely);
-            host.wsv
+            inner
+                .wsv
                 .grant_permission(&caller, PermissionToken::MintAsset(asset.clone()));
-            if host
+            if inner
                 .wsv
                 .mint(&caller, account.clone(), asset.clone(), amount.clone())
             {
@@ -621,13 +732,15 @@ fn apply_fixture_action(
             let account = eval_account_expr(&action.args[0])?;
             let key = eval_string_expr(&action.args[1])?;
             let value = eval_detail_bytes(&action.args[2])?;
-            host.wsv.add_account_unchecked(account.clone());
             let caller = host.caller_subject();
+            let inner = host.inner_mut();
+            inner.wsv.add_account_unchecked(account.clone());
             if caller != account {
-                host.wsv
+                inner
+                    .wsv
                     .grant_permission(&caller, PermissionToken::SetAccountDetail(account.clone()));
             }
-            if host.wsv.set_account_detail(&caller, &account, &key, value) {
+            if inner.wsv.set_account_detail(&caller, &account, &key, value) {
                 return Ok(());
             }
             Err(format!(
@@ -638,7 +751,8 @@ fn apply_fixture_action(
             expect_arg_count(action, 2)?;
             let path = eval_string_expr(&action.args[0])?;
             let value = eval_envelope_expr(&action.args[1])?;
-            host.wsv
+            host.inner_mut()
+                .wsv
                 .sc_set(&path, value)
                 .map_err(|err| format!("failed to seed state `{path}`: {err:?}"))
         }
@@ -653,6 +767,394 @@ fn apply_fixture_action(
     }
 }
 
+struct KotoTestHostSnapshot {
+    inner: Box<dyn Any + Send>,
+    actors: HashMap<String, FixtureActor>,
+    last_test_error: Option<String>,
+    supplemental_trace_pcs: Vec<u64>,
+    supplemental_delta_trace: Vec<ivm::zk::DeltaEntry>,
+}
+
+impl KotoTestHost {
+    fn new(inner: WsvHost, program: Vec<u8>, entrypoints: HashMap<String, u64>) -> Self {
+        Self {
+            inner,
+            actors: HashMap::new(),
+            base_public_inputs: BTreeMap::new(),
+            entrypoints,
+            program,
+            last_test_error: None,
+            supplemental_trace_pcs: Vec::new(),
+            supplemental_delta_trace: Vec::new(),
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut WsvHost {
+        &mut self.inner
+    }
+
+    fn caller_subject(&self) -> AccountId {
+        self.inner.caller_subject()
+    }
+
+    fn set_caller_subject(&mut self, caller: AccountId) {
+        self.inner.set_caller_subject(caller);
+    }
+
+    fn actor_account(&self, alias: &str) -> Option<AccountId> {
+        self.actors.get(alias).map(|actor| actor.account.clone())
+    }
+
+    fn register_actor(&mut self, alias: String, account: AccountId) -> Result<(), String> {
+        if self.actors.contains_key(&alias) {
+            return Err(format!("duplicate actor `{alias}`"));
+        }
+        self.inner.wsv.add_account_unchecked(account.clone());
+        self.actors.insert(
+            alias,
+            FixtureActor {
+                account,
+                seed: None,
+            },
+        );
+        Ok(())
+    }
+
+    fn set_actor_seed(&mut self, alias: &str, seed: [u8; 32]) -> Result<(), String> {
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            signing_key.verifying_key().as_bytes(),
+        )
+        .map_err(|err| format!("failed to derive Ed25519 public key for actor `{alias}`: {err}"))?;
+        let derived_account = AccountId::new(public_key);
+        let actor = self
+            .actors
+            .get_mut(alias)
+            .ok_or_else(|| format!("unknown actor `{alias}`"))?;
+        if actor.account != derived_account {
+            return Err(format!(
+                "actor `{alias}` seed derives `{derived_account}` but fixture bound `{}`",
+                actor.account
+            ));
+        }
+        actor.seed = Some(seed);
+        Ok(())
+    }
+
+    fn last_test_error(&self) -> Option<&str> {
+        self.last_test_error.as_deref()
+    }
+
+    fn supplemental_trace_pcs(&self) -> &[u64] {
+        &self.supplemental_trace_pcs
+    }
+
+    fn supplemental_delta_trace(&self) -> &[ivm::zk::DeltaEntry] {
+        &self.supplemental_delta_trace
+    }
+
+    fn clear_test_error(&mut self) {
+        self.last_test_error = None;
+    }
+
+    fn restore_public_inputs(&mut self) {
+        self.inner
+            .set_public_inputs(self.base_public_inputs.clone());
+    }
+
+    fn fail_test<T>(&mut self, message: impl Into<String>) -> Result<T, ivm::VMError> {
+        self.last_test_error = Some(message.into());
+        Err(ivm::VMError::AssertionFailed)
+    }
+
+    fn decode_alias_arg(vm: &IVM, reg: usize, label: &str) -> Result<String, ivm::VMError> {
+        let ptr = vm.register(reg);
+        if ptr == 0 {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let tlv = vm.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::Blob | PointerType::NoritoBytes => {
+                String::from_utf8(tlv.payload.to_vec()).map_err(|_| ivm::VMError::DecodeError)
+            }
+            PointerType::Name => {
+                let name: Name = norito::decode_from_bytes(tlv.payload)
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                Ok(name.as_ref().to_string())
+            }
+            _ => {
+                let _ = label;
+                Err(ivm::VMError::NoritoInvalid)
+            }
+        }
+    }
+
+    fn decode_json_arg(vm: &IVM, reg: usize) -> Result<Json, ivm::VMError> {
+        let ptr = vm.register(reg);
+        if ptr == 0 {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let tlv = vm.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::Json | PointerType::NoritoBytes | PointerType::Blob => {
+                norito::decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+            }
+            _ => Err(ivm::VMError::NoritoInvalid),
+        }
+    }
+
+    fn decode_bytes_arg(vm: &IVM, reg: usize) -> Result<Vec<u8>, ivm::VMError> {
+        let ptr = vm.register(reg);
+        if ptr == 0 {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let tlv = vm.validate_tlv(ptr)?;
+        match tlv.type_id {
+            PointerType::Blob | PointerType::NoritoBytes => Ok(tlv.payload.to_vec()),
+            _ => Err(ivm::VMError::NoritoInvalid),
+        }
+    }
+
+    fn alloc_pointer_result(
+        vm: &mut IVM,
+        pointer_type: PointerType,
+        payload: &[u8],
+    ) -> Result<u64, ivm::VMError> {
+        let tlv = make_tlv(pointer_type, payload);
+        vm.alloc_input_tlv(&tlv)
+    }
+
+    fn record_nested_trace(&mut self, nested_vm: &IVM) {
+        self.supplemental_trace_pcs
+            .extend_from_slice(nested_vm.trace_pcs());
+        self.supplemental_delta_trace
+            .extend_from_slice(nested_vm.delta_register_trace());
+    }
+
+    fn nested_failure_message(
+        actor_alias: &str,
+        entrypoint: &str,
+        payload: &Json,
+        nested_vm: &IVM,
+        err: &ivm::VMError,
+    ) -> String {
+        format!(
+            "actor `{actor_alias}` calling `{entrypoint}` with payload {:?} failed: {}",
+            payload,
+            render_failure(nested_vm, None, err)
+        )
+    }
+
+    fn invoke_entrypoint(
+        &mut self,
+        vm: &mut IVM,
+        expect_reject: bool,
+    ) -> Result<u64, ivm::VMError> {
+        self.clear_test_error();
+        let actor_alias =
+            Self::decode_alias_arg(vm, 10, "actor").map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let entrypoint = Self::decode_alias_arg(vm, 11, "entrypoint")
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let payload = Self::decode_json_arg(vm, 12)?;
+        let returns_pointer = vm.register(13) != 0;
+        let actor = match self.actors.get(&actor_alias).cloned() {
+            Some(actor) => actor,
+            None => {
+                return self.fail_test(format!(
+                    "unknown actor `{actor_alias}` while calling `{entrypoint}`"
+                ));
+            }
+        };
+        let entry_pc = match self.entrypoints.get(&entrypoint).copied() {
+            Some(pc) => pc,
+            None => {
+                return self.fail_test(format!(
+                    "unknown runtime entrypoint `{entrypoint}` for actor `{actor_alias}`"
+                ));
+            }
+        };
+
+        let rollback = self
+            .inner
+            .checkpoint()
+            .ok_or(ivm::VMError::HostUnavailable)?;
+        let previous_caller = self.inner.caller_subject();
+
+        self.inner.set_caller_subject(actor.account.clone());
+        let trigger_name: Name = "trigger_event_json"
+            .parse()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        let mut nested_inputs = self.base_public_inputs.clone();
+        let encoded_payload = norito::to_bytes(&payload).map_err(|_| ivm::VMError::DecodeError)?;
+        nested_inputs.insert(trigger_name, make_tlv(PointerType::Json, &encoded_payload));
+        self.inner.set_public_inputs(nested_inputs);
+
+        let mut nested_vm = IVM::new(u64::MAX);
+        nested_vm.reset();
+        let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
+        nested_vm
+            .memory
+            .preload_input(0, &clear)
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        nested_vm
+            .load_program(&self.program)
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        nested_vm.set_program_counter(entry_pc)?;
+        nested_vm.set_register(1, nested_vm.memory.code_len());
+        nested_vm.set_trace_mode(vm.trace_mode());
+        nested_vm.set_max_cycles(0);
+        let nested_outcome = nested_vm.run_with_host(&mut self.inner);
+        self.record_nested_trace(&nested_vm);
+
+        match nested_outcome {
+            Ok(()) if expect_reject => {
+                let _ = self.inner.restore(rollback.as_ref());
+                self.fail_test(format!(
+                    "expected actor `{actor_alias}` calling `{entrypoint}` with payload {:?} to reject, but it succeeded",
+                    payload
+                ))
+            }
+            Ok(()) => {
+                self.inner.set_caller_subject(previous_caller);
+                self.restore_public_inputs();
+                let value = nested_vm.register(10);
+                if returns_pointer && value != 0 {
+                    let tlv = nested_vm.clone_tlv(value)?;
+                    let ptr = vm.alloc_input_tlv(&tlv)?;
+                    vm.set_register(10, ptr);
+                } else {
+                    vm.set_register(10, value);
+                }
+                Ok(0)
+            }
+            Err(err) if expect_reject => {
+                let _ = self.inner.restore(rollback.as_ref());
+                vm.set_register(10, 0);
+                Ok(0)
+            }
+            Err(err) => {
+                let _ = self.inner.restore(rollback.as_ref());
+                self.fail_test(Self::nested_failure_message(
+                    &actor_alias,
+                    &entrypoint,
+                    &payload,
+                    &nested_vm,
+                    &err,
+                ))
+            }
+        }
+    }
+}
+
+impl IVMHost for KotoTestHost {
+    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        match number {
+            TEST_SYSCALL_ACTOR_ACCOUNT => {
+                self.clear_test_error();
+                let alias = Self::decode_alias_arg(vm, 10, "actor")?;
+                let Some(actor) = self.actors.get(&alias) else {
+                    return self.fail_test(format!("unknown actor `{alias}`"));
+                };
+                let payload =
+                    norito::to_bytes(&actor.account).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let ptr = Self::alloc_pointer_result(vm, PointerType::AccountId, &payload)?;
+                vm.set_register(10, ptr);
+                Ok(0)
+            }
+            TEST_SYSCALL_ACTOR_PUBLIC_KEY => {
+                self.clear_test_error();
+                let alias = Self::decode_alias_arg(vm, 10, "actor")?;
+                let Some(actor) = self.actors.get(&alias) else {
+                    return self.fail_test(format!("unknown actor `{alias}`"));
+                };
+                let Some(seed) = actor.seed else {
+                    return self.fail_test(format!(
+                        "actor `{alias}` does not have a deterministic signing seed"
+                    ));
+                };
+                let signing_key = SigningKey::from_bytes(&seed);
+                let ptr = Self::alloc_pointer_result(
+                    vm,
+                    PointerType::Blob,
+                    signing_key.verifying_key().as_bytes(),
+                )?;
+                vm.set_register(10, ptr);
+                Ok(0)
+            }
+            TEST_SYSCALL_ACTOR_SIGN => {
+                self.clear_test_error();
+                let alias = Self::decode_alias_arg(vm, 10, "actor")?;
+                let Some(actor) = self.actors.get(&alias) else {
+                    return self.fail_test(format!("unknown actor `{alias}`"));
+                };
+                let Some(seed) = actor.seed else {
+                    return self.fail_test(format!(
+                        "actor `{alias}` does not have a deterministic signing seed"
+                    ));
+                };
+                let message = Self::decode_bytes_arg(vm, 11)?;
+                let signing_key = SigningKey::from_bytes(&seed);
+                let signature = signing_key.sign(&message);
+                let ptr = Self::alloc_pointer_result(vm, PointerType::Blob, &signature.to_bytes())?;
+                vm.set_register(10, ptr);
+                Ok(0)
+            }
+            TEST_SYSCALL_INVOKE_ENTRYPOINT_AS => self.invoke_entrypoint(vm, false),
+            TEST_SYSCALL_EXPECT_REJECT_AS => self.invoke_entrypoint(vm, true),
+            _ => self.inner.syscall(number, vm),
+        }
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any
+    where
+        Self: 'static,
+    {
+        self
+    }
+
+    fn supports_concurrent_blocks(&self) -> bool {
+        self.inner.supports_concurrent_blocks()
+    }
+
+    fn begin_tx(&mut self, declared: &ivm::parallel::StateAccessSet) -> Result<(), ivm::VMError> {
+        self.inner.begin_tx(declared)
+    }
+
+    fn finish_tx(&mut self) -> Result<ivm::host::AccessLog, ivm::VMError> {
+        self.inner.finish_tx()
+    }
+
+    fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
+        let inner = self.inner.checkpoint()?;
+        Some(Box::new(KotoTestHostSnapshot {
+            inner,
+            actors: self.actors.clone(),
+            last_test_error: self.last_test_error.clone(),
+            supplemental_trace_pcs: self.supplemental_trace_pcs.clone(),
+            supplemental_delta_trace: self.supplemental_delta_trace.clone(),
+        }))
+    }
+
+    fn restore(&mut self, snapshot: &dyn Any) -> bool {
+        let Some(snapshot) = snapshot.downcast_ref::<KotoTestHostSnapshot>() else {
+            return false;
+        };
+        if !self.inner.restore(snapshot.inner.as_ref()) {
+            return false;
+        }
+        self.actors = snapshot.actors.clone();
+        self.last_test_error = snapshot.last_test_error.clone();
+        self.supplemental_trace_pcs = snapshot.supplemental_trace_pcs.clone();
+        self.supplemental_delta_trace = snapshot.supplemental_delta_trace.clone();
+        true
+    }
+
+    fn access_logging_supported(&self) -> bool {
+        self.inner.access_logging_supported()
+    }
+}
+
 fn expect_arg_count(action: &FixtureAction, expected: usize) -> Result<(), String> {
     if action.args.len() == expected {
         return Ok(());
@@ -663,6 +1165,56 @@ fn expect_arg_count(action: &FixtureAction, expected: usize) -> Result<(), Strin
         expected,
         action.args.len()
     ))
+}
+
+fn eval_actor_alias_expr(expr: &Expr) -> Result<String, String> {
+    match expr {
+        Expr::String(raw) | Expr::Ident(raw) => Ok(raw.clone()),
+        Expr::Call { name, args } if name == "name" => {
+            if args.len() != 1 {
+                return Err("`name` expects exactly one argument".to_string());
+            }
+            eval_string_expr(&args[0])
+        }
+        other => Err(format!("expected actor alias expression, got {other:?}")),
+    }
+}
+
+fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
+    if let Some(hex) = raw.strip_prefix("0x") {
+        if hex.len() % 2 != 0 {
+            return Err(format!(
+                "invalid hex literal `{raw}`: expected even-length hex digits"
+            ));
+        }
+        let mut out = Vec::with_capacity(hex.len() / 2);
+        for chunk in hex.as_bytes().chunks(2) {
+            let byte_str = std::str::from_utf8(chunk)
+                .map_err(|err| format!("invalid hex literal `{raw}`: {err}"))?;
+            let byte = u8::from_str_radix(byte_str, 16)
+                .map_err(|err| format!("invalid hex literal `{raw}`: {err}"))?;
+            out.push(byte);
+        }
+        return Ok(out);
+    }
+    Ok(raw.as_bytes().to_vec())
+}
+
+fn eval_seed_expr(expr: &Expr) -> Result<[u8; 32], String> {
+    let bytes = match expr {
+        Expr::Bytes(bytes) => bytes.clone(),
+        Expr::String(raw) | Expr::Ident(raw) | Expr::Decimal(raw) => decode_hex_or_raw_bytes(raw)?,
+        Expr::Call { name, args } if matches!(name.as_str(), "blob" | "norito_bytes") => {
+            if args.len() != 1 {
+                return Err(format!("`{name}` expects exactly one argument"));
+            }
+            let raw = eval_string_expr(&args[0])?;
+            decode_hex_or_raw_bytes(&raw)?
+        }
+        other => return Err(format!("expected 32-byte seed blob, got {other:?}")),
+    };
+    <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| format!("actor seed must be exactly 32 bytes, got {}", bytes.len()))
 }
 
 fn eval_account_expr(expr: &Expr) -> Result<AccountId, String> {
@@ -1024,7 +1576,7 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
     }
 }
 
-fn render_failure(vm: &IVM, err: &ivm::VMError) -> String {
+fn render_failure(vm: &IVM, extra_detail: Option<&str>, err: &ivm::VMError) -> String {
     let mut message = format!("{err:?}");
     if let Some(diag) = vm.last_diagnostic() {
         if let Some(source) = &diag.source {
@@ -1040,6 +1592,11 @@ fn render_failure(vm: &IVM, err: &ivm::VMError) -> String {
         if !diag.message.is_empty() && diag.message != message {
             message.push_str(&format!(" ({})", diag.message));
         }
+    }
+    if let Some(extra_detail) = extra_detail
+        && !extra_detail.is_empty()
+    {
+        message.push_str(&format!(" [{extra_detail}]"));
     }
     message
 }
@@ -1247,6 +1804,38 @@ mod tests {
         })
     }
 
+    fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
+        let target_program = Program {
+            items: vec![Item::Function(ivm::kotodama::ast::Function {
+                name: "helper".to_string(),
+                params: Vec::new(),
+                ret_ty: None,
+                body: ivm::kotodama::ast::Block {
+                    statements: Vec::new(),
+                },
+                modifiers: Default::default(),
+                location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
+            })],
+            contract_meta: None,
+            test_target: None,
+            fixtures: fixtures.clone(),
+        };
+        let mut merged_program = target_program.clone();
+        merged_program.items.push(test_function("smoke", None));
+        let suite = DiscoveredSuite {
+            target_path: PathBuf::from("/tmp/fixture_demo.ko"),
+            target_program,
+            merged_program,
+            tests: vec![TestCase {
+                name: "smoke".to_string(),
+                fixture: None,
+                line: 1,
+            }],
+            fixtures: build_fixture_map(&fixtures).expect("build fixture map"),
+        };
+        compile_suite(&suite).expect("compile fixture suite")
+    }
+
     #[test]
     fn parse_args_accepts_supported_subcommands() {
         let (command, path) = parse_args(vec![
@@ -1345,6 +1934,312 @@ mod tests {
     }
 
     #[test]
+    fn execute_suite_supports_native_contract_flow_helpers() {
+        let temp = TestTempDir::new();
+        let actor_seed = [9_u8; 32];
+        let signing_key = SigningKey::from_bytes(&actor_seed);
+        let actor_public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            signing_key.verifying_key().as_bytes(),
+        )
+        .expect("public key");
+        let actor_account = AccountId::new(actor_public_key)
+            .canonical_i105()
+            .expect("canonical actor account");
+        temp.write(
+            "contracts/contract_flow_demo.ko",
+            r#"
+            seiyaku Demo {
+                state int counter;
+                state AccountId last_actor;
+
+                hajimari() {
+                    counter = 1;
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn increment() {
+                    counter = counter + 4;
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn remember_caller() {
+                    last_actor = authority();
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn reject_me() {
+                    assert_eq(1, 2);
+                }
+            }
+            "#,
+        );
+        let test_path = temp.write(
+            "contracts/contract_flow_demo.test.ko",
+            &format!(
+                r#"
+                koto_test {{ target: "contract_flow_demo.ko" }}
+
+                fixture actors {{
+                    actor("issuer", account_id("{actor_account}"), "0x{seed_hex}");
+                }}
+
+                #[test(fixture="actors")]
+                fn drive_contract_flow() {{
+                    invoke_entrypoint_as("issuer", "hajimari", json("{{}}"));
+                    invoke_entrypoint_as("issuer", "increment", json("{{}}"));
+                    invoke_entrypoint_as(
+                        "issuer",
+                        "remember_caller",
+                        json("{{}}")
+                    );
+
+                    expect_reject_as("issuer", "reject_me", json("{{}}"));
+                }}
+                "#,
+                actor_account = actor_account,
+                seed_hex = hex::encode(actor_seed),
+            ),
+        );
+
+        let suite = discover_suite(&test_path).expect("discover suite");
+        let compiled = compile_suite(&suite).expect("compile suite");
+        let mut host = build_host_for_fixture(&compiled, Some("actors")).expect("build host");
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_trace_mode(TraceMode::PcOnly);
+
+        let put_blob = |vm: &mut IVM, reg: usize, value: &str| {
+            let ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::Blob, value.as_bytes()))
+                .expect("blob tlv");
+            vm.set_register(reg, ptr);
+        };
+        let put_json = |vm: &mut IVM, reg: usize, raw: &str| {
+            let json = Json::from_str_norito(raw).expect("json payload");
+            let bytes = norito::to_bytes(&json).expect("json norito");
+            let ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::Json, &bytes))
+                .expect("json tlv");
+            vm.set_register(reg, ptr);
+        };
+
+        put_blob(&mut vm, 10, "issuer");
+        host.syscall(TEST_SYSCALL_ACTOR_ACCOUNT, &mut vm)
+            .expect("actor account syscall");
+        let actor_tlv = vm
+            .validate_input_tlv(vm.register(10))
+            .expect("actor account tlv");
+        assert_eq!(actor_tlv.type_id, PointerType::AccountId);
+        let decoded_actor: AccountId =
+            norito::decode_from_bytes(actor_tlv.payload).expect("decode actor account");
+        assert_eq!(
+            decoded_actor
+                .canonical_i105()
+                .expect("canonical decoded actor"),
+            actor_account
+        );
+
+        put_blob(&mut vm, 10, "issuer");
+        host.syscall(TEST_SYSCALL_ACTOR_PUBLIC_KEY, &mut vm)
+            .expect("actor public key syscall");
+        let public_key_tlv = vm
+            .validate_input_tlv(vm.register(10))
+            .expect("public key tlv");
+        assert_eq!(public_key_tlv.type_id, PointerType::Blob);
+        assert_eq!(
+            public_key_tlv.payload,
+            signing_key.verifying_key().as_bytes()
+        );
+
+        put_blob(&mut vm, 10, "issuer");
+        let message_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, b"native-flow"))
+            .expect("message tlv");
+        vm.set_register(11, message_ptr);
+        host.syscall(TEST_SYSCALL_ACTOR_SIGN, &mut vm)
+            .expect("actor sign syscall");
+        let signature_tlv = vm
+            .validate_input_tlv(vm.register(10))
+            .expect("signature tlv");
+        assert_eq!(signature_tlv.type_id, PointerType::Blob);
+        let signature =
+            Ed25519Signature::from_slice(signature_tlv.payload).expect("signature bytes");
+        signing_key
+            .verifying_key()
+            .verify(b"native-flow", &signature)
+            .expect("signature verifies");
+
+        put_blob(&mut vm, 10, "issuer");
+        put_blob(&mut vm, 11, "hajimari");
+        put_json(&mut vm, 12, "{}");
+        vm.set_register(13, 0);
+        host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
+            .expect("invoke hajimari");
+
+        put_blob(&mut vm, 10, "issuer");
+        put_blob(&mut vm, 11, "increment");
+        put_json(&mut vm, 12, "{}");
+        vm.set_register(13, 0);
+        host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
+            .expect("invoke increment");
+        let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
+        let counter_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(&counter_state).expect("counter state tlv");
+        assert_eq!(counter_tlv.type_id, PointerType::NoritoBytes);
+        let counter: i64 =
+            norito::decode_from_bytes(counter_tlv.payload).expect("decode counter value");
+        assert_eq!(counter, 5);
+
+        put_blob(&mut vm, 10, "issuer");
+        put_blob(&mut vm, 11, "remember_caller");
+        put_json(&mut vm, 12, "{}");
+        vm.set_register(13, 0);
+        host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
+            .expect("invoke remember_caller");
+        let remembered_state = host
+            .inner
+            .wsv
+            .sc_get("last_actor")
+            .expect("last_actor state");
+        let remembered_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(&remembered_state).expect("remembered state tlv");
+        assert_eq!(remembered_tlv.type_id, PointerType::NoritoBytes);
+        let remembered_account_tlv = ivm::pointer_abi::validate_tlv_bytes(remembered_tlv.payload)
+            .expect("remembered account tlv");
+        assert_eq!(remembered_account_tlv.type_id, PointerType::AccountId);
+        let remembered: AccountId = norito::decode_from_bytes(remembered_account_tlv.payload)
+            .expect("decode remembered account");
+        assert_eq!(
+            remembered
+                .canonical_i105()
+                .expect("canonical remembered account"),
+            actor_account
+        );
+
+        put_blob(&mut vm, 10, "issuer");
+        put_blob(&mut vm, 11, "reject_me");
+        put_json(&mut vm, 12, "{}");
+        vm.set_register(13, 0);
+        host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
+            .expect("expect reject");
+
+        assert!(
+            !host.supplemental_trace_pcs().is_empty(),
+            "expected coverage trace from nested entrypoint execution"
+        );
+    }
+
+    #[test]
+    fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
+        let temp = TestTempDir::new();
+        let actor_seed = [9_u8; 32];
+        let signing_key = SigningKey::from_bytes(&actor_seed);
+        let actor_public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            signing_key.verifying_key().as_bytes(),
+        )
+        .expect("public key");
+        let actor_account = AccountId::new(actor_public_key)
+            .canonical_i105()
+            .expect("canonical actor account");
+
+        temp.write(
+            "contracts/contract_flow_demo.ko",
+            r#"
+            seiyaku Demo {
+                state int counter;
+                state AccountId last_actor;
+
+                hajimari() {
+                    counter = 1;
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn increment() {
+                    counter = counter + 4;
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn remember_caller() {
+                    last_actor = authority();
+                }
+
+                #[access(read="*", write="*")]
+                kotoage fn reject_me() {
+                    assert_eq(1, 2);
+                }
+            }
+            "#,
+        );
+        let test_path = temp.write(
+            "contracts/contract_flow_demo.test.ko",
+            &format!(
+                r#"
+                koto_test {{ target: "contract_flow_demo.ko" }}
+
+                fixture actors {{
+                    actor("issuer", account_id("{actor_account}"), "0x{seed_hex}");
+                }}
+
+                #[test(fixture="actors")]
+                fn actor_helpers_roundtrip() {{
+                    let acct = actor_account("issuer");
+                    assert(acct == account_id("{actor_account}"));
+
+                    let pk = actor_public_key("issuer");
+                    let sig = actor_sign("issuer", b"native-flow");
+                    assert(tlv_len(pk) > 0);
+                    assert(tlv_len(sig) > 0);
+                }}
+
+                #[test(fixture="actors")]
+                fn invoke_entrypoint_as_runs_the_contract() {{
+                    invoke_entrypoint_as("issuer", "hajimari", json("{{}}"));
+                    invoke_entrypoint_as("issuer", "increment", json("{{}}"));
+                    assert(counter == 5);
+
+                    invoke_entrypoint_as("issuer", "remember_caller", json("{{}}"));
+                    assert(last_actor == account_id("{actor_account}"));
+                }}
+
+                #[test(fixture="actors")]
+                fn expect_reject_as_captures_contract_rejection() {{
+                    expect_reject_as("issuer", "reject_me", json("{{}}"));
+                }}
+                "#,
+                actor_account = actor_account,
+                seed_hex = hex::encode(actor_seed),
+            ),
+        );
+
+        let suite = discover_suite(&test_path).expect("discover suite");
+        let compiled = compile_suite(&suite).expect("compile suite");
+        let results = execute_suite(&compiled, TraceMode::PcOnly).expect("execute suite");
+        let failures = results
+            .iter()
+            .filter(|result| !result.passed)
+            .map(|result| {
+                format!(
+                    "{}: {}",
+                    result.name,
+                    result.failure.as_deref().unwrap_or("missing failure")
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            failures.is_empty(),
+            "compiled standalone tests should pass: {}",
+            failures.join("; ")
+        );
+        assert!(
+            results
+                .iter()
+                .any(|result| !result.trace_pcs.is_empty() || !result.delta_trace.is_empty()),
+            "expected compiled helpers to emit execution traces"
+        );
+    }
+
+    #[test]
     fn validate_standalone_test_program_rejects_public_functions() {
         let temp = TestTempDir::new();
         let target = fs::canonicalize(temp.write("demo.ko", "fn helper() {}")).expect("target");
@@ -1379,7 +2274,7 @@ mod tests {
             test_target: None,
             fixtures: Vec::new(),
         };
-        let err = finalize_suite(PathBuf::from("/tmp/demo.ko"), program)
+        let err = finalize_suite(PathBuf::from("/tmp/demo.ko"), program.clone(), program)
             .err()
             .expect("program without tests should fail");
         assert!(err.contains("no #[test] Kotodama functions"));
@@ -1404,6 +2299,7 @@ mod tests {
         .expect("parse program");
         let suite = DiscoveredSuite {
             target_path: PathBuf::from("/tmp/demo.ko"),
+            target_program: program.clone(),
             merged_program: program,
             tests: vec![TestCase {
                 name: "smoke".to_string(),
@@ -1442,8 +2338,11 @@ mod tests {
     #[test]
     fn apply_fixture_action_rejects_unknown_action() {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
-        let mut host =
-            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            Vec::new(),
+            HashMap::new(),
+        );
         let mut public_inputs = BTreeMap::new();
         let err = apply_fixture_action(
             &FixtureAction {
@@ -1460,8 +2359,11 @@ mod tests {
     #[test]
     fn apply_fixture_action_populates_state_and_public_inputs() {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
-        let mut host =
-            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            Vec::new(),
+            HashMap::new(),
+        );
         let mut public_inputs = BTreeMap::new();
 
         apply_fixture_action(
@@ -1493,7 +2395,7 @@ mod tests {
         .expect("apply public_input");
 
         assert_eq!(
-            host.wsv.sc_get("demo/counter").expect("seeded state"),
+            host.inner.wsv.sc_get("demo/counter").expect("seeded state"),
             make_norito_envelope(&7i64).expect("encoded value"),
         );
         let trigger_name: Name = "trigger_event_json".parse().expect("name");
@@ -1506,7 +2408,8 @@ mod tests {
 
     #[test]
     fn build_host_for_fixture_rejects_unknown_fixture() {
-        let err = build_host_for_fixture(&HashMap::new(), Some("missing"))
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        let err = build_host_for_fixture(&compiled, Some("missing"))
             .err()
             .expect("unknown fixture should fail");
         assert!(err.contains("unknown fixture"));
@@ -1530,16 +2433,57 @@ mod tests {
                 },
             ],
         };
-        let fixtures = HashMap::from([(fixture.name.clone(), fixture)]);
-
-        let host = build_host_for_fixture(&fixtures, Some("seeded")).expect("build host");
+        let compiled = compiled_suite_with_fixtures(vec![fixture]);
+        let host = build_host_for_fixture(&compiled, Some("seeded")).expect("build host");
         assert_eq!(
             host.caller_subject(),
             parse_account_literal(DEFAULT_CALLER).expect("caller")
         );
         assert_eq!(
-            host.wsv.sc_get("demo/value").expect("state value"),
+            host.inner.wsv.sc_get("demo/value").expect("state value"),
             make_norito_envelope(&"hello").expect("encoded string"),
+        );
+    }
+
+    #[test]
+    fn apply_fixture_action_registers_actor_seed() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            Vec::new(),
+            HashMap::new(),
+        );
+        let mut public_inputs = BTreeMap::new();
+        let actor_seed = [7_u8; 32];
+        let signing_key = SigningKey::from_bytes(&actor_seed);
+        let actor_account = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            signing_key.verifying_key().as_bytes(),
+        )
+        .expect("public key")
+        .to_string();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "actor".to_string(),
+                args: vec![
+                    Expr::String("seller".to_string()),
+                    Expr::String(actor_account.clone()),
+                    Expr::String(format!("0x{}", hex::encode(actor_seed))),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("register actor");
+
+        assert!(public_inputs.is_empty());
+        assert_eq!(
+            host.actor_account("seller").expect("actor account"),
+            parse_account_literal(&actor_account).expect("parsed actor account")
+        );
+        assert_eq!(
+            host.actors["seller"].seed.expect("stored actor seed"),
+            actor_seed
         );
     }
 
@@ -1612,7 +2556,7 @@ mod tests {
     #[test]
     fn render_failure_without_diagnostic_falls_back_to_debug_error() {
         let vm = IVM::new(u64::MAX);
-        let rendered = render_failure(&vm, &ivm::VMError::DecodeError);
+        let rendered = render_failure(&vm, None, &ivm::VMError::DecodeError);
         assert!(rendered.contains("DecodeError"));
     }
 
