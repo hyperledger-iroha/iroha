@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: mock WSV unshield JSON compatibility
+- `crates/iroha_data_model/src/isi/zk.rs` now defaults
+  `iroha_data_model::isi::zk::Unshield.outputs` during decode, so JSON
+  envelopes that omit optional private change commitments no longer fail with
+  `NoritoInvalid` before the mock-host permission / verify latch checks run.
+- `crates/iroha_data_model/tests/unshield_json_defaults.rs` adds direct
+  coverage for the missing-`outputs` JSON compatibility case.
+- `crates/ivm/tests/wsv_verify_latch_unshield.rs` now builds the current
+  `iroha_data_model::zk::OpenVerifyEnvelope` wire payload expected by
+  `WsvHost`, keeping the mock-host verify-latch tests aligned with the
+  documented syscall contract.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test unshield_json_defaults -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_zk_perm_and_events -- --nocapture`
+  - `cargo test -p ivm --test wsv_verify_latch_unshield -- --nocapture`
+
 ## 2026-04-19 Follow-up: Kotodama pointer-ABI fixture resync
 - `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs` now uses the current
   Kotodama JSON method helpers (`ev.get_account_id(...)` and

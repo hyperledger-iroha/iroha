@@ -20096,6 +20096,11 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 2. Completed: focused unit coverage now exercises the proposal highest-QC path, precommit QC/vote aggregation path, block-sync QC prefilters, local precommit emission, cached vote pruning, divergent newer-view acceptance, and divergent same-view rejection.
 3. Remaining open: rerun a 4+ peer view-change/localnet regression once the surrounding dirty-tree Sumeragi formatting drift is settled enough for the standard full validation corridor.
 
+## 2026-04-19 Mock WSV Unshield JSON Follow-up
+1. Completed: `iroha_data_model::isi::zk::Unshield` now defaults missing JSON `outputs` to `[]`, so optional private change commitments no longer turn mock-host unshield gating into `NoritoInvalid`.
+2. Completed: the mock-host unshield latch regressions now build the current `iroha_data_model::zk::OpenVerifyEnvelope` wire payload, keeping `WsvHost` tests aligned with the documented verify-syscall contract.
+3. No additional roadmap item was opened from this fix; the targeted `iroha_data_model` and `ivm` regressions are green.
+
 ## 2026-04-04 Throughput Harness Follow-up
 1. Completed: `stable` now defaults to the preallocated transfer hot path instead of the previous mixed stateful recipe set. Izanami genesis pre-seeds user balances, stable transfer plans no longer mint inline, and the default stable path stays on ingress acceptance.
 2. Completed: read-side overload no longer poisons Izanami submit routing. Confirmation / trigger-status query failures still fail over, but only submit-path failures can mark endpoints unhealthy.

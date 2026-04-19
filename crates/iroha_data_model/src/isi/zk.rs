@@ -318,6 +318,7 @@ isi! {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
         pub inputs: Vec<[u8; 32]>,
         /// Optional private change note commitments.
+        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
         pub outputs: Vec<[u8; 32]>,
         /// Proof attachment for the unshield.
