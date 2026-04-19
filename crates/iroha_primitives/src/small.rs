@@ -140,6 +140,31 @@ mod tests {
     }
 
     #[test]
+    fn smallstr_constructors_prefix_and_display() {
+        let owned = SmallStr::from_string(String::from("ledger-alpha"));
+        let borrowed = SmallStr::from_str("ledger-alpha");
+
+        assert_eq!(owned, borrowed);
+        assert_eq!(owned.as_ref(), "ledger-alpha");
+        assert!(owned.starts_with("ledger"));
+        assert!(!owned.starts_with("account"));
+        assert_eq!(owned.to_string(), "ledger-alpha");
+    }
+
+    #[test]
+    fn smallstr_decode_from_slice_reports_used_bytes() {
+        let value = SmallStr::from_str("slice-value");
+        let mut bytes = Vec::new();
+        value.serialize(&mut bytes).expect("serialize SmallStr");
+
+        let (decoded, used) =
+            <SmallStr as ncore::DecodeFromSlice>::decode_from_slice(&bytes).expect("decode slice");
+
+        assert_eq!(decoded, value);
+        assert_eq!(used, bytes.len());
+    }
+
+    #[test]
     fn smallstr_json_roundtrip() {
         for sample in ["", "abc", "Δfire🔥"] {
             let small = SmallStr::from_str(sample);
@@ -175,6 +200,54 @@ mod tests {
         let bytes = to_bytes(&value).expect("encode SmallVec");
         let decoded: SmallVec<[u32; 4]> = decode_from_bytes(&bytes).expect("decode SmallVec");
         assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn smallvec_api_methods_preserve_order() {
+        let mut vec = SmallVec::<[u32; 4]>::new();
+
+        vec.push(1);
+        vec.extend([2, 3, 4, 5]);
+        assert_eq!(&*vec, &[1, 2, 3, 4, 5]);
+        assert_eq!(vec.remove(1), 2);
+        assert_eq!(vec.clone().into_vec(), vec![1, 3, 4, 5]);
+        vec.clear();
+        assert!(vec.is_empty());
+    }
+
+    #[test]
+    fn smallvec_from_vec_from_iter_and_into_iter_preserve_order() {
+        let from_vec = SmallVec::<[u32; 2]>::from(vec![7, 8, 9]);
+        let from_iter = [7_u32, 8, 9].into_iter().collect::<SmallVec<[u32; 2]>>();
+
+        assert_eq!(from_vec, from_iter);
+        assert_eq!(from_vec.into_iter().collect::<Vec<_>>(), vec![7, 8, 9]);
+    }
+
+    #[test]
+    fn smallvec_decode_rejects_truncated_element_payload() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&4_u64.to_le_bytes());
+        bytes.extend_from_slice(&[0xAA, 0xBB]);
+
+        let err = <SmallVec<[u32; 4]> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("truncated element payload should fail");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn smallvec_try_deserialize_honors_zero_payload_context() {
+        let value: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3]);
+        let bytes = to_bytes(&value).expect("encode SmallVec");
+        let archived = norito::core::from_bytes::<SmallVec<[u32; 4]>>(&bytes).expect("archive");
+        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(&[], 0);
+
+        let decoded =
+            <SmallVec<[u32; 4]> as NoritoDeserialize>::try_deserialize(archived).expect("decode");
+
+        assert!(decoded.is_empty());
     }
 
     #[test]
