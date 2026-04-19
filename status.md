@@ -25435,3 +25435,14 @@ Last updated: 2026-04-19
   - `cargo test -p iroha_core --lib block_sync_qc_lock_override_handles_missing_locked_payload -- --nocapture`
   - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
   - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.
+
+## 2026-04-19 Integration Failure Sweep
+- Fixed the `fast_dsl` workspace build by importing Norito's `DecodeFromSlice` extension trait in the `iroha_genesis` `tx_decode` diagnostic binary.
+- Updated the scheduler default-lane regression to use a fallback transaction without an inherent dataspace target, keeping the test focused on policy default routing instead of account-metadata dataspace routing.
+- Scoped threshold escrow contract-state reads by the deployed contract address so `/v1/contracts/state` queries read the same per-instance namespace used by contract execution.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo check --workspace --features fast_dsl`
+  - `cargo test -p integration_tests queue_uses_default_lane_when_no_rule_matches -- --nocapture`
+  - `cargo test -p integration_tests threshold_escrow -- --nocapture`
+  - `cargo test -p integration_tests workspace_builds_with_fast_dsl_feature -- --nocapture`

@@ -24,7 +24,7 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{
     isi::{
         InstructionBox,
-        prelude::{Mint, SetKeyValue, Transfer},
+        prelude::{Mint, Register, SetKeyValue, Transfer},
     },
     metadata::Metadata,
     nexus::{
@@ -573,11 +573,10 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "key_routed".parse().unwrap(),
         Json::new("value_routed"),
     ));
-    let fallback_instr = InstructionBox::from(SetKeyValue::account(
+    let fallback_instr = InstructionBox::from(Register::role(Role::new(
+        "scheduler_default_lane_role".parse().unwrap(),
         fallback_account.clone(),
-        "key_fallback".parse().unwrap(),
-        Json::new("value_fallback"),
-    ));
+    )));
 
     let routed_teu = gas::meter_instructions(std::slice::from_ref(&routed_instr));
     let fallback_teu = gas::meter_instructions(std::slice::from_ref(&fallback_instr));
