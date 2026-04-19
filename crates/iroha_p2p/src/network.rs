@@ -7522,7 +7522,7 @@ mod tests {
     use iroha_primitives::addr::socket_addr;
     use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::generate_mldsa_keypair;
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::*;

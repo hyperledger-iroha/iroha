@@ -312,13 +312,17 @@ fn render_config(
                 &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
                 discriminant,
             );
-            let telemetry_submitter = account_literal_string_for_chain_discriminant(
-                &iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+            let telemetry_submitters =
+                iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
                     .into_iter()
-                    .next()
-                    .expect("default submitter"),
-                discriminant,
-            );
+                    .map(|literal| {
+                        format!(
+                            "\"{}\"",
+                            account_literal_string_for_chain_discriminant(&literal, discriminant)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
             format!(
                 r#"
 [gov]
@@ -329,7 +333,7 @@ viral_incentive_pool_account = "{slash_receiver_account}"
 viral_escrow_account = "{slash_receiver_account}"
 
 [gov.sorafs_telemetry]
-submitters = ["{telemetry_submitter}"]
+submitters = [{telemetry_submitters}]
 "#,
             )
         });
@@ -620,6 +624,7 @@ mod tests {
         json::from_str(
             r#"{
             "chain": "stub",
+            "chain_discriminant": 753,
             "executor": null,
             "ivm_dir": ".",
             "consensus_mode": "Npos",

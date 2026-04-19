@@ -139,7 +139,18 @@ fn unregister_domain_with_only_accounts_fails() {
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
 
-    // Unregister domain should fail because an account exists
+    // Under the universal-account model, the canonical account id is domainless.
+    // Link the subject into `wonder.universal` explicitly so unregistering the
+    // domain still exercises the "domain has linked accounts" rejection path.
+    {
+        let wonder =
+            iroha_data_model::DomainId::try_new("wonder", "universal").expect("wonder domain id");
+        let host_any = vm.host_mut_any().expect("host");
+        let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
+        assert!(host.wsv.link_subject_to_domain(bob.clone(), wonder));
+    }
+
+    // Unregister domain should fail because a subject is still linked to it.
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);

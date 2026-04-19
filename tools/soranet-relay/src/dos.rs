@@ -1382,7 +1382,7 @@ mod tests {
 
     #[test]
     fn token_policy_verifies_valid_token() {
-        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -1447,7 +1447,7 @@ mod tests {
 
     #[test]
     fn token_policy_rejects_revoked_token() {
-        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -1513,7 +1513,7 @@ mod tests {
 
     #[test]
     fn token_outcome_metrics_recorded() {
-        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+        use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");

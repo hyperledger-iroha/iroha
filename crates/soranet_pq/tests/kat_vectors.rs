@@ -1,8 +1,8 @@
 //! Known-answer tests for the `SoraNet` PQ helper crate.
 
 use soranet_pq::{
-    MlDsaSuite, MlKemSuite, decapsulate_mlkem, sign_mldsa, validate_mlkem_ciphertext,
-    validate_mlkem_public_key, validate_mlkem_secret_key, verify_mldsa,
+    HedgedRngSeed, MlDsaSuite, MlKemSuite, decapsulate_mlkem, hedged_chacha20_rng, sign_mldsa,
+    validate_mlkem_ciphertext, validate_mlkem_public_key, validate_mlkem_secret_key, verify_mldsa,
 };
 
 const KAT_JSON: &str = include_str!(concat!(
@@ -58,17 +58,17 @@ fn mldsa_known_answer_vectors_verify_and_sign() {
         let msg = hex_to_bytes(fixture.msg.as_ref().expect("message present"));
         let sig = hex_to_bytes(fixture.sig.as_ref().expect("signature present"));
 
-        verify_mldsa(suite, &pk, &msg, &sig)
+        verify_mldsa(suite, &pk, &[], &msg, &sig)
             .unwrap_or_else(|err| panic!("{} verification failed: {err}", fixture.suite));
 
-        let regenerated = sign_mldsa(suite, &sk, &msg)
-            .unwrap_or_else(|err| panic!("{} signing failed: {err}", fixture.suite));
-        assert_eq!(
-            regenerated.as_bytes(),
-            sig.as_slice(),
-            "{} regenerated signature mismatch",
-            fixture.suite
+        let mut sign_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
+            b"pq-kat-vectors:mldsa:sign",
         );
+        let regenerated = sign_mldsa(suite, &sk, &[], &msg, &mut sign_rng)
+            .unwrap_or_else(|err| panic!("{} signing failed: {err}", fixture.suite));
+        verify_mldsa(suite, &pk, &[], &msg, regenerated.as_bytes())
+            .unwrap_or_else(|err| panic!("{} regenerated signature failed: {err}", fixture.suite));
     }
 }
 

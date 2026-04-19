@@ -96,6 +96,7 @@ fn bundled_tables_enable_roundtrip() {
 
     let dimensions = FrameDimensions::new(8, 8);
     let frame_duration_ns = 25_000_000;
+    let timeline_start_ns = 1_000;
     let frames = vec![
         RawFrame::new(dimensions, vec![0x11; dimensions.pixel_count()]).expect("frame 0"),
         RawFrame::new(dimensions, vec![0x22; dimensions.pixel_count()]).expect("frame 1"),
@@ -107,10 +108,11 @@ fn bundled_tables_enable_roundtrip() {
         entropy_mode: EntropyMode::RansBundled,
         bundle_width: 4,
         bundle_tables: Arc::clone(&tables),
+        quantizer: 0,
         ..BaselineEncoderConfig::default()
     });
     let segment = encoder
-        .encode_segment(7, 1_000, 5, &frames, None)
+        .encode_segment(7, timeline_start_ns, 5, &frames, None)
         .expect("encode segment");
     assert_eq!(segment.header.entropy_mode, EntropyMode::RansBundled);
 
@@ -126,7 +128,7 @@ fn bundled_tables_enable_roundtrip() {
         );
         assert_eq!(
             frame.pts_ns,
-            u64::from(frame_duration_ns) * idx as u64,
+            timeline_start_ns + u64::from(frame_duration_ns) * idx as u64,
             "frame {idx} PTS mismatch"
         );
     }

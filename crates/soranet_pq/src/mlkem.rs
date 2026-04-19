@@ -1,15 +1,30 @@
 use core::{fmt, str::FromStr};
 
-use pqcrypto_mlkem::{mlkem512 as kyber512, mlkem768 as kyber768, mlkem1024 as kyber1024};
-use pqcrypto_traits::{
-    Error as PqError,
-    kem::{
-        Ciphertext as KemCiphertext, PublicKey as KemPublicKey, SecretKey as KemSecretKey,
-        SharedSecret as KemSharedSecret,
-    },
-};
+use pqcrypto_mlkem as _;
+use pqcrypto_traits::Error as PqError;
+use rand_core::RngCore;
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+use crate::{
+    HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
+    hedged_chacha20_rng_from_os,
+};
+
+const MLKEM512_PUBLIC_KEY_BYTES: usize = 800;
+const MLKEM512_SECRET_KEY_BYTES: usize = 1632;
+const MLKEM512_CIPHERTEXT_BYTES: usize = 768;
+const MLKEM512_SHARED_SECRET_BYTES: usize = 32;
+
+const MLKEM768_PUBLIC_KEY_BYTES: usize = 1184;
+const MLKEM768_SECRET_KEY_BYTES: usize = 2400;
+const MLKEM768_CIPHERTEXT_BYTES: usize = 1088;
+const MLKEM768_SHARED_SECRET_BYTES: usize = 32;
+
+const MLKEM1024_PUBLIC_KEY_BYTES: usize = 1568;
+const MLKEM1024_SECRET_KEY_BYTES: usize = 3168;
+const MLKEM1024_CIPHERTEXT_BYTES: usize = 1568;
+const MLKEM1024_SHARED_SECRET_BYTES: usize = 32;
 
 /// Supported ML-KEM parameter sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,9 +66,9 @@ impl MlKemSuite {
     #[must_use]
     pub fn public_key_len(self) -> usize {
         match self {
-            MlKemSuite::MlKem512 => kyber512::public_key_bytes(),
-            MlKemSuite::MlKem768 => kyber768::public_key_bytes(),
-            MlKemSuite::MlKem1024 => kyber1024::public_key_bytes(),
+            MlKemSuite::MlKem512 => MLKEM512_PUBLIC_KEY_BYTES,
+            MlKemSuite::MlKem768 => MLKEM768_PUBLIC_KEY_BYTES,
+            MlKemSuite::MlKem1024 => MLKEM1024_PUBLIC_KEY_BYTES,
         }
     }
 
@@ -61,9 +76,9 @@ impl MlKemSuite {
     #[must_use]
     pub fn secret_key_len(self) -> usize {
         match self {
-            MlKemSuite::MlKem512 => kyber512::secret_key_bytes(),
-            MlKemSuite::MlKem768 => kyber768::secret_key_bytes(),
-            MlKemSuite::MlKem1024 => kyber1024::secret_key_bytes(),
+            MlKemSuite::MlKem512 => MLKEM512_SECRET_KEY_BYTES,
+            MlKemSuite::MlKem768 => MLKEM768_SECRET_KEY_BYTES,
+            MlKemSuite::MlKem1024 => MLKEM1024_SECRET_KEY_BYTES,
         }
     }
 
@@ -71,9 +86,9 @@ impl MlKemSuite {
     #[must_use]
     pub fn ciphertext_len(self) -> usize {
         match self {
-            MlKemSuite::MlKem512 => kyber512::ciphertext_bytes(),
-            MlKemSuite::MlKem768 => kyber768::ciphertext_bytes(),
-            MlKemSuite::MlKem1024 => kyber1024::ciphertext_bytes(),
+            MlKemSuite::MlKem512 => MLKEM512_CIPHERTEXT_BYTES,
+            MlKemSuite::MlKem768 => MLKEM768_CIPHERTEXT_BYTES,
+            MlKemSuite::MlKem1024 => MLKEM1024_CIPHERTEXT_BYTES,
         }
     }
 
@@ -81,9 +96,9 @@ impl MlKemSuite {
     #[must_use]
     pub fn shared_secret_len(self) -> usize {
         match self {
-            MlKemSuite::MlKem512 => kyber512::shared_secret_bytes(),
-            MlKemSuite::MlKem768 => kyber768::shared_secret_bytes(),
-            MlKemSuite::MlKem1024 => kyber1024::shared_secret_bytes(),
+            MlKemSuite::MlKem512 => MLKEM512_SHARED_SECRET_BYTES,
+            MlKemSuite::MlKem768 => MLKEM768_SHARED_SECRET_BYTES,
+            MlKemSuite::MlKem1024 => MLKEM1024_SHARED_SECRET_BYTES,
         }
     }
 
@@ -107,22 +122,22 @@ impl MlKemSuite {
     pub fn parameters(self) -> MlKemParameters {
         match self {
             MlKemSuite::MlKem512 => MlKemParameters {
-                public_key: kyber512::public_key_bytes(),
-                secret_key: kyber512::secret_key_bytes(),
-                ciphertext: kyber512::ciphertext_bytes(),
-                shared_secret: kyber512::shared_secret_bytes(),
+                public_key: MLKEM512_PUBLIC_KEY_BYTES,
+                secret_key: MLKEM512_SECRET_KEY_BYTES,
+                ciphertext: MLKEM512_CIPHERTEXT_BYTES,
+                shared_secret: MLKEM512_SHARED_SECRET_BYTES,
             },
             MlKemSuite::MlKem768 => MlKemParameters {
-                public_key: kyber768::public_key_bytes(),
-                secret_key: kyber768::secret_key_bytes(),
-                ciphertext: kyber768::ciphertext_bytes(),
-                shared_secret: kyber768::shared_secret_bytes(),
+                public_key: MLKEM768_PUBLIC_KEY_BYTES,
+                secret_key: MLKEM768_SECRET_KEY_BYTES,
+                ciphertext: MLKEM768_CIPHERTEXT_BYTES,
+                shared_secret: MLKEM768_SHARED_SECRET_BYTES,
             },
             MlKemSuite::MlKem1024 => MlKemParameters {
-                public_key: kyber1024::public_key_bytes(),
-                secret_key: kyber1024::secret_key_bytes(),
-                ciphertext: kyber1024::ciphertext_bytes(),
-                shared_secret: kyber1024::shared_secret_bytes(),
+                public_key: MLKEM1024_PUBLIC_KEY_BYTES,
+                secret_key: MLKEM1024_SECRET_KEY_BYTES,
+                ciphertext: MLKEM1024_CIPHERTEXT_BYTES,
+                shared_secret: MLKEM1024_SHARED_SECRET_BYTES,
             },
         }
     }
@@ -132,17 +147,7 @@ impl MlKemSuite {
     /// # Errors
     /// Returns an error when the byte string cannot be decoded.
     pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
-        match self {
-            MlKemSuite::MlKem512 => kyber512::PublicKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 public key", err)),
-            MlKemSuite::MlKem768 => kyber768::PublicKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 public key", err)),
-            MlKemSuite::MlKem1024 => kyber1024::PublicKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 public key", err)),
-        }
+        validate_len(self.public_key_kind(), bytes.len(), self.public_key_len())
     }
 
     /// Validate a secret key encoding for this suite.
@@ -150,17 +155,7 @@ impl MlKemSuite {
     /// # Errors
     /// Returns an error when the byte string cannot be decoded.
     pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
-        match self {
-            MlKemSuite::MlKem512 => kyber512::SecretKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 secret key", err)),
-            MlKemSuite::MlKem768 => kyber768::SecretKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 secret key", err)),
-            MlKemSuite::MlKem1024 => kyber1024::SecretKey::from_bytes(bytes)
-                .map(|_| ())
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 secret key", err)),
-        }
+        validate_len(self.secret_key_kind(), bytes.len(), self.secret_key_len())
     }
 
     /// Validate a ciphertext encoding for this suite.
@@ -168,16 +163,30 @@ impl MlKemSuite {
     /// # Errors
     /// Returns an error when the byte string cannot be decoded.
     pub fn validate_ciphertext(self, bytes: &[u8]) -> Result<(), MlKemError> {
+        validate_len(self.ciphertext_kind(), bytes.len(), self.ciphertext_len())
+    }
+
+    const fn public_key_kind(self) -> &'static str {
         match self {
-            MlKemSuite::MlKem512 => kyber512::Ciphertext::from_bytes(bytes)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 ciphertext", err))
-                .map(|_| ()),
-            MlKemSuite::MlKem768 => kyber768::Ciphertext::from_bytes(bytes)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 ciphertext", err))
-                .map(|_| ()),
-            MlKemSuite::MlKem1024 => kyber1024::Ciphertext::from_bytes(bytes)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 ciphertext", err))
-                .map(|_| ()),
+            MlKemSuite::MlKem512 => "ML-KEM-512 public key",
+            MlKemSuite::MlKem768 => "ML-KEM-768 public key",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 public key",
+        }
+    }
+
+    const fn secret_key_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 secret key",
+            MlKemSuite::MlKem768 => "ML-KEM-768 secret key",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key",
+        }
+    }
+
+    const fn ciphertext_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 ciphertext",
+            MlKemSuite::MlKem768 => "ML-KEM-768 ciphertext",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 ciphertext",
         }
     }
 }
@@ -403,6 +412,9 @@ pub enum MlKemError {
         #[source]
         source: PqError,
     },
+    /// Hedged RNG seed construction failed.
+    #[error(transparent)]
+    Rng(#[from] RngError),
 }
 
 impl MlKemError {
@@ -411,30 +423,57 @@ impl MlKemError {
     }
 }
 
+fn validate_len(kind: &'static str, actual: usize, expected: usize) -> Result<(), MlKemError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(MlKemError::bad_encoding(
+            kind,
+            PqError::BadLength {
+                name: kind,
+                actual,
+                expected,
+            },
+        ))
+    }
+}
+
 /// Generate an ML-KEM keypair for the given parameter set.
-pub fn generate_mlkem_keypair(suite: MlKemSuite) -> MlKemKeyPair {
-    match suite {
-        MlKemSuite::MlKem512 => {
-            let (pk, sk) = kyber512::keypair();
-            MlKemKeyPair {
-                public_key: pk.as_bytes().to_vec(),
-                secret_key: Zeroizing::new(sk.as_bytes().to_vec()),
-            }
-        }
-        MlKemSuite::MlKem768 => {
-            let (pk, sk) = kyber768::keypair();
-            MlKemKeyPair {
-                public_key: pk.as_bytes().to_vec(),
-                secret_key: Zeroizing::new(sk.as_bytes().to_vec()),
-            }
-        }
-        MlKemSuite::MlKem1024 => {
-            let (pk, sk) = kyber1024::keypair();
-            MlKemKeyPair {
-                public_key: pk.as_bytes().to_vec(),
-                secret_key: Zeroizing::new(sk.as_bytes().to_vec()),
-            }
-        }
+#[must_use]
+pub fn generate_mlkem_keypair(suite: MlKemSuite, rng: &mut HedgedChaCha20Rng) -> MlKemKeyPair {
+    let mut coins = Zeroizing::new([0u8; 64]);
+    rng.fill_bytes(coins.as_mut());
+    generate_mlkem_keypair_from_coins(suite, &coins)
+}
+
+/// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails.
+pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair, MlKemError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:keypair")?;
+    Ok(generate_mlkem_keypair(suite, &mut rng))
+}
+
+/// Deterministically generate an ML-KEM keypair from explicit seed material.
+#[must_use]
+pub fn generate_mlkem_keypair_from_seed(
+    suite: MlKemSuite,
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> MlKemKeyPair {
+    let mut rng = deterministic_chacha20_rng(seed, personalization);
+    generate_mlkem_keypair(suite, &mut rng)
+}
+
+#[must_use]
+fn generate_mlkem_keypair_from_coins(suite: MlKemSuite, coins: &[u8; 64]) -> MlKemKeyPair {
+    let mut public_key = vec![0u8; suite.public_key_len()];
+    let mut secret_key = Zeroizing::new(vec![0u8; suite.secret_key_len()]);
+    mlkem_ffi::keypair_derand(suite, &mut public_key, secret_key.as_mut(), coins);
+    MlKemKeyPair {
+        public_key,
+        secret_key,
     }
 }
 
@@ -445,36 +484,53 @@ pub fn generate_mlkem_keypair(suite: MlKemSuite) -> MlKemKeyPair {
 pub fn encapsulate_mlkem(
     suite: MlKemSuite,
     public_key: &[u8],
+    rng: &mut HedgedChaCha20Rng,
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
-    match suite {
-        MlKemSuite::MlKem512 => {
-            let pk = kyber512::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 public key", err))?;
-            let (shared, ct) = kyber512::encapsulate(&pk);
-            Ok((
-                MlKemSharedSecret::new(shared.as_bytes().to_vec()),
-                MlKemCiphertext::new(ct.as_bytes().to_vec()),
-            ))
-        }
-        MlKemSuite::MlKem768 => {
-            let pk = kyber768::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 public key", err))?;
-            let (shared, ct) = kyber768::encapsulate(&pk);
-            Ok((
-                MlKemSharedSecret::new(shared.as_bytes().to_vec()),
-                MlKemCiphertext::new(ct.as_bytes().to_vec()),
-            ))
-        }
-        MlKemSuite::MlKem1024 => {
-            let pk = kyber1024::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 public key", err))?;
-            let (shared, ct) = kyber1024::encapsulate(&pk);
-            Ok((
-                MlKemSharedSecret::new(shared.as_bytes().to_vec()),
-                MlKemCiphertext::new(ct.as_bytes().to_vec()),
-            ))
-        }
-    }
+    let mut coins = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(coins.as_mut());
+    encapsulate_mlkem_from_coins(suite, public_key, &coins)
+}
+
+/// Encapsulate using seed material plus live OS entropy when available.
+///
+/// # Errors
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or
+/// [`MlKemError::BadEncoding`] when the public key encoding is invalid.
+pub fn encapsulate_mlkem_from_os(
+    suite: MlKemSuite,
+    public_key: &[u8],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:encapsulate")?;
+    encapsulate_mlkem(suite, public_key, &mut rng)
+}
+
+/// Deterministically encapsulate from explicit seed material.
+///
+/// # Errors
+/// Returns an error when the public key encoding is invalid.
+pub fn encapsulate_mlkem_from_seed(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    seed: HedgedRngSeed,
+    personalization: &[u8],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    let mut rng = deterministic_chacha20_rng(seed, personalization);
+    encapsulate_mlkem(suite, public_key, &mut rng)
+}
+
+fn encapsulate_mlkem_from_coins(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    coins: &[u8; 32],
+) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
+    let mut shared = vec![0u8; suite.shared_secret_len()];
+    let mut ciphertext = vec![0u8; suite.ciphertext_len()];
+    mlkem_ffi::encapsulate_derand(suite, &mut ciphertext, &mut shared, public_key, coins);
+    Ok((
+        MlKemSharedSecret::new(shared),
+        MlKemCiphertext::new(ciphertext),
+    ))
 }
 
 /// Decapsulate a ciphertext with the provided secret key.
@@ -486,32 +542,11 @@ pub fn decapsulate_mlkem(
     secret_key: &[u8],
     ciphertext: &[u8],
 ) -> Result<MlKemSharedSecret, MlKemError> {
-    match suite {
-        MlKemSuite::MlKem512 => {
-            let sk = kyber512::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 secret key", err))?;
-            let ct = kyber512::Ciphertext::from_bytes(ciphertext)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 ciphertext", err))?;
-            let shared = kyber512::decapsulate(&ct, &sk);
-            Ok(MlKemSharedSecret::new(shared.as_bytes().to_vec()))
-        }
-        MlKemSuite::MlKem768 => {
-            let sk = kyber768::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 secret key", err))?;
-            let ct = kyber768::Ciphertext::from_bytes(ciphertext)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 ciphertext", err))?;
-            let shared = kyber768::decapsulate(&ct, &sk);
-            Ok(MlKemSharedSecret::new(shared.as_bytes().to_vec()))
-        }
-        MlKemSuite::MlKem1024 => {
-            let sk = kyber1024::SecretKey::from_bytes(secret_key)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 secret key", err))?;
-            let ct = kyber1024::Ciphertext::from_bytes(ciphertext)
-                .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 ciphertext", err))?;
-            let shared = kyber1024::decapsulate(&ct, &sk);
-            Ok(MlKemSharedSecret::new(shared.as_bytes().to_vec()))
-        }
-    }
+    suite.validate_secret_key(secret_key)?;
+    suite.validate_ciphertext(ciphertext)?;
+    let mut shared = vec![0u8; suite.shared_secret_len()];
+    mlkem_ffi::decapsulate(suite, &mut shared, ciphertext, secret_key);
+    Ok(MlKemSharedSecret::new(shared))
 }
 
 /// Return parameter lengths for the given ML-KEM suite.
@@ -531,17 +566,7 @@ pub fn mlkem_metadata(suite: MlKemSuite) -> MlKemMetadata {
 /// # Errors
 /// Returns an error when the public key encoding is invalid.
 pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
-    match suite {
-        MlKemSuite::MlKem512 => kyber512::PublicKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 public key", err)),
-        MlKemSuite::MlKem768 => kyber768::PublicKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 public key", err)),
-        MlKemSuite::MlKem1024 => kyber1024::PublicKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 public key", err)),
-    }
+    suite.validate_public_key(bytes)
 }
 
 /// Validate the encoding of an ML-KEM secret key.
@@ -549,17 +574,7 @@ pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 /// # Errors
 /// Returns an error when the secret key encoding is invalid.
 pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
-    match suite {
-        MlKemSuite::MlKem512 => kyber512::SecretKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 secret key", err)),
-        MlKemSuite::MlKem768 => kyber768::SecretKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 secret key", err)),
-        MlKemSuite::MlKem1024 => kyber1024::SecretKey::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 secret key", err)),
-    }
+    suite.validate_secret_key(bytes)
 }
 
 /// Validate the encoding of an ML-KEM ciphertext.
@@ -567,26 +582,174 @@ pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 /// # Errors
 /// Returns an error when the ciphertext encoding is invalid.
 pub fn validate_mlkem_ciphertext(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
-    match suite {
-        MlKemSuite::MlKem512 => kyber512::Ciphertext::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-512 ciphertext", err)),
-        MlKemSuite::MlKem768 => kyber768::Ciphertext::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-768 ciphertext", err)),
-        MlKemSuite::MlKem1024 => kyber1024::Ciphertext::from_bytes(bytes)
-            .map(|_| ())
-            .map_err(|err| MlKemError::bad_encoding("ML-KEM-1024 ciphertext", err)),
+    suite.validate_ciphertext(bytes)
+}
+
+#[allow(unsafe_code)]
+mod mlkem_ffi {
+    use core::ffi::c_int;
+
+    use super::MlKemSuite;
+
+    pub fn keypair_derand(
+        suite: MlKemSuite,
+        public_key: &mut [u8],
+        secret_key: &mut [u8],
+        coins: &[u8; 64],
+    ) {
+        let status = unsafe {
+            match suite {
+                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(
+                    public_key.as_mut_ptr(),
+                    secret_key.as_mut_ptr(),
+                    coins.as_ptr(),
+                ),
+                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair_derand(
+                    public_key.as_mut_ptr(),
+                    secret_key.as_mut_ptr(),
+                    coins.as_ptr(),
+                ),
+                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair_derand(
+                    public_key.as_mut_ptr(),
+                    secret_key.as_mut_ptr(),
+                    coins.as_ptr(),
+                ),
+            }
+        };
+        assert_eq!(status, 0, "ML-KEM derandomized keygen failed");
+    }
+
+    pub fn encapsulate_derand(
+        suite: MlKemSuite,
+        ciphertext: &mut [u8],
+        shared_secret: &mut [u8],
+        public_key: &[u8],
+        coins: &[u8; 32],
+    ) {
+        let status = unsafe {
+            match suite {
+                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(
+                    ciphertext.as_mut_ptr(),
+                    shared_secret.as_mut_ptr(),
+                    public_key.as_ptr(),
+                    coins.as_ptr(),
+                ),
+                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc_derand(
+                    ciphertext.as_mut_ptr(),
+                    shared_secret.as_mut_ptr(),
+                    public_key.as_ptr(),
+                    coins.as_ptr(),
+                ),
+                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc_derand(
+                    ciphertext.as_mut_ptr(),
+                    shared_secret.as_mut_ptr(),
+                    public_key.as_ptr(),
+                    coins.as_ptr(),
+                ),
+            }
+        };
+        assert_eq!(status, 0, "ML-KEM derandomized encapsulation failed");
+    }
+
+    pub fn decapsulate(
+        suite: MlKemSuite,
+        shared_secret: &mut [u8],
+        ciphertext: &[u8],
+        secret_key: &[u8],
+    ) {
+        let status = unsafe {
+            match suite {
+                MlKemSuite::MlKem512 => PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(
+                    shared_secret.as_mut_ptr(),
+                    ciphertext.as_ptr(),
+                    secret_key.as_ptr(),
+                ),
+                MlKemSuite::MlKem768 => PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec(
+                    shared_secret.as_mut_ptr(),
+                    ciphertext.as_ptr(),
+                    secret_key.as_ptr(),
+                ),
+                MlKemSuite::MlKem1024 => PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec(
+                    shared_secret.as_mut_ptr(),
+                    ciphertext.as_ptr(),
+                    secret_key.as_ptr(),
+                ),
+            }
+        };
+        assert_eq!(status, 0, "ML-KEM decapsulation failed");
+    }
+
+    unsafe extern "C" {
+        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(
+            pk: *mut u8,
+            sk: *mut u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(
+            ct: *mut u8,
+            ss: *mut u8,
+            pk: *const u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(
+            ss: *mut u8,
+            ct: *const u8,
+            sk: *const u8,
+        ) -> c_int;
+
+        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair_derand(
+            pk: *mut u8,
+            sk: *mut u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc_derand(
+            ct: *mut u8,
+            ss: *mut u8,
+            pk: *const u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec(
+            ss: *mut u8,
+            ct: *const u8,
+            sk: *const u8,
+        ) -> c_int;
+
+        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair_derand(
+            pk: *mut u8,
+            sk: *mut u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc_derand(
+            ct: *mut u8,
+            ss: *mut u8,
+            pk: *const u8,
+            coins: *const u8,
+        ) -> c_int;
+        fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec(
+            ss: *mut u8,
+            ct: *const u8,
+            sk: *const u8,
+        ) -> c_int;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
+
     use super::*;
 
     fn roundtrip(suite: MlKemSuite) {
-        let keys = generate_mlkem_keypair(suite);
-        let (shared_a, ct) = encapsulate_mlkem(suite, keys.public_key()).unwrap();
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id(); 32]),
+            b"mlkem-test-keypair",
+        );
+        let mut enc_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(1); 32]),
+            b"mlkem-test-encap",
+        );
+        let keys = generate_mlkem_keypair(suite, &mut rng);
+        let (shared_a, ct) = encapsulate_mlkem(suite, keys.public_key(), &mut enc_rng).unwrap();
         let shared_b = decapsulate_mlkem(suite, keys.secret_key(), ct.as_bytes()).unwrap();
         assert_eq!(shared_a.as_bytes(), shared_b.as_bytes());
     }
@@ -607,26 +770,243 @@ mod tests {
     }
 
     #[test]
+    fn seeded_keypair_is_deterministic() {
+        for suite in MlKemSuite::ALL {
+            let seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xA0); 32]);
+            let first = generate_mlkem_keypair_from_seed(suite, seed.clone(), b"seeded-keygen");
+            let second = generate_mlkem_keypair_from_seed(suite, seed, b"seeded-keygen");
+
+            assert_eq!(first.public_key(), second.public_key());
+            assert_eq!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn seeded_keypair_personalization_changes_output() {
+        for suite in MlKemSuite::ALL {
+            let seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xA8); 32]);
+            let first = generate_mlkem_keypair_from_seed(suite, seed.clone(), b"seeded-keygen-a");
+            let second = generate_mlkem_keypair_from_seed(suite, seed, b"seeded-keygen-b");
+
+            assert_ne!(first.public_key(), second.public_key());
+            assert_ne!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn seeded_encapsulation_is_deterministic() {
+        for suite in MlKemSuite::ALL {
+            let key_seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xB0); 32]);
+            let enc_seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xC0); 32]);
+            let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen");
+
+            let (first_shared, first_ct) =
+                encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed.clone(), b"enc")
+                    .expect("seeded encapsulation succeeds");
+            let (second_shared, second_ct) =
+                encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed, b"enc")
+                    .expect("seeded encapsulation succeeds");
+
+            assert_eq!(first_ct.as_bytes(), second_ct.as_bytes());
+            assert_eq!(first_shared.as_bytes(), second_shared.as_bytes());
+        }
+    }
+
+    #[test]
+    fn seeded_encapsulation_personalization_changes_output() {
+        let suite = MlKemSuite::MlKem768;
+        let key_seed = HedgedRngSeed::from_entropy([0xB7; 32]);
+        let enc_seed = HedgedRngSeed::from_entropy([0xC7; 32]);
+        let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen");
+
+        let (first_shared, first_ct) =
+            encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed.clone(), b"enc-a")
+                .expect("seeded encapsulation succeeds");
+        let (second_shared, second_ct) =
+            encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed, b"enc-b")
+                .expect("seeded encapsulation succeeds");
+
+        assert_ne!(first_ct.as_bytes(), second_ct.as_bytes());
+        assert_ne!(first_shared.as_bytes(), second_shared.as_bytes());
+    }
+
+    #[test]
     fn invalid_public_key_length() {
-        let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8]).unwrap_err();
+        let mut rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xFE; 32]),
+            b"mlkem-invalid-public-key",
+        );
+        let err = encapsulate_mlkem(MlKemSuite::MlKem512, &[0u8; 8], &mut rng).unwrap_err();
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
+    }
+
+    #[test]
+    fn decapsulation_rejects_invalid_secret_and_ciphertext_lengths() {
+        let suite = MlKemSuite::MlKem512;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDA; 32]),
+            b"decap-length-keygen",
+        );
+        let (_, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            keys.public_key(),
+            HedgedRngSeed::from_entropy([0xDB; 32]),
+            b"decap-length-enc",
+        )
+        .expect("encapsulation succeeds");
+
+        let short_secret = &keys.secret_key()[..keys.secret_key().len() - 1];
+        let err =
+            decapsulate_mlkem(suite, short_secret, ciphertext.as_bytes()).expect_err("bad secret");
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("secret key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+
+        let short_ciphertext = &ciphertext.as_bytes()[..ciphertext.as_bytes().len() - 1];
+        let err =
+            decapsulate_mlkem(suite, keys.secret_key(), short_ciphertext).expect_err("bad ct");
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("ciphertext")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn decapsulation_with_wrong_secret_does_not_match_sender_secret() {
+        let suite = MlKemSuite::MlKem768;
+        let recipient = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDC; 32]),
+            b"wrong-secret-recipient",
+        );
+        let wrong_recipient = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xDD; 32]),
+            b"wrong-secret-recipient",
+        );
+        let (sender_shared, ciphertext) = encapsulate_mlkem_from_seed(
+            suite,
+            recipient.public_key(),
+            HedgedRngSeed::from_entropy([0xDE; 32]),
+            b"wrong-secret-enc",
+        )
+        .expect("encapsulation succeeds");
+
+        let wrong_shared =
+            decapsulate_mlkem(suite, wrong_recipient.secret_key(), ciphertext.as_bytes())
+                .expect("ML-KEM decapsulation returns an implicit-rejection secret");
+
+        assert_ne!(sender_shared.as_bytes(), wrong_shared.as_bytes());
+    }
+
+    #[test]
+    fn encapsulation_rejects_public_key_from_different_suite() {
+        let keypair = generate_mlkem_keypair_from_seed(
+            MlKemSuite::MlKem512,
+            HedgedRngSeed::from_entropy([0xDF; 32]),
+            b"wrong-suite-public-key",
+        );
+        let mut rng =
+            deterministic_chacha20_rng(HedgedRngSeed::from_entropy([0xE7; 32]), b"wrong-suite-enc");
+
+        let err = encapsulate_mlkem(MlKemSuite::MlKem768, keypair.public_key(), &mut rng)
+            .expect_err("ML-KEM-512 public key must not validate as ML-KEM-768");
+
+        match err {
+            MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
+            MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn validation_accepts_generated_exact_lengths() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xE0); 32]),
+                b"exact-length-keygen",
+            );
+            let (_, ciphertext) = encapsulate_mlkem_from_seed(
+                suite,
+                keys.public_key(),
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xE8); 32]),
+                b"exact-length-enc",
+            )
+            .expect("encapsulation succeeds");
+
+            validate_mlkem_public_key(suite, keys.public_key()).expect("public key validates");
+            validate_mlkem_secret_key(suite, keys.secret_key()).expect("secret key validates");
+            validate_mlkem_ciphertext(suite, ciphertext.as_bytes()).expect("ciphertext validates");
+        }
+    }
+
+    #[test]
+    fn metadata_names_are_unique_across_suites() {
+        let names: Vec<_> = MlKemSuite::ALL
+            .iter()
+            .map(|suite| suite.metadata().name)
+            .collect();
+
+        assert_eq!(names.len(), 3);
+        assert_ne!(names[0], names[1]);
+        assert_ne!(names[0], names[2]);
+        assert_ne!(names[1], names[2]);
     }
 
     #[test]
     fn mlkem_parameters_align_with_bindings() {
         let params = mlkem_parameters(MlKemSuite::MlKem768);
-        assert_eq!(params.public_key, kyber768::public_key_bytes());
-        assert_eq!(params.secret_key, kyber768::secret_key_bytes());
-        assert_eq!(params.ciphertext, kyber768::ciphertext_bytes());
-        assert_eq!(params.shared_secret, kyber768::shared_secret_bytes());
+        assert_eq!(params.public_key, MLKEM768_PUBLIC_KEY_BYTES);
+        assert_eq!(params.secret_key, MLKEM768_SECRET_KEY_BYTES);
+        assert_eq!(params.ciphertext, MLKEM768_CIPHERTEXT_BYTES);
+        assert_eq!(params.shared_secret, MLKEM768_SHARED_SECRET_BYTES);
     }
 
     #[test]
     fn validation_rejects_short_inputs() {
         let res = validate_mlkem_public_key(MlKemSuite::MlKem1024, &[0u8; 16]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn validation_error_display_includes_kind_and_lengths() {
+        let err = validate_mlkem_secret_key(MlKemSuite::MlKem768, &[0u8; 7])
+            .expect_err("short secret key must be rejected");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("ML-KEM-768 secret key"));
+        assert!(rendered.contains("7"));
+        assert!(rendered.contains("2400"));
+    }
+
+    #[test]
+    fn validation_rejects_long_inputs_for_each_kind() {
+        let suite = MlKemSuite::MlKem512;
+        let long_public = vec![0u8; suite.public_key_len() + 1];
+        let long_secret = vec![0u8; suite.secret_key_len() + 1];
+        let long_ciphertext = vec![0u8; suite.ciphertext_len() + 1];
+
+        for (label, result) in [
+            ("public key", validate_mlkem_public_key(suite, &long_public)),
+            ("secret key", validate_mlkem_secret_key(suite, &long_secret)),
+            (
+                "ciphertext",
+                validate_mlkem_ciphertext(suite, &long_ciphertext),
+            ),
+        ] {
+            match result {
+                Err(MlKemError::BadEncoding { kind, .. }) => assert!(
+                    kind.contains(label),
+                    "expected {kind:?} to mention {label:?}"
+                ),
+                other => panic!("unexpected validation result for {label}: {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -655,6 +1035,7 @@ mod tests {
             let metadata = suite.metadata();
             assert_eq!(metadata.suite, suite);
             assert_eq!(suite.kem_id(), metadata.kem_id);
+            assert_eq!(metadata, mlkem_metadata(suite));
             let recovered =
                 MlKemSuite::from_kem_id(metadata.kem_id).expect("supported kem identifier");
             assert_eq!(recovered, suite);
@@ -720,5 +1101,19 @@ mod tests {
         );
         let err = MlKemSuite::from_str("unknown-suite").unwrap_err();
         assert_eq!(err, SuiteParseError("unknown-suite".to_string()));
+    }
+
+    #[test]
+    fn suite_parse_error_display_preserves_input() {
+        let err = MlKemSuite::from_str("mlkem999").unwrap_err();
+
+        assert_eq!(err.to_string(), "unknown ML-KEM suite 'mlkem999'");
+    }
+
+    #[test]
+    fn suite_display_uses_canonical_lowercase_names() {
+        assert_eq!(MlKemSuite::MlKem512.to_string(), "mlkem512");
+        assert_eq!(MlKemSuite::MlKem768.to_string(), "mlkem768");
+        assert_eq!(MlKemSuite::MlKem1024.to_string(), "mlkem1024");
     }
 }

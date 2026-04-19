@@ -116,8 +116,8 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
   ```
 - Node-facing V1 verification no longer runs trace rebuild, LDE derivation, or
   full recursive folding. `VerifyLimits` caps proof material, query counts, path
-  depth, and payload size; large 1k/5k/20k-row traces remain in prover and
-  benchmark regression suites.
+  depth, transition count, and payload size; large 1k/5k/20k-row traces remain
+  in prover and benchmark regression suites.
 
 ### Degree Accounting
 | Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |

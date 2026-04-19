@@ -1,6 +1,167 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-18
+Last updated: 2026-04-19
+
+Latest sync (2026-04-18 ConstVec malformed query guard):
+Torii query decoding no longer lets the manual unpacked `ConstVec` fallback
+reserve memory from an impossible wire count. The regression was reproduced
+with a `f966f916b9` CLI talking to a `2d837b67c8` node; matching binaries did
+not crash, which points to a cross-version Norito length-layout mismatch as the
+trigger and an unbounded fallback allocation as the process-abort bug. The
+focused coverage now pins empty vectors, successful `u8`, `u16`, and nested
+`Vec<u8>` manual fallback decoding, recovery from length mismatch,
+non-recoverable error preservation, short count headers, impossible counts,
+overflowing element lengths, truncated element payloads, and invalid element
+bodies.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives manual_unpacked` (`11 passed`)
+  - `cargo test -p iroha_primitives` still fails the existing
+    `const_vec::tests::matches_vec_encoding` and
+    `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
+- open work after this slice:
+  - decide whether the older zero-flag `ConstVec` expectations should be
+    updated for the current default `COMPACT_LEN` layout or guarded under an
+    explicit legacy flag context
+  - add a Torii-level malformed-query regression once the query fixture can be
+    kept small and stable
+
+Latest sync (2026-04-18 SoraNet PQ derand backend wiring):
+`soranet_pq` now routes hedged RNG output into ML-KEM and ML-DSA operations by
+calling the PQClean derandomized hooks that pqcrypto 0.1.x does not expose in
+safe Rust. The older `iroha_crypto` seeded ML-DSA-65 helper now relies on
+drop-based zeroization for its sensitive intermediate buffers while preserving
+the existing seeded-key derivation label. The focused coverage now includes the
+public deterministic RNG constructor, seeded personalization behavior,
+ML-KEM/ML-DSA length rejection, deterministic ML-DSA signing replay, and C FFI
+invalid-suite/null-pointer/tampered-signature branches.
+The latest coverage pass also pins FFI parameter-success paths, ML-KEM FFI
+decapsulation length rejection, ML-DSA FFI keygen/sign/verify length rejection,
+max-length ML-DSA context acceptance, ML-DSA suite-id roundtrips, exact-length
+ML-KEM validation acceptance, and `iroha_crypto` seeded ML-DSA public-key
+recovery/tampered-secret rejection.
+A follow-up pass raises `soranet_pq` to 73 unit tests by covering deterministic
+RNG personalization, seed-byte exposure, ML-KEM wrong-secret implicit rejection,
+cross-suite public-key rejection, long input validation, ML-DSA signing
+personalization, generated length invariants, wrong-public-key rejection,
+long-context short-circuiting, and FFI helper overflow, null-output,
+short-output, and null-input branches.
+A third focused pass raises `soranet_pq` to 80 unit tests by pinning exported
+FFI invalid-suite short-circuiting, ML-KEM null output buffers, ML-DSA null
+signature/public-key inputs, write-output length mismatch handling, ML-DSA sign
+context-before-secret validation, and canonical ML-KEM display names. The
+`iroha_crypto` ML-DSA keypair integration test now also covers seed divergence
+plus modified-message and wrong-public-key signature rejection.
+A fourth focused pass raises `soranet_pq` to 84 unit tests by covering HKDF
+domain accessors, zero-length output, excessive output length, and salt/context
+domain separation. The `iroha_crypto` ML-DSA keypair integration test now also
+covers short signature rejection, invalid raw key lengths, and prefixed
+public-key parsing.
+A fifth focused pass raises `soranet_pq` to 88 unit tests by covering HKDF
+suite selection separation, ML-KEM validation and parse-error display text, and
+empty-context/empty-message ML-DSA signing. The `iroha_crypto` ML-DSA keypair
+integration test now also covers malformed prefixed public-key input and
+private-key byte roundtrips.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/rng.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/hkdf.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/ffi.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mlkem.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/mldsa_backend.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/mldsa_seed.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/tests/mldsa_keypair.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/soranet/pq_primitives.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/README.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p soranet_pq -- --nocapture`
+  - `cargo test -p iroha_crypto mldsa_seed --lib -- --nocapture`
+  - `cargo test -p iroha_crypto --test mldsa_keypair -- --nocapture`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo test -p iroha_crypto --test mldsa_keypair --test mldsa_multihash -- --nocapture`
+- open work after this slice:
+  - run the broader PQ-adjacent crate checks across `iroha_p2p`, `iroha_cli`,
+    and `sorafs_orchestrator`
+  - continue replacing PQClean-backed internals with local scalar and
+    deterministic hardware-accelerated backends behind the existing API
+
+Latest sync (2026-04-18 IVM query-envelope linked-domain test resync):
+`crates/ivm/tests/wsv_host_execute_query_envelope.rs` now follows the current
+universal-account mock WSV semantics for cross-domain subjects. The query
+envelope coverage registers each canonical account subject once, then uses
+`link_subject_to_domain(...)` to seed `list_domains_for_account` and
+`list_accounts_for_domain` behavior across `wonderland.universal`,
+`alpha.universal`, `beta.universal`, and `other.universal`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_execute_query_envelope.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test wsv_host_execute_query_envelope -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-18 SoraNet PQ hedged RNG boundary hardening):
+SoraNet PQ call sites now flow through explicit hedged RNG objects or fallible
+`_from_os` helpers, and ML-DSA fixture signatures were refreshed for the
+context-aware verifier. This makes the randomness boundary visible to callers
+while preserving the current pqcrypto-backed backend until the local scalar
+implementation lands.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/README.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/docs/source/soranet/pq_primitives.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/soranet_pq/pq_kat.json`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/tests/fixtures/pq_vectors.json`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo check -p soranet_pq`
+  - `cargo check -p soranet_pq --all-targets`
+  - `cargo check -p iroha_crypto --all-targets`
+  - `cargo check -p soranet-puzzle-service -p soranet-relay -p soranet-handshake-harness -p sorafs_orchestrator -p iroha_p2p -p iroha_cli --all-targets`
+  - `cargo test -p soranet_pq`
+- open work after this slice:
+  - replace the remaining pqcrypto-backed ML-KEM/ML-DSA internals with the
+    local pure-Rust scalar backend, then layer deterministic hardware-accelerated
+    paths behind feature flags without changing outputs
+  - rerun the full workspace test suite during a longer clean validation window
+
+Latest sync (2026-04-18 IVM bare-domain TLV normalization and opaque asset unregister sync):
+`crates/ivm/tests/common.rs` now normalizes bare `PointerType::DomainId`
+payloads onto `*.universal`, which restores the IVM WSV-host tests that still
+use short domain literals like `wonder`. `MockWorldStateView::unregister_domain`
+now uses `AssetDefinitionId::try_domain()` so opaque canonical asset
+definitions no longer panic or spuriously pin a domain, and the affected
+unregister tests now model the current universal-account / opaque-id semantics
+explicitly.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/mock_wsv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/common.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_register_domain_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_neg_cases.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_unregister_tlv.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --lib unregister_domain_ignores_opaque_asset_definition_ids -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_account_admin --test wsv_host_register_domain_tlv --test wsv_host_register_account_asset_tlv --test wsv_host_role_admin_tlv --test wsv_host_role_admin_neg --test wsv_host_role_vs_direct_perm --test wsv_host_unregister_tlv --test wsv_host_unregister_neg_cases --test wsv_host_nft_unregister_positive -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
 
 Latest sync (2026-04-18 syscall policy unknown-number test resync):
 `crates/ivm/tests/syscalls_policy.rs` no longer assumes hard-coded numbers such
@@ -225,11 +386,12 @@ OpenVerify envelope bytes from backend-native proof bytes, the synthetic STARK
 helper is test-only, high-level STARK verification now requires a
 verifier-reconstructed AIR public digest, offline recursive STARK readiness uses
 that AIR-bound path, and curve labels are exact canonical strings. FASTPQ
-verification now authenticates sampled LDE query chunks, sampled AIR trace and
-composition openings, the exact V1 AIR challenge count, and per-round FRI query
-chains without trace rebuild, LDE derivation, or full recursive folding. FASTPQ
-proof fixtures, ordering hashes, and trace-commitment goldens were refreshed for
-the in-place V1 wire shape. Follow-up gap closure keeps the mixed-case STARK VK
+verification now applies transition-count and payload caps, authenticates
+sampled LDE query chunks, sampled AIR trace and composition openings, the exact
+V1 AIR challenge count, and per-round FRI query chains without trace rebuild,
+LDE derivation, or full recursive folding. FASTPQ proof fixtures, ordering
+hashes, and trace-commitment goldens were refreshed for the in-place V1 wire
+shape. Follow-up gap closure keeps the mixed-case STARK VK
 update regression on a valid encoded V1 STARK verifying key and removes unused
 single-client Nexus helper wrappers from the compile-only integration target.
 Additional coverage now pins extra AIR challenge rejection, AIR opening-count
@@ -242,7 +404,31 @@ coverage pass also pins AIR Merkle-path limits, FRI round-value limits, final
 FRI Merkle-path tampering, outer schema tampering, and inner AIR circuit-id
 tampering. The newest tests also pin query-count and query-chunk limits, zero
 LDE domain rejection, folded/final FRI value tampering, VK-hash tampering,
-missing STARK VK rejection, and inner STARK parameter tampering.
+missing STARK VK rejection, and inner STARK parameter tampering. The latest
+FASTPQ coverage adds transition-count, batch-byte, FRI layer-count, extra
+AIR/FRI query-vector, query-path, final-FRI-value, final-FRI-path, and
+round-FRI-path guardrail tests. The newest verifier branch tests cover
+unsupported protocol versions, unknown proof parameters, malformed FRI layer
+root encodings, malformed query/AIR/FRI opening shapes, and direct zero-arity
+FRI query-chain rejection. The newest proof-module coverage also pins backend
+artifact materialisation field mapping, backend artifact count mismatches,
+malformed trace/lookup/AIR root encodings, AIR challenge value rejection, and
+default-limit AIR/FRI vector-count mismatches. The latest helper coverage pins
+explicit public-input root preservation, direct `PublicIO` mismatch errors,
+permission-root/transaction-set hash domain separation, grant/revoke permission
+hash sorting and id-length rejection, batch-size accounting for metadata and
+role payloads, field-Norito non-canonical tail rejection, terminal FRI
+query-chain success/failure without fold rounds, and Goldilocks modular folding
+wraparound. Additional FASTPQ helper coverage now pins canonical
+parameter-version catalogue ordering and non-catalogue rejection, role
+grant/revoke operation-size hints, order-sensitive fallback roots, multi-query
+materialisation, and single-round FRI query-chain accept/reject paths. Further
+FASTPQ helper coverage now pins `canonical_with_modes` unknown-parameter
+rejection, materialised commitment/PublicIO preservation, exact-boundary
+`VerifyLimits` acceptance, AIR next-row/composition path limit rejection, and
+FRI query-chain nonzero final-offset success/failure. The newest FASTPQ proof
+tests also pin direct FRI challenge/layer length mismatch branches, malformed
+round/final FRI root decoding, and Norito proof encode/decode roundtrips.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -271,8 +457,10 @@ missing STARK VK rejection, and inner STARK parameter tampering.
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
+  - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`93 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
+  - `cargo test -p fastpq_prover verify_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_zero_lde_domain_size -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_fri_folded_value -- --nocapture`
   - `cargo test -p fastpq_prover verify_rejects_wrong_final_fri -- --nocapture`
