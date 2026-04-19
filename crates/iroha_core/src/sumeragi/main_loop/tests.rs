@@ -18856,18 +18856,18 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         .pending_blocks
         .get(&future_hash)
         .expect("future pending block should remain cached after parent commit");
+    let activated_at = pending_after.inserted_at;
     assert!(
-        pending_after.inserted_at >= activation_started_at,
+        activated_at >= activation_started_at,
         "future pending block should restart its pending age when its parent commit activates the frontier"
     );
     assert_eq!(
-        pending_after.progress_age(pending_after.inserted_at),
+        pending_after.progress_age(activated_at),
         Duration::ZERO,
         "future pending block should receive a fresh quorum-timeout window after its parent commit activates the frontier"
     );
 
-    let now = Instant::now();
-    let proposed = actor.on_pacemaker_propose_ready(now);
+    let proposed = actor.on_pacemaker_propose_ready(activated_at);
     assert!(
         !proposed,
         "pacemaker should wait on the freshly activated cached proposal instead of reassembling a new one"
