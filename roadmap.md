@@ -2,6 +2,35 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 DefaultHost Halo2 open-verify gating):
+`crates/ivm/src/host.rs` now runs the real Halo2 open verifier for the
+single-envelope verify syscalls on `DefaultHost` instead of returning the old
+blanket disabled status. The path now enforces envelope-size, backend,
+curve-family, `max_k`, transcript-label, ASCII/length, and proof-size gates,
+maps decode / verifier failures onto the documented `ERR_*` register status
+codes, and keeps `ZK_VERIFY_BATCH` intentionally disabled on `DefaultHost`.
+`crates/ivm/tests/zk_verify_syscall.rs` was resynced so malformed envelopes now
+assert `ERR_DECODE`, and `crates/ivm/src/host.rs` gained small unit coverage
+for the syscall-label mapping and curve allowlist helpers behind the new
+verifier path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/host.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/zk_verify_syscall.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test zk_verify_gating -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_syscall -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_positive_matrix --test zk_verify_gating_maxk --test zk_verify_goldilocks -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_batch_syscall --test zk_verify_batch_gating -- --nocapture`
+  - `cargo test -p ivm --lib zk_verify_label_mapping_covers_single_envelope_syscalls -- --nocapture`
+  - `cargo test -p ivm --lib zk_curve_allowlist_tracks_host_curve_family -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
 Latest sync (2026-04-19 MOCHI bundle package lookup):
 `xtask mochi-bundle` no longer depends on the stale `mochi-ui-egui` Cargo
 package id. The bundle build now addresses the desktop shell by manifest path

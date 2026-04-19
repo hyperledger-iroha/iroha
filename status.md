@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: DefaultHost Halo2 open-verify gating
+- `crates/ivm/src/host.rs` no longer hard-disables the single-envelope Halo2
+  verify syscalls on `DefaultHost`. `ZK_VERIFY_TRANSFER`,
+  `ZK_VERIFY_UNSHIELD`, `ZK_VOTE_VERIFY_BALLOT`, and
+  `ZK_VOTE_VERIFY_TALLY` now enforce the configured envelope-size, backend,
+  curve-family, `max_k`, transcript-label, ASCII/length, and proof-size
+  gates before running the real Halo2 open verifier and returning the
+  corresponding `r11` status (`ERR_*` or `0`).
+- `DefaultHost` still leaves `ZK_VERIFY_BATCH` disabled, and the batch
+  regression coverage remains green after the single-envelope verifier change.
+- `crates/ivm/tests/zk_verify_syscall.rs` now matches the current behavior:
+  malformed `NoritoBytes` payloads return `ERR_DECODE` instead of the old
+  blanket `ERR_DISABLED` stub status.
+- Added focused unit coverage for the syscall-to-label mapping and the
+  host-curve allowlist used by the new `DefaultHost` verifier path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test zk_verify_gating -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_syscall -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_positive_matrix --test zk_verify_gating_maxk --test zk_verify_goldilocks -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_batch_syscall --test zk_verify_batch_gating -- --nocapture`
+  - `cargo test -p ivm --lib zk_verify_label_mapping_covers_single_envelope_syscalls -- --nocapture`
+  - `cargo test -p ivm --lib zk_curve_allowlist_tracks_host_curve_family -- --nocapture`
+
 ## 2026-04-19 Follow-up: MOCHI bundle package lookup
 - `xtask/src/mochi.rs` now builds the packaged MOCHI desktop binary through
   `--manifest-path mochi/mochi-ui-egui/Cargo.toml --bin mochi` instead of the
