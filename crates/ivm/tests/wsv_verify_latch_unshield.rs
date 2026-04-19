@@ -48,27 +48,14 @@ fn sample_account() -> AccountId {
     )
 }
 
-fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
-    use h2::norito_helpers as nh;
-    use iroha_zkp_halo2 as h2;
-    use iroha_zkp_halo2::backend::pallas::PallasBackend;
-    let params = h2::Params::new(k as usize).expect("params");
-    // Build a trivial polynomial and opening proof
-    let coeffs: Vec<h2::PrimeField64> = vec![0u64.into(); params.n()];
-    let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut tr = h2::Transcript::new(ivm::host::LABEL_UNSHIELD);
-    let p_g = poly.commit(&params).expect("commit");
-    let z = h2::PrimeField64::from(1u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-    let env = h2::OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: ivm::host::LABEL_UNSHIELD.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
+fn build_open_verify_envelope_bytes(_k: u32) -> Vec<u8> {
+    let env = iroha_data_model::zk::OpenVerifyEnvelope::new(
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        ivm::host::LABEL_UNSHIELD,
+        [0u8; 32],
+        vec![1, 2, 3],
+        vec![4, 5, 6],
+    );
     norito::to_bytes(&env).expect("encode env")
 }
 

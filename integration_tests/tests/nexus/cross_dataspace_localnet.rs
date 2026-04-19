@@ -2857,7 +2857,18 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_positive_usize_override;
+    use super::{
+        OBSERVER_QUERY_TIMEOUT_CAP, RoutedJsonGetResponse, bounded_observer_request_timeout,
+        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
+        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        parse_positive_usize_override, render_error_with_debug, routed_header_string,
+    };
+    use norito::json::Value as JsonValue;
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use std::{
+        fmt::{Debug, Display, Formatter, Result as FmtResult},
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn parse_positive_usize_override_uses_positive_input() {
@@ -2871,5 +2882,209 @@ mod tests {
         assert_eq!(parse_positive_usize_override(Some("0"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
+    }
+
+    #[test]
+    fn duration_min_avg_max_secs_reports_expected_values() {
+        assert!(duration_min_avg_max_secs(&[]).is_none());
+
+        let (min, avg, max) = duration_min_avg_max_secs(&[
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+            Duration::from_secs(1),
+        ])
+        .expect("duration summary");
+
+        assert_eq!(min, 0.5);
+        assert_eq!(avg, 1.0);
+        assert_eq!(max, 1.5);
+    }
+
+    #[test]
+    fn duration_min_avg_max_secs_handles_single_sample() {
+        let (min, avg, max) =
+            duration_min_avg_max_secs(&[Duration::from_millis(250)]).expect("duration summary");
+
+        assert_eq!(min, 0.25);
+        assert_eq!(avg, 0.25);
+        assert_eq!(max, 0.25);
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_handles_exhausted_and_large_budgets() {
+        let exhausted = bounded_observer_request_timeout(
+            Instant::now() - Duration::from_secs(10),
+            Duration::from_secs(1),
+            4,
+        );
+        assert_eq!(exhausted, Duration::from_millis(1));
+
+        let large_single_client =
+            bounded_observer_request_timeout(Instant::now(), Duration::from_secs(90), 1);
+        assert!(
+            large_single_client <= OBSERVER_QUERY_TIMEOUT_CAP,
+            "large per-client slice should be capped"
+        );
+
+        let short_budget =
+            bounded_observer_request_timeout(Instant::now(), Duration::from_millis(500), 100);
+        assert!(
+            short_budget <= Duration::from_millis(500),
+            "short remaining budgets should not be inflated by the floor"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_treats_zero_remaining_clients_as_one() {
+        let timeout =
+            bounded_observer_request_timeout(Instant::now(), OBSERVER_QUERY_TIMEOUT_CAP * 3, 0);
+
+        assert!(
+            timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
+            "zero remaining clients should still apply the per-peer cap"
+        );
+    }
+
+    #[test]
+    fn tx_fallback_error_classifiers_match_cross_dataspace_outcomes() {
+        for error_text in [
+            "transaction.status_timeout_ms elapsed",
+            "haven't got tx confirmation within 20s",
+            "transaction queued for too long",
+            "Transaction submitter thread exited with error: closed",
+            "Failed to send http POST request: connection reset",
+        ] {
+            assert!(
+                is_inconclusive_blocking_submit_error(error_text),
+                "{error_text} should be treated as inconclusive"
+            );
+        }
+        assert!(!is_inconclusive_blocking_submit_error(
+            "settlement leg requires 10000"
+        ));
+
+        assert!(is_inconclusive_committed_outcome_error(
+            "timed out waiting for committed transaction outcome"
+        ));
+        assert!(!is_inconclusive_committed_outcome_error(
+            "transaction rejected by validation"
+        ));
+    }
+
+    #[test]
+    fn tx_fallback_error_classifiers_ignore_unrelated_phrases() {
+        for error_text in [
+            "queued transaction was rejected by validation",
+            "failed to send http GET request",
+            "submitter thread completed normally",
+            "transaction status timeout was not configured",
+        ] {
+            assert!(
+                !is_inconclusive_blocking_submit_error(error_text),
+                "{error_text} should stay conclusive"
+            );
+        }
+
+        assert!(!is_inconclusive_committed_outcome_error(
+            "waiting for committed transaction outcome succeeded"
+        ));
+    }
+
+    #[test]
+    fn fanout_header_helper_accepts_local_and_proxy_without_singular_route() {
+        for routed_by in ["local", "proxy"] {
+            let response = RoutedJsonGetResponse {
+                body: JsonValue::Null,
+                routed_by: Some(routed_by.to_owned()),
+                route_lane_id: None,
+                route_dataspace_id: None,
+            };
+
+            expect_local_or_proxy_fanout_headers(&response, "fanout")
+                .expect("local/proxy fanout response should pass");
+        }
+
+        let missing_route_source = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: None,
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&missing_route_source, "fanout")
+            .expect_err("missing route source should fail");
+        assert!(err.to_string().contains("expected local or proxy fanout"));
+
+        let unknown_route_source = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("remote".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&unknown_route_source, "fanout")
+            .expect_err("unknown route source should fail");
+        assert!(err.to_string().contains("expected local or proxy fanout"));
+
+        let singular_route = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: Some("1".to_owned()),
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&singular_route, "fanout")
+            .expect_err("singular fanout route should fail");
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose a singular route lane")
+        );
+
+        let singular_dataspace = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: Some("2".to_owned()),
+        };
+        let err = expect_local_or_proxy_fanout_headers(&singular_dataspace, "fanout")
+            .expect_err("singular fanout dataspace should fail");
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose a singular route dataspace")
+        );
+    }
+
+    #[test]
+    fn routed_header_string_reads_present_headers_and_ignores_absent_ones() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iroha-routed-by", HeaderValue::from_static("proxy"));
+        headers.insert(
+            "x-iroha-invalid",
+            HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
+        );
+
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-routed-by"),
+            Some("proxy".to_owned())
+        );
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-route-lane-id"),
+            None
+        );
+        assert_eq!(routed_header_string(&headers, "x-iroha-invalid"), None);
+    }
+
+    #[derive(Debug)]
+    struct DisplayOnlyTxError;
+
+    impl Display for DisplayOnlyTxError {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+            formatter.write_str("route probe failed")
+        }
+    }
+
+    #[test]
+    fn render_error_with_debug_keeps_display_and_debug_context() {
+        assert_eq!(
+            render_error_with_debug(&DisplayOnlyTxError),
+            "route probe failed (DisplayOnlyTxError)"
+        );
     }
 }

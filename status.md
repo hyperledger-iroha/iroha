@@ -2,6 +2,141 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: DefaultHost Halo2 open-verify gating
+- `crates/ivm/src/host.rs` no longer hard-disables the single-envelope Halo2
+  verify syscalls on `DefaultHost`. `ZK_VERIFY_TRANSFER`,
+  `ZK_VERIFY_UNSHIELD`, `ZK_VOTE_VERIFY_BALLOT`, and
+  `ZK_VOTE_VERIFY_TALLY` now enforce the configured envelope-size, backend,
+  curve-family, `max_k`, transcript-label, ASCII/length, and proof-size
+  gates before running the real Halo2 open verifier and returning the
+  corresponding `r11` status (`ERR_*` or `0`).
+- `DefaultHost` still leaves `ZK_VERIFY_BATCH` disabled, and the batch
+  regression coverage remains green after the single-envelope verifier change.
+- `crates/ivm/tests/zk_verify_syscall.rs` now matches the current behavior:
+  malformed `NoritoBytes` payloads return `ERR_DECODE` instead of the old
+  blanket `ERR_DISABLED` stub status.
+- Added focused unit coverage for the syscall-to-label mapping and the
+  host-curve allowlist used by the new `DefaultHost` verifier path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test zk_verify_gating -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_syscall -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_positive_matrix --test zk_verify_gating_maxk --test zk_verify_goldilocks -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_batch_syscall --test zk_verify_batch_gating -- --nocapture`
+  - `cargo test -p ivm --lib zk_verify_label_mapping_covers_single_envelope_syscalls -- --nocapture`
+  - `cargo test -p ivm --lib zk_curve_allowlist_tracks_host_curve_family -- --nocapture`
+
+## 2026-04-19 Follow-up: SNS catalog asset-holding fixture
+- `docs/examples/sns/suffix_catalog_v1.json` now uses owner-qualified
+  asset-holding literals for `payment_asset_id`, pricing base prices, and the
+  Dutch floor entry so the snapshot matches the current `AssetId::parse_literal`
+  verifier contract.
+- Refreshed `docs/examples/sns/suffix_catalog_v1.sha256` and updated the
+  English SNS source/portal docs to describe `payment_asset_id` as
+  `<base58-asset-definition-id>#<i105-account-id>`.
+- Focused validation for this slice:
+  - `./target/debug/xtask sns-catalog-verify --allow-missing-checksum`
+  - `./target/debug/xtask sns-catalog-verify`
+  - `cargo test -p xtask sns_catalog_verify_passes_with_defaults -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-19 Follow-up: cross-dataspace transaction routing helper coverage
+- `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  now has additional pure helper regressions for wrong-ingress
+  cross-dataspace transaction/query routing. The new cases pin routed response
+  context/header extraction, exact lane/dataspace header enforcement, fanout
+  responses that must not expose singular route headers, permission payload
+  filtering by dataspace, manifest status/dataspace matching, and account-asset
+  response matching by canonical asset-definition literal.
+- The latest pass expands the same suite with root-path routed contexts,
+  non-UTF8 route-header handling, missing-proxy and wrong-lane rejection,
+  singular fanout dataspace rejection, permission records with missing payloads
+  or wrong names, missing manifest-array errors, non-string asset entries, and
+  all retryable empty-body routed HTTP statuses.
+- The newest assertions add missing lane/dataspace route-header failures,
+  manifest records with absent or non-numeric dataspace IDs, exact asset-literal
+  matching, and non-empty null-body retry rejection.
+- This improves coverage without starting another localnet; the existing
+  end-to-end wrong-ingress localnet remains the behavioral regression for real
+  cross-dataspace routing.
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` also now has
+  focused coverage for the atomic-swap transaction fallback helpers: duration
+  min/avg/max summaries, inconclusive submit/history error classification,
+  local/proxy fanout header validation, and routed header extraction.
+- The atomic-swap helper coverage now also checks exhausted/large/short
+  observer timeout slicing, singular fanout dataspace rejection, binary header
+  handling, and display+debug error rendering.
+- Additional atomic-swap helper cases cover single-sample timing summaries,
+  zero remaining-client timeout slicing, unrelated fallback error phrases, and
+  unknown fanout route sources.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
+    (`21 passed; 208 filtered out`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
+    (`11 passed; 218 filtered out`)
+  - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
+
+## 2026-04-19 Follow-up: ConstVec manual fallback coverage
+- `crates/iroha_primitives/src/const_vec.rs` now has additional focused
+  regressions for manual unpacked `ConstVec` query payloads. The new coverage
+  exercises the outer recovery helper on a length-prefixed payload, the direct
+  slice decoder's zero-count/trailing-bytes guard, and the helper that compares
+  canonical/provided payloads while ignoring element length words.
+- The payload comparison tests now pin both the accepted compatibility case and
+  rejection paths for changed payload bytes, changed count headers, total length
+  mismatches, partial element headers, and too-short payloads.
+- The older byte-vector and compatibility-length assertions now match the
+  current length-prefixed `ConstVec` layout instead of expecting raw `Vec<u8>`
+  byte parity or missing exact lengths.
+- The latest coverage also pins `ToConstVec` / iterator order, the legacy
+  unpacked byte layout with fixed-width element length words, direct empty
+  payload decoding, recovery from a misaligned fallback error, and integrated
+  `reencode_and_verify` acceptance/rejection for clobbered length words versus
+  changed payload bytes.
+- The newest tests cover `RealignedSlice` / `align_payload_for` pass-through and
+  realignment behavior, direct realigned decode, zero-length payload context
+  deserialization, `DecodeFromSlice` consumed length reporting, JSON roundtrip,
+  empty/default `ConstVec` behavior, and encoded-length hint/exact behavior for
+  legacy, packed, and inexact-element layouts.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives manual_unpacked` (`27 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`60 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives`
+    (`162 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
+## 2026-04-19 Follow-up: MOCHI bundle package lookup
+- `xtask/src/mochi.rs` now builds the packaged MOCHI desktop binary through
+  `--manifest-path mochi/mochi-ui-egui/Cargo.toml --bin mochi` instead of the
+  stale `-p mochi-ui-egui` package id. This matches the current `mochi-ui`
+  package while keeping the bundle tied to the existing UI manifest path.
+- Added a focused regression that verifies the bundle helper still points at a
+  manifest declaring the packaged `mochi` binary.
+- Focused validation for this slice:
+  - `rustfmt --check --edition 2024 xtask/src/mochi.rs`
+  - `cargo test -p xtask --test mochi_bundle -- --nocapture`
+  - `cargo test -p xtask mochi_ui_manifest_path_declares_packaged_binary -- --nocapture`
+
+## 2026-04-19 Follow-up: mock WSV unshield JSON compatibility
+- `crates/iroha_data_model/src/isi/zk.rs` now defaults
+  `iroha_data_model::isi::zk::Unshield.outputs` during decode, so JSON
+  envelopes that omit optional private change commitments no longer fail with
+  `NoritoInvalid` before the mock-host permission / verify latch checks run.
+- `crates/iroha_data_model/tests/unshield_json_defaults.rs` adds direct
+  coverage for the missing-`outputs` JSON compatibility case.
+- `crates/ivm/tests/wsv_verify_latch_unshield.rs` now builds the current
+  `iroha_data_model::zk::OpenVerifyEnvelope` wire payload expected by
+  `WsvHost`, keeping the mock-host verify-latch tests aligned with the
+  documented syscall contract.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test unshield_json_defaults -- --nocapture`
+  - `cargo test -p ivm --test wsv_host_zk_perm_and_events -- --nocapture`
+  - `cargo test -p ivm --test wsv_verify_latch_unshield -- --nocapture`
+
 ## 2026-04-19 Follow-up: Kotodama pointer-ABI fixture resync
 - `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs` now uses the current
   Kotodama JSON method helpers (`ev.get_account_id(...)` and
@@ -27,14 +162,15 @@ Last updated: 2026-04-19
   `try_reserve` for the bounded allocation path. Unit coverage now exercises
   empty vectors, successful `u8`, `u16`, and nested `Vec<u8>` manual unpacked
   decoding, recovery from length mismatch, non-recoverable error preservation,
-  short count headers, impossible counts, overflowing element lengths, truncated
-  element payloads, and invalid element bodies.
+  direct manual element decode success/failure, short count headers, impossible
+  counts, overflowing element lengths, truncated first and later element
+  payloads, truncated later element headers, and invalid first and later element
+  bodies.
 - Focused validation for this slice:
   - `cargo fmt --all -- --check`
-  - `cargo test -p iroha_primitives manual_unpacked` (`11 passed`)
-  - `cargo test -p iroha_primitives` currently still fails the pre-existing
-    `const_vec::tests::matches_vec_encoding` and
-    `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
+  - `cargo test -p iroha_primitives manual_unpacked` (`16 passed`)
+  - Broader `cargo test -p iroha_primitives` validation is covered by the
+    2026-04-19 manual fallback coverage follow-up.
 
 ## 2026-04-18 Follow-up: IVM envelope permission literal resync
 - `/home/mtakemiya/dev/iroha/crates/ivm/tests/wsv_host_roles_triggers_envelope.rs`
@@ -92,6 +228,17 @@ Last updated: 2026-04-19
   and empty-context/empty-message ML-DSA signing. The `iroha_crypto` ML-DSA
   keypair integration test now also covers malformed prefixed public-key input
   and private-key byte roundtrips.
+- A sixth focused pass raises `soranet_pq` to 91 unit tests by covering
+  OS-backed hedged RNG construction, ML-KEM `_from_os` keygen/encapsulation
+  roundtrips, and ML-DSA `_from_os` keygen/sign/verify flow. The
+  `iroha_crypto` ML-DSA keypair integration test now also covers public-key byte
+  roundtrips.
+- A seventh focused pass raises `soranet_pq` to 97 unit tests by covering
+  deterministic `next_u32` replay, `RngError` display text, ML-KEM tampered
+  ciphertext implicit rejection, Kyber alias parsing, ML-DSA bad-encoding and
+  context-length display text, and direct modified-signature rejection. The
+  `iroha_crypto` ML-DSA keypair integration test now also covers signature
+  payload byte roundtrips and public/private key hex roundtrips.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
@@ -403,12 +550,14 @@ Last updated: 2026-04-19
 - Additional FASTPQ helper coverage now covers canonical parameter-version catalogue ordering and non-catalogue rejection, role-grant/revoke operation-size hints, order-sensitive fallback roots, multi-query materialisation, and single-round FRI query-chain accept/reject paths.
 - Further FASTPQ helper coverage now covers `canonical_with_modes` unknown-parameter rejection, materialised commitment/PublicIO preservation, exact-boundary `VerifyLimits` acceptance, AIR next-row/composition path limit rejection, and FRI query-chain nonzero final-offset success/failure.
 - The newest FASTPQ proof tests also cover direct FRI challenge/layer length mismatch branches, malformed round/final FRI root decoding, and Norito proof encode/decode roundtrips.
+- FASTPQ digest coverage now pins parameter-mismatch fail-fast behavior, trace commitment binding to parameter name, trace dimensions, column count, leaf digests, fused parent roots, and the little-endian length-prefix helper.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_core --features zk-stark`
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`93 passed`)
+  - `cargo test -p fastpq_prover digest::tests:: -- --nocapture` (`6 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_ -- --nocapture`

@@ -2,6 +2,114 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 DefaultHost Halo2 open-verify gating):
+`crates/ivm/src/host.rs` now runs the real Halo2 open verifier for the
+single-envelope verify syscalls on `DefaultHost` instead of returning the old
+blanket disabled status. The path now enforces envelope-size, backend,
+curve-family, `max_k`, transcript-label, ASCII/length, and proof-size gates,
+maps decode / verifier failures onto the documented `ERR_*` register status
+codes, and keeps `ZK_VERIFY_BATCH` intentionally disabled on `DefaultHost`.
+`crates/ivm/tests/zk_verify_syscall.rs` was resynced so malformed envelopes now
+assert `ERR_DECODE`, and `crates/ivm/src/host.rs` gained small unit coverage
+for the syscall-label mapping and curve allowlist helpers behind the new
+verifier path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/ivm/src/host.rs`
+  - `/home/mtakemiya/dev/iroha/crates/ivm/tests/zk_verify_syscall.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test zk_verify_gating -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_syscall -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_positive_matrix --test zk_verify_gating_maxk --test zk_verify_goldilocks -- --nocapture`
+  - `cargo test -p ivm --test zk_verify_batch_syscall --test zk_verify_batch_gating -- --nocapture`
+  - `cargo test -p ivm --lib zk_verify_label_mapping_covers_single_envelope_syscalls -- --nocapture`
+  - `cargo test -p ivm --lib zk_curve_allowlist_tracks_host_curve_family -- --nocapture`
+- open work after this slice:
+  - rerun the broader `cargo test -p ivm` / workspace validation during a
+    longer clean window
+
+Latest sync (2026-04-19 cross-dataspace transaction routing helper coverage):
+The wrong-ingress cross-dataspace transaction/query regression now has broader
+pure helper coverage alongside the localnet path. The added tests pin routed
+response context/header extraction, exact lane/dataspace route header
+enforcement, fanout responses that must not expose singular route headers,
+permission payload filtering by dataspace, manifest status/dataspace matching,
+and account-asset response matching by canonical asset-definition literal. The
+atomic-swap localnet module also now covers duration summaries, inconclusive
+submit/history fallback classification, local/proxy fanout header validation,
+and routed header extraction. The latest pass adds negative and edge coverage
+for root-path routed contexts, non-UTF8/binary headers, missing-proxy and
+wrong-lane rejection, singular fanout dataspace rejection, missing permission
+payloads, missing manifest arrays, non-string account-asset entries, retryable
+empty-body routed statuses, exhausted/large/short observer timeout slices, and
+display+debug error rendering. The newest assertions add missing route-header
+fields, non-numeric/missing manifest dataspace IDs, exact asset-literal
+matching, non-empty null-body retry rejection, single-sample timing summaries,
+zero remaining-client timeout slicing, unrelated fallback phrase negatives, and
+unknown fanout route-source rejection.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  - `/home/mtakemiya/dev/iroha/integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
+    (`21 passed; 208 filtered out`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
+    (`11 passed; 218 filtered out`)
+  - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
+
+Latest sync (2026-04-19 ConstVec manual fallback coverage):
+The malformed-query guard now has broader focused coverage for the compatibility
+paths around manual unpacked `ConstVec` payloads. Tests cover recovery through
+the outer helper, direct rejection of zero-count payloads with trailing bytes,
+accepted payload comparison when only element length words differ, and rejection
+for changed payload bytes, changed count headers, total length mismatches,
+partial element headers, and too-short payloads. The stale byte-vector and
+compatibility-length assertions now pin the current length-prefixed layout. The
+latest pass also covers `ToConstVec` / iterator order, the legacy unpacked byte
+layout, direct empty payload decoding, recovery from a misaligned fallback
+error, and integrated `reencode_and_verify` accept/reject paths. The newest
+pass covers realignment helpers, direct realigned decode, zero-length payload
+context deserialization, direct `DecodeFromSlice` consumed-length reporting,
+JSON roundtrip, empty/default `ConstVec` behavior, and encoded-length
+hint/exact behavior for legacy, packed, and inexact-element layouts.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_primitives/src/const_vec.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_primitives manual_unpacked` (`27 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`60 passed`)
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_primitives`
+    (`162 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
+
+Latest sync (2026-04-19 MOCHI bundle package lookup):
+`xtask mochi-bundle` no longer depends on the stale `mochi-ui-egui` Cargo
+package id. The bundle build now addresses the desktop shell by manifest path
+and the `mochi` binary target, matching the current `mochi-ui` package name
+while preserving the existing bundle layout.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/xtask/src/mochi.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `rustfmt --check --edition 2024 xtask/src/mochi.rs`
+  - `cargo test -p xtask --test mochi_bundle -- --nocapture`
+  - `cargo test -p xtask mochi_ui_manifest_path_declares_packaged_binary -- --nocapture`
+- open work after this slice:
+  - rerun broader `xtask` or workspace validation during a longer clean window
+
 Latest sync (2026-04-18 ConstVec malformed query guard):
 Torii query decoding no longer lets the manual unpacked `ConstVec` fallback
 reserve memory from an impossible wire count. The regression was reproduced
@@ -10,9 +118,10 @@ not crash, which points to a cross-version Norito length-layout mismatch as the
 trigger and an unbounded fallback allocation as the process-abort bug. The
 focused coverage now pins empty vectors, successful `u8`, `u16`, and nested
 `Vec<u8>` manual fallback decoding, recovery from length mismatch,
-non-recoverable error preservation, short count headers, impossible counts,
-overflowing element lengths, truncated element payloads, and invalid element
-bodies.
+non-recoverable error preservation, direct manual element decode
+success/failure, short count headers, impossible counts, overflowing element
+lengths, truncated first and later element payloads, truncated later element
+headers, and invalid first and later element bodies.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_primitives/src/const_vec.rs`
@@ -20,14 +129,10 @@ bodies.
   - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all -- --check`
-  - `cargo test -p iroha_primitives manual_unpacked` (`11 passed`)
-  - `cargo test -p iroha_primitives` still fails the existing
-    `const_vec::tests::matches_vec_encoding` and
-    `const_vec::tests::encoded_len_exact_matches_compat_offsets` expectations.
+  - `cargo test -p iroha_primitives manual_unpacked` (`16 passed`)
+  - Broader `cargo test -p iroha_primitives` validation is covered by the
+    2026-04-19 manual fallback coverage follow-up.
 - open work after this slice:
-  - decide whether the older zero-flag `ConstVec` expectations should be
-    updated for the current default `COMPACT_LEN` layout or guarded under an
-    explicit legacy flag context
   - add a Torii-level malformed-query regression once the query fixture can be
     kept small and stable
 
@@ -84,6 +189,16 @@ suite selection separation, ML-KEM validation and parse-error display text, and
 empty-context/empty-message ML-DSA signing. The `iroha_crypto` ML-DSA keypair
 integration test now also covers malformed prefixed public-key input and
 private-key byte roundtrips.
+A sixth focused pass raises `soranet_pq` to 91 unit tests by covering
+OS-backed hedged RNG construction, ML-KEM `_from_os` keygen/encapsulation
+roundtrips, and ML-DSA `_from_os` keygen/sign/verify flow. The `iroha_crypto`
+ML-DSA keypair integration test now also covers public-key byte roundtrips.
+A seventh focused pass raises `soranet_pq` to 97 unit tests by covering
+deterministic `next_u32` replay, `RngError` display text, ML-KEM tampered
+ciphertext implicit rejection, Kyber alias parsing, ML-DSA bad-encoding and
+context-length display text, and direct modified-signature rejection. The
+`iroha_crypto` ML-DSA keypair integration test now also covers signature payload
+byte roundtrips and public/private key hex roundtrips.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/soranet_pq/src/rng.rs`
@@ -446,6 +561,9 @@ rejection, materialised commitment/PublicIO preservation, exact-boundary
 FRI query-chain nonzero final-offset success/failure. The newest FASTPQ proof
 tests also pin direct FRI challenge/layer length mismatch branches, malformed
 round/final FRI root decoding, and Norito proof encode/decode roundtrips.
+FASTPQ digest coverage now pins parameter-mismatch fail-fast behavior, trace
+commitment binding to parameter name, trace dimensions, column count, leaf
+digests, fused parent roots, and the little-endian length-prefix helper.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/zk_stark.rs`
@@ -453,6 +571,7 @@ round/final FRI root decoding, and Norito proof encode/decode roundtrips.
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/Cargo.toml`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/tests/zk_stark.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/backend.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/digest.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/proof.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/error.rs`
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/fastpq_prover/src/ordering.rs`
@@ -475,6 +594,7 @@ round/final FRI root decoding, and Norito proof encode/decode roundtrips.
   - `cargo check -p iroha_torii --features zk-stark`
   - `cargo test -p fastpq_prover -- --nocapture`
   - `cargo test -p fastpq_prover proof::tests:: -- --nocapture` (`93 passed`)
+  - `cargo test -p fastpq_prover digest::tests:: -- --nocapture` (`6 passed`)
   - `cargo test -p fastpq_prover air -- --nocapture`
   - `cargo test -p fastpq_prover verify_limits_reject_ -- --nocapture`
   - `cargo test -p fastpq_prover verify_ -- --nocapture`
@@ -20095,6 +20215,11 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 1. Completed: Sumeragi lock validation now accepts structurally divergent QCs when the candidate view is strictly newer than the local `locked_qc.view`, matching the lock-override liveness rule while retaining same-view/older-view structural-extension safety.
 2. Completed: focused unit coverage now exercises the proposal highest-QC path, precommit QC/vote aggregation path, block-sync QC prefilters, local precommit emission, cached vote pruning, divergent newer-view acceptance, and divergent same-view rejection.
 3. Remaining open: rerun a 4+ peer view-change/localnet regression once the surrounding dirty-tree Sumeragi formatting drift is settled enough for the standard full validation corridor.
+
+## 2026-04-19 Mock WSV Unshield JSON Follow-up
+1. Completed: `iroha_data_model::isi::zk::Unshield` now defaults missing JSON `outputs` to `[]`, so optional private change commitments no longer turn mock-host unshield gating into `NoritoInvalid`.
+2. Completed: the mock-host unshield latch regressions now build the current `iroha_data_model::zk::OpenVerifyEnvelope` wire payload, keeping `WsvHost` tests aligned with the documented verify-syscall contract.
+3. No additional roadmap item was opened from this fix; the targeted `iroha_data_model` and `ivm` regressions are green.
 
 ## 2026-04-04 Throughput Harness Follow-up
 1. Completed: `stable` now defaults to the preallocated transfer hot path instead of the previous mixed stateful recipe set. Izanami genesis pre-seeds user balances, stable transfer plans no longer mint inline, and the default stable path stays on ingress acceptance.
