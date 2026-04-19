@@ -5,7 +5,10 @@ use std::{env, fs};
 use eyre::{Result, eyre};
 use iroha_data_model::{
     block::decode_framed_signed_block,
-    isi::{GrantBox, TransferBox, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox, register::RegisterBox},
+    isi::{
+        GrantBox, TransferBox, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
+        register::RegisterBox,
+    },
     transaction::Executable,
 };
 
