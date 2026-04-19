@@ -1916,6 +1916,7 @@ pub struct WsvHost {
     pub caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     // ZK verify gating and configuration
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
@@ -1942,6 +1943,7 @@ struct WsvHostSnapshot {
     caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
     zk_verified_ballot: VecDeque<[u8; 32]>,
@@ -1982,6 +1984,7 @@ impl WsvHost {
             caller,
             account_map,
             asset_map,
+            public_inputs: BTreeMap::new(),
             zk_verified_transfer: false,
             zk_verified_unshield: false,
             zk_verified_ballot: VecDeque::new(),
@@ -2035,6 +2038,17 @@ impl WsvHost {
         self.caller = Self::materialize_subject_account(&mut self.wsv, &caller);
     }
 
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.public_inputs = inputs;
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.public_inputs = inputs;
+    }
+
     fn build_wsv_axt_policy(wsv: &MockWorldStateView) -> Arc<SpaceDirectoryAxtPolicy> {
         let slot_length_ms = wsv.slot_length_ms();
         let max_clock_skew_ms = wsv.max_clock_skew_ms();
@@ -2066,6 +2080,7 @@ impl WsvHost {
             caller: self.caller.clone(),
             account_map: self.account_map.clone(),
             asset_map: self.asset_map.clone(),
+            public_inputs: self.public_inputs.clone(),
             zk_verified_transfer: self.zk_verified_transfer,
             zk_verified_unshield: self.zk_verified_unshield,
             zk_verified_ballot: self.zk_verified_ballot.clone(),
@@ -2093,6 +2108,7 @@ impl WsvHost {
         self.caller = snapshot.caller.clone();
         self.account_map = snapshot.account_map.clone();
         self.asset_map = snapshot.asset_map.clone();
+        self.public_inputs = snapshot.public_inputs.clone();
         self.zk_verified_transfer = snapshot.zk_verified_transfer;
         self.zk_verified_unshield = snapshot.zk_verified_unshield;
         self.zk_verified_ballot = snapshot.zk_verified_ballot.clone();
@@ -2993,6 +3009,9 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
     Ok(PermissionToken::Custom(s.to_string()))
 }
 
+const PUBLIC_INPUT_GAS_BASE: u64 = 16;
+const PUBLIC_INPUT_GAS_PER_BYTE: u64 = 1;
+
 /// Parse a JSON payload and return either the raw string value or selected field contents.
 fn parse_json_value_any(bytes: &[u8]) -> Result<njson::Value, VMError> {
     if let Ok(raw) = core::str::from_utf8(bytes)
@@ -3285,6 +3304,37 @@ impl IVMHost for WsvHost {
                     self.wsv.sc_del(path.as_ref())?;
                 }
                 Ok(0)
+            }
+            crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let name: Name =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let Some(bytes) = self.public_inputs.get(&name) else {
+                    return Err(VMError::PermissionDenied);
+                };
+                let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let dst = vm.alloc_input_tlv(bytes)?;
+                vm.set_register(10, dst);
+                let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                Ok(PUBLIC_INPUT_GAS_BASE
+                    .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE.saturating_mul(len)))
             }
             crate::syscalls::SYSCALL_DECODE_INT => {
                 // r10 = &NoritoBytes (Norito-framed i64) -> r10 = parsed i64
@@ -7133,6 +7183,35 @@ mod tests_null_decode {
         assert_ne!(out_ptr, 0);
         let out = vm.memory.validate_tlv(out_ptr).expect("validate tlv");
         assert_eq!(out.type_id, PointerType::Json);
+    }
+
+    #[test]
+    fn get_public_input_reads_named_fixture_value() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let input_name: Name = "trigger_event_json".parse().expect("public input name");
+        let input_value = make_tlv(PointerType::Json, br#"{"kind":"manual"}"#);
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_public_inputs(BTreeMap::from([(input_name.clone(), input_value.clone())]));
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let name_bytes = norito::to_bytes(&input_name).expect("encode name");
+        let name_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &name_bytes))
+            .expect("alloc name tlv");
+        vm.set_register(10, name_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("get public input");
+
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("validate output tlv");
+        assert_eq!(out.type_id, PointerType::Json);
+        assert_eq!(out.payload, br#"{"kind":"manual"}"#);
     }
 
     #[test]

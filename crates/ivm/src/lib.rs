@@ -140,7 +140,7 @@ pub use crate::{
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
-    ivm::{IVM, set_banner_enabled},
+    ivm::{IVM, TraceMode, set_banner_enabled},
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
         global_stats,

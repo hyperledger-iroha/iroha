@@ -17,6 +17,9 @@ use super::{
     },
 };
 
+pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_json";
+const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
+
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     fn rec(expr: &semantic::TypedExpr, indices: &mut Vec<usize>) -> Option<String> {
         match &expr.expr {
@@ -1049,6 +1052,15 @@ pub fn lower(program: &TypedProgram) -> Result<Program, String> {
 
 /// Lower with a specific dynamic-iteration cap used for feature-gated dynamic bounds.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
+    lower_with_cap_and_test_mode(program, dyn_iter_cap, false)
+}
+
+/// Lower with a specific dynamic-iteration cap and optional local-test semantics.
+pub fn lower_with_cap_and_test_mode(
+    program: &TypedProgram,
+    dyn_iter_cap: usize,
+    test_mode: bool,
+) -> Result<Program, String> {
     let call_renames = build_entrypoint_call_renames(program);
     let function_param_specs = build_function_param_specs(program);
     let mut functions = Vec::new();
@@ -1069,6 +1081,7 @@ pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Pro
                 dyn_iter_cap,
                 &call_renames,
                 &function_param_specs,
+                test_mode,
             )?);
         } else {
             functions.push(lower_function_named(
@@ -1184,6 +1197,7 @@ fn lower_entrypoint_wrapper(
     dyn_iter_cap: usize,
     call_renames: &HashMap<String, String>,
     function_param_specs: &HashMap<String, Vec<TypedParam>>,
+    test_mode: bool,
 ) -> Result<Function, String> {
     let mut ctx = LowerCtx::new(
         dyn_iter_cap,
@@ -1196,9 +1210,7 @@ fn lower_entrypoint_wrapper(
     let payload = if func.param_types.is_empty() {
         None
     } else {
-        let payload = ctx.new_temp();
-        ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
-        Some(payload)
+        Some(load_entrypoint_payload(&mut ctx, test_mode))
     };
 
     let mut args = Vec::with_capacity(func.param_types.len());
@@ -1270,6 +1282,184 @@ fn lower_entrypoint_wrapper(
     } else {
         Ok(function)
     }
+}
+
+fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
+    if !test_mode {
+        let payload = ctx.new_temp();
+        ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
+        return payload;
+    }
+
+    let override_path = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: override_path,
+        kind: DataRefKind::Name,
+        value: TEST_TRIGGER_EVENT_OVERRIDE_KEY.to_string(),
+    });
+    let override_payload = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet {
+        dest: override_payload,
+        path: override_path,
+    });
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let has_override = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: has_override,
+        op: BinaryOp::Ne,
+        left: override_payload,
+        right: zero,
+    });
+
+    let override_bb = ctx.new_label();
+    let host_bb = ctx.new_label();
+    let join_bb = ctx.new_label();
+    let payload = ctx.new_temp();
+
+    ctx.finish_current(Terminator::Branch {
+        cond: has_override,
+        then_bb: override_bb,
+        else_bb: host_bb,
+    });
+
+    ctx.start_block(override_bb);
+    let decoded_override = ctx.new_temp();
+    ctx.current_instr(Instr::JsonDecode {
+        dest: decoded_override,
+        blob: override_payload,
+    });
+    ctx.current_instr(Instr::Copy {
+        dest: payload,
+        src: decoded_override,
+    });
+    ctx.finish_current(Terminator::Jump(join_bb));
+
+    ctx.start_block(host_bb);
+    let host_payload = ctx.new_temp();
+    ctx.current_instr(Instr::GetTriggerEvent { dest: host_payload });
+    ctx.current_instr(Instr::Copy {
+        dest: payload,
+        src: host_payload,
+    });
+    ctx.finish_current(Terminator::Jump(join_bb));
+
+    ctx.start_block(join_bb);
+    payload
+}
+
+fn lower_invoke_entrypoint_call(
+    ctx: &mut LowerCtx,
+    entrypoint: &str,
+    payload_expr: &semantic::TypedExpr,
+    result_ty: &semantic::Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let override_path = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: override_path,
+        kind: DataRefKind::Name,
+        value: TEST_TRIGGER_EVENT_OVERRIDE_KEY.to_string(),
+    });
+    let previous_payload = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet {
+        dest: previous_payload,
+        path: override_path,
+    });
+
+    let payload = lower_expr(ctx, payload_expr, vars);
+    let encoded_payload = ctx.new_temp();
+    ctx.current_instr(Instr::JsonEncode {
+        dest: encoded_payload,
+        json: payload,
+    });
+    ctx.current_instr(Instr::StateSet {
+        path: override_path,
+        value: encoded_payload,
+    });
+
+    let result = match result_ty {
+        semantic::Type::Unit => {
+            ctx.current_instr(Instr::Call {
+                callee: entrypoint.to_string(),
+                args: Vec::new(),
+                dest: None,
+            });
+            let unit = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: unit,
+                value: 0,
+            });
+            unit
+        }
+        semantic::Type::Tuple(items) => {
+            let mut dests = Vec::with_capacity(items.len());
+            for _ in items {
+                dests.push(ctx.new_temp());
+            }
+            ctx.current_instr(Instr::CallMulti {
+                callee: entrypoint.to_string(),
+                args: Vec::new(),
+                dests: dests.clone(),
+            });
+            let tuple = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest: tuple,
+                items: dests,
+            });
+            tuple
+        }
+        _ => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Call {
+                callee: entrypoint.to_string(),
+                args: Vec::new(),
+                dest: Some(dest),
+            });
+            dest
+        }
+    };
+
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::Const {
+        dest: zero,
+        value: 0,
+    });
+    let has_previous = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest: has_previous,
+        op: BinaryOp::Ne,
+        left: previous_payload,
+        right: zero,
+    });
+
+    let restore_bb = ctx.new_label();
+    let clear_bb = ctx.new_label();
+    let join_bb = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: has_previous,
+        then_bb: restore_bb,
+        else_bb: clear_bb,
+    });
+
+    ctx.start_block(restore_bb);
+    ctx.current_instr(Instr::StateSet {
+        path: override_path,
+        value: previous_payload,
+    });
+    ctx.finish_current(Terminator::Jump(join_bb));
+
+    ctx.start_block(clear_bb);
+    ctx.current_instr(Instr::StateDel {
+        path: override_path,
+    });
+    ctx.finish_current(Terminator::Jump(join_bb));
+
+    ctx.start_block(join_bb);
+    result
 }
 
 fn lower_entrypoint_param(
@@ -2892,6 +3082,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             result
         }
         semantic::ExprKind::Call { name, args } => {
+            if let Some(entrypoint) = name.strip_prefix(INVOKE_ENTRYPOINT_PREFIX) {
+                return lower_invoke_entrypoint_call(ctx, entrypoint, &args[0], &expr.ty, vars);
+            }
             if let Some(builtin) = Builtin::from_name(name) {
                 return lower_surface_builtin_call(ctx, builtin, args, vars);
             }
@@ -5179,6 +5372,166 @@ mod tests {
         assert_eq!(ir.functions.len(), 1);
         let f = &ir.functions[0];
         assert_eq!(f.blocks.len(), 1); // only entry block
+    }
+
+    #[test]
+    fn test_mode_entrypoint_wrapper_checks_override_state_first() {
+        let src = r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+            }
+        "#;
+        let prog = parse(src).expect("parse wrapper test");
+        let typed = analyze(&prog).expect("analyze wrapper test");
+        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower wrapper test");
+        let wrapper = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("wrapper function");
+
+        let mut saw_override_key = false;
+        let mut saw_state_get = false;
+        let mut saw_get_trigger = false;
+        for block in &wrapper.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::DataRef {
+                        kind: DataRefKind::Name,
+                        value,
+                        ..
+                    } if value == TEST_TRIGGER_EVENT_OVERRIDE_KEY => saw_override_key = true,
+                    Instr::StateGet { .. } => saw_state_get = true,
+                    Instr::GetTriggerEvent { .. } => saw_get_trigger = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_override_key,
+            "wrapper should materialize the override key"
+        );
+        assert!(saw_state_get, "wrapper should read the test override slot");
+        assert!(
+            saw_get_trigger,
+            "wrapper should still fall back to host trigger input"
+        );
+    }
+
+    #[test]
+    fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
+        let src = r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse invoke_entrypoint");
+        let typed = analyze(&prog).expect("analyze invoke_entrypoint");
+        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_run")
+            .expect("test function");
+
+        let mut saw_wrapper_call = false;
+        let mut saw_impl_call = false;
+        let mut saw_override_get = false;
+        let mut saw_override_set = false;
+        let mut saw_override_clear = false;
+        for block in &test_fn.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::Call { callee, .. } if callee == "run" => saw_wrapper_call = true,
+                    Instr::Call { callee, .. } if callee == "__entrypoint_impl__run" => {
+                        saw_impl_call = true
+                    }
+                    Instr::StateGet { .. } => saw_override_get = true,
+                    Instr::StateSet { .. } => saw_override_set = true,
+                    Instr::StateDel { .. } => saw_override_clear = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_wrapper_call,
+            "invoke_entrypoint should call the public wrapper"
+        );
+        assert!(
+            !saw_impl_call,
+            "invoke_entrypoint must not bypass the entrypoint wrapper"
+        );
+        assert!(
+            saw_override_get,
+            "invoke_entrypoint should snapshot any previous override"
+        );
+        assert!(
+            saw_override_set,
+            "invoke_entrypoint should install a trigger override"
+        );
+        assert!(
+            saw_override_clear,
+            "invoke_entrypoint should clear the override when none existed"
+        );
+    }
+
+    #[test]
+    fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
+        let src = r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+
+                #[test]
+                fn drive_run() {
+                    let pair = invoke_entrypoint("run", json("{\"count\": 7}"));
+                    assert_eq(pair.0, 7);
+                    assert_eq(pair.1, 8);
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse tuple invoke_entrypoint");
+        let typed = analyze(&prog).expect("analyze tuple invoke_entrypoint");
+        let ir =
+            lower_with_cap_and_test_mode(&typed, 2, true).expect("lower tuple invoke_entrypoint");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_run")
+            .expect("test function");
+
+        let mut saw_wrapper_callmulti = false;
+        let mut saw_tuple_pack = false;
+        for block in &test_fn.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::CallMulti { callee, .. } if callee == "run" => {
+                        saw_wrapper_callmulti = true
+                    }
+                    Instr::TuplePack { .. } => saw_tuple_pack = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_wrapper_callmulti,
+            "tuple invoke_entrypoint should call the public wrapper via CallMulti"
+        );
+        assert!(
+            saw_tuple_pack,
+            "tuple invoke_entrypoint should pack multi-return values"
+        );
     }
 
     #[test]

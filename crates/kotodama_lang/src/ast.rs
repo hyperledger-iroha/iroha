@@ -8,6 +8,10 @@ pub struct Program {
     pub items: Vec<Item>,
     /// Optional contract-level metadata captured from a `seiyaku` container.
     pub contract_meta: Option<ContractMeta>,
+    /// Optional standalone test-file target declaration.
+    pub test_target: Option<TestTargetDecl>,
+    /// Optional local test fixtures available to `#[test(...)]` functions.
+    pub fixtures: Vec<FixtureDecl>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Eq)]
@@ -52,6 +56,10 @@ pub struct FunctionModifiers {
     pub access_reads: Vec<String>,
     /// Optional explicit write access hints for this function.
     pub access_writes: Vec<String>,
+    /// Marks a function as a local-only Kotodama test.
+    pub is_test: bool,
+    /// Optional fixture bound to a Kotodama test function.
+    pub test_fixture: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -149,6 +157,27 @@ pub struct ConstDecl {
 pub struct StateDecl {
     pub name: String,
     pub ty: TypeExpr,
+}
+
+/// Standalone Kotodama test-file declaration identifying the contract under test.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TestTargetDecl {
+    pub target: String,
+}
+
+/// Declarative local fixture used by `koto_test`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct FixtureDecl {
+    pub name: String,
+    pub actions: Vec<FixtureAction>,
+}
+
+/// One fixture action expressed as a function-style command, for example
+/// `caller(account("alice@wonderland"))`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct FixtureAction {
+    pub name: String,
+    pub args: Vec<Expr>,
 }
 
 /// Contract-level trigger declaration.
@@ -411,4 +440,23 @@ pub enum BinaryOp {
 pub enum UnaryOp {
     Neg,
     Not,
+}
+
+impl Program {
+    #[must_use]
+    pub fn stripped_for_production(&self) -> Self {
+        Self {
+            items: self
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Function(func) if func.modifiers.is_test => None,
+                    _ => Some(item.clone()),
+                })
+                .collect(),
+            contract_meta: self.contract_meta.clone(),
+            test_target: None,
+            fixtures: Vec::new(),
+        }
+    }
 }
