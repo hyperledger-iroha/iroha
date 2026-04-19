@@ -907,7 +907,14 @@ where
     let count =
         usize::try_from(u64::from_le_bytes(len_bytes)).map_err(|_| ncore::Error::LengthMismatch)?;
     let mut offset = 8usize;
-    let mut items = Vec::with_capacity(count);
+    let max_items_with_length_headers = bytes.len().saturating_sub(offset) / 8;
+    if count > max_items_with_length_headers {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let mut items = Vec::new();
+    items
+        .try_reserve(count)
+        .map_err(|_| ncore::Error::LengthMismatch)?;
     for idx in 0..count {
         if offset.checked_add(8).is_none_or(|end| end > bytes.len()) {
             return Err(ncore::Error::LengthMismatch);
@@ -1195,7 +1202,10 @@ mod tests {
         codec::{self, Decode, Encode},
     };
 
-    use super::{ConstVec, decode_const_vec_manual, ncore, reencode_and_verify};
+    use super::{
+        ConstVec, decode_const_vec_manual, decode_const_vec_manual_unpacked,
+        decode_const_vec_recover, ncore, reencode_and_verify,
+    };
 
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1459,6 +1469,145 @@ mod tests {
             decoded.is_err(),
             "corrupted packed header should be rejected"
         );
+    }
+
+    fn manual_unpacked_payload(elements: &[&[u8]]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
+        for element in elements {
+            bytes.extend_from_slice(&(element.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(element);
+        }
+        bytes
+    }
+
+    fn manual_unpacked_payload_from_values<T: NoritoSerialize>(elements: &[T]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
+        for element in elements {
+            let mut element_bytes = Vec::new();
+            element
+                .serialize(&mut element_bytes)
+                .expect("serialize manual unpacked element");
+            bytes.extend_from_slice(&(element_bytes.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(&element_bytes);
+        }
+        bytes
+    }
+
+    #[test]
+    fn manual_unpacked_decodes_empty_vector() {
+        let bytes = 0_u64.to_le_bytes();
+
+        let decoded = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect("empty manual unpacked payload should decode");
+
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn manual_unpacked_decodes_length_prefixed_elements() {
+        let bytes = manual_unpacked_payload(&[&[1], &[2], &[3]]);
+
+        let decoded = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect("manual unpacked payload should decode");
+
+        assert_eq!(decoded.into_vec(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn manual_unpacked_decodes_non_byte_scalars() {
+        let expected = vec![0x1234_u16, 0xABCD_u16];
+        let bytes = manual_unpacked_payload_from_values(&expected);
+
+        let decoded = decode_const_vec_manual_unpacked::<u16>(&bytes)
+            .expect("manual unpacked scalar payload should decode");
+
+        assert_eq!(decoded.into_vec(), expected);
+    }
+
+    #[test]
+    fn manual_unpacked_decodes_nested_byte_vectors() {
+        let expected = vec![vec![1_u8, 2, 3], vec![4_u8, 5]];
+        let bytes = manual_unpacked_payload_from_values(&expected);
+
+        let decoded = decode_const_vec_manual_unpacked::<Vec<u8>>(&bytes)
+            .expect("manual unpacked nested byte vectors should decode");
+
+        assert_eq!(decoded.into_vec(), expected);
+    }
+
+    #[test]
+    fn recover_uses_manual_unpacked_after_length_mismatch() {
+        let bytes = manual_unpacked_payload(&[&[7], &[8]]);
+
+        let decoded = decode_const_vec_recover::<u8>(ncore::Error::LengthMismatch, &bytes, false)
+            .expect("manual unpacked fallback should recover from length mismatch");
+
+        assert_eq!(decoded.into_vec(), vec![7, 8]);
+    }
+
+    #[test]
+    fn manual_unpacked_recover_preserves_non_recoverable_errors() {
+        let err = decode_const_vec_recover::<u8>(ncore::Error::InvalidNonZero, &[], false)
+            .expect_err("non-recoverable errors should be returned");
+
+        assert!(matches!(err, ncore::Error::InvalidNonZero));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_short_count_header() {
+        let err = decode_const_vec_manual_unpacked::<u8>(&[0; 7])
+            .expect_err("short count header should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_impossible_count_before_allocating() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x4000_0000_0000_0002_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("impossible count should be rejected");
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_element_length_overflow() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("overflowing element length should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_truncated_element_payload() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        bytes.push(1);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("truncated element payload should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn manual_unpacked_rejects_invalid_element_body() {
+        let bytes = manual_unpacked_payload(&[&[]]);
+
+        let err = decode_const_vec_manual_unpacked::<u8>(&bytes)
+            .expect_err("empty u8 element should be rejected");
+
+        assert!(matches!(err, ncore::Error::LengthMismatch));
     }
 
     #[test]

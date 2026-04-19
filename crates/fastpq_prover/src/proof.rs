@@ -2911,6 +2911,103 @@ mod tests {
     }
 
     #[test]
+    fn verify_fri_query_chain_rejects_challenge_and_layer_length_mismatches() {
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values: vec![1],
+            final_merkle_path: Vec::new(),
+        };
+        let final_root = field_norito::core::to_bytes(backend::hash_fri_chunk(0, 0, &[1]).unwrap());
+        let err = verify_fri_query_chain(0, 0, 1, &fri_query, &[final_root], &[7], 2).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::FriChallengeLengthMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+
+        let round_values = vec![1, 2];
+        let folded = fold_fri_values(&round_values, 7);
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 0,
+                values: round_values,
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 0,
+            final_values: vec![folded],
+            final_merkle_path: Vec::new(),
+        };
+        let err = verify_fri_query_chain(0, 0, 1, &fri_query, &[final_root], &[7], 2).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::FriLayerLengthMismatch {
+                expected: 2,
+                actual: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_fri_query_chain_rejects_malformed_round_and_final_roots() {
+        let beta = 7;
+        let round_values = vec![1, 2];
+        let folded = fold_fri_values(&round_values, beta);
+        let final_values = vec![folded];
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: vec![FriRoundOpening {
+                round: 0,
+                index: 0,
+                values: round_values.clone(),
+                folded_value: folded,
+                merkle_path: Vec::new(),
+            }],
+            final_index: 0,
+            final_values: final_values.clone(),
+            final_merkle_path: Vec::new(),
+        };
+        let round_root =
+            field_norito::core::to_bytes(backend::hash_fri_chunk(0, 0, &round_values).unwrap());
+        let final_root =
+            field_norito::core::to_bytes(backend::hash_fri_chunk(1, 0, &final_values).unwrap());
+
+        let mut malformed_round_root = round_root;
+        malformed_round_root[8] = 1;
+        let err = verify_fri_query_chain(
+            0,
+            0,
+            1,
+            &fri_query,
+            &[malformed_round_root, final_root],
+            &[beta],
+            2,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::FriLayerMismatch { round: 0 }));
+
+        let mut malformed_final_root = final_root;
+        malformed_final_root[8] = 1;
+        let err = verify_fri_query_chain(
+            0,
+            0,
+            1,
+            &fri_query,
+            &[round_root, malformed_final_root],
+            &[beta],
+            2,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::FriLayerMismatch { round: 1 }));
+    }
+
+    #[test]
     fn verify_fri_query_chain_rejects_terminal_layer_shape_errors() {
         let fri_query = FriQueryOpening {
             initial_index: 0,
@@ -3129,6 +3226,15 @@ mod tests {
         let first = norito::core::to_bytes(&proof).expect("encode proof");
         let second = norito::core::to_bytes(&proof).expect("re-encode proof deterministically");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn proof_norito_roundtrip_decodes_original() {
+        let proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let encoded = norito::core::to_bytes(&proof).expect("encode proof");
+        let decoded: Proof = norito::decode_from_bytes(&encoded).expect("decode proof");
+
+        assert_eq!(decoded, proof);
     }
 
     #[test]
