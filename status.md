@@ -10,6 +10,14 @@ Last updated: 2026-04-19
   responses that must not expose singular route headers, permission payload
   filtering by dataspace, manifest status/dataspace matching, and account-asset
   response matching by canonical asset-definition literal.
+- The latest pass expands the same suite with root-path routed contexts,
+  non-UTF8 route-header handling, missing-proxy and wrong-lane rejection,
+  singular fanout dataspace rejection, permission records with missing payloads
+  or wrong names, missing manifest-array errors, non-string asset entries, and
+  all retryable empty-body routed HTTP statuses.
+- The newest assertions add missing lane/dataspace route-header failures,
+  manifest records with absent or non-numeric dataspace IDs, exact asset-literal
+  matching, and non-empty null-body retry rejection.
 - This improves coverage without starting another localnet; the existing
   end-to-end wrong-ingress localnet remains the behavioral regression for real
   cross-dataspace routing.
@@ -17,13 +25,19 @@ Last updated: 2026-04-19
   focused coverage for the atomic-swap transaction fallback helpers: duration
   min/avg/max summaries, inconclusive submit/history error classification,
   local/proxy fanout header validation, and routed header extraction.
+- The atomic-swap helper coverage now also checks exhausted/large/short
+  observer timeout slicing, singular fanout dataspace rejection, binary header
+  handling, and display+debug error rendering.
+- Additional atomic-swap helper cases cover single-sample timing summaries,
+  zero remaining-client timeout slicing, unrelated fallback error phrases, and
+  unknown fanout route sources.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::tests:: -- --nocapture`
-    (`11 passed; 199 filtered out`)
+    (`21 passed; 208 filtered out`)
   - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::tests:: -- --nocapture`
-    (`6 passed; 208 filtered out`)
+    (`11 passed; 218 filtered out`)
   - `git diff --check -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/cross_dataspace_localnet.rs status.md roadmap.md`
 
 ## 2026-04-19 Follow-up: ConstVec manual fallback coverage
@@ -43,12 +57,18 @@ Last updated: 2026-04-19
   payload decoding, recovery from a misaligned fallback error, and integrated
   `reencode_and_verify` acceptance/rejection for clobbered length words versus
   changed payload bytes.
+- The newest tests cover `RealignedSlice` / `align_payload_for` pass-through and
+  realignment behavior, direct realigned decode, zero-length payload context
+  deserialization, `DecodeFromSlice` consumed length reporting, JSON roundtrip,
+  empty/default `ConstVec` behavior, and encoded-length hint/exact behavior for
+  legacy, packed, and inexact-element layouts.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo test -p iroha_primitives manual_unpacked` (`26 passed`)
-  - `cargo test -p iroha_primitives const_vec::tests` (`46 passed`)
+  - `cargo test -p iroha_primitives manual_unpacked` (`27 passed`)
+  - `cargo test -p iroha_primitives const_vec::tests` (`60 passed`)
   - `cargo fmt --all -- --check`
-  - `cargo test -p iroha_primitives` (`148 passed`; doctests `1 passed; 1 ignored`)
+  - `cargo test -p iroha_primitives`
+    (`162 passed`; `numeric_inspect` `1 passed`; doctests `1 passed; 1 ignored`)
 
 ## 2026-04-19 Follow-up: MOCHI bundle package lookup
 - `xtask/src/mochi.rs` now builds the packaged MOCHI desktop binary through
