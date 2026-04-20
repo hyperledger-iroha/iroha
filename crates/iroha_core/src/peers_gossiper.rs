@@ -547,8 +547,11 @@ impl PeersGossiper {
     }
 
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
+        let force_disconnect = topology.is_empty();
         let mut new_topology: BTreeSet<_> = topology.into_iter().collect();
-        new_topology.extend(self.static_trusted_peers.iter().cloned());
+        if !force_disconnect {
+            new_topology.extend(self.static_trusted_peers.iter().cloned());
+        }
 
         self.gossip_peers.retain(|peer, map| {
             if !new_topology.contains(peer) {
@@ -571,7 +574,14 @@ impl PeersGossiper {
         let unchanged = new_topology == self.current_topology;
 
         let mut trust_changed = false;
-        if !removed.is_empty() {
+        if force_disconnect {
+            trust_changed |= !self.trusted_peers.is_empty()
+                || !self.trust_candidates.is_empty()
+                || !self.trust.entries.is_empty();
+            self.trusted_peers.clear();
+            self.trust_candidates.clear();
+            self.trust.entries.clear();
+        } else {
             for peer in removed {
                 if self.static_trusted_peers.contains(&peer) {
                     continue;
@@ -580,13 +590,13 @@ impl PeersGossiper {
                 self.trust_candidates.remove(&peer);
                 self.trust.entries.remove(&peer);
             }
-        }
-        if !added.is_empty() {
-            let now = std::time::Instant::now();
-            self.trust.seed(added.iter().cloned(), now);
-            for peer in &added {
-                trust_changed |= self.trusted_peers.insert(peer.clone());
-                self.trust_candidates.insert(peer.clone());
+            if !added.is_empty() {
+                let now = std::time::Instant::now();
+                self.trust.seed(added.iter().cloned(), now);
+                for peer in &added {
+                    trust_changed |= self.trusted_peers.insert(peer.clone());
+                    self.trust_candidates.insert(peer.clone());
+                }
             }
         }
         if trust_changed {
@@ -1404,7 +1414,9 @@ mod tests {
             },
         );
 
-        gossiper.set_current_topology(UpdateTopology(HashSet::new()));
+        let validator_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let validator_peer_id = PeerId::from(validator_kp.public_key().clone());
+        gossiper.set_current_topology(UpdateTopology([validator_peer_id].into_iter().collect()));
 
         assert!(
             gossiper.trusted_peers.contains(observer_peer.id()),
@@ -1429,6 +1441,21 @@ mod tests {
         assert!(
             !gossiper.trust_candidates.contains(&dynamic_peer_id),
             "removed dynamic peer should not remain a trust candidate"
+        );
+
+        gossiper.set_current_topology(UpdateTopology(HashSet::new()));
+
+        assert!(
+            gossiper.current_topology.is_empty(),
+            "empty topology updates should force the local dial set to disconnect"
+        );
+        assert!(
+            gossiper.trusted_peers.is_empty(),
+            "empty topology updates should clear runtime trusted peers"
+        );
+        assert!(
+            gossiper.trust_candidates.is_empty(),
+            "empty topology updates should clear runtime trust candidates"
         );
     }
 

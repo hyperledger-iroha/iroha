@@ -1,6 +1,6 @@
 //! Small helper binary that validates hard-coded BLS keypairs.
 
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
 
 fn main() {
     let pairs = [
@@ -23,9 +23,11 @@ fn main() {
     ];
 
     for (idx, (pub_hex, priv_hex)) in pairs.iter().enumerate() {
-        let sk = PrivateKey::from_hex(Algorithm::BlsNormal, priv_hex)
+        let sk = priv_hex
+            .parse::<PrivateKey>()
             .unwrap_or_else(|e| panic!("peer{idx} private parse: {e}"));
-        let pk = PublicKey::from_hex(Algorithm::BlsNormal, pub_hex)
+        let pk = pub_hex
+            .parse::<PublicKey>()
             .unwrap_or_else(|e| panic!("peer{idx} public parse: {e}"));
         match KeyPair::new(pk, sk) {
             Ok(_) => println!("peer{idx}: OK"),

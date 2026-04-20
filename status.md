@@ -23,6 +23,31 @@ Last updated: 2026-04-20
     (matched the gated integration test and exited cleanly after the expected
     `Skipping: ... Set IROHA_RUN_IGNORED=1 to run.` message)
 
+## 2026-04-20 Follow-up: unregister-peer local P2P disconnect
+- Sumeragi now emits an empty topology update when the local peer observes that
+  it has been removed from world state, even if that peer never advertised a
+  previous topology. This lets newly added peers disconnect cleanly after their
+  own `Unregister<Peer>` block lands.
+- The peer gossiper now treats an empty topology as a forced disconnect signal,
+  while non-empty topology updates still preserve configured static trusted
+  peers. The p2p layer also avoids re-adding trusted observers when the current
+  topology is intentionally empty.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core topology_update_preserves_static_trusted_peers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib topology_update_for_local_removal_disconnects -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib refresh_p2p_topology_marks_removed_after_local_seen -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib empty_topology_does_not_add_trusted_observers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib trusted_observers_survive_topology_updates -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test network_functional extra_functional::unregister_peer::network_stable_after_add_and_after_remove_peer -- --nocapture`
+    (`1 passed`; 103.26s)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: SoraFS manifest CAR metadata alignment
 - `crates/sorafs_node/tests/cli.rs` and `crates/sorafs_node/tests/pin_workflows.rs`
   now build fixture manifests from `CarWriter` archive stats instead of

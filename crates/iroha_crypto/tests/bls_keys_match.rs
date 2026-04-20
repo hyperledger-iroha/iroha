@@ -1,7 +1,7 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
-#![cfg(feature = "bls")]
+#![cfg(all(feature = "bls", not(feature = "ffi_import")))]
 
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
 
 #[test]
 fn bls_keys_match_localnet_soranexus() {
@@ -26,10 +26,10 @@ fn bls_keys_match_localnet_soranexus() {
     ];
 
     for (public_hex, private_hex) in keypairs {
-        let private =
-            PrivateKey::from_hex(Algorithm::BlsNormal, private_hex).expect("parse private key");
-        let public =
-            PublicKey::from_hex(Algorithm::BlsNormal, public_hex).expect("parse public key");
+        let private = private_hex
+            .parse::<PrivateKey>()
+            .expect("parse private key");
+        let public = public_hex.parse::<PublicKey>().expect("parse public key");
         KeyPair::new(public, private)
             .unwrap_or_else(|e| panic!("keypair mismatch for {public_hex}: {e}"));
     }
