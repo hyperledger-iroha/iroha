@@ -3235,6 +3235,12 @@ impl PeerSpec {
         config_overrides: &PeerConfigOverrides,
         extra_layers: &[toml::Table],
     ) -> Result<()> {
+        let mut config_overrides = config_overrides.clone();
+        normalize_peer_config_overrides(
+            &mut config_overrides.nexus,
+            &mut config_overrides.sumeragi,
+            &mut config_overrides.torii,
+        )?;
         let mut root = toml::Table::new();
         root.insert("chain".into(), toml::Value::String(chain_id.to_owned()));
         root.insert(
@@ -4350,7 +4356,9 @@ JSON
         fn create(root: &Path) -> Self {
             let script_path = root.join("kagami_override.sh");
             let log_path = root.join("kagami_override.log");
-            let script = r#"#!/bin/sh
+            let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
+            let script = format!(
+                r#"#!/bin/sh
 set -e
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_override.log"
@@ -4370,9 +4378,10 @@ case "$1" in
     ;;
 esac
 cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
+{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","transactions":[{{"instructions":[]}}]}}
 JSON
-"#;
+"#
+            );
             fs::write(&script_path, script).expect("write standalone kagami stub");
             #[cfg(unix)]
             {

@@ -41,6 +41,91 @@ the preserved rerun logs show `validators: 4, configured_peers: 5, pops: 4`.
 - open work after this slice:
   - none for `observer_sync::observer_node_catches_up`
 
+Latest sync (2026-04-20 iroha_crypto signature test regressions):
+`iroha_crypto` now keeps w3f BLS multi-message aggregate verification on the
+w3f hashing path when `bls-multi-pairing` is enabled, avoiding the prior mixed
+blstrs hash-to-curve check for w3f signatures. The same pass fixes brittle
+ML-DSA clone and SoraNet puzzle transcript tests, and refreshes the current
+canonical `PublicKey` Norito archive golden.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/signature/bls/implementation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/soranet/puzzle.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing aggregate_multi_message_verification -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto ml_dsa_secret_key_clone_shares_inner_arc -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto public_key_norito_golden_archive -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto rejects_mismatched_transcript_hash -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib`
+    (`323 passed; 1 ignored`)
+  - `cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+  - `git diff --check`
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
+
+Latest sync (2026-04-19 Musubi Program AST initializer sync):
+The Musubi CLI test literal that exercises namespaced-call rewriting now
+initializes the current Kotodama `Program` test-only fields (`test_target` and
+`fixtures`), restoring compatibility with the expanded AST definition used by
+`ivm::kotodama::ast::Program`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p musubi linker_rewrites_namespaced_calls_to_locked_exports -- --nocapture`
+- open work after this slice:
+  - rerun broader Musubi or workspace validation during a longer clean window
+
+Latest sync (2026-04-19 Mochi draft/state/supervisor regression sync):
+Mochi's remaining focused regressions now line up with the current data-model
+and supervisor contracts. Compose draft coverage uses fully qualified
+`domain.dataspace` inputs, the state explorer no longer panics when it sees
+opaque canonical asset-definition IDs without a stored domain projection, and
+direct `PeerSpec::write_config` calls now normalize Torii/MCP and DA defaults
+the same way the public builder path does. The standalone Kagami stub also
+emits the required `chain_discriminant`, and the stale pipeline-event fixture
+has been regenerated from the current sample helper.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/compose.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/state.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/supervisor.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core regenerate_pipeline_event_message_fixture -- --ignored --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core compose::tests:: -- --nocapture`
+    (`30 passed`)
+  - `cargo test -p mochi-core state::tests::state_entry_asset -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p mochi-core supervisor::tests::peer_spec_ -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p mochi-core supervisor::tests::supervisor_ -- --nocapture`
+    (`7 passed`)
+  - `cargo test -p mochi-core supervisor::tests::wipe_and_regenerate_resets_storage_and_genesis -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core torii::tests::event_stream_decodes_pipeline_events -- --nocapture`
+    (`1 passed`)
+  - `git diff --check`
+  - `cargo test -p mochi-core`
+    (`244 passed; 0 failed; 4 ignored`; integration tests `3 passed`; doctests `0`)
+- open work after this slice:
+  - rerun broader workspace validation when time allows
+
 Latest sync (2026-04-19 Mochi supervisor Kagami and stream fixture sync):
 The Mochi supervisor integration harness now matches the current external
 `kagami` contract, including the `--version` probe and the newer genesis
