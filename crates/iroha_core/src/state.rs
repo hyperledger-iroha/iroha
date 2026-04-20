@@ -205,7 +205,10 @@ use crate::{
         AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
         UaidDataspaceBindings,
     },
-    query::store::LiveQueryStoreHandle,
+    query::{
+        index_status::{QueryIndexJournal, QueryIndexStatus},
+        store::LiveQueryStoreHandle,
+    },
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
@@ -5992,6 +5995,8 @@ pub struct State {
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
     /// Durable commit-roster journal reconstructed at startup for block sync.
     pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
+    /// Durable latest query-index snapshot marker reconstructed at startup.
+    query_index_journal: parking_lot::RwLock<QueryIndexJournal>,
     /// In-memory DA pin intent index mirrored from the on-chain registry.
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
@@ -15997,6 +16002,62 @@ impl State {
         CommitRosterJournal::journal_path(&root)
     }
 
+    fn query_index_journal_path(&self) -> PathBuf {
+        let root = self.kura.store_root();
+        if root.as_os_str().is_empty() {
+            return PathBuf::new();
+        }
+        QueryIndexJournal::journal_path(&root)
+    }
+
+    fn persist_query_index_status(
+        &self,
+        indexed_height: u64,
+        indexed_block_hash: Option<HashOf<BlockHeader>>,
+    ) {
+        let path = self.query_index_journal_path();
+        let mut journal = self.query_index_journal.write();
+        journal.set_latest(indexed_height, indexed_block_hash);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let measure_bytes = |path: &Path| -> Option<u64> {
+            match std::fs::metadata(path) {
+                Ok(meta) => Some(meta.len()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+                Err(err) => {
+                    warn!(?err, path = %path.display(), "failed to stat query index journal");
+                    None
+                }
+            }
+        };
+        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let Err(err) = journal.persist() {
+            warn!(
+                ?err,
+                path = %path.display(),
+                "failed to persist query index journal"
+            );
+        }
+        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
+            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+    }
+
+    /// Fetch the latest durable query-index snapshot marker.
+    #[must_use]
+    pub fn query_index_status_snapshot(&self) -> QueryIndexStatus {
+        self.query_index_journal.read().snapshot()
+    }
+
     fn persist_commit_roster_journal(
         &self,
         commit_qc: &Qc,
@@ -17103,6 +17164,18 @@ impl State {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
+        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_index_journal_path.display(),
+                    "failed to load query index journal; starting empty"
+                );
+                QueryIndexJournal::new(query_index_journal_path)
+            }
+        };
         let pipeline = iroha_config::parameters::actual::Pipeline {
             ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
                 enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -17201,6 +17274,7 @@ impl State {
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            query_index_journal: parking_lot::RwLock::new(query_index_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -22128,6 +22202,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         state_ref.enforce_nexus_storage_budget(block_height);
+        state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
         Ok(())
     }
 
@@ -28563,6 +28638,31 @@ pub(crate) mod deserialize {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
+        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
+            Ok(mut journal) => {
+                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
+                let hash = block_hashes.view().last().copied();
+                if height > 0 {
+                    journal.set_latest(height, hash);
+                }
+                journal
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_index_journal_path.display(),
+                    "failed to load query index journal; starting empty"
+                );
+                let mut journal = QueryIndexJournal::new(query_index_journal_path);
+                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
+                let hash = block_hashes.view().last().copied();
+                if height > 0 {
+                    journal.set_latest(height, hash);
+                }
+                journal
+            }
+        };
         let pipeline = default_pipeline();
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
@@ -28586,6 +28686,7 @@ pub(crate) mod deserialize {
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            query_index_journal: parking_lot::RwLock::new(query_index_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -35280,6 +35381,69 @@ mod tests {
             cursor.last_block_height,
             committed.as_ref().header().height().get()
         );
+    }
+
+    #[test]
+    fn state_commit_persists_query_index_status_journal() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let expected = QueryIndexStatus {
+            indexed_height: committed.as_ref().header().height().get(),
+            indexed_block_hash: Some(committed.as_ref().hash()),
+        };
+        assert_eq!(state.query_index_status_snapshot(), expected);
+
+        let path = state.query_index_journal_path();
+        assert!(
+            path.exists(),
+            "query index journal should be materialized when store root is set"
+        );
+        let persisted = QueryIndexJournal::load(&path)
+            .expect("load query index journal")
+            .snapshot();
+        assert_eq!(persisted, expected);
+
+        let restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(restarted.query_index_status_snapshot(), expected);
     }
 
     #[test]

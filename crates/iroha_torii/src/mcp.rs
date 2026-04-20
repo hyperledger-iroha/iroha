@@ -7554,7 +7554,14 @@ fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
     }
 
     let mut env = Map::new();
-    for key in ["query", "filter", "select", "sort", "fetch_size"] {
+    for key in [
+        "query",
+        "filter",
+        "select",
+        "aggregate",
+        "sort",
+        "fetch_size",
+    ] {
         if let Some(value) = arguments.get(key) {
             env.insert(key.to_owned(), value.clone());
         }
@@ -10994,6 +11001,7 @@ fn iroha_accounts_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -11152,6 +11160,7 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -11237,6 +11246,7 @@ fn iroha_account_assets_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -11408,6 +11418,7 @@ fn iroha_domains_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -12006,6 +12017,7 @@ fn iroha_asset_definitions_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -12091,6 +12103,7 @@ fn iroha_asset_holders_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -12275,6 +12288,7 @@ fn iroha_nfts_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -12394,6 +12408,7 @@ fn iroha_rwas_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -12500,6 +12515,7 @@ fn iroha_offline_transfers_query_tool() -> ToolSpec {
                 "query": { "type": "string" },
                 "filter": { "type": "object", "additionalProperties": true },
                 "select": {},
+                "aggregate": { "type": "object", "additionalProperties": true },
                 "sort": { "type": "array", "items": {} },
                 "pagination": { "type": "object", "additionalProperties": true },
                 "limit": { "type": "integer" },
@@ -15215,6 +15231,12 @@ mod tests {
     fn build_query_envelope_body_collects_shortcut_fields() {
         let args = norito::json!({
             "filter": { "op": "eq", "args": ["authority", TEST_ACCOUNT_I105] },
+            "aggregate": {
+                "group_by": ["primary_alias_domain"],
+                "metrics": [
+                    { "alias": "holder_count", "fn": "count" }
+                ]
+            },
             "limit": 25,
             "offset": 5,
             "fetch_size": 10
@@ -15222,6 +15244,7 @@ mod tests {
         let body = build_query_envelope_body(args.as_object().expect("object")).expect("body");
         let body = body.as_object().expect("body object");
         assert!(body.contains_key("filter"));
+        assert!(body.contains_key("aggregate"));
         let pagination = body
             .get("pagination")
             .and_then(Value::as_object)

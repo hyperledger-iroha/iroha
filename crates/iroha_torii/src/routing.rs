@@ -34838,6 +34838,7 @@ mod tx_query_integration_smoke {
                 ),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(50),
@@ -34891,6 +34892,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(cap + 1),
@@ -34926,6 +34928,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::from(1u64),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(1),
@@ -35458,6 +35461,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(timestamp_filter.clone()),
             select: None,
+            aggregate: None,
             sort: vec![
                 crate::filter::SortKey {
                     key: crate::filter::FieldPath("timestamp_ms".into()),
@@ -35499,6 +35503,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(timestamp_filter),
             select: None,
+            aggregate: None,
             sort: vec![
                 crate::filter::SortKey {
                     key: crate::filter::FieldPath("timestamp_ms".into()),
@@ -35611,6 +35616,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::String(authority_literal.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(2),
@@ -35738,6 +35744,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![
                 crate::filter::SortKey {
                     key: crate::filter::FieldPath("result_ok".into()),
@@ -35829,6 +35836,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(10),
@@ -35938,6 +35946,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("timestamp_ms".into()),
                 order: crate::filter::Order::Asc,
@@ -36034,6 +36043,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("timestamp_ms".into()),
                 order: crate::filter::Order::Asc,
@@ -36135,6 +36145,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("timestamp_ms".into()),
                 order: crate::filter::Order::Asc,
@@ -36279,6 +36290,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("timestamp_ms".into()),
                 order: crate::filter::Order::Asc,
@@ -36390,6 +36402,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::String(acc_a_str.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36420,6 +36433,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::String(acc_b_str.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36453,6 +36467,7 @@ mod tx_query_integration_smoke {
                 ],
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36483,6 +36498,7 @@ mod tx_query_integration_smoke {
                 vec![norito::json::Value::String(acc_a_str)],
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36571,6 +36587,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::String(entry1.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36600,6 +36617,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::String(entry1.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36629,6 +36647,7 @@ mod tx_query_integration_smoke {
                 vec![norito::json::Value::String(entry1.clone())],
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36661,6 +36680,7 @@ mod tx_query_integration_smoke {
                 ],
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36690,6 +36710,7 @@ mod tx_query_integration_smoke {
                 vec![norito::json::Value::String(entry1.clone())],
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36780,6 +36801,7 @@ mod tx_query_integration_smoke {
                 "entrypoint_hash".into(),
             ))),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36814,6 +36836,7 @@ mod tx_query_integration_smoke {
                 "entrypoint_hash".into(),
             ))),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36848,6 +36871,7 @@ mod tx_query_integration_smoke {
                 "result_ok".into(),
             ))),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -36882,6 +36906,7 @@ mod tx_query_integration_smoke {
                 "result_ok".into(),
             ))),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: None,
@@ -37034,6 +37059,7 @@ mod tx_query_integration_smoke {
             query: None,
             filter: Some(expr),
             select: None,
+            aggregate: None,
             sort: vec![
                 crate::filter::SortKey {
                     key: crate::filter::FieldPath("result_ok".into()),
@@ -37191,6 +37217,7 @@ mod tx_query_integration_smoke {
                 norito::json::Value::from(1000u64),
             )),
             select: None,
+            aggregate: None,
             sort: vec![
                 crate::filter::SortKey {
                     key: crate::filter::FieldPath("result_ok".into()),
@@ -37454,6 +37481,7 @@ mod app_api_integration_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("timestamp_ms".into()),
                 order: crate::filter::Order::Asc,
@@ -38939,6 +38967,91 @@ mod app_api_integration_tests {
         );
     }
 
+    #[tokio::test]
+    async fn asset_holders_query_aggregate_groups_pkrs_by_primary_alias_domain() {
+        let _guard = app_query_limits_guard();
+
+        let (state, _, _) = build_asset_holder_aggregate_fixture_state();
+        let response = handle_v1_asset_holders_query(
+            state,
+            axum::extract::Path("rose#centralbank".to_owned()),
+            crate::utils::extractors::NoritoJson(QueryEnvelope {
+                query: None,
+                filter: Some(crate::filter::FilterExpr::And(vec![
+                    crate::filter::FilterExpr::Eq(
+                        crate::filter::FieldPath("scope".into()),
+                        norito::json::Value::from("global"),
+                    ),
+                    crate::filter::FilterExpr::In(
+                        crate::filter::FieldPath("primary_alias_domain".into()),
+                        vec![
+                            norito::json::Value::from("hbl.universal"),
+                            norito::json::Value::from("ubl.universal"),
+                        ],
+                    ),
+                ])),
+                select: None,
+                aggregate: Some(crate::filter::AggregateSpec {
+                    group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
+                    metrics: vec![
+                        crate::filter::AggregateMetric {
+                            alias: "user_count".into(),
+                            r#fn: crate::filter::AggregateFn::DistinctCount,
+                            field: Some(crate::filter::FieldPath("account_id".into())),
+                        },
+                        crate::filter::AggregateMetric {
+                            alias: "pkr_total".into(),
+                            r#fn: crate::filter::AggregateFn::Sum,
+                            field: Some(crate::filter::FieldPath("quantity".into())),
+                        },
+                    ],
+                    having: None,
+                }),
+                sort: vec![crate::filter::SortKey {
+                    key: crate::filter::FieldPath("primary_alias_domain".into()),
+                    order: crate::filter::Order::Asc,
+                }],
+                pagination: crate::filter::Pagination {
+                    limit: Some(8),
+                    offset: 0,
+                },
+                fetch_size: None,
+            }),
+            MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let payload = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_slice(&payload).expect("json response");
+
+        assert_eq!(parsed["total"].as_u64(), Some(2));
+        assert!(parsed["indexed_height"].as_u64().is_some());
+        assert!(parsed["indexed_block_hash"].is_string() || parsed["indexed_block_hash"].is_null());
+
+        let items = parsed["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.universal")
+        );
+        assert_eq!(items[0]["user_count"].as_u64(), Some(1));
+        assert_eq!(items[0]["pkr_total"].as_str(), Some("10"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.universal")
+        );
+        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
+        assert_eq!(items[1]["pkr_total"].as_str(), Some("20"));
+    }
+
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
@@ -38978,6 +39091,51 @@ mod app_api_integration_tests {
         ));
         bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
         bind_account_alias_for_test(&state, &alice_id, "treasury@universal");
+
+        (state, alice_id, bob_id)
+    }
+
+    fn build_asset_holder_aggregate_fixture_state()
+    -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
+        let kp_a = iroha_crypto::KeyPair::random();
+        let kp_b = iroha_crypto::KeyPair::random();
+        let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
+        let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
+
+        let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
+        let rose_def: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");
+        let rose_definition = AssetDefinition::numeric(rose_def.clone())
+            .with_name("rose".to_owned())
+            .build(&alice_id);
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(rose_def.clone(), bob_id.clone()),
+                Numeric::from(20_u32),
+            ),
+        ];
+        let domain = Domain::new(domain_id).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let bob_account = Account::new(bob_id.clone()).build(&alice_id);
+        let world = World::with_assets(
+            [domain],
+            [alice_account, bob_account],
+            [rose_definition],
+            assets,
+            [],
+        );
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
+        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.universal");
+        bind_account_alias_for_test(&state, &bob_id, "bob@ubl.universal");
 
         (state, alice_id, bob_id)
     }
@@ -50475,6 +50633,145 @@ fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
 // ---------------------- Balances and Holders ----------------------
 
 #[cfg(feature = "app_api")]
+#[derive(Clone, Default)]
+struct PrimaryAliasProjection {
+    literal: Option<String>,
+    name: Option<String>,
+    dataspace: Option<String>,
+    domain: Option<String>,
+    has_primary_alias: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn primary_alias_projection_from_alias(
+    alias: &iroha_data_model::account::rekey::AccountAlias,
+    catalog: &DataSpaceCatalog,
+) -> PrimaryAliasProjection {
+    let dataspace = catalog
+        .by_id(alias.dataspace)
+        .map(|entry| entry.alias.to_ascii_lowercase());
+    let domain_segment = alias
+        .domain
+        .as_ref()
+        .map(|domain| domain.to_string().to_ascii_lowercase());
+    let domain = dataspace.as_ref().map(|dataspace_alias| {
+        domain_segment.as_ref().map_or_else(
+            || dataspace_alias.clone(),
+            |segment| format!("{segment}.{dataspace_alias}"),
+        )
+    });
+
+    PrimaryAliasProjection {
+        literal: alias.to_literal(catalog).ok(),
+        name: Some(alias.label.as_ref().to_ascii_lowercase()),
+        dataspace,
+        domain,
+        has_primary_alias: true,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn primary_alias_projection_from_binding_record(
+    binding: &iroha_data_model::query::account::AccountAliasBindingRecord,
+) -> PrimaryAliasProjection {
+    let dataspace = binding.dataspace.to_ascii_lowercase();
+    let name = binding
+        .alias
+        .split_once('@')
+        .map(|(label, _)| label.to_ascii_lowercase());
+    let domain = binding
+        .domain
+        .as_ref()
+        .map(|segment| format!("{}.{}", segment.to_ascii_lowercase(), dataspace))
+        .unwrap_or_else(|| dataspace.clone());
+    PrimaryAliasProjection {
+        literal: Some(binding.alias.to_ascii_lowercase()),
+        name,
+        dataspace: Some(dataspace),
+        domain: Some(domain),
+        has_primary_alias: true,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn primary_alias_projection_for_account_id(
+    state: &CoreState,
+    account_id: &AccountId,
+) -> PrimaryAliasProjection {
+    let view = state.view();
+    let query = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    );
+    if let Ok(bindings) = query.execute(&view) {
+        if let Some(binding) = bindings
+            .iter()
+            .find(|binding| binding.is_primary)
+            .or_else(|| bindings.first())
+        {
+            return primary_alias_projection_from_binding_record(binding);
+        }
+    }
+
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let world = view.world();
+    if let Some(account) = world.accounts().get(account_id) {
+        let labels = world
+            .account_aliases_by_account()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(primary) = account
+            .as_ref()
+            .label()
+            .filter(|label| labels.contains(label))
+            .or_else(|| labels.iter().next())
+        {
+            return primary_alias_projection_from_alias(primary, &catalog);
+        }
+    }
+
+    PrimaryAliasProjection::default()
+}
+
+#[cfg(feature = "app_api")]
+fn insert_primary_alias_fields(map: &mut norito::json::Map, alias: &PrimaryAliasProjection) {
+    map.insert(
+        "primary_alias".into(),
+        alias
+            .literal
+            .as_ref()
+            .map_or(norito::json::Value::Null, |value| value.clone().into()),
+    );
+    map.insert(
+        "primary_alias_name".into(),
+        alias
+            .name
+            .as_ref()
+            .map_or(norito::json::Value::Null, |value| value.clone().into()),
+    );
+    map.insert(
+        "primary_alias_dataspace".into(),
+        alias
+            .dataspace
+            .as_ref()
+            .map_or(norito::json::Value::Null, |value| value.clone().into()),
+    );
+    map.insert(
+        "primary_alias_domain".into(),
+        alias
+            .domain
+            .as_ref()
+            .map_or(norito::json::Value::Null, |value| value.clone().into()),
+    );
+    map.insert(
+        "has_primary_alias".into(),
+        norito::json::Value::from(alias.has_primary_alias),
+    );
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountAssetListItem {
     asset: String,
@@ -50483,6 +50780,7 @@ struct AccountAssetListItem {
     asset_name: String,
     asset_alias: Option<String>,
     quantity: iroha_primitives::numeric::Numeric,
+    primary_alias: PrimaryAliasProjection,
 }
 
 #[cfg(feature = "app_api")]
@@ -50562,21 +50860,42 @@ fn account_asset_sort_key(
 #[cfg(feature = "app_api")]
 fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAssetListItem) -> bool {
     use crate::filter::FilterExpr as F;
+
+    let field_str = |field: &str| -> Option<&str> {
+        match field {
+            "asset" => Some(it.asset.as_str()),
+            "scope" => Some(it.scope.as_str()),
+            "primary_alias" => it.primary_alias.literal.as_deref(),
+            "primary_alias_name" => it.primary_alias.name.as_deref(),
+            "primary_alias_dataspace" => it.primary_alias.dataspace.as_deref(),
+            "primary_alias_domain" => it.primary_alias.domain.as_deref(),
+            _ => None,
+        }
+    };
+
     match expr {
         F::And(list) => list.iter().all(|e| filter_account_asset_item(e, it)),
         F::Or(list) => list.iter().any(|e| filter_account_asset_item(e, it)),
         F::Not(inner) => !filter_account_asset_item(inner, it),
         F::Eq(f, v) => match f.0.as_str() {
-            "asset" => v.as_str().map(|s| s == it.asset).unwrap_or(false),
-            "scope" => v.as_str().map(|s| s == it.scope).unwrap_or(false),
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag == it.primary_alias.has_primary_alias),
             "quantity" => v.as_u64().map(|n| it.quantity == n.into()).unwrap_or(false),
-            _ => false,
+            field => v
+                .as_str()
+                .zip(field_str(field))
+                .is_some_and(|(expected, actual)| expected == actual),
         },
         F::Ne(f, v) => match f.0.as_str() {
-            "asset" => v.as_str().map(|s| s != it.asset).unwrap_or(false),
-            "scope" => v.as_str().map(|s| s != it.scope).unwrap_or(false),
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag != it.primary_alias.has_primary_alias),
             "quantity" => v.as_u64().map(|n| it.quantity != n.into()).unwrap_or(false),
-            _ => false,
+            field => v
+                .as_str()
+                .map(|expected| field_str(field) != Some(expected))
+                .unwrap_or(false),
         },
         F::Lt(f, v) => match (f.0.as_str(), v.as_u64()) {
             ("quantity", Some(n)) => it.quantity < n.into(),
@@ -50595,38 +50914,51 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
             _ => false,
         },
         F::In(f, list) => match f.0.as_str() {
-            "asset" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == it.asset),
-            "scope" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == it.scope),
+                .filter_map(norito::json::Value::as_bool)
+                .any(|flag| flag == it.primary_alias.has_primary_alias),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .any(|n| it.quantity == n.into()),
-            _ => false,
+            field => field_str(field).is_some_and(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .any(|expected| expected == actual)
+            }),
         },
         F::Nin(f, list) => match f.0.as_str() {
-            "asset" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != it.asset),
-            "scope" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != it.scope),
+                .filter_map(norito::json::Value::as_bool)
+                .all(|flag| flag != it.primary_alias.has_primary_alias),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .all(|n| it.quantity != n.into()),
-            _ => false,
+            field => field_str(field).is_none_or(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .all(|expected| expected != actual)
+            }),
         },
-        F::Exists(f) => matches!(f.0.as_str(), "asset" | "scope" | "quantity"),
+        F::Exists(f) => matches!(
+            f.0.as_str(),
+            "asset"
+                | "scope"
+                | "quantity"
+                | "primary_alias"
+                | "primary_alias_name"
+                | "primary_alias_dataspace"
+                | "primary_alias_domain"
+                | "has_primary_alias"
+        ),
         F::IsNull(f) => match f.0.as_str() {
-            "asset" | "scope" | "quantity" => false,
+            "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => field_str(f.0.as_str()).is_none(),
             _ => false,
         },
     }
@@ -50796,6 +51128,7 @@ pub async fn handle_v1_account_assets_with_policy(
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
 
     let mut projected_assets = Vec::new();
     for account_id in &scoped_accounts {
@@ -50828,6 +51161,7 @@ pub async fn handle_v1_account_assets_with_policy(
                 asset_name,
                 asset_alias,
                 quantity: asset.value().clone().into_inner(),
+                primary_alias: primary_alias.clone(),
             });
         }
     }
@@ -50866,6 +51200,7 @@ pub async fn handle_v1_account_assets_with_policy(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -51589,6 +51924,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51632,6 +51968,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51680,6 +52017,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51728,6 +52066,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51774,6 +52113,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51825,6 +52165,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51878,6 +52219,7 @@ mod pagination_enforcement_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(0),
@@ -51904,6 +52246,7 @@ mod pagination_enforcement_tests {
 struct AccountListItem {
     canonical_id: String,
     display_id: String,
+    primary_alias: PrimaryAliasProjection,
 }
 
 #[cfg(feature = "app_api")]
@@ -52113,34 +52456,80 @@ fn account_filter_object(expr: &FilterExpr, acc: &iroha_data_model::account::Acc
 #[cfg(feature = "app_api")]
 fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool {
     use FilterExpr as F;
+
+    let field_str = |field: &str| -> Option<&str> {
+        match field {
+            "id" => Some(proj.canonical_id.as_str()),
+            "primary_alias" => proj.primary_alias.literal.as_deref(),
+            "primary_alias_name" => proj.primary_alias.name.as_deref(),
+            "primary_alias_dataspace" => proj.primary_alias.dataspace.as_deref(),
+            "primary_alias_domain" => proj.primary_alias.domain.as_deref(),
+            _ => None,
+        }
+    };
+
     match expr {
         F::And(list) => list.iter().all(|e| account_filter_projection(e, proj)),
         F::Or(list) => list.iter().any(|e| account_filter_projection(e, proj)),
         F::Not(inner) => !account_filter_projection(inner, proj),
         F::Eq(f, v) => match f.0.as_str() {
-            "id" => v.as_str().is_some_and(|s| s == proj.canonical_id),
-            _ => false,
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag == proj.primary_alias.has_primary_alias),
+            field => v
+                .as_str()
+                .zip(field_str(field))
+                .is_some_and(|(expected, actual)| expected == actual),
         },
         F::Ne(f, v) => match f.0.as_str() {
-            "id" => v.as_str().is_some_and(|s| s != proj.canonical_id),
-            _ => false,
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag != proj.primary_alias.has_primary_alias),
+            field => v
+                .as_str()
+                .map(|expected| field_str(field) != Some(expected))
+                .unwrap_or(false),
         },
         F::In(f, list) => match f.0.as_str() {
-            "id" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == proj.canonical_id),
-            _ => false,
+                .filter_map(norito::json::Value::as_bool)
+                .any(|flag| flag == proj.primary_alias.has_primary_alias),
+            field => field_str(field).is_some_and(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .any(|expected| expected == actual)
+            }),
         },
         F::Nin(f, list) => match f.0.as_str() {
-            "id" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != proj.canonical_id),
-            _ => false,
+                .filter_map(norito::json::Value::as_bool)
+                .all(|flag| flag != proj.primary_alias.has_primary_alias),
+            field => field_str(field).is_none_or(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .all(|expected| expected != actual)
+            }),
         },
-        F::Exists(f) => matches!(f.0.as_str(), "id"),
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
+        F::Exists(f) => matches!(
+            f.0.as_str(),
+            "id" | "primary_alias"
+                | "primary_alias_name"
+                | "primary_alias_dataspace"
+                | "primary_alias_domain"
+                | "has_primary_alias"
+        ),
+        F::IsNull(f) => {
+            matches!(
+                f.0.as_str(),
+                "primary_alias"
+                    | "primary_alias_name"
+                    | "primary_alias_dataspace"
+                    | "primary_alias_domain"
+            ) && field_str(f.0.as_str()).is_none()
+        }
+        F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
     }
 }
 
@@ -53840,22 +54229,25 @@ pub async fn handle_v1_accounts(
     let filter_ref = filter_expr.as_ref();
     let mapped_iter = accounts.into_iter().filter_map({
         let selectors = selectors;
+        let state = state.clone();
         move |account| {
-            if let Some(expr) = filter_ref {
-                if !account_filter_object(expr, &account) {
-                    return None;
-                }
-            }
             let key = account_sort_key(&account, &selectors);
             let canonical_id = account.id().to_string();
             let display_id = crate::account_literal::display_literal(account.id());
-            Some((
-                key,
-                AccountListItem {
-                    canonical_id,
-                    display_id,
-                },
-            ))
+            let projected = AccountListItem {
+                canonical_id,
+                display_id,
+                primary_alias: primary_alias_projection_for_account_id(
+                    state.as_ref(),
+                    account.id(),
+                ),
+            };
+            if let Some(expr) = filter_ref {
+                if !account_filter_projection(expr, &projected) {
+                    return None;
+                }
+            }
+            Some((key, projected))
         }
     });
     let (items, total) =
@@ -53868,6 +54260,7 @@ pub async fn handle_v1_accounts(
             "id".into(),
             norito::json::Value::from(it.display_id.clone()),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -53920,7 +54313,6 @@ pub async fn handle_v1_accounts_query(
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_QUERY);
 
     let filter_clone = envelope.filter.clone();
-    let filter_ref = filter_clone.as_ref();
     let filter_projection_ref = filter_clone.as_ref();
     let sort_spec = envelope.sort.clone();
     let cap = app_query_page_cap(&state);
@@ -53934,17 +54326,20 @@ pub async fn handle_v1_accounts_query(
     let world = state.world_view();
     let accounts = collect_subject_accounts(&world);
     drop(world);
+    if envelope.aggregate.is_some() {
+        return handle_v1_accounts_query_aggregate(state, accounts, envelope);
+    }
 
     let (items, total) = if sort_spec.is_empty() {
+        let state = state.clone();
         let filtered_iter = accounts.into_iter().filter_map(move |account| {
-            if let Some(expr) = filter_ref {
-                if !account_filter_object(expr, &account) {
-                    return None;
-                }
-            }
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
                 display_id: crate::account_literal::display_literal(account.id()),
+                primary_alias: primary_alias_projection_for_account_id(
+                    state.as_ref(),
+                    account.id(),
+                ),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -53961,15 +54356,15 @@ pub async fn handle_v1_accounts_query(
         )
     } else {
         let selectors = compile_account_sort_spec(&sort_spec);
+        let state = state.clone();
         let mapped_iter = accounts.into_iter().filter_map(move |account| {
-            if let Some(expr) = filter_ref {
-                if !account_filter_object(expr, &account) {
-                    return None;
-                }
-            }
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
                 display_id: crate::account_literal::display_literal(account.id()),
+                primary_alias: primary_alias_projection_for_account_id(
+                    state.as_ref(),
+                    account.id(),
+                ),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -53989,6 +54384,7 @@ pub async fn handle_v1_accounts_query(
             "id".into(),
             norito::json::Value::from(it.display_id.clone()),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -55116,6 +55512,7 @@ mod accounts_query_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(2),
@@ -55194,6 +55591,7 @@ mod accounts_query_tests {
                 Value::String(alias_literal.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55249,6 +55647,7 @@ mod accounts_query_tests {
                 Value::String(expected.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55304,6 +55703,7 @@ mod accounts_query_tests {
                 Value::String(non_canonical_i105_literal.clone()),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55425,6 +55825,123 @@ mod accounts_query_tests {
             "GET /v1/accounts must still emit canonical account ids, got {ids:?}"
         );
     }
+
+    #[tokio::test]
+    async fn accounts_query_aggregate_groups_by_primary_alias_domain() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let domain_id: dm::DomainId =
+            DomainId::try_new("aggregate-aliases", "universal").expect("valid domain");
+        let exec_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let exec_id = exec_authority.clone();
+        let domain = dm::Domain::new(domain_id).build(&exec_authority);
+
+        let hbl_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let hbl_id = hbl_authority.clone();
+        let ubl_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let ubl_id = ubl_authority.clone();
+
+        let state = Arc::new(State::new_for_testing(
+            World::with(
+                [domain],
+                [
+                    dm::Account::new(exec_id.account().clone()).build(&exec_authority),
+                    dm::Account::new(hbl_id.account().clone()).build(&hbl_authority),
+                    dm::Account::new(ubl_id.account().clone()).build(&ubl_authority),
+                ],
+                [],
+            ),
+            kura,
+            query,
+        ));
+        bind_account_alias_for_test(&state, &hbl_id, "alice@hbl.universal");
+        bind_account_alias_for_test(&state, &ubl_id, "bob@ubl.universal");
+
+        let env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::In(
+                crate::filter::FieldPath("primary_alias_domain".into()),
+                vec![
+                    norito::json::Value::from("hbl.universal"),
+                    norito::json::Value::from("ubl.universal"),
+                ],
+            )),
+            select: None,
+            aggregate: Some(crate::filter::AggregateSpec {
+                group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
+                metrics: vec![
+                    crate::filter::AggregateMetric {
+                        alias: "row_count".into(),
+                        r#fn: crate::filter::AggregateFn::Count,
+                        field: None,
+                    },
+                    crate::filter::AggregateMetric {
+                        alias: "user_count".into(),
+                        r#fn: crate::filter::AggregateFn::DistinctCount,
+                        field: Some(crate::filter::FieldPath("id".into())),
+                    },
+                ],
+                having: None,
+            }),
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("primary_alias_domain".into()),
+                order: crate::filter::Order::Asc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+
+        let response = handle_v1_accounts_query(
+            state,
+            crate::utils::extractors::NoritoJson(env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response bytes")
+            .to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
+
+        assert_eq!(doc["total"].as_u64(), Some(2));
+        assert!(doc["indexed_height"].as_u64().is_some());
+        assert!(doc["indexed_block_hash"].is_string() || doc["indexed_block_hash"].is_null());
+
+        let items = doc["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.universal")
+        );
+        assert_eq!(items[0]["row_count"].as_u64(), Some(1));
+        assert_eq!(items[0]["user_count"].as_u64(), Some(1));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.universal")
+        );
+        assert_eq!(items[1]["row_count"].as_u64(), Some(1));
+        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
+    }
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -55524,6 +56041,7 @@ mod asset_definitions_query_tests {
                 norito::json::Value::from("USD"),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55552,6 +56070,7 @@ mod asset_definitions_query_tests {
                 norito::json::Value::from("CBDC#centralbank"),
             )),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55579,6 +56098,7 @@ mod asset_definitions_query_tests {
                 "alias".into(),
             ))),
             select: None,
+            aggregate: None,
             sort: Vec::new(),
             pagination: crate::filter::Pagination {
                 limit: Some(8),
@@ -55609,6 +56129,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("name".into()),
                 order: crate::filter::Order::Desc,
@@ -55636,6 +56157,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: None,
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("alias".into()),
                 order: crate::filter::Order::Asc,
@@ -55666,6 +56188,7 @@ mod asset_definitions_query_tests {
                 norito::json::Value::from(1_u64),
             )),
             select: None,
+            aggregate: None,
             sort: vec![crate::filter::SortKey {
                 key: crate::filter::FieldPath("metadata.rank".into()),
                 order: crate::filter::Order::Asc,
@@ -58440,31 +58963,61 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
             Ok(())
         }
         F::Not(inner) => validate_accounts_filter_adapter(inner),
-        F::Eq(f, v) | F::Ne(f, v) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
+            "id"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => v
+                .is_string()
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "has_primary_alias" => v
+                .is_bool()
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+        },
+        F::In(f, list) | F::Nin(f, list) => match f.0.as_str() {
+            "id"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => {
+                if !list.iter().all(norito::json::Value::is_string) {
+                    return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+                }
+                Ok(())
             }
-            if !v.is_string() {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            "has_primary_alias" => {
+                if !list.iter().all(norito::json::Value::is_bool) {
+                    return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+                }
+                Ok(())
             }
-            Ok(())
-        }
-        F::In(f, list) | F::Nin(f, list) => {
-            if f.0.as_str() != "id" {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            if !list.iter().all(norito::json::Value::is_string) {
-                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
-            }
-            Ok(())
-        }
+            _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+        },
         F::Exists(f) => {
-            if f.0.as_str() != "id" {
+            if !matches!(
+                f.0.as_str(),
+                "id" | "primary_alias"
+                    | "primary_alias_name"
+                    | "primary_alias_dataspace"
+                    | "primary_alias_domain"
+                    | "has_primary_alias"
+            ) {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             Ok(())
         }
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
+        F::IsNull(f) => match f.0.as_str() {
+            "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => Ok(()),
+            _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+        },
+        F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
             Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
         }
     }
@@ -68353,6 +68906,7 @@ mod adapter_filter_tests {
             asset_alias: Some("cbdc#issuer.main".to_owned()),
             scope: "global".to_owned(),
             quantity: Numeric::from(10_u32),
+            primary_alias: PrimaryAliasProjection::default(),
         };
         let expr = FilterExpr::Eq(
             FieldPath("asset".into()),
@@ -69228,6 +69782,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     )?;
     let world = state.world_view();
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
     let mut projected_assets = Vec::new();
     for account_id in &scoped_accounts {
         for asset in world.assets_in_account_iter(account_id) {
@@ -69249,6 +69804,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
                 asset_name,
                 asset_alias,
                 quantity: asset.value().clone().into_inner(),
+                primary_alias: primary_alias.clone(),
             });
         }
     }
@@ -69337,6 +69893,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -69367,8 +69924,17 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
         F::Not(inner) => validate_asset_filter_adapter(inner),
         F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
-            "asset" | "scope" => v
+            "asset"
+            | "scope"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => v
                 .is_string()
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "has_primary_alias" => v
+                .is_bool()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => v
@@ -69385,9 +69951,19 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::In(f, list) | F::Nin(f, list) => match f.0.as_str() {
-            "asset" | "scope" => list
+            "asset"
+            | "scope"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => list
                 .iter()
                 .all(norito::json::Value::is_string)
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "has_primary_alias" => list
+                .iter()
+                .all(norito::json::Value::is_bool)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => list
@@ -69398,7 +69974,14 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-            "asset" | "scope" | "quantity" => Ok(()),
+            "asset"
+            | "scope"
+            | "quantity"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain"
+            | "has_primary_alias" => Ok(()),
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
     }
@@ -69413,6 +69996,7 @@ struct AssetHolderListItem {
     asset_alias: Option<String>,
     scope: String,
     quantity: iroha_primitives::numeric::Numeric,
+    primary_alias: PrimaryAliasProjection,
 }
 
 #[cfg(feature = "app_api")]
@@ -69481,37 +70065,50 @@ fn asset_holder_sort_key(
 #[cfg(feature = "app_api")]
 fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolderListItem) -> bool {
     use crate::filter::FilterExpr as F;
+
+    let field_str = |field: &str| -> Option<&str> {
+        match field {
+            "account_id" => Some(item.canonical_id.as_str()),
+            "asset" => Some(item.asset.as_str()),
+            "asset_alias" => item.asset_alias.as_deref(),
+            "scope" => Some(item.scope.as_str()),
+            "primary_alias" => item.primary_alias.literal.as_deref(),
+            "primary_alias_name" => item.primary_alias.name.as_deref(),
+            "primary_alias_dataspace" => item.primary_alias.dataspace.as_deref(),
+            "primary_alias_domain" => item.primary_alias.domain.as_deref(),
+            _ => None,
+        }
+    };
+
     match expr {
         F::And(list) => list.iter().all(|e| filter_asset_holder_item(e, item)),
         F::Or(list) => list.iter().any(|e| filter_asset_holder_item(e, item)),
         F::Not(inner) => !filter_asset_holder_item(inner, item),
         F::Eq(f, v) => match f.0.as_str() {
-            "account_id" => v.as_str().map(|s| s == item.canonical_id).unwrap_or(false),
-            "asset" => v.as_str().map(|s| s == item.asset).unwrap_or(false),
-            "asset_alias" => v
-                .as_str()
-                .map(|s| item.asset_alias.as_deref() == Some(s))
-                .unwrap_or(false),
-            "scope" => v.as_str().map(|s| s == item.scope).unwrap_or(false),
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag == item.primary_alias.has_primary_alias),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity == n.into())
                 .unwrap_or(false),
-            _ => false,
+            field => v
+                .as_str()
+                .zip(field_str(field))
+                .is_some_and(|(expected, actual)| expected == actual),
         },
         F::Ne(f, v) => match f.0.as_str() {
-            "account_id" => v.as_str().map(|s| s != item.canonical_id).unwrap_or(false),
-            "asset" => v.as_str().map(|s| s != item.asset).unwrap_or(false),
-            "asset_alias" => v
-                .as_str()
-                .map(|s| item.asset_alias.as_deref() != Some(s))
-                .unwrap_or(false),
-            "scope" => v.as_str().map(|s| s != item.scope).unwrap_or(false),
+            "has_primary_alias" => v
+                .as_bool()
+                .is_some_and(|flag| flag != item.primary_alias.has_primary_alias),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity != n.into())
                 .unwrap_or(false),
-            _ => false,
+            field => v
+                .as_str()
+                .map(|expected| field_str(field) != Some(expected))
+                .unwrap_or(false),
         },
         F::Lt(f, v) => match (f.0.as_str(), v.as_u64()) {
             ("quantity", Some(n)) => item.quantity < n.into(),
@@ -69530,56 +70127,57 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
             _ => false,
         },
         F::In(f, list) => match f.0.as_str() {
-            "account_id" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == item.canonical_id),
-            "asset" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == item.asset),
-            "asset_alias" => item
-                .asset_alias
-                .as_deref()
-                .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias)),
-            "scope" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .any(|s| s == item.scope),
+                .filter_map(norito::json::Value::as_bool)
+                .any(|flag| flag == item.primary_alias.has_primary_alias),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .any(|n| item.quantity == n.into()),
-            _ => false,
+            field => field_str(field).is_some_and(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .any(|expected| expected == actual)
+            }),
         },
         F::Nin(f, list) => match f.0.as_str() {
-            "account_id" => list
+            "has_primary_alias" => list
                 .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != item.canonical_id),
-            "asset" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != item.asset),
-            "asset_alias" => item
-                .asset_alias
-                .as_deref()
-                .is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias)),
-            "scope" => list
-                .iter()
-                .filter_map(|v| v.as_str())
-                .all(|s| s != item.scope),
+                .filter_map(norito::json::Value::as_bool)
+                .all(|flag| flag != item.primary_alias.has_primary_alias),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .all(|n| item.quantity != n.into()),
-            _ => false,
+            field => field_str(field).is_none_or(|actual| {
+                list.iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .all(|expected| expected != actual)
+            }),
         },
         F::Exists(f) => matches!(
             f.0.as_str(),
-            "account_id" | "asset" | "asset_alias" | "scope" | "quantity"
+            "account_id"
+                | "asset"
+                | "asset_alias"
+                | "scope"
+                | "quantity"
+                | "primary_alias"
+                | "primary_alias_name"
+                | "primary_alias_dataspace"
+                | "primary_alias_domain"
+                | "has_primary_alias"
         ),
-        F::IsNull(_) => false,
+        F::IsNull(f) => {
+            matches!(
+                f.0.as_str(),
+                "primary_alias"
+                    | "primary_alias_name"
+                    | "primary_alias_dataspace"
+                    | "primary_alias_domain"
+            ) && field_str(f.0.as_str()).is_none()
+        }
     }
 }
 
@@ -69632,7 +70230,6 @@ pub async fn handle_v1_asset_holders(
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
-    drop(world);
     // Aggregate balances per account and scope.
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
@@ -69658,6 +70255,16 @@ pub async fn handle_v1_asset_holders(
             *entry = sum;
         }
     }
+    let alias_cache: BTreeMap<_, _> = map
+        .keys()
+        .map(|(account_id, _)| {
+            (
+                account_id.clone(),
+                primary_alias_projection_for_account_id(state.as_ref(), account_id),
+            )
+        })
+        .collect();
+    drop(world);
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_HOLDERS)?;
@@ -69671,6 +70278,7 @@ pub async fn handle_v1_asset_holders(
             let canonical_id = account_id.to_string();
             let asset = def_id.to_string();
             let scope = asset_balance_scope_literal(&scope);
+            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
             (
                 format!("{canonical_id}:{scope}"),
                 AssetHolderListItem {
@@ -69680,6 +70288,7 @@ pub async fn handle_v1_asset_holders(
                     asset_alias: asset_alias.clone(),
                     scope,
                     quantity,
+                    primary_alias,
                 },
             )
         }),
@@ -69707,6 +70316,7 @@ pub async fn handle_v1_asset_holders(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -69745,7 +70355,6 @@ pub async fn handle_v1_asset_holders_query(
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
-    drop(world);
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
         iroha_primitives::numeric::Numeric,
@@ -69760,9 +70369,21 @@ pub async fn handle_v1_asset_holders_query(
             *entry = sum;
         }
     }
+    let alias_cache: BTreeMap<_, _> = map
+        .keys()
+        .map(|(account_id, _)| {
+            (
+                account_id.clone(),
+                primary_alias_projection_for_account_id(state.as_ref(), account_id),
+            )
+        })
+        .collect();
+    drop(world);
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY);
     let crate::filter::QueryEnvelope {
         filter,
+        select,
+        aggregate,
         sort,
         pagination,
         fetch_size,
@@ -69807,6 +70428,24 @@ pub async fn handle_v1_asset_holders_query(
             ENDPOINT_ASSET_HOLDERS_QUERY,
         )?;
     }
+    if aggregate.is_some() {
+        if select.is_some() {
+            return Err(aggregate_validation_error(
+                "select is not supported when aggregate is present",
+            ));
+        }
+        return handle_v1_asset_holders_query_aggregate(
+            state,
+            def_id,
+            asset_alias,
+            map,
+            alias_cache,
+            filter,
+            aggregate,
+            sort,
+            pagination,
+        );
+    }
     let filter_ref = filter.as_ref();
     let selectors = compile_asset_holder_sort_spec(&sort);
     let mapped_iter = map.into_iter().filter_map({
@@ -69817,6 +70456,7 @@ pub async fn handle_v1_asset_holders_query(
         move |((account_id, scope), quantity)| {
             let canonical_id = account_id.to_string();
             let scope = asset_balance_scope_literal(&scope);
+            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
             let projected = AssetHolderListItem {
                 account_id,
                 canonical_id,
@@ -69824,6 +70464,7 @@ pub async fn handle_v1_asset_holders_query(
                 asset_alias: asset_alias.clone(),
                 scope,
                 quantity,
+                primary_alias,
             };
             if let Some(expr) = filter_ref {
                 if !filter_asset_holder_item(expr, &projected) {
@@ -69856,6 +70497,7 @@ pub async fn handle_v1_asset_holders_query(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
         );
+        insert_primary_alias_fields(&mut m, &it.primary_alias);
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -69901,8 +70543,17 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
         F::Not(inner) => validate_holders_filter_adapter(inner),
         F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
-            "account_id" | "asset_alias" => v
+            "account_id"
+            | "asset_alias"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => v
                 .is_string()
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "has_primary_alias" => v
+                .is_bool()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "asset" => validate_asset(v),
@@ -69921,9 +70572,19 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::In(f, list) | F::Nin(f, list) => match f.0.as_str() {
-            "account_id" | "asset_alias" => list
+            "account_id"
+            | "asset_alias"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain" => list
                 .iter()
                 .all(norito::json::Value::is_string)
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "has_primary_alias" => list
+                .iter()
+                .all(norito::json::Value::is_bool)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "asset" => list.iter().try_for_each(validate_asset),
@@ -69936,10 +70597,752 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-            "account_id" | "asset" | "asset_alias" | "scope" | "quantity" => Ok(()),
+            "account_id"
+            | "asset"
+            | "asset_alias"
+            | "scope"
+            | "quantity"
+            | "primary_alias"
+            | "primary_alias_name"
+            | "primary_alias_dataspace"
+            | "primary_alias_domain"
+            | "has_primary_alias" => Ok(()),
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
     }
+}
+
+#[cfg(feature = "app_api")]
+fn aggregate_validation_error(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "unsupported_aggregate_shape",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn is_valid_aggregate_alias(alias: &str) -> bool {
+    let mut chars = alias.chars();
+    match chars.next() {
+        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
+            chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn json_value_to_numeric(value: &Value) -> Option<iroha_primitives::numeric::Numeric> {
+    value
+        .as_u64()
+        .map(Into::into)
+        .or_else(|| value.as_str()?.parse().ok())
+}
+
+#[cfg(feature = "app_api")]
+fn compare_json_values(left: &Value, right: &Value) -> Option<Ordering> {
+    if let (Some(lhs), Some(rhs)) = (json_value_to_numeric(left), json_value_to_numeric(right)) {
+        return Some(lhs.cmp(&rhs));
+    }
+    if let (Some(lhs), Some(rhs)) = (left.as_bool(), right.as_bool()) {
+        return Some(lhs.cmp(&rhs));
+    }
+    if let (Some(lhs), Some(rhs)) = (left.as_str(), right.as_str()) {
+        return Some(lhs.cmp(rhs));
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
+fn aggregate_field_value<'a>(row: &'a norito::json::Map, field: &str) -> Option<&'a Value> {
+    row.get(field)
+}
+
+#[cfg(feature = "app_api")]
+fn evaluate_filter_on_aggregate_row(
+    expr: &crate::filter::FilterExpr,
+    row: &norito::json::Map,
+) -> bool {
+    use crate::filter::FilterExpr as F;
+
+    match expr {
+        F::And(list) => list
+            .iter()
+            .all(|entry| evaluate_filter_on_aggregate_row(entry, row)),
+        F::Or(list) => list
+            .iter()
+            .any(|entry| evaluate_filter_on_aggregate_row(entry, row)),
+        F::Not(inner) => !evaluate_filter_on_aggregate_row(inner, row),
+        F::Eq(field, value) => aggregate_field_value(row, &field.0)
+            .is_some_and(|actual| compare_json_values(actual, value) == Some(Ordering::Equal)),
+        F::Ne(field, value) => aggregate_field_value(row, &field.0)
+            .is_some_and(|actual| compare_json_values(actual, value) != Some(Ordering::Equal)),
+        F::Lt(field, value) => aggregate_field_value(row, &field.0)
+            .is_some_and(|actual| compare_json_values(actual, value) == Some(Ordering::Less)),
+        F::Lte(field, value) => aggregate_field_value(row, &field.0).is_some_and(|actual| {
+            matches!(
+                compare_json_values(actual, value),
+                Some(Ordering::Less | Ordering::Equal)
+            )
+        }),
+        F::Gt(field, value) => aggregate_field_value(row, &field.0)
+            .is_some_and(|actual| compare_json_values(actual, value) == Some(Ordering::Greater)),
+        F::Gte(field, value) => aggregate_field_value(row, &field.0).is_some_and(|actual| {
+            matches!(
+                compare_json_values(actual, value),
+                Some(Ordering::Greater | Ordering::Equal)
+            )
+        }),
+        F::In(field, values) => aggregate_field_value(row, &field.0).is_some_and(|actual| {
+            values
+                .iter()
+                .any(|expected| compare_json_values(actual, expected) == Some(Ordering::Equal))
+        }),
+        F::Nin(field, values) => aggregate_field_value(row, &field.0).is_none_or(|actual| {
+            values
+                .iter()
+                .all(|expected| compare_json_values(actual, expected) != Some(Ordering::Equal))
+        }),
+        F::Exists(field) => aggregate_field_value(row, &field.0).is_some(),
+        F::IsNull(field) => aggregate_field_value(row, &field.0).is_none_or(Value::is_null),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_aggregate_filter_fields(
+    expr: &crate::filter::FilterExpr,
+    allowed_fields: &BTreeSet<String>,
+) -> Result<()> {
+    use crate::filter::FilterExpr as F;
+
+    let validate_field = |field: &crate::filter::FieldPath| -> Result<()> {
+        if allowed_fields.contains(&field.0) {
+            Ok(())
+        } else {
+            Err(aggregate_validation_error(format!(
+                "aggregate field `{}` is not allowed",
+                field.0
+            )))
+        }
+    };
+
+    match expr {
+        F::And(list) | F::Or(list) => {
+            for nested in list {
+                validate_aggregate_filter_fields(nested, allowed_fields)?;
+            }
+            Ok(())
+        }
+        F::Not(inner) => validate_aggregate_filter_fields(inner, allowed_fields),
+        F::Eq(field, _)
+        | F::Ne(field, _)
+        | F::Lt(field, _)
+        | F::Lte(field, _)
+        | F::Gt(field, _)
+        | F::Gte(field, _)
+        | F::In(field, _)
+        | F::Nin(field, _)
+        | F::Exists(field)
+        | F::IsNull(field) => validate_field(field),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_aggregate_sort_fields(
+    sort: &[crate::filter::SortKey],
+    allowed_fields: &BTreeSet<String>,
+) -> Result<()> {
+    for key in sort {
+        if !allowed_fields.contains(&key.key.0) {
+            return Err(aggregate_validation_error(format!(
+                "aggregate sort key `{}` is not allowed",
+                key.key.0
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+enum AggregateMetricState {
+    Count(u64),
+    DistinctCount(BTreeSet<String>),
+    Sum(Option<iroha_primitives::numeric::Numeric>),
+    Min(Option<iroha_primitives::numeric::Numeric>),
+    Max(Option<iroha_primitives::numeric::Numeric>),
+    Avg {
+        sum: Option<iroha_primitives::numeric::Numeric>,
+        count: u64,
+    },
+}
+
+#[cfg(feature = "app_api")]
+impl AggregateMetricState {
+    fn new(metric: &crate::filter::AggregateMetric) -> Result<Self> {
+        use crate::filter::AggregateFn as FnKind;
+
+        match metric.r#fn {
+            FnKind::Count => Ok(Self::Count(0)),
+            FnKind::DistinctCount => Ok(Self::DistinctCount(BTreeSet::new())),
+            FnKind::Sum => Ok(Self::Sum(None)),
+            FnKind::Min => Ok(Self::Min(None)),
+            FnKind::Max => Ok(Self::Max(None)),
+            FnKind::Avg => Ok(Self::Avg {
+                sum: None,
+                count: 0,
+            }),
+        }
+    }
+
+    fn update(
+        &mut self,
+        metric: &crate::filter::AggregateMetric,
+        row: &norito::json::Map,
+    ) -> Result<()> {
+        use crate::filter::AggregateFn as FnKind;
+
+        match (self, metric.r#fn) {
+            (Self::Count(total), FnKind::Count) => {
+                *total = total.saturating_add(1);
+                Ok(())
+            }
+            (Self::DistinctCount(values), FnKind::DistinctCount) => {
+                let field = metric
+                    .field
+                    .as_ref()
+                    .ok_or_else(|| aggregate_validation_error("distinct_count requires a field"))?;
+                if let Some(value) = aggregate_field_value(row, &field.0) {
+                    let encoded = norito::json::to_json(value).map_err(|err| {
+                        Error::Query(iroha_data_model::ValidationFail::InternalError(
+                            err.to_string(),
+                        ))
+                    })?;
+                    values.insert(encoded);
+                }
+                Ok(())
+            }
+            (Self::Sum(total), FnKind::Sum) => {
+                let field = metric
+                    .field
+                    .as_ref()
+                    .ok_or_else(|| aggregate_validation_error("sum requires a field"))?;
+                if let Some(value) =
+                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
+                {
+                    *total = Some(match total.take() {
+                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
+                            aggregate_validation_error("aggregate sum overflowed")
+                        })?,
+                        None => value,
+                    });
+                }
+                Ok(())
+            }
+            (Self::Min(current), FnKind::Min) => {
+                let field = metric
+                    .field
+                    .as_ref()
+                    .ok_or_else(|| aggregate_validation_error("min requires a field"))?;
+                if let Some(value) =
+                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
+                {
+                    if current.as_ref().is_none_or(|existing| value < *existing) {
+                        *current = Some(value);
+                    }
+                }
+                Ok(())
+            }
+            (Self::Max(current), FnKind::Max) => {
+                let field = metric
+                    .field
+                    .as_ref()
+                    .ok_or_else(|| aggregate_validation_error("max requires a field"))?;
+                if let Some(value) =
+                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
+                {
+                    if current.as_ref().is_none_or(|existing| value > *existing) {
+                        *current = Some(value);
+                    }
+                }
+                Ok(())
+            }
+            (Self::Avg { sum, count }, FnKind::Avg) => {
+                let field = metric
+                    .field
+                    .as_ref()
+                    .ok_or_else(|| aggregate_validation_error("avg requires a field"))?;
+                if let Some(value) =
+                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
+                {
+                    *sum = Some(match sum.take() {
+                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
+                            aggregate_validation_error("aggregate avg overflowed")
+                        })?,
+                        None => value,
+                    });
+                    *count = count.saturating_add(1);
+                }
+                Ok(())
+            }
+            _ => Err(aggregate_validation_error(
+                "aggregate metric state mismatch",
+            )),
+        }
+    }
+
+    fn finalize(self) -> Result<Value> {
+        match self {
+            Self::Count(total) => Ok(Value::from(total)),
+            Self::DistinctCount(values) => Ok(Value::from(values.len() as u64)),
+            Self::Sum(total) | Self::Min(total) | Self::Max(total) => Ok(total
+                .map(|value| Value::from(value.to_string()))
+                .unwrap_or(Value::Null)),
+            Self::Avg { sum, count } => {
+                let Some(sum) = sum else {
+                    return Ok(Value::Null);
+                };
+                let divisor = iroha_primitives::numeric::Numeric::new(count, 0);
+                let scale = sum.scale().max(6);
+                let avg = sum
+                    .checked_div(
+                        divisor,
+                        iroha_primitives::numeric::NumericSpec::fractional(scale),
+                    )
+                    .ok_or_else(|| aggregate_validation_error("aggregate avg overflowed"))?;
+                Ok(Value::from(avg.to_string()))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+struct AggregateGroupState {
+    group_values: Vec<(String, Value)>,
+    metrics: Vec<AggregateMetricState>,
+}
+
+#[cfg(feature = "app_api")]
+fn aggregate_rows(
+    rows: impl IntoIterator<Item = norito::json::Map>,
+    aggregate: &crate::filter::AggregateSpec,
+) -> Result<Vec<norito::json::Map>> {
+    let mut grouped: BTreeMap<Vec<String>, AggregateGroupState> = BTreeMap::new();
+
+    for row in rows {
+        let group_values: Vec<(String, Value)> = aggregate
+            .group_by
+            .iter()
+            .map(|field| {
+                (
+                    field.0.clone(),
+                    row.get(&field.0).cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect();
+        let group_key: Vec<String> = group_values
+            .iter()
+            .map(|(_, value)| norito::json::to_json(value).unwrap_or_else(|_| "null".to_owned()))
+            .collect();
+
+        let entry = grouped
+            .entry(group_key)
+            .or_insert_with(|| AggregateGroupState {
+                group_values: group_values.clone(),
+                metrics: aggregate
+                    .metrics
+                    .iter()
+                    .map(AggregateMetricState::new)
+                    .collect::<Result<Vec<_>>>()
+                    .expect("metric validation should happen before execution"),
+            });
+
+        for (state, metric) in entry.metrics.iter_mut().zip(&aggregate.metrics) {
+            state.update(metric, &row)?;
+        }
+    }
+
+    grouped
+        .into_values()
+        .map(|state| {
+            let mut row = norito::json::Map::new();
+            for (field, value) in state.group_values {
+                row.insert(field, value);
+            }
+            for (metric, value) in aggregate.metrics.iter().zip(state.metrics) {
+                row.insert(metric.alias.clone(), value.finalize()?);
+            }
+            Ok(row)
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn sort_aggregate_rows_in_place(rows: &mut [norito::json::Map], sort: &[crate::filter::SortKey]) {
+    rows.sort_by(|left, right| {
+        for key in sort {
+            let left_value = left.get(&key.key.0).unwrap_or(&Value::Null);
+            let right_value = right.get(&key.key.0).unwrap_or(&Value::Null);
+            let ordering = compare_json_values(left_value, right_value).unwrap_or_else(|| {
+                let left_json =
+                    norito::json::to_json(left_value).unwrap_or_else(|_| "null".to_owned());
+                let right_json =
+                    norito::json::to_json(right_value).unwrap_or_else(|_| "null".to_owned());
+                left_json.cmp(&right_json)
+            });
+            if ordering != Ordering::Equal {
+                return if matches!(key.order, crate::filter::Order::Asc) {
+                    ordering
+                } else {
+                    ordering.reverse()
+                };
+            }
+        }
+        Ordering::Equal
+    });
+}
+
+#[cfg(feature = "app_api")]
+fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
+    let snapshot = state.query_index_status_snapshot();
+    let block_hash = snapshot
+        .indexed_block_hash
+        .map(|hash| hex::encode(hash.as_ref().as_ref()));
+    (snapshot.indexed_height, block_hash)
+}
+
+#[cfg(feature = "app_api")]
+fn account_list_item_to_query_row(item: &AccountListItem) -> norito::json::Map {
+    let mut row = norito::json::Map::new();
+    row.insert("id".into(), Value::from(item.canonical_id.clone()));
+    insert_primary_alias_fields(&mut row, &item.primary_alias);
+    row
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> norito::json::Map {
+    let mut row = norito::json::Map::new();
+    row.insert("account_id".into(), Value::from(item.canonical_id.clone()));
+    row.insert("asset".into(), Value::from(item.asset.clone()));
+    row.insert(
+        "asset_alias".into(),
+        item.asset_alias
+            .as_ref()
+            .map_or(Value::Null, |value| Value::from(value.clone())),
+    );
+    row.insert("scope".into(), Value::from(item.scope.clone()));
+    row.insert("quantity".into(), Value::from(item.quantity.to_string()));
+    insert_primary_alias_fields(&mut row, &item.primary_alias);
+    row
+}
+
+#[cfg(feature = "app_api")]
+fn build_aggregate_response(
+    state: &CoreState,
+    mut rows: Vec<norito::json::Map>,
+    sort: &[crate::filter::SortKey],
+    pagination: EffectivePagination,
+    having: Option<&crate::filter::FilterExpr>,
+) -> Result<Response, Error> {
+    if let Some(expr) = having {
+        rows.retain(|row| evaluate_filter_on_aggregate_row(expr, row));
+    }
+    if !sort.is_empty() {
+        sort_aggregate_rows_in_place(&mut rows, sort);
+    }
+    let total = rows.len();
+    let offset = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
+    let limit = usize::try_from(pagination.limit.unwrap_or(pagination.cap)).unwrap_or(usize::MAX);
+    let items = rows
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let (indexed_height, indexed_block_hash) = query_index_snapshot(state);
+
+    let mut top = norito::json::Map::new();
+    top.insert(
+        "items".into(),
+        Value::Array(items.into_iter().map(Value::Object).collect()),
+    );
+    top.insert("total".into(), Value::from(total as u64));
+    top.insert("indexed_height".into(), Value::from(indexed_height));
+    top.insert(
+        "indexed_block_hash".into(),
+        indexed_block_hash.map_or(Value::Null, Value::from),
+    );
+    let body = norito::json::to_json_pretty(&top).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        ))
+    })?;
+    let mut response = axum::response::Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_accounts_aggregate_request(
+    aggregate: &crate::filter::AggregateSpec,
+    sort: &[crate::filter::SortKey],
+) -> Result<BTreeSet<String>> {
+    use crate::filter::AggregateFn as FnKind;
+
+    if aggregate.group_by.len() > 4 {
+        return Err(aggregate_validation_error(
+            "aggregate group_by supports at most four fields",
+        ));
+    }
+    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
+        return Err(aggregate_validation_error(
+            "aggregate metrics requires between one and eight metrics",
+        ));
+    }
+
+    let allowed_group_fields = BTreeSet::from([
+        "primary_alias_domain".to_owned(),
+        "primary_alias_dataspace".to_owned(),
+        "has_primary_alias".to_owned(),
+    ]);
+    let mut allowed_result_fields = BTreeSet::new();
+    for field in &aggregate.group_by {
+        if !allowed_group_fields.contains(&field.0) {
+            return Err(aggregate_validation_error(format!(
+                "accounts aggregate group_by field `{}` is not supported",
+                field.0
+            )));
+        }
+        allowed_result_fields.insert(field.0.clone());
+    }
+
+    for metric in &aggregate.metrics {
+        if !is_valid_aggregate_alias(&metric.alias) {
+            return Err(aggregate_validation_error(format!(
+                "aggregate metric alias `{}` is invalid",
+                metric.alias
+            )));
+        }
+        if !allowed_result_fields.insert(metric.alias.clone()) {
+            return Err(aggregate_validation_error(format!(
+                "aggregate metric alias `{}` is duplicated",
+                metric.alias
+            )));
+        }
+        match metric.r#fn {
+            FnKind::Count => {
+                if metric.field.is_some() {
+                    return Err(aggregate_validation_error("count must not declare a field"));
+                }
+            }
+            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
+                Some("id") => {}
+                _ => {
+                    return Err(aggregate_validation_error(
+                        "accounts aggregate distinct_count only supports field `id`",
+                    ));
+                }
+            },
+            _ => {
+                return Err(aggregate_validation_error(
+                    "accounts aggregate only supports `count` and `distinct_count(id)` metrics",
+                ));
+            }
+        }
+    }
+
+    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
+    if let Some(having) = aggregate.having.as_ref() {
+        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
+    }
+    Ok(allowed_result_fields)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_asset_holders_aggregate_request(
+    aggregate: &crate::filter::AggregateSpec,
+    sort: &[crate::filter::SortKey],
+) -> Result<BTreeSet<String>> {
+    use crate::filter::AggregateFn as FnKind;
+
+    if aggregate.group_by.len() > 4 {
+        return Err(aggregate_validation_error(
+            "aggregate group_by supports at most four fields",
+        ));
+    }
+    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
+        return Err(aggregate_validation_error(
+            "aggregate metrics requires between one and eight metrics",
+        ));
+    }
+
+    let allowed_group_fields = BTreeSet::from([
+        "scope".to_owned(),
+        "primary_alias_domain".to_owned(),
+        "primary_alias_dataspace".to_owned(),
+        "has_primary_alias".to_owned(),
+    ]);
+    let mut allowed_result_fields = BTreeSet::new();
+    for field in &aggregate.group_by {
+        if !allowed_group_fields.contains(&field.0) {
+            return Err(aggregate_validation_error(format!(
+                "asset holders aggregate group_by field `{}` is not supported",
+                field.0
+            )));
+        }
+        allowed_result_fields.insert(field.0.clone());
+    }
+
+    for metric in &aggregate.metrics {
+        if !is_valid_aggregate_alias(&metric.alias) {
+            return Err(aggregate_validation_error(format!(
+                "aggregate metric alias `{}` is invalid",
+                metric.alias
+            )));
+        }
+        if !allowed_result_fields.insert(metric.alias.clone()) {
+            return Err(aggregate_validation_error(format!(
+                "aggregate metric alias `{}` is duplicated",
+                metric.alias
+            )));
+        }
+        match metric.r#fn {
+            FnKind::Count => {
+                if metric.field.is_some() {
+                    return Err(aggregate_validation_error("count must not declare a field"));
+                }
+            }
+            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
+                Some("account_id") => {}
+                _ => {
+                    return Err(aggregate_validation_error(
+                        "asset holders distinct_count only supports field `account_id`",
+                    ));
+                }
+            },
+            FnKind::Sum | FnKind::Min | FnKind::Max | FnKind::Avg => {
+                match metric.field.as_ref().map(|field| field.0.as_str()) {
+                    Some("quantity") => {}
+                    _ => {
+                        return Err(aggregate_validation_error(
+                            "numeric aggregate metrics only support field `quantity`",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
+    if let Some(having) = aggregate.having.as_ref() {
+        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
+    }
+    Ok(allowed_result_fields)
+}
+
+#[cfg(feature = "app_api")]
+fn handle_v1_accounts_query_aggregate(
+    state: Arc<CoreState>,
+    accounts: Vec<iroha_data_model::account::Account>,
+    envelope: crate::filter::QueryEnvelope,
+) -> Result<Response, Error> {
+    let crate::filter::QueryEnvelope {
+        filter,
+        select,
+        aggregate,
+        sort,
+        pagination,
+        ..
+    } = envelope;
+    if select.is_some() {
+        return Err(aggregate_validation_error(
+            "select is not supported when aggregate is present",
+        ));
+    }
+    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
+    validate_accounts_aggregate_request(&aggregate, &sort)?;
+
+    let mut rows = Vec::new();
+    for account in accounts {
+        let projected = AccountListItem {
+            canonical_id: account.id().to_string(),
+            display_id: crate::account_literal::display_literal(account.id()),
+            primary_alias: primary_alias_projection_for_account_id(state.as_ref(), account.id()),
+        };
+        if let Some(expr) = filter.as_ref()
+            && !account_filter_projection(expr, &projected)
+        {
+            continue;
+        }
+        rows.push(account_list_item_to_query_row(&projected));
+    }
+
+    let aggregated = aggregate_rows(rows, &aggregate)?;
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        pagination.limit,
+        pagination.offset,
+        cap,
+        ENDPOINT_ACCOUNTS_QUERY,
+    )?;
+    build_aggregate_response(
+        state.as_ref(),
+        aggregated,
+        &sort,
+        pagination,
+        aggregate.having.as_ref(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn handle_v1_asset_holders_query_aggregate(
+    state: Arc<CoreState>,
+    def_id: AssetDefinitionId,
+    asset_alias: Option<String>,
+    map: BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    >,
+    alias_cache: BTreeMap<AccountId, PrimaryAliasProjection>,
+    filter: Option<crate::filter::FilterExpr>,
+    aggregate: Option<crate::filter::AggregateSpec>,
+    sort: Vec<crate::filter::SortKey>,
+    pagination: EffectivePagination,
+) -> Result<Response, Error> {
+    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
+    validate_asset_holders_aggregate_request(&aggregate, &sort)?;
+
+    let mut rows = Vec::new();
+    let asset = def_id.to_string();
+    for ((account_id, scope), quantity) in map {
+        let canonical_id = account_id.to_string();
+        let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
+        let projected = AssetHolderListItem {
+            account_id: account_id.clone(),
+            canonical_id,
+            asset: asset.clone(),
+            asset_alias: asset_alias.clone(),
+            scope: asset_balance_scope_literal(&scope),
+            quantity,
+            primary_alias,
+        };
+        if let Some(expr) = filter.as_ref()
+            && !filter_asset_holder_item(expr, &projected)
+        {
+            continue;
+        }
+        rows.push(asset_holder_item_to_query_row(&projected));
+    }
+
+    let aggregated = aggregate_rows(rows, &aggregate)?;
+    build_aggregate_response(
+        state.as_ref(),
+        aggregated,
+        &sort,
+        pagination,
+        aggregate.having.as_ref(),
+    )
 }
 
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.
