@@ -25,6 +25,45 @@ execution.
 - open work after this slice:
   - rerun broader workspace validation during a longer clean window
 
+Latest sync (2026-04-20 observer sync validator roster isolation):
+Observer catch-up no longer pollutes permissioned consensus topology. The PoP
+map now defines the validator subset among BLS trusted peers when present, so
+trusted peers without PoPs can be admitted for networking and block sync without
+becoming validators. Sumeragi fallback topology and daemon genesis-startup
+topology now also honor observer role by removing the local observer identity
+from consensus. Daemon genesis metadata validation keeps exact config/genesis
+PoP matching when config PoPs are present, while allowing genesis PoPs to back
+an empty config PoP map. The observer sync integration fixture now trusts the
+observer for networking while publishing PoPs only for the four validators, and
+the preserved rerun logs show `validators: 4, configured_peers: 5, pops: 4`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/mod.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/main.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_config/src/parameters/{actual,user}.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_config/tests/trusted_peers_pop_validation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/wizard.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/observer_sync.rs`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/{sumeragi,pipeline,references/configuration,sora_nexus_operator_onboarding}*.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test trusted_peers_pop_validation -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_kagami trusted_peers_pop -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core trusted_roster -- --nocapture`
+    (`4 passed`)
+  - `cargo check -p irohad`
+  - `cargo build -p irohad`
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test network_functional observer_sync::observer_node_catches_up -- --nocapture`
+    (`1 passed`; 87.06s)
+- open work after this slice:
+  - none for `observer_sync::observer_node_catches_up`
+
 Latest sync (2026-04-20 iroha_crypto signature test regressions):
 `iroha_crypto` now keeps w3f BLS multi-message aggregate verification on the
 w3f hashing path when `bls-multi-pairing` is enabled, avoiding the prior mixed
@@ -33,11 +72,11 @@ ML-DSA clone and SoraNet puzzle transcript tests, and refreshes the current
 canonical `PublicKey` Norito archive golden.
 
 - shipped in:
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/signature/bls/implementation.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/lib.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/soranet/puzzle.rs`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
-  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/signature/bls/implementation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/soranet/puzzle.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo fmt --all -- --check`
@@ -63,9 +102,9 @@ initializes the current Kotodama `Program` test-only fields (`test_target` and
 `ivm::kotodama::ast::Program`.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/crates/musubi/src/cli.rs`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/musubi/src/cli.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
   - `cargo test -p musubi linker_rewrites_namespaced_calls_to_locked_exports -- --nocapture`
 - open work after this slice:
@@ -82,12 +121,12 @@ emits the required `chain_discriminant`, and the stale pipeline-event fixture
 has been regenerated from the current sample helper.
 
 - shipped in:
-  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/compose.rs`
-  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/state.rs`
-  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/supervisor.rs`
-  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
-  - `/home/mtakemiya/dev/iroha/status.md`
-  - `/home/mtakemiya/dev/iroha/roadmap.md`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/compose.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/state.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/src/supervisor.rs`
+  - `/Users/takemiyamakoto/dev/iroha/mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo test -p mochi-core regenerate_pipeline_event_message_fixture -- --ignored --nocapture`

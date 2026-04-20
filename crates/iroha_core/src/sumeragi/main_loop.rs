@@ -14103,7 +14103,8 @@ impl Actor {
     }
 
     /// Deterministic fallback roster derived from trusted peers.
-    /// Uses the configured `others` ordering and appends `self` if missing.
+    /// Uses the configured `others` ordering, appends a validator `self` if
+    /// missing, and removes an observer `self` from consensus.
     fn trusted_topology(&self) -> Vec<PeerId> {
         let trusted = self.common_config.trusted_peers.value();
         let mut roster = super::filter_validators_from_trusted(trusted);
@@ -14111,8 +14112,12 @@ impl Actor {
         if roster.is_empty() {
             roster = trusted.clone().into_non_empty_vec().into_iter().collect();
         }
-        if !roster.iter().any(|p| p == me) {
-            roster.push(me.clone());
+        if matches!(self.config.role, NodeRole::Validator) {
+            if !roster.iter().any(|p| p == me) {
+                roster.push(me.clone());
+            }
+        } else {
+            roster.retain(|p| p != me);
         }
         if roster.len() <= 1 {
             iroha_logger::warn!(

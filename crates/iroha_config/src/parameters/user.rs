@@ -727,9 +727,10 @@ pub struct Root {
         default = "defaults::common::chain_discriminant()"
     )]
     chain_discriminant: WithOrigin<u16>,
-    /// BLS Proof-of-Possession entries for trusted peers.
-    /// PoP entries must cover every BLS validator in `trusted_peers` and are verified
-    /// during config parsing; incomplete or invalid PoPs are rejected.
+    /// BLS Proof-of-Possession entries for validator trusted peers.
+    /// When present, these entries define the BLS trusted-peer subset that
+    /// participates in consensus; trusted peers without PoPs are network-trusted
+    /// observers. Invalid or duplicate PoP entries are rejected.
     #[config(env = "TRUSTED_PEERS_POP", default)]
     trusted_peers_pop: TrustedPeerPops,
     #[config(nested)]
@@ -941,19 +942,6 @@ impl Root {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
                     "trusted_peers contains non-BLS validator keys: {non_bls:?}"
-                )),
-            );
-        }
-
-        let missing: Vec<_> = roster_keys
-            .iter()
-            .filter(|pk| !trusted.pops.contains_key(*pk))
-            .map(ToString::to_string)
-            .collect();
-        if !missing.is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                    "trusted_peers_pop missing PoPs for roster keys: {missing:?}"
                 )),
             );
         }

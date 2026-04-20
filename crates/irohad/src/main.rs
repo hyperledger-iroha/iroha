@@ -4305,10 +4305,18 @@ impl Iroha {
                                 .collect();
                         }
                         let me = config.common.peer.id();
-                        if !validator_roster.iter().any(|p| p == me) {
-                            validator_roster.push(me.clone());
+                        let is_validator = matches!(
+                            config.sumeragi.role,
+                            iroha_config::parameters::actual::NodeRole::Validator
+                        );
+                        if is_validator {
+                            if !validator_roster.iter().any(|p| p == me) {
+                                validator_roster.push(me.clone());
+                            }
+                        } else {
+                            validator_roster.retain(|p| p != me);
                         }
-                        if validator_roster.is_empty() {
+                        if validator_roster.is_empty() && is_validator {
                             validator_roster.push(me.clone());
                         }
                         validator_roster
@@ -8698,14 +8706,15 @@ fn verify_genesis_metadata(
             return Err(Report::new(MainError::Config)
                 .attach(format!("trusted peer {peer_id} must use a BLS-normal key")));
         }
-        let expected_pop = trusted.pops.get(bls_pk).ok_or_else(|| {
-            Report::new(MainError::Config).attach(format!(
-                "trusted peer {peer_id} missing PoP in configuration"
-            ))
-        })?;
-        if &entry.pop != expected_pop {
+        if let Some(expected_pop) = trusted.pops.get(bls_pk) {
+            if &entry.pop != expected_pop {
+                return Err(Report::new(MainError::Config).attach(format!(
+                    "genesis PoP for peer {peer_id} does not match configuration"
+                )));
+            }
+        } else if !trusted.pops.is_empty() {
             return Err(Report::new(MainError::Config).attach(format!(
-                "genesis PoP for peer {peer_id} does not match configuration"
+                "trusted peer {peer_id} missing PoP in configuration"
             )));
         }
         if let Err(err) = iroha_crypto::bls_normal_pop_verify(bls_pk, &entry.pop) {
