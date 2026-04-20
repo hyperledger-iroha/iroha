@@ -88673,6 +88673,13 @@ async fn later_view_block_created_becomes_passive_when_frontier_owner_has_vote_l
     let later_view = owner_view.saturating_add(1);
     let owner_block = sample_block(height, owner_view, parent);
     let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+
+    actor.pending.pending_blocks.insert(
+        owner_hash,
+        PendingBlock::new(owner_block.clone(), owner_payload_hash, height, owner_view),
+    );
+    actor.note_proposal_seen(height, owner_view, owner_payload_hash);
 
     actor.frontier_slot = Some(super::FrontierSlot::new(
         height,
