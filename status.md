@@ -31,6 +31,15 @@ Last updated: 2026-04-20
   - `cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
   - `git diff --check`
 
+## 2026-04-19 Follow-up: Musubi Program AST initializer sync
+- `crates/musubi/src/cli.rs` now initializes the newer
+  `ivm::kotodama::ast::Program` test-only fields (`test_target` and
+  `fixtures`) in the `linker_rewrites_namespaced_calls_to_locked_exports`
+  regression, keeping the Musubi test literal aligned with the current
+  Kotodama AST shape.
+- Focused validation for this slice:
+  - `cargo test -p musubi linker_rewrites_namespaced_calls_to_locked_exports -- --nocapture`
+
 ## 2026-04-19 Follow-up: Mochi draft/state/supervisor regression sync
 - `mochi/mochi-core/src/compose.rs` test coverage now uses fully qualified
   `domain.dataspace` literals for domain-registration and account-admission
