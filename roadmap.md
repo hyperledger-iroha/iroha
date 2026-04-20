@@ -1,6 +1,37 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
+
+Latest sync (2026-04-20 iroha_crypto signature test regressions):
+`iroha_crypto` now keeps w3f BLS multi-message aggregate verification on the
+w3f hashing path when `bls-multi-pairing` is enabled, avoiding the prior mixed
+blstrs hash-to-curve check for w3f signatures. The same pass fixes brittle
+ML-DSA clone and SoraNet puzzle transcript tests, and refreshes the current
+canonical `PublicKey` Norito archive golden.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/signature/bls/implementation.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_crypto/src/soranet/puzzle.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing aggregate_multi_message_verification -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto ml_dsa_secret_key_clone_shares_inner_arc -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto public_key_norito_golden_archive -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto rejects_mismatched_transcript_hash -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib`
+    (`323 passed; 1 ignored`)
+  - `cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+  - `git diff --check`
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
 
 Latest sync (2026-04-19 Mochi supervisor Kagami and stream fixture sync):
 The Mochi supervisor integration harness now matches the current external

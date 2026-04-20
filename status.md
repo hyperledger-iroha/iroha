@@ -1,6 +1,35 @@
 # Status
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
+
+## 2026-04-20 Follow-up: iroha_crypto signature test regressions
+- The w3f BLS multi-message aggregate verifier now stays on the w3f hashing
+  and domain-separation path even when `bls-multi-pairing` is enabled, avoiding
+  the previous mixed blstrs hash-to-curve check that rejected valid aggregate
+  signatures.
+- The ML-DSA clone-sharing test now verifies both signatures against the seeded
+  public key instead of requiring byte-for-byte equality from randomized ML-DSA
+  signing.
+- The SoraNet Argon2 puzzle transcript tests now verify tickets at a stable
+  synthetic time so slow solution search cannot consume the minimum TTL window
+  before assertions run.
+- Refreshed the `PublicKey` Norito golden archive to the current canonical
+  framed encoding.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing aggregate_multi_message_verification -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto ml_dsa_secret_key_clone_shares_inner_arc -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto public_key_norito_golden_archive -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto rejects_mismatched_transcript_hash -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib`
+    (`323 passed; 1 ignored`)
+  - `cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+  - `git diff --check`
 
 ## 2026-04-19 Follow-up: Mochi supervisor Kagami and stream fixture sync
 - `mochi/mochi-integration/src/bin/kagami_mock.rs` now matches the current

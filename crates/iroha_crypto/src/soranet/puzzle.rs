@@ -491,7 +491,13 @@ mod tests {
         let binding = binding();
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
-        verify(&ticket, &binding, &params).expect("verify");
+        verify_at(
+            &ticket,
+            &binding,
+            &params,
+            stable_verify_time(&ticket, &params),
+        )
+        .expect("verify");
     }
 
     #[test]
@@ -547,9 +553,10 @@ mod tests {
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(12), &mut rng).expect("mint");
 
-        verify(&ticket, &binding, &params).expect("expected transcript to verify");
+        let now = stable_verify_time(&ticket, &params);
+        verify_at(&ticket, &binding, &params, now).expect("expected transcript to verify");
         let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_b));
-        let err = verify(&ticket, &mismatched, &params)
+        let err = verify_at(&ticket, &mismatched, &params, now)
             .expect_err("transcript mismatch should reject ticket");
         assert!(matches!(err, Error::InvalidSolution));
     }
