@@ -111,8 +111,9 @@ mod thread_builder_tests {
 }
 
 /// Build the initial validator topology from trusted peers.
-/// Enforces BLS-normal keys and, when configured with a complete `PoP` map, valid `PoP` entries.
-/// Observers are not included; this helper filters the validator set only.
+/// Enforces BLS-normal keys and, when configured with a `PoP` map, treats peers
+/// with valid PoPs as the validator subset. BLS trusted peers without a PoP are
+/// kept as network-trusted peers but are not included in consensus.
 pub fn filter_validators_from_trusted(
     tp: &iroha_config::parameters::actual::TrustedPeers,
 ) -> Vec<PeerId> {
@@ -130,56 +131,35 @@ pub fn filter_validators_from_trusted(
     let mut out = if tp.pops.is_empty() {
         baseline.clone()
     } else {
-        let missing = baseline
-            .iter()
-            .filter(|peer_id| !tp.pops.contains_key(peer_id.public_key()))
-            .count();
+        let mut filtered: BTreeSet<PeerId> = BTreeSet::new();
+        let mut missing = 0usize;
+        for peer_id in &baseline {
+            let pk = peer_id.public_key();
+            let Some(pop) = tp.pops.get(pk) else {
+                missing = missing.saturating_add(1);
+                continue;
+            };
+            if let Err(e) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
+                iroha_logger::warn!(?pk, ?e, "invalid PoP; excluding peer from consensus");
+                continue;
+            }
+            filtered.insert(peer_id.clone());
+        }
         if missing > 0 {
-            iroha_logger::warn!(
+            iroha_logger::info!(
                 missing,
                 baseline = baseline.len(),
                 pops = tp.pops.len(),
-                "PoP map incomplete for trusted peers; skipping PoP filtering"
+                validators = filtered.len(),
+                "excluding trusted peers without validator PoPs from consensus roster"
             );
-            baseline.clone()
-        } else {
-            let mut filtered: BTreeSet<PeerId> = BTreeSet::new();
-            for peer_id in &baseline {
-                let pk = peer_id.public_key();
-                let Some(pop) = tp.pops.get(pk) else {
-                    iroha_logger::warn!(?pk, "missing PoP; excluding peer from consensus");
-                    continue;
-                };
-                if let Err(e) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
-                    iroha_logger::warn!(?pk, ?e, "invalid PoP; excluding peer from consensus");
-                    continue;
-                }
-                filtered.insert(peer_id.clone());
-            }
-            let baseline_len = baseline.len();
-            let needed = if baseline_len > 3 {
-                ((baseline_len.saturating_sub(1)) / 3) * 2 + 1
-            } else {
-                baseline_len
-            };
-            if filtered.len() < needed {
-                iroha_logger::warn!(
-                    filtered = filtered.len(),
-                    baseline = baseline_len,
-                    needed,
-                    pops = tp.pops.len(),
-                    "PoP filtering produced sub-quorum roster; falling back to BLS baseline"
-                );
-                baseline.clone()
-            } else {
-                filtered
-            }
         }
+        filtered
     };
 
-    // If the explicit peer roster was empty but the configuration still includes PoP
-    // records, fall back to those so we do not silently collapse into a single-node
-    // topology when addresses were omitted.
+    // If PoP filtering leaves the bootstrap roster empty but the configuration
+    // still includes PoP records, fall back to those so startup does not silently
+    // collapse into a single-node topology when addresses were omitted.
     if out.is_empty() && !tp.pops.is_empty() {
         iroha_logger::warn!(
             roster_peers = tp.others.len().saturating_add(1),
@@ -849,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_roster_pop_filter_falls_back_on_sub_quorum() {
+    fn trusted_roster_pop_filter_uses_pop_subset() {
         let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -868,14 +848,7 @@ mod tests {
             others: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone(), peer3.clone()]),
             pops,
         };
-        let expected: BTreeSet<_> = vec![
-            peer0.id().clone(),
-            peer1.id().clone(),
-            peer2.id().clone(),
-            peer3.id().clone(),
-        ]
-        .into_iter()
-        .collect();
+        let expected: BTreeSet<_> = vec![peer0.id().clone()].into_iter().collect();
         let actual: BTreeSet<_> = filter_validators_from_trusted(&trusted)
             .into_iter()
             .collect();
@@ -904,14 +877,10 @@ mod tests {
             others: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone(), peer3.clone()]),
             pops,
         };
-        let expected: BTreeSet<_> = vec![
-            peer0.id().clone(),
-            peer1.id().clone(),
-            peer2.id().clone(),
-            peer3.id().clone(),
-        ]
-        .into_iter()
-        .collect();
+        let expected: BTreeSet<_> =
+            vec![peer0.id().clone(), peer1.id().clone(), peer2.id().clone()]
+                .into_iter()
+                .collect();
         let actual: BTreeSet<_> = filter_validators_from_trusted(&trusted)
             .into_iter()
             .collect();
@@ -7911,6 +7880,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_drains_post_tick_payloads() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);

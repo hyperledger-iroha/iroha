@@ -7073,13 +7073,11 @@ impl Actor {
                 "local peer removed from world state; disconnecting from p2p"
             );
             self.queue.clear_all();
-            if let Some(advertise) =
-                super::topology_update_for_local_removal(&self.last_advertised_topology)
-            {
-                self.last_advertised_topology.clone_from(&advertise);
-                self.peers_gossiper
-                    .update_topology(UpdateTopology(advertise.into_iter().collect()));
-            }
+            let advertise =
+                super::topology_update_for_local_removal(&self.last_advertised_topology);
+            self.last_advertised_topology.clone_from(&advertise);
+            self.peers_gossiper
+                .update_topology(UpdateTopology(advertise.into_iter().collect()));
             return;
         }
 

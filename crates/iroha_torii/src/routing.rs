@@ -20145,7 +20145,8 @@ pub struct DeployContractBundleContractReceiptDto {
     /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
-    /// Final deployment status.
+    /// Current deployment status (`submitted` after queue admission, `deployed`
+    /// once a waiting bundle observes the live alias binding).
     pub status: String,
 }
 
@@ -23184,6 +23185,12 @@ async fn execute_contract_bundle_request(
         return Ok(planned);
     }
 
+    // Init calls and assertions execute against the live chain state, so those
+    // bundle shapes still need to wait for alias activation before proceeding.
+    // Plain deploy receipts should return as soon as the deploy transaction is
+    // accepted into the queue.
+    let require_activation_wait = !req.init_calls.is_empty() || !req.assertions.is_empty();
+
     let mut receipt =
         load_contract_bundle_receipt(&planned.bundle_digest, &planned.chain_fingerprint)?
             .unwrap_or(planned);
@@ -23253,20 +23260,25 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index].status = response.status.clone();
             persist_contract_bundle_receipt(&receipt)?;
 
-            if let Err(err) =
-                wait_for_contract_alias_target(state.clone(), &contract_alias, &contract_address)
-                    .await
-            {
-                mark_bundle_failure(
-                    &mut receipt,
-                    format!("activate contract `{contract_name}`: {err}"),
-                );
-                persist_contract_bundle_receipt(&receipt)?;
-                return Err(err);
-            }
+            if require_activation_wait {
+                if let Err(err) = wait_for_contract_alias_target(
+                    state.clone(),
+                    &contract_alias,
+                    &contract_address,
+                )
+                .await
+                {
+                    mark_bundle_failure(
+                        &mut receipt,
+                        format!("activate contract `{contract_name}`: {err}"),
+                    );
+                    persist_contract_bundle_receipt(&receipt)?;
+                    return Err(err);
+                }
 
-            receipt.contracts[index].status = "deployed".to_owned();
-            persist_contract_bundle_receipt(&receipt)?;
+                receipt.contracts[index].status = "deployed".to_owned();
+                persist_contract_bundle_receipt(&receipt)?;
+            }
         }
 
         record_bundle_stage(&mut receipt, "deploy");
@@ -26299,6 +26311,10 @@ mod deploy_tests {
         assert_eq!(
             v.get("ok").and_then(norito::json::Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            v.get("status").and_then(norito::json::Value::as_str),
+            Some("submitted")
         );
         let ch = v
             .get("code_hash_hex")

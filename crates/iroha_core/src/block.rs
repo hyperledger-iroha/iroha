@@ -13777,7 +13777,11 @@ mod commit {
                 handles: Vec::new(),
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let entries = vec![AxtPolicyBinding { dsid, policy }];
+            let snapshot = AxtPolicySnapshot {
+                version: AxtPolicySnapshot::compute_version(&entries),
+                entries,
+            };
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();

@@ -6658,17 +6658,35 @@ impl Actor {
     fn frontier_slot_has_local_vote_history_in_slot(&self, slot: &FrontierSlot) -> bool {
         let local_peer = self.common_config.peer.id();
         let epoch = self.epoch_for_height(slot.height);
+        let live_local_signer = {
+            let (consensus_mode, mode_tag, prf_seed) =
+                self.consensus_context_for_height(slot.height);
+            let live_roster = self.roster_for_live_vote_with_mode(slot.height, consensus_mode);
+            if live_roster.is_empty() {
+                None
+            } else {
+                let topology = super::network_topology::Topology::new(live_roster);
+                let signature_topology =
+                    topology_for_view(&topology, slot.height, slot.view, mode_tag, prf_seed);
+                self.local_validator_index_for_topology(&signature_topology)
+            }
+        };
         self.stored_votes().any(|vote| {
             matches!(
                 vote.phase,
                 crate::sumeragi::consensus::Phase::Prepare
                     | crate::sumeragi::consensus::Phase::Commit
             ) && vote.height == slot.height
+                && vote.view == slot.view
                 && vote.epoch == epoch
                 && vote.block_hash == slot.block_hash
-                && self
-                    .vote_signer_peer(vote)
-                    .is_some_and(|peer| peer == *local_peer)
+                && match self.vote_signer_peer(vote) {
+                    Some(peer) => peer == *local_peer,
+                    // Stale/direct vote-log entries may not have enough cached roster context for
+                    // peer identity resolution; the live active roster still disambiguates local
+                    // signer history for the exact frontier slot.
+                    None => live_local_signer == Some(vote.signer),
+                }
         })
     }
 
@@ -13070,14 +13088,8 @@ enum TopologyRefreshDecision {
     AdvertiseForStrays { stray_count: usize },
 }
 
-fn topology_update_for_local_removal(
-    last_advertised: &BTreeSet<PeerId>,
-) -> Option<BTreeSet<PeerId>> {
-    if last_advertised.is_empty() {
-        None
-    } else {
-        Some(BTreeSet::new())
-    }
+fn topology_update_for_local_removal(_last_advertised: &BTreeSet<PeerId>) -> BTreeSet<PeerId> {
+    BTreeSet::new()
 }
 
 fn topology_refresh_decision(
@@ -14103,7 +14115,8 @@ impl Actor {
     }
 
     /// Deterministic fallback roster derived from trusted peers.
-    /// Uses the configured `others` ordering and appends `self` if missing.
+    /// Uses the configured `others` ordering, appends a validator `self` if
+    /// missing, and removes an observer `self` from consensus.
     fn trusted_topology(&self) -> Vec<PeerId> {
         let trusted = self.common_config.trusted_peers.value();
         let mut roster = super::filter_validators_from_trusted(trusted);
@@ -14111,8 +14124,12 @@ impl Actor {
         if roster.is_empty() {
             roster = trusted.clone().into_non_empty_vec().into_iter().collect();
         }
-        if !roster.iter().any(|p| p == me) {
-            roster.push(me.clone());
+        if matches!(self.config.role, NodeRole::Validator) {
+            if !roster.iter().any(|p| p == me) {
+                roster.push(me.clone());
+            }
+        } else {
+            roster.retain(|p| p != me);
         }
         if roster.len() <= 1 {
             iroha_logger::warn!(

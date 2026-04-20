@@ -4305,10 +4305,18 @@ impl Iroha {
                                 .collect();
                         }
                         let me = config.common.peer.id();
-                        if !validator_roster.iter().any(|p| p == me) {
-                            validator_roster.push(me.clone());
+                        let is_validator = matches!(
+                            config.sumeragi.role,
+                            iroha_config::parameters::actual::NodeRole::Validator
+                        );
+                        if is_validator {
+                            if !validator_roster.iter().any(|p| p == me) {
+                                validator_roster.push(me.clone());
+                            }
+                        } else {
+                            validator_roster.retain(|p| p != me);
                         }
-                        if validator_roster.is_empty() {
+                        if validator_roster.is_empty() && is_validator {
                             validator_roster.push(me.clone());
                         }
                         validator_roster
@@ -6748,7 +6756,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "7f66b7a2fd69ea5ab9eacce7c3315a4a3b2fb1a5f110115f68594a54d94174a7";
+        "5eaf540791b06ee5ad37a0e6b7d9dcaf500aa48c49acdbb8b097b328ec0eb483";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -7356,7 +7364,28 @@ fn log_config_warning(message: &str) {
     iroha_logger::warn!(target: "config", "{message}");
 }
 
+#[cfg(test)]
+static INSTRUCTION_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn instruction_registry_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    // `iroha_data_model` is linked into this unit-test binary as a normal
+    // dependency, so its instruction registry is process-global. Serialize the
+    // tests that intentionally clear the registry with the helpers that decode
+    // genesis, otherwise parallel test threads can observe an empty registry.
+    INSTRUCTION_REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
+    #[cfg(test)]
+    let _registry_guard = instruction_registry_test_guard();
+
+    read_genesis_unlocked(path)
+}
+
+fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     const PANIC_HELP: &str = concat!(
         "Genesis decode panicked. A common cause is an invalid `Name` (identifiers ",
         "must not contain whitespace or the characters `@`, `#`, `$`). ",
@@ -8698,14 +8727,15 @@ fn verify_genesis_metadata(
             return Err(Report::new(MainError::Config)
                 .attach(format!("trusted peer {peer_id} must use a BLS-normal key")));
         }
-        let expected_pop = trusted.pops.get(bls_pk).ok_or_else(|| {
-            Report::new(MainError::Config).attach(format!(
-                "trusted peer {peer_id} missing PoP in configuration"
-            ))
-        })?;
-        if &entry.pop != expected_pop {
+        if let Some(expected_pop) = trusted.pops.get(bls_pk) {
+            if &entry.pop != expected_pop {
+                return Err(Report::new(MainError::Config).attach(format!(
+                    "genesis PoP for peer {peer_id} does not match configuration"
+                )));
+            }
+        } else if !trusted.pops.is_empty() {
             return Err(Report::new(MainError::Config).attach(format!(
-                "genesis PoP for peer {peer_id} does not match configuration"
+                "trusted peer {peer_id} missing PoP in configuration"
             )));
         }
         if let Err(err) = iroha_crypto::bls_normal_pop_verify(bls_pk, &entry.pop) {
@@ -10676,6 +10706,8 @@ mod tests {
     fn read_genesis_initializes_instruction_registry() {
         use iroha_data_model::isi::{InstructionRegistry, set_instruction_registry};
 
+        let _registry_guard = instruction_registry_test_guard();
+
         // Start with an empty registry to simulate uninitialized state.
         set_instruction_registry(InstructionRegistry::new());
 
@@ -10685,7 +10717,7 @@ mod tests {
 
         // `read_genesis` should initialize the registry internally and simply
         // return a decode error for the bogus file instead of panicking.
-        let res = read_genesis(&path);
+        let res = read_genesis_unlocked(&path);
         assert!(res.is_err());
     }
 

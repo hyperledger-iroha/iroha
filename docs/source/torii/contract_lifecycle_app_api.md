@@ -83,7 +83,10 @@ For `POST /v1/contracts/deploy`, the sole `contracts[0]` entry carries the
 fresh immutable `contract_address`, the stable `contract_alias`, any
 `previous_contract_address` retired by an upgrade, the resolved `dataspace`,
 the consumed `deploy_nonce`, `tx_hash_hex`, `code_hash_hex`, `abi_hash_hex`,
-and the current receipt `status`.
+and the current receipt `status`. Single deploy receipts normally return
+`status = "submitted"` because the route returns after queue admission; bundle
+flows that continue into init/assertion stages may advance that status to
+`"deployed"` before returning.
 
 ## `POST /v1/contracts/call`
 
