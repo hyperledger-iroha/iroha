@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: config scenario SoraNet puzzle test budget
+- `integration_tests/tests/config.rs` now keeps the `config_scenarios`
+  SoraNet PoW/puzzle roundtrip and propagation coverage on non-default
+  memory/time/lane values, but scales the localnet Argon2 puzzle costs down
+  from 128-192 MiB class parameters to MiB-scale test parameters. This avoids
+  starving Torii during four-peer integration startup and prevents
+  contention-sensitive `/configuration` request timeouts in the grouped
+  `core_api` suite.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test core_api config::config_scenarios -- --exact --nocapture`
+    (`1 passed`; 24.50s)
+
 ## 2026-04-20 Follow-up: Izanami Nexus selector and persistence regression sync
 - `crates/izanami/src/config.rs` now resolves the embedded Sora Nexus fee/stake
   selectors into canonical `AssetDefinitionId`s before Izanami builds genesis

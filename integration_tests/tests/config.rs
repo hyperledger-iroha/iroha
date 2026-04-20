@@ -16,8 +16,14 @@ const TEST_POW_DIFFICULTY: u8 = 7;
 const TEST_POW_MAX_FUTURE_SKEW: u64 = 720;
 const TEST_POW_MIN_TTL: u64 = 180;
 const TEST_POW_TARGET_TTL: u64 = 360;
-const TEST_POW_MEMORY_KIB: u32 = 192 * 1024;
-const TEST_POW_TIME_COST: u32 = 4;
+const INITIAL_POW_MEMORY_KIB: u32 = 8 * 1024;
+const INITIAL_POW_TIME_COST: u32 = 1;
+const INITIAL_POW_LANES: u32 = 1;
+const UPDATED_POW_MEMORY_KIB: u32 = 10 * 1024;
+const UPDATED_POW_TIME_COST: u32 = 2;
+const UPDATED_POW_LANES: u32 = 2;
+const TEST_POW_MEMORY_KIB: u32 = 12 * 1024;
+const TEST_POW_TIME_COST: u32 = 3;
 const TEST_POW_LANES: u32 = 3;
 const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
 const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -63,15 +69,15 @@ fn config_scenarios() -> eyre::Result<()> {
                         "puzzle",
                         "memory_kib",
                     ],
-                    131_072_i64,
+                    i64::from(INITIAL_POW_MEMORY_KIB),
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
-                    3_i64,
+                    i64::from(INITIAL_POW_TIME_COST),
                 )
                 .write(
                     ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
-                    2_i64,
+                    i64::from(INITIAL_POW_LANES),
                 );
         });
     let Some((network, rt)) =
@@ -161,9 +167,9 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
                 signed_ticket_public_key_hex: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),
-                    memory_kib: Some(131_072),
-                    time_cost: Some(3),
-                    lanes: Some(2),
+                    memory_kib: Some(UPDATED_POW_MEMORY_KIB),
+                    time_cost: Some(UPDATED_POW_TIME_COST),
+                    lanes: Some(UPDATED_POW_LANES),
                 }),
             }),
         }),
@@ -191,9 +197,9 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     assert!(handshake.pow.required);
     assert_eq!(handshake.pow.difficulty, 5);
     let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
-    assert_eq!(puzzle.memory_kib, 131_072);
-    assert_eq!(puzzle.time_cost, 3);
-    assert_eq!(puzzle.lanes, 2);
+    assert_eq!(puzzle.memory_kib, UPDATED_POW_MEMORY_KIB);
+    assert_eq!(puzzle.time_cost, UPDATED_POW_TIME_COST);
+    assert_eq!(puzzle.lanes, UPDATED_POW_LANES);
     assert!(!config.network.require_sm_handshake_match);
     assert!(!config.network.require_sm_openssl_preview_match);
 
@@ -211,9 +217,9 @@ fn soranet_pow_puzzle_config_roundtrips_scenario(
     assert_eq!(handshake.pow.min_ticket_ttl_secs, 120);
     assert_eq!(handshake.pow.ticket_ttl_secs, 240);
     let puzzle = handshake.pow.puzzle.expect("puzzle summary present");
-    assert_eq!(puzzle.memory_kib, 131_072);
-    assert_eq!(puzzle.time_cost, 3);
-    assert_eq!(puzzle.lanes, 2);
+    assert_eq!(puzzle.memory_kib, INITIAL_POW_MEMORY_KIB);
+    assert_eq!(puzzle.time_cost, INITIAL_POW_TIME_COST);
+    assert_eq!(puzzle.lanes, INITIAL_POW_LANES);
 
     Ok(())
 }
