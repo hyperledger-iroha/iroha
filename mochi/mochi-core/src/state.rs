@@ -15,7 +15,10 @@ use iroha_data_model::query::{
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::{Account, AccountId},
-    asset::{AssetId, definition::AssetDefinition, id::AssetDefinitionId, value::Asset},
+    asset::{
+        AssetId, alias::AssetDefinitionAlias, definition::AssetDefinition, id::AssetDefinitionId,
+        value::Asset,
+    },
     domain::{Domain, DomainId},
     metadata::Metadata,
     peer::PeerId,
@@ -246,8 +249,8 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = asset_id.definition().domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
+        let domain = asset_definition_domain_hint(asset_id.definition(), None);
+        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
         let title = asset_id.to_string();
@@ -257,7 +260,7 @@ impl StateEntry {
             &title,
             &subtitle,
             &detail,
-            Some(&domain),
+            domain.as_deref(),
             Some(&owner_str),
             Some(&definition),
         );
@@ -271,16 +274,25 @@ impl StateEntry {
                 }
             }
         };
-        let search_blob =
-            build_search_blob(&[&title, &subtitle, &detail, &domain, &owner_str, &definition]);
+        let mut search_parts = vec![
+            title.as_str(),
+            subtitle.as_str(),
+            detail.as_str(),
+            owner_str.as_str(),
+            definition.as_str(),
+        ];
+        if let Some(domain) = domain.as_deref() {
+            search_parts.push(domain);
+        }
+        let search_blob = build_search_blob(&search_parts);
         let raw = format!("{asset:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
+            domain,
+            domain_lower,
             owner: Some(owner_str),
             owner_lower: Some(owner_lower),
             asset_definition: Some(definition),
@@ -295,31 +307,34 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = asset_id.definition().domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
+        let domain = asset_definition_domain_hint(asset_id.definition(), None);
+        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
         let (json, norito_bytes) = encode_json(&asset_id);
         let title = asset_id.to_string();
         let detail = "Identifier projection".to_owned();
         let subtitle = format!("Owner {owner_str}");
-        let search_blob = build_search_blob(&[
-            &title,
-            &subtitle,
-            &detail,
-            &domain,
-            &owner_str,
-            &definition,
+        let mut search_parts = vec![
+            title.as_str(),
+            subtitle.as_str(),
+            detail.as_str(),
+            owner_str.as_str(),
+            definition.as_str(),
             json.as_deref().unwrap_or_default(),
-        ]);
+        ];
+        if let Some(domain) = domain.as_deref() {
+            search_parts.push(domain);
+        }
+        let search_blob = build_search_blob(&search_parts);
         let raw = format!("{asset_id:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
+            domain,
+            domain_lower,
             owner: Some(owner_str),
             owner_lower: Some(owner_lower),
             asset_definition: Some(definition),
@@ -332,8 +347,8 @@ impl StateEntry {
 
     fn from_asset_definition(definition: AssetDefinition) -> Self {
         let definition_id = definition.id().clone();
-        let domain = definition_id.domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
+        let domain = asset_definition_domain_hint(&definition_id, definition.alias().as_ref());
+        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let owner = definition.owned_by().to_string();
         let owner_lower = owner.to_ascii_lowercase();
         let title = definition_id.to_string();
@@ -345,7 +360,7 @@ impl StateEntry {
             &title,
             &subtitle,
             &detail,
-            Some(&domain),
+            domain.as_deref(),
             Some(&owner),
             Some(&definition_string),
         );
@@ -359,15 +374,24 @@ impl StateEntry {
                 }
             }
         };
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &domain, &owner]);
+        let mut search_parts = vec![
+            title.as_str(),
+            subtitle.as_str(),
+            detail.as_str(),
+            owner.as_str(),
+        ];
+        if let Some(domain) = domain.as_deref() {
+            search_parts.push(domain);
+        }
+        let search_blob = build_search_blob(&search_parts);
         let raw = format!("{definition:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
+            domain,
+            domain_lower,
             owner: Some(owner),
             owner_lower: Some(owner_lower),
             asset_definition: Some(definition_string),
@@ -379,29 +403,32 @@ impl StateEntry {
     }
 
     fn from_asset_definition_id(id: AssetDefinitionId) -> Self {
-        let domain = id.domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
+        let domain = asset_definition_domain_hint(&id, None);
+        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
         let definition = id.to_string();
         let definition_lower = definition.to_ascii_lowercase();
         let title = definition.clone();
         let (json, norito_bytes) = encode_json(&id);
         let subtitle = "Asset definition identifier".to_owned();
         let detail = "Identifier projection".to_owned();
-        let search_blob = build_search_blob(&[
-            &title,
-            &subtitle,
-            &detail,
-            &domain,
+        let mut search_parts = vec![
+            title.as_str(),
+            subtitle.as_str(),
+            detail.as_str(),
             json.as_deref().unwrap_or_default(),
-        ]);
+        ];
+        if let Some(domain) = domain.as_deref() {
+            search_parts.push(domain);
+        }
+        let search_blob = build_search_blob(&search_parts);
         let raw = format!("{id:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
+            domain,
+            domain_lower,
             owner: None,
             owner_lower: None,
             asset_definition: Some(definition),
@@ -535,6 +562,21 @@ fn metadata_summary(metadata: &Metadata) -> String {
             .join(", ");
         format!("Metadata keys: {keys}")
     }
+}
+
+fn asset_definition_domain_hint(
+    id: &AssetDefinitionId,
+    alias: Option<&AssetDefinitionAlias>,
+) -> Option<String> {
+    id.try_domain()
+        .map(ToString::to_string)
+        .or_else(|| alias.and_then(asset_alias_domain_hint))
+}
+
+fn asset_alias_domain_hint(alias: &AssetDefinitionAlias) -> Option<String> {
+    alias
+        .domain_segment()
+        .map(|domain| format!("{domain}.{}", alias.dataspace_segment()))
 }
 
 fn encode_json<T: json::JsonSerialize>(value: &T) -> (Option<String>, Option<Vec<u8>>) {
@@ -964,6 +1006,10 @@ mod tests {
         let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
         let asset = Asset::new(asset_id, Numeric::from(42_u32));
         let entry = StateEntry::from_asset(asset);
+        assert!(
+            entry.domain.is_none(),
+            "opaque canonical definition ids should not force a synthetic domain"
+        );
         let json = entry.json.expect("asset json");
         assert!(
             json.contains("\"value\""),
@@ -981,6 +1027,10 @@ mod tests {
         let definition =
             AssetDefinition::new(definition_id, NumericSpec::default()).build(&ALICE_ID);
         let entry = StateEntry::from_asset_definition(definition);
+        assert!(
+            entry.domain.is_none(),
+            "opaque canonical definition ids should not force a synthetic domain"
+        );
         let json = entry.json.expect("asset definition json");
         assert!(
             json.contains("\"owned_by\""),
@@ -991,6 +1041,27 @@ mod tests {
             !bytes.is_empty(),
             "definition norito encoding should not be empty"
         );
+    }
+
+    #[test]
+    fn state_entry_asset_id_handles_opaque_definition_without_domain_projection() {
+        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
+            .parse()
+            .expect("definition id");
+        let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
+        let entry = StateEntry::from_asset_id(asset_id);
+        assert!(entry.domain.is_none());
+        assert!(entry.asset_definition.is_some());
+    }
+
+    #[test]
+    fn state_entry_asset_definition_id_handles_opaque_domainless_identifier() {
+        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
+            .parse()
+            .expect("definition id");
+        let entry = StateEntry::from_asset_definition_id(definition_id);
+        assert!(entry.domain.is_none());
+        assert!(entry.asset_definition.is_some());
     }
 
     #[test]

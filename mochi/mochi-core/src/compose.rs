@@ -1717,16 +1717,16 @@ mod tests {
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
-        let scoped_account = format!("{account}@wonderland");
+        let domain = "wonderland.universal";
 
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
         let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
             .expect("transfer draft");
         let register_domain =
-            InstructionDraft::register_domain_from_input("wonderland").expect("domain draft");
+            InstructionDraft::register_domain_from_input(domain).expect("domain draft");
         let register_account =
-            InstructionDraft::register_account_from_input(&scoped_account).expect("account draft");
+            InstructionDraft::register_account_from_input(&account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             Mintable::Once,
@@ -1742,7 +1742,7 @@ mod tests {
             min_initial_amounts: BTreeMap::new(),
             default_role_on_create: None,
         };
-        let admission = InstructionDraft::account_admission_policy_from_input("wonderland", policy)
+        let admission = InstructionDraft::account_admission_policy_from_input(domain, policy)
             .expect("policy draft");
 
         let grant_role =
@@ -1870,10 +1870,11 @@ mod tests {
     #[test]
     fn account_admission_policy_draft_parses_domain() {
         let policy = AccountAdmissionPolicy::default();
-        let draft = InstructionDraft::account_admission_policy_from_input("wonderland", policy)
-            .expect("policy draft");
+        let draft =
+            InstructionDraft::account_admission_policy_from_input("wonderland.universal", policy)
+                .expect("policy draft");
         assert!(
-            draft.summary().contains("wonderland"),
+            draft.summary().contains("wonderland.universal"),
             "summary should mention domain"
         );
     }
@@ -1998,8 +1999,8 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
 
-        let draft =
-            InstructionDraft::register_domain_from_input("side_garden").expect("domain draft");
+        let draft = InstructionDraft::register_domain_from_input("side_garden.universal")
+            .expect("domain draft");
         let err = compose_preview_with_authority("chain", &[draft], bob)
             .expect_err("Bob should not be allowed to register domains");
 

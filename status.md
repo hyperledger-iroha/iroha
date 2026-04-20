@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-19
 
+## 2026-04-19 Follow-up: Mochi draft/state/supervisor regression sync
+- `mochi/mochi-core/src/compose.rs` test coverage now uses fully qualified
+  `domain.dataspace` literals for domain-registration and account-admission
+  drafts, and the JSON roundtrip coverage keeps account registration on the
+  canonical domainless `AccountId` path.
+- `mochi/mochi-core/src/state.rs` no longer panics when explorer entries are
+  built from opaque canonical `AssetDefinitionId` values. Asset and
+  asset-definition rows now treat the domain as optional, fall back to alias
+  metadata when available, and have focused regressions for the identifier-only
+  paths.
+- `mochi/mochi-core/src/supervisor.rs` now normalizes peer config overrides
+  inside `PeerSpec::write_config`, so direct config rendering picks up the same
+  local MCP / DA defaults as the builder path. The standalone Kagami test stub
+  also emits `chain_discriminant`, matching the current genesis manifest
+  schema.
+- Regenerated `mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
+  from the in-tree ignored helper so the pipeline-event fixture matches the
+  current sample event shape again.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core regenerate_pipeline_event_message_fixture -- --ignored --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core compose::tests:: -- --nocapture`
+    (`30 passed`)
+  - `cargo test -p mochi-core state::tests::state_entry_asset -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p mochi-core supervisor::tests::peer_spec_ -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p mochi-core supervisor::tests::supervisor_ -- --nocapture`
+    (`7 passed`)
+  - `cargo test -p mochi-core supervisor::tests::wipe_and_regenerate_resets_storage_and_genesis -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core torii::tests::event_stream_decodes_pipeline_events -- --nocapture`
+    (`1 passed`)
+  - `git diff --check`
+  - `cargo test -p mochi-core`
+    (`244 passed; 0 failed; 4 ignored`; integration tests `3 passed`; doctests `0`)
+
 ## 2026-04-19 Follow-up: Mochi supervisor Kagami and stream fixture sync
 - `mochi/mochi-integration/src/bin/kagami_mock.rs` now matches the current
   supervisor CLI contract: it accepts `--version`, `--chain-id`,
