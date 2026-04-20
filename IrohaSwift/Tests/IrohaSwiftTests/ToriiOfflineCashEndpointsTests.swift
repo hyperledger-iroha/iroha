@@ -585,7 +585,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         XCTAssertTrue(requestIds.allSatisfy { !$0.isEmpty })
     }
 
-    func testAuthorizationCanonicalPayloadPreservesNilIosBindingFieldsAsNull() throws {
+    func testAuthorizationCanonicalPayloadOmitsNilIosBindingFields() throws {
         let authorization = ToriiOfflineSpendAuthorization(
             authorizationId: "authorization-1",
             lineageId: "lineage-1",
@@ -609,36 +609,47 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         let payload = try ToriiOfflineCashCodec.authorizationUnsignedPayload(authorization)
         let rawJSON = try XCTUnwrap(String(data: payload, encoding: .utf8))
 
-        XCTAssertTrue(rawJSON.contains("\"ios_bundle_id\":null"))
-        XCTAssertTrue(rawJSON.contains("\"ios_environment\":null"))
-        XCTAssertTrue(rawJSON.contains("\"ios_team_id\":null"))
+        XCTAssertFalse(rawJSON.contains("ios_bundle_id"))
+        XCTAssertFalse(rawJSON.contains("ios_environment"))
+        XCTAssertFalse(rawJSON.contains("ios_team_id"))
     }
 
-    func testAuthorizationSignatureVerifiesForLiveIosFixtureWithNilBindingOptionals() throws {
+    func testAuthorizationSignatureVerifiesForLiveIosSetupFixture() throws {
         let fixtureJSON = #"""
         {
-          "authorization_id": "authorization_b9faaf81e8f788b0a0a1dd80a2555aebbf52481f87b1ce0a4c926b7a8af748e4",
-          "lineage_id": "lineage_b70a95d4e5da112c50a36c3270e0282b2f79bdd29f216d4cfffb7aef3e2154d7",
-          "account_id": "sorauﾛ1PﾘhﾜAﾘｷwﾓ5ePXﾂfXR5dQbﾍ2ﾔN22Wﾑn2gﾀDﾇYﾛｾ1J8NG4W",
-          "verdict_id": "verdict_d8faf3ca1a7beb981edc7b883feb8f76e5a6cf5b37a4af7dcf66a420f0d0b691",
+          "authorization_id": "authorization_4f86a60dec284c895df9a95c2fadcfd5c9f3a481f2c3aa90c1c5ea7ebd3d9387",
+          "lineage_id": "lineage_9f9d160ad45be891381b19e42d3d2255f11b077fbbf95b5943a44507dc817305",
+          "account_id": "sorauﾛ1NxZｶLｹVｶ9ﾁﾘｽﾓｦﾏ4ｹｿﾄAｷNCzﾑKﾅｵfwfvﾚQｿｦﾗCVSPP8WN",
+          "device_id": "9EEDB7BE-2177-4AE5-8740-F8F5ACB2880D",
+          "offline_public_key": "BBdP8FMSpBK64fpmCrS1bwnAlYL6XyfPBUXWSY4YQWeGbfDoi2LgJXD5JeQptopPDZBtKe7+Vk4oSQSHcwBsbDk=",
+          "app_attest_key_id": "NL/FM1mi18jlLUkCYW9t9UzIWiQwY5ldPhZR0g+3/mQ=",
+          "verdict_id": "verdict_38997c2f0b9570034dd17f643856352d167c397a8d71180eeaa008ddc84110a7",
           "max_balance": "1000000",
           "max_tx_value": "1000000",
-          "issued_at_ms": 1776040130220,
-          "refresh_at_ms": 1776083330220,
-          "expires_at_ms": 1776126530220,
+          "issued_at_ms": 1776627732979,
+          "refresh_at_ms": 1776670932979,
+          "expires_at_ms": 1776714132979,
           "device_binding": {
             "platform": "ios",
-            "attestation_key_id": "boM+kn3kpykutMrFQOam4/PhsK2WJah8wWJBNAaDMWo=",
-            "device_id": "30A7BB8C-C3B2-4321-9E57-9E8AECB12D51",
-            "offline_public_key": "BDlEb0SFGGA9Y4LGOvj8zGBULbarNb975avP0b9uhaGTdHhPPZMX6KDjVh5A48rL6LNMLZF/tLrjz32bs2odZTQ=",
+            "attestation_key_id": "NL/FM1mi18jlLUkCYW9t9UzIWiQwY5ldPhZR0g+3/mQ=",
+            "device_id": "9EEDB7BE-2177-4AE5-8740-F8F5ACB2880D",
+            "offline_public_key": "BBdP8FMSpBK64fpmCrS1bwnAlYL6XyfPBUXWSY4YQWeGbfDoi2LgJXD5JeQptopPDZBtKe7+Vk4oSQSHcwBsbDk=",
             "attestation_report_base64": ""
           },
-          "issuer_signature_base64": "lHMMogLtd1estr3Z/CAOMC3jj+QxUIpiGzqvkbY47y1CnICGdBhnMa0zS0WXILIJte+T9WZufWky/h63ozDWCQ=="
+          "issuer_signature_base64": "szVhqwR9rEOUmn8U+Kr0TgybfuQBHx+VFcKmKk+4zt+u2FfPYuOXRd1Uc8j6p9uzqO41g+EoJOnolIn6jxxuAg=="
         }
         """#
         let authorization = try JSONDecoder().decode(
             ToriiOfflineSpendAuthorization.self,
             from: Data(fixtureJSON.utf8)
+        )
+
+        let payload = try ToriiOfflineCashCodec.authorizationUnsignedPayload(authorization)
+        let rawJSON = try XCTUnwrap(String(data: payload, encoding: .utf8))
+
+        XCTAssertEqual(
+            rawJSON,
+            #"{"account_id":"sorauﾛ1NxZｶLｹVｶ9ﾁﾘｽﾓｦﾏ4ｹｿﾄAｷNCzﾑKﾅｵfwfvﾚQｿｦﾗCVSPP8WN","authorization_id":"authorization_4f86a60dec284c895df9a95c2fadcfd5c9f3a481f2c3aa90c1c5ea7ebd3d9387","device_binding":{"attestation_key_id":"NL/FM1mi18jlLUkCYW9t9UzIWiQwY5ldPhZR0g+3/mQ=","attestation_report_base64":"","device_id":"9EEDB7BE-2177-4AE5-8740-F8F5ACB2880D","offline_public_key":"BBdP8FMSpBK64fpmCrS1bwnAlYL6XyfPBUXWSY4YQWeGbfDoi2LgJXD5JeQptopPDZBtKe7+Vk4oSQSHcwBsbDk=","platform":"ios"},"expires_at_ms":1776714132979,"issued_at_ms":1776627732979,"lineage_id":"lineage_9f9d160ad45be891381b19e42d3d2255f11b077fbbf95b5943a44507dc817305","max_balance":"1000000","max_tx_value":"1000000","refresh_at_ms":1776670932979,"verdict_id":"verdict_38997c2f0b9570034dd17f643856352d167c397a8d71180eeaa008ddc84110a7"}"#
         )
 
         XCTAssertNoThrow(

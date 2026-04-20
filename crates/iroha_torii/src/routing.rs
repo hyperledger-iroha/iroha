@@ -19775,7 +19775,9 @@ pub async fn handle_post_vk_register(
         id,
         record: vk_record,
     };
+    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+        .with_metadata(tx_metadata)
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
@@ -19815,7 +19817,9 @@ pub async fn handle_post_vk_update(
         id,
         record: vk_record,
     };
+    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+        .with_metadata(tx_metadata)
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")

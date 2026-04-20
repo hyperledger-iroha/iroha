@@ -2,6 +2,27 @@ import XCTest
 @testable import IrohaSwift
 
 final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
+    func testEd25519TransferWithFeeSponsorEncodes() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Ed25519 transaction encoder unavailable")
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 0x11, count: 32))
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+                                      authority: authority,
+                                      assetDefinitionId: "xor#wonderland",
+                                      quantity: "2",
+                                      destination: authority,
+                                      description: "fee-sponsor",
+                                      feeSponsor: "sponsor@sbp",
+                                      ttlMs: 120)
+        let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
+                                                                  signingKey: signingKey,
+                                                                  creationTimeMs: 1_717_000_222)
+        XCTAssertFalse(envelope.signedTransaction.isEmpty)
+        XCTAssertFalse(envelope.transactionHash.isEmpty)
+    }
+
     func testSm2SigningKeyEncodesTransfer() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .sm2),
                       "SM2 transaction encoder unavailable")

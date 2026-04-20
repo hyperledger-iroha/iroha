@@ -7,6 +7,7 @@ public struct TransferRequest {
     public let quantity: String         // decimal string
     public let destination: String      // i105 account id
     public let description: String?
+    public let feeSponsor: String?
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
@@ -16,6 +17,7 @@ public struct TransferRequest {
                 quantity: String,
                 destination: String,
                 description: String?,
+                feeSponsor: String? = nil,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
@@ -24,6 +26,7 @@ public struct TransferRequest {
         self.quantity = quantity
         self.destination = destination
         self.description = description
+        self.feeSponsor = feeSponsor
         self.ttlMs = ttlMs
         self.nonce = nonce
     }

@@ -595,6 +595,14 @@ struct SwiftTransactionEncoder {
         }
         let destination = ids.accountIds["destination"] ?? transfer.destination
         let privateKey = try privateKeyBytes(from: signingKey)
+        let feeSponsor: String?
+        if let rawFeeSponsor = transfer.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawFeeSponsor.isEmpty
+        {
+            feeSponsor = rawFeeSponsor
+        } else {
+            feeSponsor = nil
+        }
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
                                                          authority: ids.authorityId,
@@ -604,6 +612,7 @@ struct SwiftTransactionEncoder {
                                                          assetDefinitionId: assetDefinitionId,
                                                          quantity: transfer.quantity,
                                                          destination: destination,
+                                                         feeSponsor: feeSponsor,
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }

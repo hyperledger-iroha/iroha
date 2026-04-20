@@ -54,6 +54,7 @@ use iroha_data_model::{
         transfer::Transfer,
         zk,
     },
+    metadata::Metadata,
     name::Name,
     offline::{
         OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
@@ -460,6 +461,28 @@ fn parse_voting_mode(code: u8) -> BridgeResult<VotingMode> {
 
 fn parse_name(value: String) -> BridgeResult<Name> {
     Name::from_str(&value).map_err(|_| BridgeError::MetadataKey)
+}
+
+unsafe fn parse_optional_account_id_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<Option<AccountId>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(None);
+    }
+    let raw = unsafe { read_string_bridge(ptr, len)? };
+    parse_account_id(raw).map(Some)
+}
+
+fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
+    let mut metadata = Metadata::default();
+    if let Some(fee_sponsor) = fee_sponsor {
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("fee_sponsor is a valid metadata key"),
+            Json::new(fee_sponsor.to_string()),
+        );
+    }
+    metadata
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -2697,9 +2720,37 @@ fn encode_asset_transaction_with_nonce<F>(
 where
     F: FnOnce() -> Executable,
 {
+    encode_asset_transaction_with_nonce_and_metadata(
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_option,
+        nonce_option,
+        Metadata::default(),
+        private_key,
+        build_executable,
+    )
+}
+
+fn encode_asset_transaction_with_nonce_and_metadata<F>(
+    chain_id: ChainId,
+    authority: AccountId,
+    creation_time_ms: u64,
+    ttl_option: Option<NonZeroU64>,
+    nonce_option: Option<NonZeroU32>,
+    metadata: Metadata,
+    private_key: PrivateKey,
+    build_executable: F,
+) -> (Vec<u8>, [u8; 32])
+where
+    F: FnOnce() -> Executable,
+{
     let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
     let mut builder = TransactionBuilder::new(chain_id, authority);
     builder = builder.with_executable(build_executable());
+    if !metadata.is_empty() {
+        builder = builder.with_metadata(metadata);
+    }
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -4894,6 +4945,94 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let inputs = unsafe {
+            gather_asset_tx_inputs(AssetInputPointers {
+                chain_ptr,
+                chain_len,
+                authority_ptr,
+                authority_len,
+                asset_definition_ptr,
+                asset_definition_len,
+                quantity_ptr,
+                quantity_len,
+                destination_ptr,
+                destination_len,
+                ttl_ms,
+                ttl_present,
+                private_key_ptr,
+                private_key_len,
+            })?
+        };
+
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let metadata = build_fee_sponsor_metadata(fee_sponsor);
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
+            private_key,
+            || {
+                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                Executable::from([InstructionBox::from(transfer)])
+            },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
     chain_ptr: *const c_char,
     chain_len: c_ulong,
@@ -4964,6 +5103,98 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             creation_time_ms,
             ttl,
             nonce,
+            private_key,
+            || {
+                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                Executable::from([InstructionBox::from(transfer)])
+            },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    algorithm_code: u8,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let inputs = unsafe {
+            gather_asset_tx_inputs_with_parser(
+                AssetInputPointers {
+                    chain_ptr,
+                    chain_len,
+                    authority_ptr,
+                    authority_len,
+                    asset_definition_ptr,
+                    asset_definition_len,
+                    quantity_ptr,
+                    quantity_len,
+                    destination_ptr,
+                    destination_len,
+                    ttl_ms,
+                    ttl_present,
+                    private_key_ptr,
+                    private_key_len,
+                },
+                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
+            )?
+        };
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let metadata = build_fee_sponsor_metadata(fee_sponsor);
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
             private_key,
             || {
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
@@ -7993,6 +8224,60 @@ mod accel_tests {
             NonZeroU32::new(nonce_value),
             "nonce should be encoded"
         );
+        unsafe {
+            free(out_signed_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn transfer_encoder_with_fee_sponsor_sets_metadata() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let quantity = cstring("10");
+        let destination = sample_destination("bank", 1);
+        let fee_sponsor = sample_destination("sbp", 2);
+        let fee_sponsor_literal = fee_sponsor.to_str().expect("utf8 fee sponsor");
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                quantity.as_ptr(),
+                quantity.as_bytes().len() as c_ulong,
+                destination.as_ptr(),
+                destination.as_bytes().len() as c_ulong,
+                fee_sponsor.as_ptr(),
+                fee_sponsor.as_bytes().len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let signed = decode_signed(out_signed_ptr, out_signed_len);
+        let metadata_key = Name::from_str("fee_sponsor").expect("metadata key");
+        let metadata_value = signed
+            .payload()
+            .metadata
+            .get(&metadata_key)
+            .expect("fee sponsor metadata should be present");
+        assert_eq!(metadata_value, &Json::new(fee_sponsor_literal));
         unsafe {
             free(out_signed_ptr as *mut _);
         }

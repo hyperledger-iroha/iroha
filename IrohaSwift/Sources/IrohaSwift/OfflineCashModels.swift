@@ -68,9 +68,9 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
         try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
-        try container.encode(iosTeamId, forKey: .iosTeamId)
-        try container.encode(iosBundleId, forKey: .iosBundleId)
-        try container.encode(iosEnvironment, forKey: .iosEnvironment)
+        try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)
+        try container.encodeIfPresent(iosBundleId, forKey: .iosBundleId)
+        try container.encodeIfPresent(iosEnvironment, forKey: .iosEnvironment)
     }
 }
 
