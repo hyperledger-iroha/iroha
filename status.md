@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: Torii contract deploy receipt timeout regression
+- `crates/iroha_torii/src/routing.rs` no longer waits for alias activation on
+  plain deploy receipts that only need queue admission metadata. Single
+  `POST /v1/contracts/deploy` responses now return promptly with
+  `contracts[0].status = "submitted"` after the deploy transaction is queued,
+  while deploy bundles that continue into init-call or assertion stages still
+  wait for the live alias binding before proceeding.
+- `docs/source/torii/contract_lifecycle_app_api.md` now documents the
+  queue-admission `submitted` status for single deploy receipts and clarifies
+  that waiting bundle flows may still advance the status to `deployed` before
+  returning.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii contracts_deploy_handler_ok --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii deploy_endpoint_returns_hashes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+    (matched the gated integration test and exited cleanly after the expected
+    `Skipping: ... Set IROHA_RUN_IGNORED=1 to run.` message)
+
 ## 2026-04-20 Follow-up: SoraFS manifest CAR metadata alignment
 - `crates/sorafs_node/tests/cli.rs` and `crates/sorafs_node/tests/pin_workflows.rs`
   now build fixture manifests from `CarWriter` archive stats instead of
