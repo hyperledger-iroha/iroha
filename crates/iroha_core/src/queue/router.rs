@@ -16,6 +16,7 @@ use iroha_data_model::{
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
+        settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
         smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
     },
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
@@ -150,6 +151,9 @@ pub fn evaluate_policy(
     {
         return decision;
     }
+    if let Some(decision) = settlement_routing_decision_without_catalog(tx) {
+        return decision;
+    }
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
         return evaluate_query_policy_with_view(policy, account_id, None);
     }
@@ -175,6 +179,16 @@ fn evaluate_policy_with_view(
         tx,
         Some(&state_view.nexus().lane_catalog),
         Some(&state_view.nexus().dataspace_catalog),
+        Some(state_view),
+    )
+    .unwrap_or(None)
+    {
+        return decision;
+    }
+    if let Some(decision) = settlement_routing_decision(
+        tx,
+        &state_view.nexus().lane_catalog,
+        &state_view.nexus().dataspace_catalog,
         Some(state_view),
     )
     .unwrap_or(None)
@@ -227,6 +241,10 @@ pub fn evaluate_policy_with_catalog(
     )? {
         return Ok(decision);
     }
+    if let Some(decision) = settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
+    {
+        return Ok(decision);
+    }
     if let Some(account_id) = account_permission_holder_routing_target(tx) {
         return resolve_query_routing_decision(
             policy,
@@ -265,6 +283,11 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
         Some(dataspace_catalog),
         world,
     )? {
+        return Ok(decision);
+    }
+    if let Some(decision) =
+        settlement_routing_decision_with_world(tx, lane_catalog, dataspace_catalog, world)?
+    {
         return Ok(decision);
     }
     let target_dataspace =
@@ -418,6 +441,293 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
         }
         _ => Ok(None),
     }
+}
+
+fn settlement_routing_decision_without_catalog(
+    tx: &AcceptedTransaction<'_>,
+) -> Option<RoutingDecision> {
+    let dataspace_id = settlement_transaction_dataspace_target(tx, None, None)?;
+    (dataspace_id == DataSpaceId::UNIVERSAL)
+        .then(|| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+}
+
+fn settlement_routing_decision(
+    tx: &AcceptedTransaction<'_>,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    state_view: Option<&StateView<'_>>,
+) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+    let Some(dataspace_id) =
+        settlement_transaction_dataspace_target(tx, Some(dataspace_catalog), state_view)
+    else {
+        return Ok(None);
+    };
+    canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
+}
+
+fn settlement_routing_decision_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+    let Some(dataspace_id) =
+        settlement_transaction_dataspace_target_with_world(tx, Some(dataspace_catalog), world)
+    else {
+        return Ok(None);
+    };
+    canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
+}
+
+fn merge_settlement_target_dataspace(
+    target_dataspace: &mut Option<DataSpaceId>,
+    candidate: Option<DataSpaceId>,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    match *target_dataspace {
+        Some(existing) if existing != candidate => {
+            // Mixed settlement legs require a deterministic coordinator route instead of being
+            // captured by the transaction authority's ordinary account rule.
+            *target_dataspace = Some(DataSpaceId::UNIVERSAL);
+        }
+        Some(_) => {}
+        None => *target_dataspace = Some(candidate),
+    }
+}
+
+fn settlement_pair_dataspace_target(
+    first: Option<DataSpaceId>,
+    second: Option<DataSpaceId>,
+) -> Option<DataSpaceId> {
+    match (first, second) {
+        (Some(first), Some(second)) if first == second => Some(first),
+        (Some(_), Some(_)) => Some(DataSpaceId::UNIVERSAL),
+        (Some(dataspace), None) | (None, Some(dataspace)) => Some(dataspace),
+        (None, None) => None,
+    }
+}
+
+fn settlement_transaction_dataspace_target(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let Some(executable) = transaction_executable(tx) else {
+        return None;
+    };
+    let mut target_dataspace = None;
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                merge_settlement_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_settlement_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                );
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                merge_settlement_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_settlement_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    ),
+                );
+            }
+        }
+    }
+
+    target_dataspace
+}
+
+fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+    tx: &AcceptedTransaction<'_>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let Some(executable) = transaction_executable(tx) else {
+        return None;
+    };
+    let mut target_dataspace = None;
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                merge_settlement_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_settlement_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                );
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                merge_settlement_target_dataspace(
+                    &mut target_dataspace,
+                    instruction_settlement_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                    ),
+                );
+            }
+        }
+    }
+
+    target_dataspace
+}
+
+fn instruction_settlement_dataspace_target(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
+        return settlement_pair_dataspace_target(
+            asset_definition_dataspace_target(
+                dvp.delivery_leg().asset_definition_id(),
+                dataspace_catalog,
+                state_view,
+            ),
+            asset_definition_dataspace_target(
+                dvp.payment_leg().asset_definition_id(),
+                dataspace_catalog,
+                state_view,
+            ),
+        );
+    }
+
+    if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
+        return settlement_pair_dataspace_target(
+            asset_definition_dataspace_target(
+                pvp.primary_leg().asset_definition_id(),
+                dataspace_catalog,
+                state_view,
+            ),
+            asset_definition_dataspace_target(
+                pvp.counter_leg().asset_definition_id(),
+                dataspace_catalog,
+                state_view,
+            ),
+        );
+    }
+
+    if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
+        return match settlement {
+            SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
+                asset_definition_dataspace_target(
+                    dvp.delivery_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    state_view,
+                ),
+                asset_definition_dataspace_target(
+                    dvp.payment_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    state_view,
+                ),
+            ),
+            SettlementInstructionBox::Pvp(pvp) => settlement_pair_dataspace_target(
+                asset_definition_dataspace_target(
+                    pvp.primary_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    state_view,
+                ),
+                asset_definition_dataspace_target(
+                    pvp.counter_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    state_view,
+                ),
+            ),
+        };
+    }
+
+    None
+}
+
+fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
+    instruction: &dyn Instruction,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
+        return settlement_pair_dataspace_target(
+            asset_definition_dataspace_target_with_world(
+                dvp.delivery_leg().asset_definition_id(),
+                dataspace_catalog,
+                world,
+            ),
+            asset_definition_dataspace_target_with_world(
+                dvp.payment_leg().asset_definition_id(),
+                dataspace_catalog,
+                world,
+            ),
+        );
+    }
+
+    if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
+        return settlement_pair_dataspace_target(
+            asset_definition_dataspace_target_with_world(
+                pvp.primary_leg().asset_definition_id(),
+                dataspace_catalog,
+                world,
+            ),
+            asset_definition_dataspace_target_with_world(
+                pvp.counter_leg().asset_definition_id(),
+                dataspace_catalog,
+                world,
+            ),
+        );
+    }
+
+    if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
+        return match settlement {
+            SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
+                asset_definition_dataspace_target_with_world(
+                    dvp.delivery_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    world,
+                ),
+                asset_definition_dataspace_target_with_world(
+                    dvp.payment_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    world,
+                ),
+            ),
+            SettlementInstructionBox::Pvp(pvp) => settlement_pair_dataspace_target(
+                asset_definition_dataspace_target_with_world(
+                    pvp.primary_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    world,
+                ),
+                asset_definition_dataspace_target_with_world(
+                    pvp.counter_leg().asset_definition_id(),
+                    dataspace_catalog,
+                    world,
+                ),
+            ),
+        };
+    }
+
+    None
 }
 
 fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx Executable> {
@@ -884,6 +1194,51 @@ fn domain_dataspace_target(
 
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+
+    if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
+        return dvp
+            .delivery_leg()
+            .asset_definition_id()
+            .is_opaque_canonical()
+            || dvp
+                .payment_leg()
+                .asset_definition_id()
+                .is_opaque_canonical();
+    }
+
+    if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
+        return pvp
+            .primary_leg()
+            .asset_definition_id()
+            .is_opaque_canonical()
+            || pvp
+                .counter_leg()
+                .asset_definition_id()
+                .is_opaque_canonical();
+    }
+
+    if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
+        return match settlement {
+            SettlementInstructionBox::Dvp(dvp) => {
+                dvp.delivery_leg()
+                    .asset_definition_id()
+                    .is_opaque_canonical()
+                    || dvp
+                        .payment_leg()
+                        .asset_definition_id()
+                        .is_opaque_canonical()
+            }
+            SettlementInstructionBox::Pvp(pvp) => {
+                pvp.primary_leg()
+                    .asset_definition_id()
+                    .is_opaque_canonical()
+                    || pvp
+                        .counter_leg()
+                        .asset_definition_id()
+                        .is_opaque_canonical()
+            }
+        };
+    }
 
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return matches!(
@@ -1938,6 +2293,14 @@ impl LaneRouter for ConfigLaneRouter {
         )? {
             return Ok(decision);
         }
+        if let Some(decision) = settlement_routing_decision(
+            tx,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+            None,
+        )? {
+            return Ok(decision);
+        }
         if let Some(account_id) = account_permission_holder_routing_target(tx) {
             return resolve_query_routing_decision(
                 &self.policy,
@@ -1973,6 +2336,14 @@ impl LaneRouter for ConfigLaneRouter {
             tx,
             Some(&nexus.lane_catalog),
             Some(&nexus.dataspace_catalog),
+            Some(state_view),
+        )? {
+            return Ok(decision);
+        }
+        if let Some(decision) = settlement_routing_decision(
+            tx,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
             Some(state_view),
         )? {
             return Ok(decision);
@@ -2067,6 +2438,10 @@ mod tests {
         account::AccountAliasDomain,
         isi::{
             prelude::{Mint, Register, Transfer},
+            settlement::{
+                DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
+                SettlementPlan,
+            },
             smart_contract_code::RegisterSmartContractBytes,
         },
         metadata::Metadata,
@@ -2425,6 +2800,203 @@ mod tests {
 
         let helper_decision = evaluate_policy(&policy_for_helper, &tx);
         assert_eq!(helper_decision, decision);
+    }
+
+    #[test]
+    fn settlement_routes_to_common_leg_dataspace_before_account_policy() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(7)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let router = ConfigLaneRouter::new(
+            policy,
+            dataspace_catalog(&[(DataSpaceId::new(7), "restricted")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(1), DataSpaceId::new(7)),
+            ]),
+        );
+        let delivery_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "universal").expect("domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let payment_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "universal").expect("domain id"),
+            "cash".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(DvpIsi::new(
+                "commonroute".parse().expect("settlement id"),
+                SettlementLeg::new(
+                    delivery_definition,
+                    Numeric::from(1_u32),
+                    alice_id.clone(),
+                    bob_id.clone(),
+                ),
+                SettlementLeg::new(
+                    payment_definition,
+                    Numeric::from(1_u32),
+                    bob_id,
+                    alice_id.clone(),
+                ),
+                SettlementPlan::new(
+                    SettlementExecutionOrder::DeliveryThenPayment,
+                    SettlementAtomicity::AllOrNothing,
+                ),
+            ))],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("settlement route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn settlement_with_different_leg_dataspaces_routes_to_universal_coordinator() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::new(7),
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(7)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let router = ConfigLaneRouter::new(
+            policy,
+            dataspace_catalog(&[
+                (DataSpaceId::new(7), "delivery"),
+                (DataSpaceId::new(9), "payment"),
+            ]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(1), DataSpaceId::new(7)),
+                (LaneId::new(2), DataSpaceId::new(9)),
+            ]),
+        );
+        let delivery_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "delivery").expect("domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let payment_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "payment").expect("domain id"),
+            "cash".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(DvpIsi::new(
+                "crossroute".parse().expect("settlement id"),
+                SettlementLeg::new(
+                    delivery_definition,
+                    Numeric::from(1_u32),
+                    alice_id.clone(),
+                    bob_id.clone(),
+                ),
+                SettlementLeg::new(
+                    payment_definition,
+                    Numeric::from(1_u32),
+                    bob_id,
+                    alice_id.clone(),
+                ),
+                SettlementPlan::new(
+                    SettlementExecutionOrder::DeliveryThenPayment,
+                    SettlementAtomicity::AllOrNothing,
+                ),
+            ))],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("settlement route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn settlement_pvp_with_different_leg_dataspaces_routes_to_universal_coordinator() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::new(7),
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(7)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let router = ConfigLaneRouter::new(
+            policy,
+            dataspace_catalog(&[
+                (DataSpaceId::new(7), "primary"),
+                (DataSpaceId::new(9), "counter"),
+            ]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(1), DataSpaceId::new(7)),
+                (LaneId::new(2), DataSpaceId::new(9)),
+            ]),
+        );
+        let primary_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "primary").expect("domain id"),
+            "usd".parse().expect("asset definition name"),
+        );
+        let counter_definition = AssetDefinitionId::new(
+            DomainId::try_new("settlement", "counter").expect("domain id"),
+            "eur".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(PvpIsi::new(
+                "pvpcrossroute".parse().expect("settlement id"),
+                SettlementLeg::new(
+                    primary_definition,
+                    Numeric::from(1_u32),
+                    alice_id.clone(),
+                    bob_id.clone(),
+                ),
+                SettlementLeg::new(
+                    counter_definition,
+                    Numeric::from(1_u32),
+                    bob_id,
+                    alice_id.clone(),
+                ),
+                SettlementPlan::new(
+                    SettlementExecutionOrder::DeliveryThenPayment,
+                    SettlementAtomicity::AllOrNothing,
+                ),
+            ))],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("settlement route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
     }
 
     #[test]

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 Torii bridge message submit SCCP test alignment):
+The Torii bridge-message-submit handler tests are aligned with the current SCCP
+rollout state again. The disabled inbound lane regression now checks the
+embedded conversion message instead of `Error::to_string`, and the settlement
+scaffold tests use a Torii unit-test-only SCCP proof override guard so they
+can keep exercising route/contract-call shaping without weakening the
+production disabled-lane checks while all live SCCP manifests remain
+`production_ready = false`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bridge_message_submit_ --lib -- --nocapture --test-threads=1`
+    (`4 passed`)
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `iroha_torii --lib` window when there is time budget for
+    the unrelated pre-existing reds outside this SCCP bridge-message subset
+
 Latest sync (2026-04-20 Torii contract deploy receipt timeout regression):
 Plain `POST /v1/contracts/deploy` receipts no longer spend the bundle wait
 budget polling for alias activation when the request only needs queue-admission
