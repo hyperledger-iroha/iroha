@@ -39564,7 +39564,10 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
             Ok(_) => panic!("disabled lane should reject message submit"),
         };
-        assert!(err.to_string().contains("transparent proof consumption"));
+        assert!(
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("transparent proof consumption"))
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -39644,6 +39647,8 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn bridge_message_submit_prepares_ephemeral_settlement_contract_call() {
         routing::clear_sccp_bundles_for_tests();
+        let _proof_override =
+            routing::sccp_message_proof_override_guard_for_tests(iroha_sccp::SCCP_DOMAIN_ETH);
 
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());
@@ -39773,6 +39778,8 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn bridge_message_submit_derives_settlement_route_from_transfer_bundle() {
         routing::clear_sccp_bundles_for_tests();
+        let _proof_override =
+            routing::sccp_message_proof_override_guard_for_tests(iroha_sccp::SCCP_DOMAIN_ETH);
 
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());

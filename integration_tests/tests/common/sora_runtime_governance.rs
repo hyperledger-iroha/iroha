@@ -929,18 +929,36 @@ pub async fn setup_runtime_governance_fixture(
     let asset_def_id = governance_asset_definition_id();
     ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
         .wrap_err("seed governance domain registration lease")?;
-    alice
-        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
-        .wrap_err("register governance domain")?;
+    let register_domain_tx_hash = alice
+        .submit(Register::domain(Domain::new(gov_domain_id.clone())))
+        .wrap_err("submit governance domain registration")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(register_domain_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture domain registration tx to be applied",
+    )
+    .await
+    .wrap_err("register governance domain")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;
-    alice
-        .submit_blocking(Register::asset_definition(
+    let register_asset_definition_tx_hash = alice
+        .submit(Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
         ))
-        .wrap_err("register governance numeric asset definition")?;
+        .wrap_err("submit governance numeric asset definition registration")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(register_asset_definition_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture asset-definition registration tx to be applied",
+    )
+    .await
+    .wrap_err("register governance numeric asset definition")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance asset definition registration")?;
@@ -954,21 +972,39 @@ pub async fn setup_runtime_governance_fixture(
         contract_address: governance_contract_address(SECOND_CONTRACT_ID),
     }
     .into();
-    alice
-        .submit_all_blocking([
+    let grant_permissions_tx_hash = alice
+        .submit_all([
             Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(enact_perm, ALICE_ID.clone()),
         ])
-        .wrap_err("grant governance proposal/enact permissions to alice")?;
+        .wrap_err("submit governance proposal/enact permission grants to alice")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(grant_permissions_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture permission grant tx to be applied",
+    )
+    .await
+    .wrap_err("grant governance proposal/enact permissions to alice")?;
 
-    alice
-        .submit_all_blocking(
+    let register_accounts_tx_hash = alice
+        .submit_all(
             citizens
                 .iter()
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
         )
-        .wrap_err("register runtime-governance citizen accounts")?;
+        .wrap_err("submit runtime-governance citizen account registrations")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(register_accounts_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture account registration tx to be applied",
+    )
+    .await
+    .wrap_err("register runtime-governance citizen accounts")?;
     for (account_id, _) in &citizens {
         wait_for_account_registration(&alice, account_id, Duration::from_secs(180))
             .await
@@ -1003,15 +1039,24 @@ pub async fn setup_runtime_governance_fixture(
     )
     .await?;
 
-    alice
-        .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
+    let funding_distribution_tx_hash = alice
+        .submit_all(citizens.iter().map(|(account_id, _)| {
             Transfer::asset_numeric(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
                 account_id.clone(),
             )
         }))
-        .wrap_err("transfer citizen funding allocations for runtime-governance fixture")?;
+        .wrap_err("submit citizen funding allocations for runtime-governance fixture")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(funding_distribution_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture citizen funding tx to be applied",
+    )
+    .await
+    .wrap_err("transfer citizen funding allocations for runtime-governance fixture")?;
     wait_for_all_citizen_balances(
         &alice,
         &asset_def_id,
