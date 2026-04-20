@@ -328,7 +328,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         .as_deref()
         .unwrap_or(default_trusted.as_str());
     let trusted_prompt = resolve_text(
-        "Trusted peers (comma separated pubkey@host:port; PoP required)",
+        "Trusted peers (comma separated pubkey@host:port; PoPs mark validators)",
         args.trusted_peers.clone(),
         trusted_default.to_string(),
         args.non_interactive,
@@ -403,12 +403,7 @@ fn resolve_trusted_peers_pop(
         .filter(|pk| !pops.contains_key(*pk))
         .cloned()
         .collect();
-    if !missing.is_empty() {
-        if args.non_interactive {
-            return Err(eyre!(
-                "trusted_peers_pop missing PoPs for peers: {missing:?}"
-            ));
-        }
+    if !missing.is_empty() && !args.non_interactive {
         for pk in missing {
             let pop = prompt_pop_for_peer(&pk)?;
             pops.insert(pk, pop);
@@ -422,7 +417,9 @@ fn parse_trusted_peer_ids(peers: &[String]) -> Result<Vec<PeerId>> {
     peers
         .iter()
         .map(|entry| {
-            PeerId::from_str(entry).wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))
+            let public_key = entry.split_once('@').map_or(entry.as_str(), |(pk, _)| pk);
+            PeerId::from_str(public_key)
+                .wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))
         })
         .collect()
 }
@@ -1076,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_peers_pop_missing_non_interactive_fails() {
+    fn trusted_peers_pop_missing_non_interactive_marks_peer_observer() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let answers = Answers {
@@ -1106,7 +1103,16 @@ mod tests {
             trusted_peers_pop: None,
         };
         let result = resolve_trusted_peers_pop(&args, &answers, &keypair);
-        assert!(result.is_err());
+        let pops =
+            result.expect("missing remote PoPs should leave peers as non-validator trusted peers");
+        assert!(
+            pops.contains_key(keypair.public_key()),
+            "local validator PoP should be generated"
+        );
+        assert!(
+            !pops.contains_key(other.public_key()),
+            "remote trusted peer without PoP should not be promoted into the validator roster"
+        );
     }
 
     #[test]

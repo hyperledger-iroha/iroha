@@ -2692,8 +2692,8 @@ impl Network {
 
     /// Base configuration including the current peers and any additional peers provided.
     ///
-    /// Useful for bootstrapping peers that were registered after the network was built by
-    /// threading their PoP into `trusted_peers_pop` so they are not excluded from consensus.
+    /// Useful for bootstrapping validator peers that were registered after the network was built by
+    /// threading their PoP into `trusted_peers_pop` so they participate in consensus.
     pub fn config_layers_with_additional_peers<'a>(
         &'a self,
         additional_peers: impl IntoIterator<Item = &'a NetworkPeer>,

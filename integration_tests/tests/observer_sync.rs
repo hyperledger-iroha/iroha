@@ -33,23 +33,9 @@ fn observer_node_catches_up() -> Result<()> {
         .with_seed(Some(b"observer"))
         .build(network.env());
 
-    // Start validators with the observer in trusted peers so permissioned networking accepts it.
-    // Keep PoP entries aligned with trusted_peers to satisfy config validation.
-    let validator_layers: Vec<_> = network
-        .config_layers_with_additional_peers([&observer])
-        .collect();
-    let genesis = network.genesis();
-    for peer in network.peers() {
-        sandbox::handle_result(
-            rt.block_on(async {
-                peer.start_checked(validator_layers.iter().cloned(), Some(&genesis))
-                    .await
-            }),
-            "observer_node_catches_up_start_validator",
-        )?;
-    }
-
-    // Prepare a trusted_peers override including existing peers and the observer itself
+    // Prepare a trusted_peers override including existing peers and the observer itself.
+    // The observer is trusted for networking/block sync, but it is intentionally omitted
+    // from `trusted_peers_pop` so the validator roster remains the four validator peers.
     let mut tp: UniqueVec<Peer> = network
         .peers()
         .iter()
@@ -63,21 +49,18 @@ fn observer_node_catches_up() -> Result<()> {
         let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
         pops_by_peer_id.insert(peer.id(), pop.to_vec());
     }
-    if let Some(pop) = observer.bls_pop() {
-        pops_by_peer_id.insert(observer.id(), pop.to_vec());
-    }
 
     let trusted_peers: Vec<String> = tp.iter().map(|peer| peer.to_string()).collect();
     let mut trusted_peers_pop = Vec::new();
     let mut seen = HashSet::new();
-    for trusted in tp.iter() {
-        let peer_id = trusted.id();
+    for peer in network.peers() {
+        let peer_id = peer.id();
         if !seen.insert(peer_id.clone()) {
             continue;
         }
         let pop = pops_by_peer_id
-            .get(peer_id)
-            .unwrap_or_else(|| panic!("missing PoP for trusted peer {}", peer_id.public_key()));
+            .get(&peer_id)
+            .unwrap_or_else(|| panic!("missing PoP for validator peer {}", peer_id.public_key()));
         let mut pop_entry = Table::new();
         pop_entry.insert(
             "public_key".into(),
@@ -90,9 +73,32 @@ fn observer_node_catches_up() -> Result<()> {
         trusted_peers_pop.push(TomlValue::Table(pop_entry));
     }
 
-    let override_layer = Table::new()
-        .write(["trusted_peers"], trusted_peers)
-        .write(["trusted_peers_pop"], TomlValue::Array(trusted_peers_pop))
+    let trusted_observer_layer = Table::new()
+        .write(["trusted_peers"], trusted_peers.clone())
+        .write(
+            ["trusted_peers_pop"],
+            TomlValue::Array(trusted_peers_pop.clone()),
+        );
+
+    // Start validators with the observer in trusted peers so permissioned networking accepts it.
+    let validator_layers: Vec<_> = network
+        .config_layers()
+        .chain(std::iter::once(std::borrow::Cow::Owned(
+            trusted_observer_layer.clone(),
+        )))
+        .collect();
+    let genesis = network.genesis();
+    for peer in network.peers() {
+        sandbox::handle_result(
+            rt.block_on(async {
+                peer.start_checked(validator_layers.iter().cloned(), Some(&genesis))
+                    .await
+            }),
+            "observer_node_catches_up_start_validator",
+        )?;
+    }
+
+    let override_layer = trusted_observer_layer
         .write(["sumeragi", "role"], "observer")
         .write(["logger", "level"], "INFO");
 

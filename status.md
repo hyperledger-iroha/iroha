@@ -1,6 +1,35 @@
 # Status
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
+
+## 2026-04-20 Follow-up: Observer sync validator roster isolation
+- `trusted_peers_pop` now acts as the validator subset among BLS trusted peers:
+  peers with valid PoPs participate in consensus, while trusted peers without
+  PoPs remain network-trusted observers and are excluded from the validator
+  roster. Empty PoP maps keep the legacy BLS trusted-peer roster.
+- Sumeragi fallback topology and daemon genesis-startup topology now honor
+  `sumeragi.role = "observer"` by not re-adding the local observer identity to
+  consensus. Genesis metadata validation still enforces config PoP equality
+  when config PoPs are present, and accepts the genesis `RegisterPeerWithPop`
+  proof as the source of truth when the config PoP map is intentionally empty.
+- `observer_sync::observer_node_catches_up` now starts validators with the
+  observer in `trusted_peers` for networking but with validator-only PoPs, so a
+  five-peer test network resolves to four validators plus one observer.
+- Updated Kagami wizard behavior, config validation tests, test-network helper
+  comments, and Sumeragi/configuration/operator docs to describe validator-subset
+  PoP semantics.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test trusted_peers_pop_validation -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_kagami trusted_peers_pop -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core trusted_roster -- --nocapture`
+    (`4 passed`: 3 Sumeragi roster tests plus one filtered bridge proof test)
+  - `cargo check -p irohad`
+  - `cargo build -p irohad`
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test network_functional observer_sync::observer_node_catches_up -- --nocapture`
+    (`1 passed`; 87.06s, refreshed daemon binary)
 
 ## 2026-04-19 Follow-up: Mochi supervisor Kagami and stream fixture sync
 - `mochi/mochi-integration/src/bin/kagami_mock.rs` now matches the current
