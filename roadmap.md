@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 Torii contract deploy receipt timeout regression):
+Plain `POST /v1/contracts/deploy` receipts no longer spend the bundle wait
+budget polling for alias activation when the request only needs queue-admission
+metadata. Torii now returns single deploy receipts with
+`contracts[0].status = "submitted"` once the deploy transaction is queued,
+while deploy bundles that continue into init-call or assertion stages still
+wait for the live alias binding before proceeding.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/docs/source/torii/contract_lifecycle_app_api.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii contracts_deploy_handler_ok --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii deploy_endpoint_returns_hashes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+    (matched the gated integration test and exited cleanly after the expected
+    `Skipping: ... Set IROHA_RUN_IGNORED=1 to run.` message)
+- open work after this slice:
+  - rerun a non-gated end-to-end deploy-bundle path with live queue application
+    during a longer validation window
+
 Latest sync (2026-04-20 unregister-peer local P2P disconnect):
 Local peers that apply a block unregistering their own identity now force the
 runtime p2p topology to empty, even when no prior topology advertisement was
@@ -12,13 +38,13 @@ updates still preserve configured static trusted peers. This restores
 must stop receiving later blocks after it is unregistered.
 
 - shipped in:
-  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/peers_gossiper.rs`
-  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
-  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
-  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
-  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/network.rs`
-  - `/Users/takemiyamakoto/dev/iroha/status.md`
-  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/peers_gossiper.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_p2p/src/network.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
 - validation status:
   - `cargo fmt --all`
   - `cargo test -p iroha_core topology_update_preserves_static_trusted_peers -- --nocapture`
