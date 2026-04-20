@@ -11,6 +11,9 @@ use iroha_crypto::{
 use norito::json::{self, JsonDeserialize};
 use sm3::{Digest, Sm3};
 
+const CURVE_SM2P256V1: &str = "sm2p256v1";
+const CURVE_GMT0003_ANNEX_D_FP256: &str = "gm-t-0003-annex-d-fp256";
+
 #[derive(Debug, JsonDeserialize)]
 struct FixtureRoot {
     algorithm: String,
@@ -32,6 +35,7 @@ struct FixtureRoot {
 struct FixtureCase {
     case_id: String,
     note: Option<String>,
+    curve: Option<String>,
     distid: String,
     message_hex: String,
     public_key_sec1_hex: String,
@@ -174,31 +178,13 @@ fn verify_public_encodings(case_id: &str, public_sec1: &[u8], case: &FixtureCase
     }
 }
 
-fn verify_signature_artifacts(
+fn verify_signature_encoding(
     case_id: &str,
     case: &FixtureCase,
-    message: &[u8],
-    public_sec1: &[u8],
-    public: &Sm2PublicKey,
-) {
+) -> ([u8; Sm2Signature::LENGTH], Sm2Signature) {
     let signature_bytes = hex_to_array::<{ Sm2Signature::LENGTH }>(&case.signature);
     let signature = Sm2Signature::from_bytes(&signature_bytes)
         .unwrap_or_else(|err| panic!("case {case_id}: invalid SM2 signature bytes: {err}"));
-
-    public
-        .verify(message, &signature)
-        .unwrap_or_else(|err| panic!("case {case_id}: signature verification failed: {err}"));
-
-    if let Some(za_expected) = case.za.as_deref() {
-        let za = public
-            .compute_z(&case.distid)
-            .unwrap_or_else(|err| panic!("case {case_id}: compute ZA failed: {err}"));
-        assert_eq!(
-            hex::encode_upper(za),
-            za_expected,
-            "case {case_id}: ZA mismatch"
-        );
-    }
 
     if let Some(r_hex) = case.r.as_deref() {
         assert_eq!(
@@ -223,6 +209,33 @@ fn verify_signature_artifacts(
             parsed.to_bytes(),
             signature_bytes,
             "case {case_id}: DER vs r∥s payload mismatch"
+        );
+    }
+
+    (signature_bytes, signature)
+}
+
+fn verify_sm2p256v1_signature_artifacts(
+    case_id: &str,
+    case: &FixtureCase,
+    message: &[u8],
+    public_sec1: &[u8],
+    public: &Sm2PublicKey,
+) {
+    let (signature_bytes, signature) = verify_signature_encoding(case_id, case);
+
+    public
+        .verify(message, &signature)
+        .unwrap_or_else(|err| panic!("case {case_id}: signature verification failed: {err}"));
+
+    if let Some(za_expected) = case.za.as_deref() {
+        let za = public
+            .compute_z(&case.distid)
+            .unwrap_or_else(|err| panic!("case {case_id}: compute ZA failed: {err}"));
+        assert_eq!(
+            hex::encode_upper(za),
+            za_expected,
+            "case {case_id}: ZA mismatch"
         );
     }
 
@@ -276,6 +289,38 @@ fn verify_signature_artifacts(
     }
 }
 
+fn verify_legacy_annex_d_fixture_case(case_id: &str, case: &FixtureCase, public_sec1: &[u8]) {
+    assert_eq!(
+        public_sec1.len(),
+        65,
+        "case {case_id}: legacy SEC1 public key must be uncompressed"
+    );
+    assert_eq!(
+        public_sec1.first().copied(),
+        Some(0x04),
+        "case {case_id}: legacy SEC1 public key must use the uncompressed tag"
+    );
+    assert!(
+        case.public_key_multihash.is_none() && case.public_key_prefixed.is_none(),
+        "case {case_id}: legacy Annex D key must not advertise Iroha SM2 multihash encodings"
+    );
+    assert!(
+        case.seed_hex.is_none() && case.private_key_hex.is_none(),
+        "case {case_id}: legacy Annex D vector must not be treated as a production signing key"
+    );
+
+    verify_signature_encoding(case_id, case);
+
+    assert!(
+        Sm2PublicKey::from_sec1_bytes(&case.distid, public_sec1).is_err(),
+        "case {case_id}: legacy Annex D Fp-256 point must stay outside sm2p256v1 parsing"
+    );
+    assert!(
+        case.za.is_some() && case.hash_e_hex.is_some(),
+        "case {case_id}: legacy Annex D fixture must carry ZA and e digests for the dedicated harness"
+    );
+}
+
 fn verify_fixture_case(case: &FixtureCase) {
     let case_id = &case.case_id;
     if let Some(note) = case.note.as_ref() {
@@ -287,11 +332,19 @@ fn verify_fixture_case(case: &FixtureCase) {
 
     let message = hex_to_vec(&case.message_hex);
     let public_sec1 = hex_to_vec(&case.public_key_sec1_hex);
-    let public = Sm2PublicKey::from_sec1_bytes(&case.distid, &public_sec1)
-        .unwrap_or_else(|err| panic!("case {case_id}: invalid SEC1 public key: {err}"));
+    match case.curve.as_deref().unwrap_or(CURVE_SM2P256V1) {
+        CURVE_SM2P256V1 => {
+            let public = Sm2PublicKey::from_sec1_bytes(&case.distid, &public_sec1)
+                .unwrap_or_else(|err| panic!("case {case_id}: invalid SEC1 public key: {err}"));
 
-    verify_public_encodings(case_id, &public_sec1, case);
-    verify_signature_artifacts(case_id, case, &message, &public_sec1, &public);
+            verify_public_encodings(case_id, &public_sec1, case);
+            verify_sm2p256v1_signature_artifacts(case_id, case, &message, &public_sec1, &public);
+        }
+        CURVE_GMT0003_ANNEX_D_FP256 => {
+            verify_legacy_annex_d_fixture_case(case_id, case, &public_sec1);
+        }
+        curve => panic!("case {case_id}: unsupported SM2 fixture curve '{curve}'"),
+    }
 }
 
 #[test]
