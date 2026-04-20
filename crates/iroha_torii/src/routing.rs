@@ -5316,6 +5316,110 @@ fn sccp_message_manifest_for_bundle(
     })
 }
 
+#[cfg(test)]
+static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
+#[cfg(test)]
+static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS: LazyLock<RwLock<HashSet<u32>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
+#[cfg(test)]
+/// Serialize SCCP message-proof override tests and temporarily allow synthetic
+/// transparent proof generation for the selected counterparty domain.
+pub(crate) fn sccp_message_proof_override_guard_for_tests(counterparty_domain: u32) -> impl Drop {
+    struct Guard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+                .write()
+                .expect("SCCP message proof override registry poisoned")
+                .clear();
+        }
+    }
+
+    let guard = SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK
+        .lock()
+        .expect("SCCP message proof override lock poisoned");
+    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+        .write()
+        .expect("SCCP message proof override registry poisoned")
+        .insert(counterparty_domain);
+    Guard { _guard: guard }
+}
+
+#[cfg(test)]
+fn sccp_message_proof_override_enabled_for_tests(counterparty_domain: u32) -> bool {
+    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+        .read()
+        .expect("SCCP message proof override registry poisoned")
+        .contains(&counterparty_domain)
+}
+
+#[cfg(test)]
+#[derive(Encode)]
+struct SyntheticSccpTransparentProofArtifactV1 {
+    version: u8,
+    counterparty_domain: u32,
+    message_id: [u8; 32],
+    payload_hash: [u8; 32],
+}
+
+#[cfg(test)]
+fn synthetic_bridge_proof_from_sccp_message_bundle_for_tests(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<Result<iroha_data_model::bridge::BridgeProof>> {
+    let (backend, manifest_hash, counterparty_domain) =
+        match sccp_message_backend_descriptor(&bundle.payload) {
+            Ok(descriptor) => descriptor,
+            Err(err) => return Some(Err(err)),
+        };
+    if !sccp_message_proof_override_enabled_for_tests(counterparty_domain) {
+        return None;
+    }
+
+    let finality = match decode_nexus_bridge_finality_proof(&bundle.finality_proof) {
+        Some(finality) => finality,
+        None => {
+            return Some(Err(conversion_error(
+                "SCCP message bundle finality proof could not be decoded".to_owned(),
+            )));
+        }
+    };
+    let artifact = SyntheticSccpTransparentProofArtifactV1 {
+        version: 1,
+        counterparty_domain,
+        message_id: bundle.commitment.message_id,
+        payload_hash: bundle.commitment.payload_hash,
+    };
+    let proof_bytes = match to_bytes(&artifact) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Some(Err(conversion_error(format!(
+                "failed to encode synthetic SCCP transparent proof artifact: {err}"
+            ))));
+        }
+    };
+
+    Some(Ok(iroha_data_model::bridge::BridgeProof {
+        range: iroha_data_model::bridge::BridgeProofRange {
+            start_height: finality.height,
+            end_height: finality.height,
+        },
+        manifest_hash,
+        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+            iroha_data_model::bridge::BridgeTransparentProof {
+                proof: iroha_data_model::proof::ProofBox::new(backend, proof_bytes),
+                recursion_depth: Some(0),
+            },
+        ),
+        pinned: false,
+    }))
+}
+
 fn sccp_message_lane_disabled_message(
     bundle: &NexusSccpMessageProofV1,
     target: &str,
@@ -5360,6 +5464,10 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(
             "SCCP message bundle failed structural verification".to_owned(),
         ));
+    }
+    #[cfg(test)]
+    if let Some(result) = synthetic_bridge_proof_from_sccp_message_bundle_for_tests(bundle) {
+        return result;
     }
     if let Some(message) =
         sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
