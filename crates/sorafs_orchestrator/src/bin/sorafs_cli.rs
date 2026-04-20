@@ -1448,19 +1448,23 @@ fn por_trigger(raw_args: Vec<String>) -> Result<(), String> {
         println!("manual PoR challenge submitted successfully.");
         return Ok(());
     }
-    if let Ok(value) = norito::json::from_slice(&body) {
+    println!("{}", render_por_trigger_response(&body)?);
+    Ok(())
+}
+
+fn render_por_trigger_response(body: &[u8]) -> Result<String, String> {
+    if let Ok(value) = norito::json::from_slice::<Value>(body) {
         let pretty = to_string_pretty(&value)
             .map_err(|err| format!("failed to format manual challenge response JSON: {err}"))?;
-        println!("{pretty}");
-    } else if let Ok(text) = std::str::from_utf8(&body) {
-        println!("{}", text.trim());
+        Ok(pretty)
+    } else if let Ok(text) = std::str::from_utf8(body) {
+        Ok(text.trim().to_string())
     } else {
-        println!(
+        Ok(format!(
             "manual PoR challenge accepted ({} bytes response payload).",
             body.len()
-        );
+        ))
     }
-    Ok(())
 }
 
 fn por_export(raw_args: Vec<String>) -> Result<(), String> {
@@ -7672,6 +7676,24 @@ mod tests {
             .extend_metadata([("release".into(), "test".into())])
             .build()
             .expect("manifest build")
+    }
+
+    #[test]
+    fn render_por_trigger_response_formats_json_and_fallbacks() {
+        let rendered = render_por_trigger_response(br#"{"status":"ok","accepted":true}"#)
+            .expect("render JSON");
+        let parsed: Value = norito::json::from_str(&rendered).expect("parse rendered JSON");
+        assert_eq!(parsed.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(parsed.get("accepted").and_then(Value::as_bool), Some(true));
+
+        let text = render_por_trigger_response(b" accepted\n").expect("render text");
+        assert_eq!(text, "accepted");
+
+        let binary = render_por_trigger_response(&[0xFF, 0x00]).expect("render binary fallback");
+        assert_eq!(
+            binary,
+            "manual PoR challenge accepted (2 bytes response payload)."
+        );
     }
 
     #[test]
