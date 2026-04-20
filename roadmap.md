@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 irohad Nexus hash and genesis-registry test isolation):
+`irohad` now tracks the current `defaults/nexus/config.toml` hash in the
+build-line regression, and the daemon/unit-test shared genesis decoder no
+longer races the `read_genesis_initializes_instruction_registry` test. A
+test-only mutex now serializes the one test that clears the global instruction
+registry with the helpers that decode genesis, which removes the intermittent
+`unknown instruction \`iroha.set_parameter\`` failures in config integration
+suites.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/irohad/src/main.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p irohad --bin iroha3d -- --nocapture`
+    (`136 passed; 0 failed`)
+  - `cargo test -p irohad --bin irohad -- --nocapture`
+    (`136 passed; 0 failed`)
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
+
 Latest sync (2026-04-20 Izanami Nexus selector and persistence regression sync):
 `crates/izanami/src/config.rs` now canonicalizes the embedded Sora Nexus
 fee/stake asset selectors before Izanami turns them into typed
