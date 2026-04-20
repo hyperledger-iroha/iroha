@@ -1,10 +1,8 @@
 //! Integration-style tests covering SoraFS pin, fetch, restart, quota, and PoR flows.
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
-use blake3::hash;
-use sorafs_car::CarBuildPlan;
-use sorafs_chunker::ChunkProfile;
+use sorafs_car::{CarBuildPlan, CarWriter};
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 use sorafs_node::{NodeHandle, NodeStorageError, config::StorageConfig, store::StorageError};
 use tempfile::TempDir;
@@ -18,14 +16,19 @@ fn storage_config(temp_dir: &TempDir) -> StorageConfig {
 
 fn build_manifest(payload: &[u8]) -> (CarBuildPlan, sorafs_manifest::ManifestV1) {
     let plan = CarBuildPlan::single_file(payload).expect("build plan");
-    let digest = hash(payload);
+    let stats = CarWriter::new(&plan, payload)
+        .expect("build writer")
+        .write_to(io::sink())
+        .expect("derive CAR stats");
+    let mut car_digest = [0u8; 32];
+    car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
     let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+        .root_cid(stats.root_cids[0].clone())
+        .dag_codec(DagCodecId(stats.dag_codec))
+        .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
         .content_length(plan.content_length)
-        .car_digest(digest.into())
-        .car_size(plan.content_length)
+        .car_digest(car_digest)
+        .car_size(stats.car_size)
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");

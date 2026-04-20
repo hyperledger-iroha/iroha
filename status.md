@@ -1,6 +1,246 @@
 # Status
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
+
+## 2026-04-20 Follow-up: Torii contract deploy receipt timeout regression
+- `crates/iroha_torii/src/routing.rs` no longer waits for alias activation on
+  plain deploy receipts that only need queue admission metadata. Single
+  `POST /v1/contracts/deploy` responses now return promptly with
+  `contracts[0].status = "submitted"` after the deploy transaction is queued,
+  while deploy bundles that continue into init-call or assertion stages still
+  wait for the live alias binding before proceeding.
+- `docs/source/torii/contract_lifecycle_app_api.md` now documents the
+  queue-admission `submitted` status for single deploy receipts and clarifies
+  that waiting bundle flows may still advance the status to `deployed` before
+  returning.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii contracts_deploy_handler_ok --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii deploy_endpoint_returns_hashes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+    (matched the gated integration test and exited cleanly after the expected
+    `Skipping: ... Set IROHA_RUN_IGNORED=1 to run.` message)
+
+## 2026-04-20 Follow-up: unregister-peer local P2P disconnect
+- Sumeragi now emits an empty topology update when the local peer observes that
+  it has been removed from world state, even if that peer never advertised a
+  previous topology. This lets newly added peers disconnect cleanly after their
+  own `Unregister<Peer>` block lands.
+- The peer gossiper now treats an empty topology as a forced disconnect signal,
+  while non-empty topology updates still preserve configured static trusted
+  peers. The p2p layer also avoids re-adding trusted observers when the current
+  topology is intentionally empty.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core topology_update_preserves_static_trusted_peers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib topology_update_for_local_removal_disconnects -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib refresh_p2p_topology_marks_removed_after_local_seen -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib empty_topology_does_not_add_trusted_observers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib trusted_observers_survive_topology_updates -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test network_functional extra_functional::unregister_peer::network_stable_after_add_and_after_remove_peer -- --nocapture`
+    (`1 passed`; 103.26s)
+  - `git diff --check`
+
+## 2026-04-20 Follow-up: SoraFS manifest CAR metadata alignment
+- `crates/sorafs_node/tests/cli.rs` and `crates/sorafs_node/tests/pin_workflows.rs`
+  now build fixture manifests from `CarWriter` archive stats instead of
+  treating the raw payload digest and payload byte length as the manifest's
+  CAR digest, root CID, and `car_size`. This restores the `sorafs-node ingest`
+  CLI roundtrip and PoR replay coverage after manifest verification tightened
+  to compare full CAR archive metadata.
+- `crates/iroha_torii/src/contract_sources.rs` now uses the same `CarWriter`
+  archive metadata when persisting verified contract source bundles into
+  SoraFS, and a new regression verifies that the stored manifest round-trips
+  through `CarVerifier::verify_full_car_with_plan` against a reconstructed CAR.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p sorafs_node --test cli -- --nocapture`
+    (`3 passed`)
+  - `cargo test -p sorafs_node --test pin_workflows -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_torii verified_source_job_persists_verifiable_sorafs_manifest -- --nocapture`
+    (`1 passed`; target build/test completed in 8m 27s)
+  - `git diff --check`
+
+## 2026-04-20 Follow-up: config scenario SoraNet puzzle test budget
+- `integration_tests/tests/config.rs` now keeps the `config_scenarios`
+  SoraNet PoW/puzzle roundtrip and propagation coverage on non-default
+  memory/time/lane values, but scales the localnet Argon2 puzzle costs down
+  from 128-192 MiB class parameters to MiB-scale test parameters. This avoids
+  starving Torii during four-peer integration startup and prevents
+  contention-sensitive `/configuration` request timeouts in the grouped
+  `core_api` suite.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test core_api config::config_scenarios -- --exact --nocapture`
+    (`1 passed`; 24.50s)
+
+## 2026-04-20 Follow-up: irohad Nexus hash and genesis-registry test isolation
+- `crates/irohad/src/main.rs` now pins the Sora Nexus profile hash test to the
+  current `defaults/nexus/config.toml` contents, restoring the build-line
+  template integrity check after the checked-in Nexus profile changed.
+- `read_genesis` now routes through a test-only mutex-backed wrapper, and the
+  `read_genesis_initializes_instruction_registry` regression now shares that
+  lock while it intentionally clears the global instruction registry. This
+  removes the parallel-test race where other config/genesis tests could briefly
+  observe an empty registry and fail with `unknown instruction
+  \`iroha.set_parameter\`` while decoding genesis.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p irohad --bin iroha3d -- --nocapture`
+    (`136 passed; 0 failed`)
+  - `cargo test -p irohad --bin irohad -- --nocapture`
+    (`136 passed; 0 failed`)
+
+## 2026-04-20 Follow-up: Izanami Nexus selector and persistence regression sync
+- `crates/izanami/src/config.rs` now resolves the embedded Sora Nexus fee/stake
+  selectors into canonical `AssetDefinitionId`s before Izanami builds genesis
+  and emits its config layer, so alias-shaped embedded selectors such as
+  `xor#universal` no longer panic and the generated layer preserves the
+  effective canonical bootstrap asset IDs.
+- `crates/izanami/src/persistence.rs` test coverage now serializes
+  `XDG_CONFIG_HOME` mutations behind a test-local mutex, removing the
+  parallel-test race that intermittently caused the persisted roundtrip test to
+  observe a different config root and return `None`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p izanami -- --nocapture`
+    (`215 passed; 0 failed`)
+  - `git diff --check`
+
+## 2026-04-20 Follow-up: Observer sync validator roster isolation
+- `trusted_peers_pop` now acts as the validator subset among BLS trusted peers:
+  peers with valid PoPs participate in consensus, while trusted peers without
+  PoPs remain network-trusted observers and are excluded from the validator
+  roster. Empty PoP maps keep the legacy BLS trusted-peer roster.
+- Sumeragi fallback topology and daemon genesis-startup topology now honor
+  `sumeragi.role = "observer"` by not re-adding the local observer identity to
+  consensus. Genesis metadata validation still enforces config PoP equality
+  when config PoPs are present, and accepts the genesis `RegisterPeerWithPop`
+  proof as the source of truth when the config PoP map is intentionally empty.
+- `observer_sync::observer_node_catches_up` now starts validators with the
+  observer in `trusted_peers` for networking but with validator-only PoPs, so a
+  five-peer test network resolves to four validators plus one observer.
+- Updated Kagami wizard behavior, config validation tests, test-network helper
+  comments, and Sumeragi/configuration/operator docs to describe validator-subset
+  PoP semantics.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test trusted_peers_pop_validation -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_kagami trusted_peers_pop -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core trusted_roster -- --nocapture`
+    (`4 passed`: 3 Sumeragi roster tests plus one filtered bridge proof test)
+  - `cargo check -p irohad`
+  - `cargo build -p irohad`
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test network_functional observer_sync::observer_node_catches_up -- --nocapture`
+    (`1 passed`; 87.06s, refreshed daemon binary)
+
+## 2026-04-20 Follow-up: iroha_crypto signature test regressions
+- The w3f BLS multi-message aggregate verifier now stays on the w3f hashing
+  and domain-separation path even when `bls-multi-pairing` is enabled, avoiding
+  the previous mixed blstrs hash-to-curve check that rejected valid aggregate
+  signatures.
+- The ML-DSA clone-sharing test now verifies both signatures against the seeded
+  public key instead of requiring byte-for-byte equality from randomized ML-DSA
+  signing.
+- The SoraNet Argon2 puzzle transcript tests now verify tickets at a stable
+  synthetic time so slow solution search cannot consume the minimum TTL window
+  before assertions run.
+- Refreshed the `PublicKey` Norito golden archive to the current canonical
+  framed encoding.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing aggregate_multi_message_verification -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto ml_dsa_secret_key_clone_shares_inner_arc -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto public_key_norito_golden_archive -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_crypto rejects_mismatched_transcript_hash -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_crypto --features bls,bls-multi-pairing --lib`
+    (`323 passed; 1 ignored`)
+  - `cargo clippy -p iroha_crypto --features bls,bls-multi-pairing --lib --no-deps -- -D warnings`
+  - `git diff --check`
+
+## 2026-04-19 Follow-up: Musubi Program AST initializer sync
+- `crates/musubi/src/cli.rs` now initializes the newer
+  `ivm::kotodama::ast::Program` test-only fields (`test_target` and
+  `fixtures`) in the `linker_rewrites_namespaced_calls_to_locked_exports`
+  regression, keeping the Musubi test literal aligned with the current
+  Kotodama AST shape.
+- Focused validation for this slice:
+  - `cargo test -p musubi linker_rewrites_namespaced_calls_to_locked_exports -- --nocapture`
+
+## 2026-04-19 Follow-up: Mochi draft/state/supervisor regression sync
+- `mochi/mochi-core/src/compose.rs` test coverage now uses fully qualified
+  `domain.dataspace` literals for domain-registration and account-admission
+  drafts, and the JSON roundtrip coverage keeps account registration on the
+  canonical domainless `AccountId` path.
+- `mochi/mochi-core/src/state.rs` no longer panics when explorer entries are
+  built from opaque canonical `AssetDefinitionId` values. Asset and
+  asset-definition rows now treat the domain as optional, fall back to alias
+  metadata when available, and have focused regressions for the identifier-only
+  paths.
+- `mochi/mochi-core/src/supervisor.rs` now normalizes peer config overrides
+  inside `PeerSpec::write_config`, so direct config rendering picks up the same
+  local MCP / DA defaults as the builder path. The standalone Kagami test stub
+  also emits `chain_discriminant`, matching the current genesis manifest
+  schema.
+- Regenerated `mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
+  from the in-tree ignored helper so the pipeline-event fixture matches the
+  current sample event shape again.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core regenerate_pipeline_event_message_fixture -- --ignored --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core compose::tests:: -- --nocapture`
+    (`30 passed`)
+  - `cargo test -p mochi-core state::tests::state_entry_asset -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p mochi-core supervisor::tests::peer_spec_ -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p mochi-core supervisor::tests::supervisor_ -- --nocapture`
+    (`7 passed`)
+  - `cargo test -p mochi-core supervisor::tests::wipe_and_regenerate_resets_storage_and_genesis -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core torii::tests::event_stream_decodes_pipeline_events -- --nocapture`
+    (`1 passed`)
+  - `git diff --check`
+  - `cargo test -p mochi-core`
+    (`244 passed; 0 failed; 4 ignored`; integration tests `3 passed`; doctests `0`)
+
+## 2026-04-19 Follow-up: Mochi supervisor Kagami and stream fixture sync
+- `mochi/mochi-integration/src/bin/kagami_mock.rs` now matches the current
+  supervisor CLI contract: it accepts `--version`, `--chain-id`,
+  `--consensus-mode`, profile / VRF passthrough flags, and emits a canonical
+  minimal genesis JSON payload instead of rejecting the newer `kagami`
+  invocation shape.
+- `mochi/mochi-core/src/torii.rs` now decodes framed signed-block payloads on
+  the block stream before falling back to legacy bare versioned bytes, which
+  restores canonical block-stream coverage after the block fixtures were
+  refreshed.
+- Refreshed the stale Mochi Torii replay block/event fixtures, extended the
+  replay status fixture with the current governance counters, and updated the
+  supervisor integration assertions for addr literals, signed-genesis config
+  paths, and the interleaved Torii/P2P port-allocation invariant.
+- Focused validation for this slice:
+  - `cargo test -p mochi-integration`
+    (`17 passed`)
+  - `cargo test -p mochi-core canonical_block_fixture_roundtrips_via_wire_helpers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core block_stream_end_to_end_decodes_canonical_block -- --nocapture`
+    (`1 passed`)
 
 ## 2026-04-19 Follow-up: Mochi readiness status decoding
 - `mochi/mochi-core/src/torii.rs` now decodes `/status` responses through the
@@ -25435,3 +25675,14 @@ Last updated: 2026-04-19
   - `cargo test -p iroha_core --lib block_sync_qc_lock_override_handles_missing_locked_payload -- --nocapture`
   - `cargo test -p iroha_core --lib try_form_qc_from_votes_skips_when_conflicts_locked_chain -- --nocapture`
   - `cargo fmt --all --check` was run and is blocked by pre-existing formatting drift in unrelated hunks of dirty Sumeragi files.
+
+## 2026-04-19 Integration Failure Sweep
+- Fixed the `fast_dsl` workspace build by importing Norito's `DecodeFromSlice` extension trait in the `iroha_genesis` `tx_decode` diagnostic binary.
+- Updated the scheduler default-lane regression to use a fallback transaction without an inherent dataspace target, keeping the test focused on policy default routing instead of account-metadata dataspace routing.
+- Scoped threshold escrow contract-state reads by the deployed contract address so `/v1/contracts/state` queries read the same per-instance namespace used by contract execution.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo check --workspace --features fast_dsl`
+  - `cargo test -p integration_tests queue_uses_default_lane_when_no_rule_matches -- --nocapture`
+  - `cargo test -p integration_tests threshold_escrow -- --nocapture`
+  - `cargo test -p integration_tests workspace_builds_with_fast_dsl_feature -- --nocapture`

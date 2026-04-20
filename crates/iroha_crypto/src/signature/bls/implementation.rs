@@ -494,17 +494,13 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
 }
 
 impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
-    /// Aggregate verification across distinct messages using a single pairing-product when
-    /// the `bls-multi-pairing` feature is enabled. Otherwise, falls back to per-signature.
-    #[allow(unused_variables)]
+    /// Aggregate verification across distinct messages using the w3f verifier so hashing and
+    /// domain separation match signatures produced by this backend.
     pub fn verify_aggregate_multi_message(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
-    ) -> Result<(), Error>
-    where
-        C::Engine: 'static,
-    {
+    ) -> Result<(), Error> {
         if !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
             || messages.is_empty()
         {
@@ -512,116 +508,56 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         ensure_distinct_messages(messages)?;
 
-        #[cfg(feature = "bls-multi-pairing")]
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
+            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
+                .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+            let canonical = sig.to_bytes();
+            if canonical.as_slice() != bytes {
+                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+            }
+            if canonical == identity_sig {
+                return Err(ParseError("BLS signature is identity".to_string()).into());
+            }
+            Ok(sig)
+        };
+        let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
+        let mut decoded_messages = Vec::with_capacity(messages.len());
+        let mut decoded_public_keys = Vec::with_capacity(messages.len());
+
+        for ((message, signature_bytes), public_key_bytes) in messages
+            .iter()
+            .zip(signatures.iter())
+            .zip(public_keys.iter())
         {
-            // Select implementation by engine (normal vs small)
-            if core::any::TypeId::of::<C::Engine>() == core::any::TypeId::of::<w3f_bls::ZBLS>() {
-                return verify_aggregate_multi_message_normal_blstrs(
-                    messages,
-                    signatures,
-                    public_keys,
-                );
-            }
-            if core::any::TypeId::of::<C::Engine>()
-                == core::any::TypeId::of::<w3f_bls::TinyBLS381>()
-            {
-                return verify_aggregate_multi_message_small_blstrs(
-                    messages,
-                    signatures,
-                    public_keys,
-                );
-            }
-            // Unknown engine; fall back
+            let signature = parse_signature(signature_bytes)?;
+            aggregated_group += signature.0;
+
+            let public_key = Self::parse_public_key(public_key_bytes)?;
+            decoded_public_keys.push(public_key);
+            decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
         }
 
-        #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
-        {
-            let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-            let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
-                let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
-                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
-                let canonical = sig.to_bytes();
-                if canonical.as_slice() != bytes {
-                    return Err(
-                        ParseError("non-canonical BLS signature encoding".to_string()).into(),
-                    );
-                }
-                if canonical == identity_sig {
-                    return Err(ParseError("BLS signature is identity".to_string()).into());
-                }
-                Ok(sig)
-            };
-            let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
-            let mut decoded_messages = Vec::with_capacity(messages.len());
-            let mut decoded_public_keys = Vec::with_capacity(messages.len());
+        let batch = MultiMessageBatch {
+            signature: BlsSignature(aggregated_group),
+            messages: decoded_messages,
+            public_keys: decoded_public_keys,
+        };
 
-            for ((message, signature_bytes), public_key_bytes) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                let signature = parse_signature(signature_bytes)?;
-                aggregated_group += signature.0;
-
-                let public_key = Self::parse_public_key(public_key_bytes)?;
-                decoded_public_keys.push(public_key);
-                decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
-            }
-
-            let batch = MultiMessageBatch {
-                signature: BlsSignature(aggregated_group),
-                messages: decoded_messages,
-                public_keys: decoded_public_keys,
-            };
-
-            if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
-        }
-
-        #[cfg(not(all(feature = "bls", not(feature = "bls-multi-pairing"))))]
-        {
-            // Should be unreachable because the preceding cfg covers all cases,
-            // but keep a fallback to satisfy the type-checker when the feature
-            // set changes.
-            for ((m, s), pk_bytes) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                let pk = Self::parse_public_key(pk_bytes)?;
-                let signature = w3f_bls::Signature::<C::Engine>::from_bytes(s)
-                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
-                let canonical = signature.to_bytes();
-                if canonical.as_slice() != *s {
-                    return Err(
-                        ParseError("non-canonical BLS signature encoding".to_string()).into(),
-                    );
-                }
-                let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-                if canonical == identity_sig {
-                    return Err(ParseError("BLS signature is identity".to_string()).into());
-                }
-                let message = w3f_bls::Message::new(MESSAGE_CONTEXT, m);
-                if !signature.verify(&message, &pk) {
-                    return Err(Error::BadSignature);
-                }
-            }
+        if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
             Ok(())
+        } else {
+            Err(Error::BadSignature)
         }
     }
 }
 
-#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
 struct MultiMessageBatch<E: EngineBLS> {
     signature: BlsSignature<E>,
     messages: Vec<w3f_bls::Message>,
     public_keys: Vec<PublicKey<E>>,
 }
 
-#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
 impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
     type E = E;
     type M = &'a w3f_bls::Message;
@@ -635,178 +571,5 @@ impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
 
     fn messages_and_publickeys(self) -> Self::PKnM {
         self.messages.iter().zip(self.public_keys.iter())
-    }
-}
-
-// Pairing-product helpers (blstrs) for normal/small configurations
-#[cfg(feature = "bls-multi-pairing")]
-pub(super) fn verify_aggregate_multi_message_normal_blstrs(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
-    public_keys: &[&[u8]],
-) -> Result<(), Error> {
-    use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
-    use group::Curve;
-    use group::Group as _; // for is_identity()
-    use group::prime::PrimeCurveAffine; // for generator()
-    use pairing::{MillerLoopResult as _, MultiMillerLoop}; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
-
-    // Decompress helpers
-    fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
-        if bytes.len() != 48 {
-            return None;
-        }
-        let mut arr = [0u8; 48];
-        arr.copy_from_slice(bytes);
-        let ct = G1Affine::from_compressed(&arr);
-        if !bool::from(ct.is_some()) {
-            return None;
-        }
-        let point = ct.unwrap();
-        if point.is_identity().into() {
-            return None;
-        }
-        if point.to_compressed() != arr {
-            return None;
-        }
-        Some(point)
-    }
-    fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
-        if bytes.len() != 96 {
-            return None;
-        }
-        let mut arr = [0u8; 96];
-        arr.copy_from_slice(bytes);
-        let ct = G2Affine::from_compressed(&arr);
-        if !bool::from(ct.is_some()) {
-            return None;
-        }
-        let point = ct.unwrap();
-        if point.is_identity().into() {
-            return None;
-        }
-        if point.to_compressed() != arr {
-            return None;
-        }
-        Some(point)
-    }
-
-    // Hash-to-curve to G2, using standard IETF ciphersuite with context prefix
-    fn hash_msg_to_g2(msg: &[u8]) -> G2Affine {
-        const DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_";
-        let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
-        buf.extend_from_slice(MESSAGE_CONTEXT);
-        buf.extend_from_slice(msg);
-        // `aug` = empty; we prefix with MESSAGE_CONTEXT for domain separation
-        G2Projective::hash_to_curve(&buf, DST, &[]).to_affine()
-    }
-
-    let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
-    let g1 = G1Affine::generator();
-    for ((m, s_bytes), pk_bytes) in messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
-    {
-        let sig = to_g2(s_bytes).ok_or(Error::BadSignature)?;
-        let pk = to_g1(pk_bytes).ok_or(Error::BadSignature)?;
-        let h = hash_msg_to_g2(m);
-
-        pairs.push((g1, G2Prepared::from(sig)));
-        let neg_pk = (-G1Projective::from(pk)).to_affine();
-        pairs.push((neg_pk, G2Prepared::from(h)));
-    }
-
-    let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
-    let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-    if gt.is_identity().into() {
-        Ok(())
-    } else {
-        Err(Error::BadSignature)
-    }
-}
-
-#[cfg(feature = "bls-multi-pairing")]
-pub(super) fn verify_aggregate_multi_message_small_blstrs(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
-    public_keys: &[&[u8]],
-) -> Result<(), Error> {
-    use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
-    use group::Curve;
-    use group::Group as _; // for is_identity()
-    use group::prime::PrimeCurveAffine; // for generator()
-    use pairing::{MillerLoopResult as _, MultiMillerLoop}; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
-
-    fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
-        if bytes.len() != 48 {
-            return None;
-        }
-        let mut arr = [0u8; 48];
-        arr.copy_from_slice(bytes);
-        let ct = G1Affine::from_compressed(&arr);
-        if !bool::from(ct.is_some()) {
-            return None;
-        }
-        let point = ct.unwrap();
-        if point.is_identity().into() {
-            return None;
-        }
-        if point.to_compressed() != arr {
-            return None;
-        }
-        Some(point)
-    }
-    fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
-        if bytes.len() != 96 {
-            return None;
-        }
-        let mut arr = [0u8; 96];
-        arr.copy_from_slice(bytes);
-        let ct = G2Affine::from_compressed(&arr);
-        if !bool::from(ct.is_some()) {
-            return None;
-        }
-        let point = ct.unwrap();
-        if point.is_identity().into() {
-            return None;
-        }
-        if point.to_compressed() != arr {
-            return None;
-        }
-        Some(point)
-    }
-
-    // Hash-to-curve to G1 for small variant
-    fn hash_msg_to_g1(msg: &[u8]) -> G1Affine {
-        const DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_";
-        let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
-        buf.extend_from_slice(MESSAGE_CONTEXT);
-        buf.extend_from_slice(msg);
-        G1Projective::hash_to_curve(&buf, DST, &[]).to_affine()
-    }
-
-    let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
-    let g2 = blstrs::G2Affine::generator();
-    for ((m, s_bytes), pk_bytes) in messages
-        .iter()
-        .zip(signatures.iter())
-        .zip(public_keys.iter())
-    {
-        let sig = to_g1(s_bytes).ok_or(Error::BadSignature)?;
-        let pk = to_g2(pk_bytes).ok_or(Error::BadSignature)?;
-        let h = hash_msg_to_g1(m);
-
-        pairs.push((sig, blstrs::G2Prepared::from(g2)));
-        let neg_h = (-G1Projective::from(h)).to_affine();
-        pairs.push((neg_h, blstrs::G2Prepared::from(pk)));
-    }
-
-    let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
-    let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-    if gt.is_identity().into() {
-        Ok(())
-    } else {
-        Err(Error::BadSignature)
     }
 }

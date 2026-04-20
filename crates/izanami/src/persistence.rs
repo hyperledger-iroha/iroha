@@ -229,7 +229,12 @@ pub fn store_config(config: &ChaosConfig) -> Result<()> {
 
 #[cfg(all(unix, target_os = "linux"))]
 mod tests {
-    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{
+        env, fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        sync::{Mutex as StdMutex, OnceLock},
+    };
 
     use super::*;
 
@@ -265,6 +270,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn env_lock() -> &'static StdMutex<()> {
+        static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| StdMutex::new(()))
     }
 
     fn readonly_dir(label: &str) -> Result<PathBuf> {
@@ -310,6 +320,7 @@ mod tests {
 
     #[test]
     fn store_args_skips_permission_denied() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = readonly_dir("perm-store")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
@@ -322,6 +333,7 @@ mod tests {
 
     #[test]
     fn load_args_skips_permission_denied() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = env::temp_dir().join(format!("izanami-perm-load-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
         let config_dir = dir.join(APP_DIR);
@@ -345,6 +357,7 @@ mod tests {
 
     #[test]
     fn store_and_load_roundtrip_persists_progress_settings() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("roundtrip")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
@@ -416,6 +429,7 @@ mod tests {
 
     #[test]
     fn load_args_defaults_missing_progress_fields() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("legacy")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
