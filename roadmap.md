@@ -2,6 +2,41 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 unregister-peer local P2P disconnect):
+Local peers that apply a block unregistering their own identity now force the
+runtime p2p topology to empty, even when no prior topology advertisement was
+recorded. Empty topology updates are treated as an explicit disconnect signal
+by peer gossip and are no longer re-inflated by trusted-observer state; non-empty
+updates still preserve configured static trusted peers. This restores
+`network_stable_after_add_and_after_remove_peer`, where a dynamically added peer
+must stop receiving later blocks after it is unregistered.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/peers_gossiper.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/network.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core topology_update_preserves_static_trusted_peers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib topology_update_for_local_removal_disconnects -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --lib refresh_p2p_topology_marks_removed_after_local_seen -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib empty_topology_does_not_add_trusted_observers -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_p2p --lib trusted_observers_survive_topology_updates -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test network_functional extra_functional::unregister_peer::network_stable_after_add_and_after_remove_peer -- --nocapture`
+    (`1 passed`; 103.26s)
+  - `git diff --check`
+- open work after this slice:
+  - none for `extra_functional::unregister_peer::network_stable_after_add_and_after_remove_peer`
+
 Latest sync (2026-04-20 SoraFS manifest CAR metadata alignment):
 SoraFS manifest builders touched by the `sorafs-node ingest` CLI and Torii's
 verified-source persistence path now derive `root_cid`, `car_digest`, and
