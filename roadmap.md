@@ -2,6 +2,35 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 SoraFS manifest CAR metadata alignment):
+SoraFS manifest builders touched by the `sorafs-node ingest` CLI and Torii's
+verified-source persistence path now derive `root_cid`, `car_digest`, and
+`car_size` from `CarWriter` archive stats instead of guessing from the raw
+payload bytes. This restores the CLI ingest/export + PoR replay tests after
+manifest verification started enforcing full CAR archive metadata, and adds a
+Torii regression that re-verifies the stored manifest against a reconstructed
+CAR.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_node/tests/cli.rs`
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_node/tests/pin_workflows.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/contract_sources.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p sorafs_node --test cli -- --nocapture`
+    (`3 passed`)
+  - `cargo test -p sorafs_node --test pin_workflows -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_torii verified_source_job_persists_verifiable_sorafs_manifest -- --nocapture`
+    (`1 passed`; target build/test completed in 8m 27s)
+  - `git diff --check`
+- open work after this slice:
+  - audit the remaining SoraFS test-only manifest fixtures that still hard-code
+    raw-payload digests and lengths, especially before enabling stricter
+    manifest verification inside storage ingestion paths
+
 Latest sync (2026-04-20 irohad Nexus hash and genesis-registry test isolation):
 `irohad` now tracks the current `defaults/nexus/config.toml` hash in the
 build-line regression, and the daemon/unit-test shared genesis decoder no

@@ -26,7 +26,7 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
-use sorafs_car::CarBuildPlan;
+use sorafs_car::{CarBuildPlan, CarWriter};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
@@ -1001,19 +1001,7 @@ fn persist_verified_source_bundle(
     let payload = norito::json::to_vec(bundle).map_err(|err| {
         conversion_error(format!("failed to encode verified source bundle: {err}"))
     })?;
-    let plan = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)
-        .map_err(|err| conversion_error(format!("failed to derive SoraFS chunk plan: {err}")))?;
-    let digest = blake3::hash(&payload);
-    let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
-        .content_length(plan.content_length)
-        .car_digest(digest.into())
-        .car_size(plan.content_length)
-        .pin_policy(PinPolicy::default())
-        .build()
-        .map_err(|err| conversion_error(format!("failed to build SoraFS manifest: {err}")))?;
+    let (plan, manifest) = build_sorafs_manifest(&payload)?;
     let mut reader = payload.as_slice();
     let manifest_id = sorafs_node
         .ingest_manifest(&manifest, &plan, &mut reader)
@@ -1029,6 +1017,36 @@ fn persist_verified_source_bundle(
         payload_digest_hex: Some(hex::encode(plan.payload_digest.as_bytes())),
         content_length: Some(plan.content_length),
     }))
+}
+
+fn build_sorafs_manifest(
+    payload: &[u8],
+) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1), Error> {
+    let plan = CarBuildPlan::single_file_with_profile(payload, ChunkProfile::DEFAULT)
+        .map_err(|err| conversion_error(format!("failed to derive SoraFS chunk plan: {err}")))?;
+    let stats = CarWriter::new(&plan, payload)
+        .and_then(|writer| writer.write_to(io::sink()))
+        .map_err(|err| {
+            conversion_error(format!("failed to materialize SoraFS CAR metadata: {err}"))
+        })?;
+    let root_cid = stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| conversion_error("failed to derive SoraFS CAR root CID"))?;
+    let mut car_digest = [0u8; 32];
+    car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(stats.dag_codec))
+        .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+        .content_length(plan.content_length)
+        .car_digest(car_digest)
+        .car_size(stats.car_size)
+        .pin_policy(PinPolicy::default())
+        .build()
+        .map_err(|err| conversion_error(format!("failed to build SoraFS manifest: {err}")))?;
+    Ok((plan, manifest))
 }
 
 fn new_job_id(code_hash: &str, source_text: &str) -> String {
@@ -1246,6 +1264,7 @@ mod tests {
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
+    use sorafs_car::{CarVerifier, CarWriter};
 
     use super::*;
     use crate::test_utils::TestDataDirGuard;
@@ -1445,6 +1464,60 @@ kotoage fn main() {}
             .expect("record exists");
         assert_eq!(record.source_text.trim(), source.trim());
         assert_eq!(record.language, VERIFIED_SOURCE_LANGUAGE_KOTODAMA);
+    }
+
+    #[tokio::test]
+    async fn verified_source_job_persists_verifiable_sorafs_manifest() {
+        let _guard = TestDataDirGuard::new();
+        let source = "kotoage fn main() {}";
+
+        let (compiled, _, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest_and_report(source)
+            .expect("compile contract");
+        let code_hash_hex = hash_hex(&canonical_code_hash(&compiled).expect("canonical hash"));
+        let node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(true)
+                .data_dir(_guard.path().join("sorafs"))
+                .build(),
+        );
+        let inspect_node = node.clone();
+
+        let (status, JsonBody(response)) = handle_post_verified_source_job(
+            code_hash_hex,
+            SubmitVerifiedContractSourceDto {
+                language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
+                source_name: Some("demo.ko".to_owned()),
+                source_text: source.to_owned(),
+            },
+            node,
+        )
+        .await
+        .expect("submit verified source");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let manifest_id = response
+            .verified_source_ref
+            .as_ref()
+            .and_then(|reference| reference.manifest_id_hex.as_deref())
+            .expect("manifest id");
+        let stored = inspect_node
+            .manifest_metadata(manifest_id)
+            .expect("stored manifest");
+        let manifest = stored.load_manifest().expect("load stored manifest");
+        let content_length =
+            usize::try_from(stored.content_length()).expect("stored content length fits usize");
+        let payload = inspect_node
+            .read_payload_range(manifest_id, 0, content_length)
+            .expect("read stored payload");
+        let plan = stored.to_car_plan(ChunkProfile::DEFAULT);
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car_bytes)
+            .expect("materialize CAR");
+        CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car_bytes)
+            .expect("stored manifest verifies against reconstructed CAR");
     }
 
     #[tokio::test]
