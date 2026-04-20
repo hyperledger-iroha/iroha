@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 Izanami Nexus selector and persistence regression sync):
+`crates/izanami/src/config.rs` now canonicalizes the embedded Sora Nexus
+fee/stake asset selectors before Izanami turns them into typed
+`AssetDefinitionId`s or re-emits them in its config layer, which restores the
+NPoS/Nexus genesis and shared-host profile tests after the embedded
+`xor#universal` fee selector switched to the alias-aware config path. The same
+pass serializes `XDG_CONFIG_HOME` mutations inside the Izanami persistence
+tests so the persisted roundtrip no longer flakes under parallel test
+execution.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/izanami/src/config.rs`
+  - `/home/mtakemiya/dev/iroha/crates/izanami/src/persistence.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p izanami -- --nocapture`
+    (`215 passed; 0 failed`)
+  - `git diff --check`
+- open work after this slice:
+  - rerun broader workspace validation during a longer clean window
+
 Latest sync (2026-04-20 iroha_crypto signature test regressions):
 `iroha_crypto` now keeps w3f BLS multi-message aggregate verification on the
 w3f hashing path when `bls-multi-pairing` is enabled, avoiding the prior mixed
