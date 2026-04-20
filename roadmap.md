@@ -1,6 +1,45 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
+
+Latest sync (2026-04-20 observer sync validator roster isolation):
+Observer catch-up no longer pollutes permissioned consensus topology. The PoP
+map now defines the validator subset among BLS trusted peers when present, so
+trusted peers without PoPs can be admitted for networking and block sync without
+becoming validators. Sumeragi fallback topology and daemon genesis-startup
+topology now also honor observer role by removing the local observer identity
+from consensus. Daemon genesis metadata validation keeps exact config/genesis
+PoP matching when config PoPs are present, while allowing genesis PoPs to back
+an empty config PoP map. The observer sync integration fixture now trusts the
+observer for networking while publishing PoPs only for the four validators, and
+the preserved rerun logs show `validators: 4, configured_peers: 5, pops: 4`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/mod.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/main.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_config/src/parameters/{actual,user}.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_config/tests/trusted_peers_pop_validation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/wizard.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/observer_sync.rs`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/{sumeragi,pipeline,references/configuration,sora_nexus_operator_onboarding}*.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test trusted_peers_pop_validation -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_kagami trusted_peers_pop -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core trusted_roster -- --nocapture`
+    (`4 passed`)
+  - `cargo check -p irohad`
+  - `cargo build -p irohad`
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test network_functional observer_sync::observer_node_catches_up -- --nocapture`
+    (`1 passed`; 87.06s)
+- open work after this slice:
+  - none for `observer_sync::observer_node_catches_up`
 
 Latest sync (2026-04-19 Mochi supervisor Kagami and stream fixture sync):
 The Mochi supervisor integration harness now matches the current external
