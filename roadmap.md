@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 Torii contract deploy receipt timeout regression):
+Plain `POST /v1/contracts/deploy` receipts no longer spend the bundle wait
+budget polling for alias activation when the request only needs queue-admission
+metadata. Torii now returns single deploy receipts with
+`contracts[0].status = "submitted"` once the deploy transaction is queued,
+while deploy bundles that continue into init-call or assertion stages still
+wait for the live alias binding before proceeding.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/docs/source/torii/contract_lifecycle_app_api.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii contracts_deploy_handler_ok --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii deploy_endpoint_returns_hashes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+    (matched the gated integration test and exited cleanly after the expected
+    `Skipping: ... Set IROHA_RUN_IGNORED=1 to run.` message)
+- open work after this slice:
+  - rerun a non-gated end-to-end deploy-bundle path with live queue application
+    during a longer validation window
+
 Latest sync (2026-04-20 SoraFS manifest CAR metadata alignment):
 SoraFS manifest builders touched by the `sorafs-node ingest` CLI and Torii's
 verified-source persistence path now derive `root_cid`, `car_digest`, and
