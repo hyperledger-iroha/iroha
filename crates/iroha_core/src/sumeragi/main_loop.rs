@@ -6658,17 +6658,35 @@ impl Actor {
     fn frontier_slot_has_local_vote_history_in_slot(&self, slot: &FrontierSlot) -> bool {
         let local_peer = self.common_config.peer.id();
         let epoch = self.epoch_for_height(slot.height);
+        let live_local_signer = {
+            let (consensus_mode, mode_tag, prf_seed) =
+                self.consensus_context_for_height(slot.height);
+            let live_roster = self.roster_for_live_vote_with_mode(slot.height, consensus_mode);
+            if live_roster.is_empty() {
+                None
+            } else {
+                let topology = super::network_topology::Topology::new(live_roster);
+                let signature_topology =
+                    topology_for_view(&topology, slot.height, slot.view, mode_tag, prf_seed);
+                self.local_validator_index_for_topology(&signature_topology)
+            }
+        };
         self.stored_votes().any(|vote| {
             matches!(
                 vote.phase,
                 crate::sumeragi::consensus::Phase::Prepare
                     | crate::sumeragi::consensus::Phase::Commit
             ) && vote.height == slot.height
+                && vote.view == slot.view
                 && vote.epoch == epoch
                 && vote.block_hash == slot.block_hash
-                && self
-                    .vote_signer_peer(vote)
-                    .is_some_and(|peer| peer == *local_peer)
+                && match self.vote_signer_peer(vote) {
+                    Some(peer) => peer == *local_peer,
+                    // Stale/direct vote-log entries may not have enough cached roster context for
+                    // peer identity resolution; the live active roster still disambiguates local
+                    // signer history for the exact frontier slot.
+                    None => live_local_signer == Some(vote.signer),
+                }
         })
     }
 
