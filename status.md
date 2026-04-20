@@ -15,6 +15,23 @@ Last updated: 2026-04-20
   - `cargo test -p integration_tests --test core_api config::config_scenarios -- --exact --nocapture`
     (`1 passed`; 24.50s)
 
+## 2026-04-20 Follow-up: irohad Nexus hash and genesis-registry test isolation
+- `crates/irohad/src/main.rs` now pins the Sora Nexus profile hash test to the
+  current `defaults/nexus/config.toml` contents, restoring the build-line
+  template integrity check after the checked-in Nexus profile changed.
+- `read_genesis` now routes through a test-only mutex-backed wrapper, and the
+  `read_genesis_initializes_instruction_registry` regression now shares that
+  lock while it intentionally clears the global instruction registry. This
+  removes the parallel-test race where other config/genesis tests could briefly
+  observe an empty registry and fail with `unknown instruction
+  \`iroha.set_parameter\`` while decoding genesis.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p irohad --bin iroha3d -- --nocapture`
+    (`136 passed; 0 failed`)
+  - `cargo test -p irohad --bin irohad -- --nocapture`
+    (`136 passed; 0 failed`)
+
 ## 2026-04-20 Follow-up: Izanami Nexus selector and persistence regression sync
 - `crates/izanami/src/config.rs` now resolves the embedded Sora Nexus fee/stake
   selectors into canonical `AssetDefinitionId`s before Izanami builds genesis
