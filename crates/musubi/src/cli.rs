@@ -3709,6 +3709,8 @@ mod tests {
                 location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
             })],
             contract_meta: None,
+            test_target: None,
+            fixtures: Vec::new(),
         };
         let package = LockedPackage {
             alias: "math".parse().unwrap(),
