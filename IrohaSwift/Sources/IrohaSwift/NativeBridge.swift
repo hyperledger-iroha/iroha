@@ -583,6 +583,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt8>?,
         UInt
     ) -> Int32
+    private typealias EncodeTransferWithFeeSponsorFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UInt32,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
     private typealias EncodeTransferWithAlgFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -591,6 +609,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UInt32,
         UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+    private typealias EncodeTransferWithFeeSponsorWithAlgFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UInt32,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -1635,7 +1672,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private var bridgeHandle: UnsafeMutableRawPointer? = nil
     private var encodeTransferFn: EncodeTransferFn? = nil
+    private var encodeTransferWithFeeSponsorFn: EncodeTransferWithFeeSponsorFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
+    private var encodeTransferWithFeeSponsorWithAlgFn: EncodeTransferWithFeeSponsorWithAlgFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
     private var encodeShieldFn: EncodeShieldFn? = nil
@@ -1933,6 +1972,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
            let freeSymbol = dlsym(handle, "connect_norito_free") {
             self.encodeTransferFn = unsafeBitCast(encodeSymbol, to: EncodeTransferFn.self)
             self.freeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
+            if let encodeFeeSponsorSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor") {
+                self.encodeTransferWithFeeSponsorFn = unsafeBitCast(
+                    encodeFeeSponsorSymbol,
+                    to: EncodeTransferWithFeeSponsorFn.self
+                )
+            } else {
+                self.encodeTransferWithFeeSponsorFn = nil
+            }
             if let chainSymbol = dlsym(handle, "connect_norito_set_chain_discriminant") {
                 self.setChainDiscriminantFn = unsafeBitCast(chainSymbol, to: SetChainDiscriminantFn.self)
             } else {
@@ -1942,6 +1989,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeTransferWithAlgFn = unsafeBitCast(encodeAlgSymbol, to: EncodeTransferWithAlgFn.self)
             } else {
                 self.encodeTransferWithAlgFn = nil
+            }
+            if let encodeFeeSponsorAlgSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg") {
+                self.encodeTransferWithFeeSponsorWithAlgFn = unsafeBitCast(
+                    encodeFeeSponsorAlgSymbol,
+                    to: EncodeTransferWithFeeSponsorWithAlgFn.self
+                )
+            } else {
+                self.encodeTransferWithFeeSponsorWithAlgFn = nil
             }
             if let mintSymbol = dlsym(handle, "connect_norito_encode_mint_signed_transaction") {
                 self.encodeMintFn = unsafeBitCast(mintSymbol, to: EncodeMintFn.self)
@@ -2492,7 +2547,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
         } else {
             self.encodeTransferFn = nil
+            self.encodeTransferWithFeeSponsorFn = nil
             self.encodeTransferWithAlgFn = nil
+            self.encodeTransferWithFeeSponsorWithAlgFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
             self.encodeShieldFn = nil
@@ -3191,6 +3248,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         assetDefinitionId: String,
         quantity: String,
         destination: String,
+        feeSponsor: String? = nil,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
@@ -3200,8 +3258,31 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
         let nonceFlag: UInt8 = nonce == nil ? 0 : 1
-        let useAlg = algorithm != .ed25519 && encodeTransferWithAlgFn != nil
-        guard useAlg || encodeTransferFn != nil else { return nil }
+        let normalizedFeeSponsor: String?
+        if let rawFeeSponsor = feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawFeeSponsor.isEmpty
+        {
+            normalizedFeeSponsor = rawFeeSponsor
+        } else {
+            normalizedFeeSponsor = nil
+        }
+        let requiresFeeSponsorBridge = normalizedFeeSponsor != nil
+        let useAlg = algorithm != .ed25519
+        if useAlg {
+            guard requiresFeeSponsorBridge
+                ? encodeTransferWithFeeSponsorWithAlgFn != nil
+                : encodeTransferWithAlgFn != nil
+            else {
+                return nil
+            }
+        } else {
+            guard requiresFeeSponsorBridge
+                ? encodeTransferWithFeeSponsorFn != nil
+                : encodeTransferFn != nil
+            else {
+                return nil
+            }
+        }
 
         var signedPtr: UnsafeMutablePointer<UInt8>? = nil
         var signedLen: UInt = 0
@@ -3215,55 +3296,107 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 assetDefinitionId.withCString { assetPtr in
                     quantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
-                            privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                                hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                    guard let hashPtr = hashBuffer.baseAddress else {
-                                        return -1
-                                    }
-                                    return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                        if useAlg, let encodeTransferWithAlgFn {
-                                            return encodeTransferWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
-                                                authorityPtr, UInt(authority.utf8.count),
-                                                creationTimeMs,
-                                                ttlValue,
-                                                ttlFlag,
-                                                nonceValue,
-                                                nonceFlag,
-                                                assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
-                                                destinationPtr, UInt(destination.utf8.count),
-                                                keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                algorithmRaw,
-                                                signedPtrPtr,
-                                                signedLenPtr,
-                                                hashPtr,
-                                                hashLength
-                                            )
-                                        } else if let encodeTransferFn {
-                                            return encodeTransferFn(
-                                                chainPtr, UInt(chainId.utf8.count),
-                                                authorityPtr, UInt(authority.utf8.count),
-                                                creationTimeMs,
-                                                ttlValue,
-                                                ttlFlag,
-                                                nonceValue,
-                                                nonceFlag,
-                                                assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
-                                                destinationPtr, UInt(destination.utf8.count),
-                                                keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                signedPtrPtr,
-                                                signedLenPtr,
-                                                hashPtr,
-                                                hashLength
-                                            )
-                                        } else {
+                            let encodeTransferCall: (UnsafePointer<CChar>?, UInt) -> Int32 = { [self] feeSponsorPtr, feeSponsorLen in
+                                privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                                    hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                                        guard let hashPtr = hashBuffer.baseAddress else {
                                             return -1
+                                        }
+                                        return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                            if useAlg,
+                                               let feeSponsorPtr,
+                                               let encodeTransferWithFeeSponsorWithAlgFn = self.encodeTransferWithFeeSponsorWithAlgFn
+                                            {
+                                                return encodeTransferWithFeeSponsorWithAlgFn(
+                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    authorityPtr, UInt(authority.utf8.count),
+                                                    creationTimeMs,
+                                                    ttlValue,
+                                                    ttlFlag,
+                                                    nonceValue,
+                                                    nonceFlag,
+                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
+                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    destinationPtr, UInt(destination.utf8.count),
+                                                    feeSponsorPtr, feeSponsorLen,
+                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                                    algorithmRaw,
+                                                    signedPtrPtr,
+                                                    signedLenPtr,
+                                                    hashPtr,
+                                                    hashLength
+                                                )
+                                            } else if useAlg, let encodeTransferWithAlgFn = self.encodeTransferWithAlgFn {
+                                                return encodeTransferWithAlgFn(
+                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    authorityPtr, UInt(authority.utf8.count),
+                                                    creationTimeMs,
+                                                    ttlValue,
+                                                    ttlFlag,
+                                                    nonceValue,
+                                                    nonceFlag,
+                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
+                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    destinationPtr, UInt(destination.utf8.count),
+                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                                    algorithmRaw,
+                                                    signedPtrPtr,
+                                                    signedLenPtr,
+                                                    hashPtr,
+                                                    hashLength
+                                                )
+                                            } else if let feeSponsorPtr,
+                                                      let encodeTransferWithFeeSponsorFn = self.encodeTransferWithFeeSponsorFn
+                                            {
+                                                return encodeTransferWithFeeSponsorFn(
+                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    authorityPtr, UInt(authority.utf8.count),
+                                                    creationTimeMs,
+                                                    ttlValue,
+                                                    ttlFlag,
+                                                    nonceValue,
+                                                    nonceFlag,
+                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
+                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    destinationPtr, UInt(destination.utf8.count),
+                                                    feeSponsorPtr, feeSponsorLen,
+                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                                    signedPtrPtr,
+                                                    signedLenPtr,
+                                                    hashPtr,
+                                                    hashLength
+                                                )
+                                            } else if let encodeTransferFn = self.encodeTransferFn {
+                                                return encodeTransferFn(
+                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    authorityPtr, UInt(authority.utf8.count),
+                                                    creationTimeMs,
+                                                    ttlValue,
+                                                    ttlFlag,
+                                                    nonceValue,
+                                                    nonceFlag,
+                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
+                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    destinationPtr, UInt(destination.utf8.count),
+                                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                                    signedPtrPtr,
+                                                    signedLenPtr,
+                                                    hashPtr,
+                                                    hashLength
+                                                )
+                                            } else {
+                                                return -1
+                                            }
                                         }
                                     }
                                 }
                             }
+                            if let normalizedFeeSponsor {
+                                return normalizedFeeSponsor.withCString { feeSponsorPtr in
+                                    encodeTransferCall(feeSponsorPtr, UInt(normalizedFeeSponsor.utf8.count))
+                                }
+                            }
+                            return encodeTransferCall(nil, 0)
                         }
                     }
                 }

@@ -5353,6 +5353,86 @@ mod tests {
     }
 
     #[test]
+    fn cash_authorization_payload_omits_none_device_binding_ios_fields() {
+        let authorization = OfflineSpendAuthorization {
+            authorization_id: "auth-1".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            verdict_id: "verdict-1".to_owned(),
+            max_balance: "1000000".to_owned(),
+            max_tx_value: "1000000".to_owned(),
+            issued_at_ms: 1,
+            refresh_at_ms: 2,
+            expires_at_ms: 3,
+            device_binding: Some(OfflineCashAndroidDeviceBinding {
+                platform: "ios".to_owned(),
+                attestation_key_id: "key-1".to_owned(),
+                device_id: "device-1".to_owned(),
+                offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+                attestation_report_base64: String::new(),
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            }),
+            app_attest_key_id: "key-1".to_owned(),
+            issuer_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+        };
+
+        let payload = authorization_unsigned_payload(&authorization).expect("payload");
+        let payload_str = String::from_utf8(payload).expect("utf8");
+
+        assert!(
+            !payload_str.contains("null"),
+            "canonical JSON must not contain null for None ios fields: {payload_str}"
+        );
+        assert!(!payload_str.contains("ios_team_id"));
+        assert!(!payload_str.contains("ios_bundle_id"));
+        assert!(!payload_str.contains("ios_environment"));
+    }
+
+    #[test]
+    fn cash_authorization_signature_verifies_for_live_ios_setup_fixture() {
+        let authorization: OfflineSpendAuthorization = serde_json::from_str(
+            r#"{
+              "authorization_id":"authorization_4f86a60dec284c895df9a95c2fadcfd5c9f3a481f2c3aa90c1c5ea7ebd3d9387",
+              "lineage_id":"lineage_9f9d160ad45be891381b19e42d3d2255f11b077fbbf95b5943a44507dc817305",
+              "account_id":"sorauﾛ1NxZｶLｹVｶ9ﾁﾘｽﾓｦﾏ4ｹｿﾄAｷNCzﾑKﾅｵfwfvﾚQｿｦﾗCVSPP8WN",
+              "device_id":"9EEDB7BE-2177-4AE5-8740-F8F5ACB2880D",
+              "offline_public_key":"BBdP8FMSpBK64fpmCrS1bwnAlYL6XyfPBUXWSY4YQWeGbfDoi2LgJXD5JeQptopPDZBtKe7+Vk4oSQSHcwBsbDk=",
+              "verdict_id":"verdict_38997c2f0b9570034dd17f643856352d167c397a8d71180eeaa008ddc84110a7",
+              "max_balance":"1000000",
+              "max_tx_value":"1000000",
+              "issued_at_ms":1776627732979,
+              "refresh_at_ms":1776670932979,
+              "expires_at_ms":1776714132979,
+              "device_binding":{
+                "platform":"ios",
+                "attestation_key_id":"NL/FM1mi18jlLUkCYW9t9UzIWiQwY5ldPhZR0g+3/mQ=",
+                "device_id":"9EEDB7BE-2177-4AE5-8740-F8F5ACB2880D",
+                "offline_public_key":"BBdP8FMSpBK64fpmCrS1bwnAlYL6XyfPBUXWSY4YQWeGbfDoi2LgJXD5JeQptopPDZBtKe7+Vk4oSQSHcwBsbDk=",
+                "attestation_report_base64":"",
+                "ios_team_id":null,
+                "ios_bundle_id":null,
+                "ios_environment":null
+              },
+              "app_attest_key_id":"NL/FM1mi18jlLUkCYW9t9UzIWiQwY5ldPhZR0g+3/mQ=",
+              "issuer_signature_base64":"szVhqwR9rEOUmn8U+Kr0TgybfuQBHx+VFcKmKk+4zt+u2FfPYuOXRd1Uc8j6p9uzqO41g+EoJOnolIn6jxxuAg=="
+            }"#,
+        )
+        .expect("fixture");
+
+        let payload = authorization_unsigned_payload(&authorization).expect("payload");
+        validate_issuer_signature(
+            payload,
+            &authorization.issuer_signature_base64,
+            "zn+kbJ3OfqSxJeLja9tj6jMHPnWQrJKBauHoYbcEiwM=",
+        )
+        .expect("live fixture signature should verify");
+    }
+
+    #[test]
     fn cash_local_state_hash_uses_lineage_shape() {
         let hash = cash_next_local_state_hash(
             "lineage-1",

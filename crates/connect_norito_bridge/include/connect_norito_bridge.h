@@ -500,6 +500,22 @@ int32_t connect_norito_encode_transfer_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    const char* fee_sponsor, unsigned long fee_sponsor_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_transfer_signed_transaction_alg(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -511,6 +527,23 @@ int32_t connect_norito_encode_transfer_signed_transaction_alg(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    const char* fee_sponsor, unsigned long fee_sponsor_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
