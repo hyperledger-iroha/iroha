@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: SoraFS manifest CAR metadata alignment
+- `crates/sorafs_node/tests/cli.rs` and `crates/sorafs_node/tests/pin_workflows.rs`
+  now build fixture manifests from `CarWriter` archive stats instead of
+  treating the raw payload digest and payload byte length as the manifest's
+  CAR digest, root CID, and `car_size`. This restores the `sorafs-node ingest`
+  CLI roundtrip and PoR replay coverage after manifest verification tightened
+  to compare full CAR archive metadata.
+- `crates/iroha_torii/src/contract_sources.rs` now uses the same `CarWriter`
+  archive metadata when persisting verified contract source bundles into
+  SoraFS, and a new regression verifies that the stored manifest round-trips
+  through `CarVerifier::verify_full_car_with_plan` against a reconstructed CAR.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p sorafs_node --test cli -- --nocapture`
+    (`3 passed`)
+  - `cargo test -p sorafs_node --test pin_workflows -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_torii verified_source_job_persists_verifiable_sorafs_manifest -- --nocapture`
+    (`1 passed`; target build/test completed in 8m 27s)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: config scenario SoraNet puzzle test budget
 - `integration_tests/tests/config.rs` now keeps the `config_scenarios`
   SoraNet PoW/puzzle roundtrip and propagation coverage on non-default
