@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-19
 
+Latest sync (2026-04-19 Musubi Program AST initializer sync):
+The Musubi CLI test literal that exercises namespaced-call rewriting now
+initializes the current Kotodama `Program` test-only fields (`test_target` and
+`fixtures`), restoring compatibility with the expanded AST definition used by
+`ivm::kotodama::ast::Program`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/musubi/src/cli.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p musubi linker_rewrites_namespaced_calls_to_locked_exports -- --nocapture`
+- open work after this slice:
+  - rerun broader Musubi or workspace validation during a longer clean window
+
 Latest sync (2026-04-19 Mochi draft/state/supervisor regression sync):
 Mochi's remaining focused regressions now line up with the current data-model
 and supervisor contracts. Compose draft coverage uses fully qualified
