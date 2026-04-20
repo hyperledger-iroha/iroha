@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: Torii bridge message submit SCCP test alignment
+- `crates/iroha_torii/src/lib.rs` now asserts the disabled inbound SCCP lane
+  rejection against the nested conversion message instead of `Error::to_string`,
+  which had stopped surfacing the `"transparent proof consumption"` text even
+  though the handler was still rejecting the disabled lane correctly.
+- `crates/iroha_torii/src/routing.rs` now has a Torii unit-test-only SCCP proof
+  override guard that synthesizes a deterministic transparent proof for an
+  explicitly selected counterparty domain. This keeps production lane gating
+  unchanged while allowing the bridge message submit settlement tests to keep
+  exercising scaffold/route shaping against the current all-disabled SCCP
+  rollout metadata.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bridge_message_submit_ --lib -- --nocapture --test-threads=1`
+    (`4 passed`)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: Torii contract deploy receipt timeout regression
 - `crates/iroha_torii/src/routing.rs` no longer waits for alias activation on
   plain deploy receipts that only need queue admission metadata. Single
