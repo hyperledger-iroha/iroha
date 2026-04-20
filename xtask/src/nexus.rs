@@ -33,7 +33,8 @@ pub fn write_lane_commitment_fixtures(output: &Path) -> Result<(), Box<dyn Error
     fs::create_dir_all(output)?;
 
     for fixture in sample_commitments() {
-        let rendered = canonical_json(&fixture.payload)?;
+        let json_value = json::to_value(&fixture.payload)?;
+        let rendered = canonical_json(&json_value)?;
         let json_path = output.join(format!("{}.json", fixture.file_stem));
         fs::write(&json_path, rendered)?;
 
@@ -67,7 +68,8 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
             )
             .into());
         }
-        let canonical = canonical_json(&fixture.payload)?;
+        let json_value = json::to_value(&fixture.payload)?;
+        let canonical = canonical_json(&json_value)?;
         if raw != canonical {
             return Err(format!(
                 "lane commitment JSON {:?} is not canonical; run `cargo xtask nexus-fixtures`",
@@ -180,9 +182,8 @@ fn load_lane_compliance_map(
     Ok(map)
 }
 
-fn canonical_json(commitment: &LaneBlockCommitment) -> Result<String, Box<dyn Error>> {
-    let value = json::to_value(commitment)?;
-    Ok(format!("{}\n", json::to_string_pretty(&value)?))
+fn canonical_json(value: &JsonValue) -> Result<String, Box<dyn Error>> {
+    Ok(format!("{}\n", json::to_string_pretty(value)?))
 }
 
 struct CommitmentFixture {
@@ -989,6 +990,24 @@ mod tests {
             "| lane-4 (#4) | payments (#7) | 42 | 3 | 1.250000 | 99.0 | lag,backlog,manifest,compliance,teu-high |"
         ));
         assert!(rendered.contains("| lane-9 (#9) | #11 | 7 | 0 | 0.000000 | 80.0 | ok |"));
+    }
+
+    #[test]
+    fn canonical_json_renders_lane_commitment_value() {
+        let fixture = sample_commitments()
+            .into_iter()
+            .next()
+            .expect("lane commitment fixture");
+        let value = json::to_value(&fixture.payload).expect("lane commitment json value");
+
+        let rendered = canonical_json(&value).expect("canonical JSON");
+
+        assert!(
+            rendered.ends_with('\n'),
+            "canonical lane commitment JSON should end with a newline"
+        );
+        let parsed: LaneBlockCommitment = json::from_str(&rendered).expect("parse canonical JSON");
+        assert_eq!(parsed, fixture.payload);
     }
 
     fn sample_compliance(lane_id: u32, dataspace_id: u64) -> LaneComplianceEvidence {

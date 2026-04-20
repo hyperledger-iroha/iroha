@@ -2063,6 +2063,29 @@ pub mod json {
         }
     }
 
+    #[inline]
+    fn write_f64_json(x: f64, out: &mut String) {
+        if !x.is_finite() {
+            out.push_str("null");
+            return;
+        }
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(x);
+        if let Some(exp_index) = formatted.as_bytes().iter().position(|byte| *byte == b'e') {
+            out.push_str(&formatted[..=exp_index]);
+            match formatted.as_bytes().get(exp_index + 1) {
+                Some(b'+') | Some(b'-') => out.push_str(&formatted[exp_index + 1..]),
+                Some(_) => {
+                    out.push('+');
+                    out.push_str(&formatted[exp_index + 1..]);
+                }
+                None => {}
+            }
+        } else {
+            out.push_str(formatted);
+        }
+    }
+
     // Native variants for Value
     fn write_value_to_string(v: &Value, out: &mut String, pretty: bool, depth: usize) {
         use native::Value as V;
@@ -2072,19 +2095,7 @@ pub mod json {
             V::Number(n) => match n {
                 native::Number::I64(x) => out.push_str(&x.to_string()),
                 native::Number::U64(x) => out.push_str(&x.to_string()),
-                native::Number::F64(x) => {
-                    const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                    if !x.is_finite() {
-                        out.push_str("null");
-                    } else {
-                        use core::fmt::Write as _;
-                        if x.fract() == 0.0 && x.abs() <= F64_SAFE_INT {
-                            let _ = write!(out, "{x:.1}");
-                        } else {
-                            let _ = write!(out, "{x}");
-                        }
-                    }
-                }
+                native::Number::F64(x) => write_f64_json(*x, out),
             },
             V::String(s) => write_json_string(s, out),
             V::Array(a) => {
@@ -2134,15 +2145,13 @@ pub mod json {
             }
         }
     }
-    pub fn to_string(value: &Value) -> Result<String, Error> {
-        let mut s = String::new();
-        write_value_to_string(value, &mut s, false, 0);
-        Ok(s)
+    /// serde-style API: serialize any `JsonSerialize` payload to a compact string.
+    pub fn to_string<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
+        to_json(value)
     }
-    pub fn to_string_pretty(value: &Value) -> Result<String, Error> {
-        let mut s = String::new();
-        write_value_to_string(value, &mut s, true, 0);
-        Ok(s)
+    /// serde-style API: serialize any `JsonSerialize` payload to a pretty string.
+    pub fn to_string_pretty<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
+        to_json_pretty(value)
     }
     pub fn to_vec<T: JsonSerialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
         Ok(to_json(value)?.into_bytes())
@@ -2515,6 +2524,28 @@ pub mod json {
         }
 
         #[test]
+        fn string_writer_emits_utf8_for_astral_scalars() {
+            let mut rendered = String::new();
+            write_json_string("emoji 😀", &mut rendered);
+            assert_eq!(rendered, "\"emoji 😀\"");
+        }
+
+        #[test]
+        fn string_writer_emits_utf8_for_line_separators() {
+            let sample = format!("left{}\u{2029}right", '\u{2028}');
+            let mut rendered = String::new();
+            write_json_string(&sample, &mut rendered);
+            assert_eq!(rendered, format!("\"{sample}\""));
+        }
+
+        #[test]
+        fn string_writer_uses_lowercase_hex_for_control_escapes() {
+            let mut rendered = String::new();
+            write_json_string("a\u{000b}b", &mut rendered);
+            assert_eq!(rendered, "\"a\\u000bb\"");
+        }
+
+        #[test]
         fn unescape_json_string_preserves_utf8_bytes() {
             let raw = format!("price: {}\\nend", '\u{00A2}');
             let out = unescape_json_string(&raw).expect("unescape");
@@ -2632,17 +2663,6 @@ pub mod json {
     }
 
     /// Serialize a JSON string with proper escaping into `out`.
-    #[inline]
-    fn push_u16_escape(out: &mut String, code: u16) {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        out.push('\\');
-        out.push('u');
-        out.push(HEX[((code >> 12) & 0xF) as usize] as char);
-        out.push(HEX[((code >> 8) & 0xF) as usize] as char);
-        out.push(HEX[((code >> 4) & 0xF) as usize] as char);
-        out.push(HEX[(code & 0xF) as usize] as char);
-    }
-
     fn write_json_string_charwise(s: &str, out: &mut String) {
         out.reserve(s.len() + 2);
         out.push('"');
@@ -2655,20 +2675,11 @@ pub mod json {
                 '\t' => out.push_str("\\t"),
                 '\u{08}' => out.push_str("\\b"),
                 '\u{0C}' => out.push_str("\\f"),
-                '\u{2028}' => out.push_str("\\u2028"),
-                '\u{2029}' => out.push_str("\\u2029"),
                 c if (c as u32) < 0x20 => {
                     out.push_str("\\u00");
-                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                    const HEX: &[u8; 16] = b"0123456789abcdef";
                     out.push(HEX[((c as u32 >> 4) & 0xF) as usize] as char);
                     out.push(HEX[(c as u32 & 0xF) as usize] as char);
-                }
-                c if (c as u32) >= 0x10000 => {
-                    let code = (c as u32) - 0x1_0000;
-                    let hi = 0xD800u16 + ((code >> 10) as u16);
-                    let lo = 0xDC00u16 + ((code & 0x3FF) as u16);
-                    push_u16_escape(out, hi);
-                    push_u16_escape(out, lo);
                 }
                 _ => out.push(ch),
             }
@@ -2677,10 +2688,7 @@ pub mod json {
     }
 
     pub fn write_json_string(s: &str, out: &mut String) {
-        if !s.is_ascii()
-            || s.chars()
-                .any(|c| (c as u32) >= 0x10000 || c == '\u{2028}' || c == '\u{2029}')
-        {
+        if !s.is_ascii() {
             write_json_string_charwise(s, out);
             return;
         }
@@ -2740,7 +2748,7 @@ pub mod json {
                             b'\t' => out.push_str("\\t"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
-                                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                const HEX: &[u8; 16] = b"0123456789abcdef";
                                 out.push(HEX[(c >> 4) as usize] as char);
                                 out.push(HEX[(c & 0x0F) as usize] as char);
                             }
@@ -2801,7 +2809,7 @@ pub mod json {
                             b'\t' => out.push_str("\\t"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
-                                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                const HEX: &[u8; 16] = b"0123456789abcdef";
                                 out.push(HEX[(c >> 4) as usize] as char);
                                 out.push(HEX[(c & 0x0F) as usize] as char);
                             }
@@ -2868,7 +2876,7 @@ pub mod json {
                                 b'\t' => out.push_str("\\t"),
                                 c if c < 0x20 => {
                                     out.push_str("\\u00");
-                                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                    const HEX: &[u8; 16] = b"0123456789abcdef";
                                     out.push(HEX[(c >> 4) as usize] as char);
                                     out.push(HEX[(c & 0x0F) as usize] as char);
                                 }
@@ -2928,7 +2936,7 @@ pub mod json {
                     0x0C => out.push_str("\\f"),
                     c if c < 0x20 => {
                         out.push_str("\\u00");
-                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                        const HEX: &[u8; 16] = b"0123456789abcdef";
                         out.push(HEX[(c >> 4) as usize] as char);
                         out.push(HEX[(c & 0x0F) as usize] as char);
                     }
@@ -3237,7 +3245,15 @@ pub mod json {
                     out.push_str(&input[start..i]);
                 }
                 b'{' | b'[' => {
-                    out.push(bytes[i] as char);
+                    let open = bytes[i];
+                    let close = if open == b'{' { b'}' } else { b']' };
+                    if bytes.get(i + 1) == Some(&close) {
+                        out.push(open as char);
+                        out.push(close as char);
+                        i += 2;
+                        continue;
+                    }
+                    out.push(open as char);
                     indent += 1;
                     out.push('\n');
                     for _ in 0..indent {
@@ -5150,24 +5166,6 @@ pub mod json {
             assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
         }
 
-        fn pad_to_align(doc: &str, target_sub: &str, lane: usize, width: usize) -> String {
-            let bytes = doc.as_bytes();
-            let sub = target_sub.as_bytes();
-            let pos = bytes
-                .windows(sub.len())
-                .position(|w| w == sub)
-                .expect("substring present");
-            let cur = pos % width;
-            let want = lane % width;
-            let pad = (width + want - cur) % width;
-            let mut s = String::with_capacity(pad + doc.len());
-            for _ in 0..pad {
-                s.push(' ');
-            }
-            s.push_str(doc);
-            s
-        }
-
         #[test]
         fn scalar_resume_matches_full_scan_across_mid_string_split() {
             let input = r#"{"s":"abc\\\"def\\\\ghi"}"#;
@@ -5194,7 +5192,25 @@ pub mod json {
             if !std::arch::is_x86_feature_detected!("avx2") {
                 return;
             }
-            let doc = pad_to_align(r#"{"s":"abcdefghijklmnopqrstuvwxyz"}"#, r#""}"#, 0, 32);
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnopqrstuvwxyz"}"#;
+                let target_sub = r#""}"#;
+                let width = 32;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let pad = (width - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
             let scalar = build_struct_index_scalar(&doc);
             let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
             assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
@@ -5206,12 +5222,27 @@ pub mod json {
             if !std::arch::is_x86_feature_detected!("avx2") {
                 return;
             }
-            let doc = pad_to_align(
-                r#"{"s":"abcdefghijklmnopqrstuvwx\\\\"}"#,
-                r#"\\\\"}"#,
-                29,
-                32,
-            );
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnopqrstuvwx\\\\"}"#;
+                let target_sub = r#"\\\\"}"#;
+                let lane = 29;
+                let width = 32;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let want = lane % width;
+                let pad = (width + want - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
             let scalar = build_struct_index_scalar(&doc);
             let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
             assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
@@ -5220,7 +5251,25 @@ pub mod json {
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
         #[test]
         fn neon_tail_resume_matches_scalar_at_string_boundary() {
-            let doc = pad_to_align(r#"{"s":"abcdefghijklmnop"}"#, r#""}"#, 0, 16);
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnop"}"#;
+                let target_sub = r#""}"#;
+                let width = 16;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let pad = (width - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
             let scalar = build_struct_index_scalar(&doc);
             let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
             assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
@@ -5229,7 +5278,27 @@ pub mod json {
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
         #[test]
         fn neon_tail_resume_matches_scalar_with_backslash_carry() {
-            let doc = pad_to_align(r#"{"s":"abcdefghijklm\\\\"}"#, r#"\\\\"}"#, 13, 16);
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklm\\\\"}"#;
+                let target_sub = r#"\\\\"}"#;
+                let lane = 13;
+                let width = 16;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let want = lane % width;
+                let pad = (width + want - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
             let scalar = build_struct_index_scalar(&doc);
             let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
             assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
@@ -8233,12 +8302,7 @@ pub mod json {
     // Minimal writer for f64 used by derives. Non-finite values are encoded as null.
     impl FastJsonWrite for f64 {
         fn write_json(&self, out: &mut String) {
-            if self.is_finite() {
-                use core::fmt::Write as _;
-                let _ = write!(out, "{}", *self);
-            } else {
-                out.push_str("null");
-            }
+            write_f64_json(*self, out);
         }
     }
 

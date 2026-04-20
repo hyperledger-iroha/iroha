@@ -37141,6 +37141,26 @@ pub(crate) mod tests_runtime_handlers {
             hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
         );
         assert!(caps.crypto.sm.acceleration.scalar);
+        assert!(caps.query.aggregate.v1);
+        assert!(caps.query.aggregate.exact_results);
+        assert_eq!(
+            caps.query.aggregate.supported_resources,
+            vec!["accounts".to_string(), "asset_holders".to_string()]
+        );
+        assert!(caps.query.indexed_snapshot_marker);
+        assert!(
+            caps.query
+                .row_enrichment_fields
+                .contains(&"primary_alias_domain".to_string())
+        );
+        assert!(caps.query.projection.checkpoint_contract_v1);
+        assert!(!caps.query.projection.da_v1_enabled);
+        assert_eq!(caps.query.projection.blob_class_custom_id, 1001);
+        assert_eq!(
+            caps.query.projection.codec,
+            "application/x-iroha-query-shard+norito+zstd"
+        );
+        assert_eq!(caps.query.projection.compression, "zstd");
         assert!(
             !caps.crypto.sm.allowed_signing.is_empty(),
             "allowed_signing must advertise at least one algorithm"

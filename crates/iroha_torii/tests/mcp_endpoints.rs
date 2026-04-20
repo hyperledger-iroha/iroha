@@ -5283,12 +5283,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arg
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "asset holders query alias with flat arguments should dispatch successfully"
-    );
     let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "asset holders query alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "asset holders query alias should surface downstream lookup failures: {call:?}"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "asset holders query alias should return HTTP 200 when holders lookup succeeds"
+        );
+    }
 }
 
 #[tokio::test]

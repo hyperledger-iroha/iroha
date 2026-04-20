@@ -3,9 +3,17 @@
 use std::sync::Arc;
 
 use axum::{extract::Path, response::IntoResponse};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::{
+    query::projection_checkpoint::{
+        QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID, QUERY_PROJECTION_DA_CODEC,
+        QUERY_PROJECTION_DA_COMPRESSION, QUERY_PROJECTION_SCHEMA_VERSION,
+    },
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_crypto::Algorithm;
-use iroha_data_model::{account::curve::CurveId, transaction::SignedTransaction};
+use iroha_data_model::{
+    account::curve::CurveId, da::types::Compression, transaction::SignedTransaction,
+};
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -28,6 +36,8 @@ pub struct NodeCapabilitiesResponse {
     pub signed_transaction_schema_hash_hex: String,
     /// Cryptography capabilities (SM, default hashes, allow-lists)
     pub crypto: NodeCryptoCapabilities,
+    /// Query DSL and projection-index capabilities.
+    pub query: NodeQueryCapabilities,
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
@@ -80,6 +90,47 @@ pub struct NodeCurveCapabilities {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub allowed_curve_bitmap: Vec<u64>,
+}
+
+#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// Query capability advert emitted by `/v1/node/capabilities`.
+pub struct NodeQueryCapabilities {
+    /// Aggregate query support exposed today.
+    pub aggregate: NodeAggregateQueryCapabilities,
+    /// Whether aggregate responses report a durable indexed snapshot marker.
+    pub indexed_snapshot_marker: bool,
+    /// Additional alias-aware fields injected into aggregate-capable row responses.
+    pub row_enrichment_fields: Vec<String>,
+    /// Reserved DA-backed projection checkpoint contract.
+    pub projection: NodeProjectionCapabilities,
+}
+
+#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// Aggregate DSL capability advert emitted by `/v1/node/capabilities`.
+pub struct NodeAggregateQueryCapabilities {
+    /// Whether aggregate DSL v1 is available.
+    pub v1: bool,
+    /// Whether the current aggregate implementation is exact rather than approximate.
+    pub exact_results: bool,
+    /// Resource families that currently accept aggregate mode.
+    pub supported_resources: Vec<String>,
+}
+
+#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// Reserved DA query projection capability advert.
+pub struct NodeProjectionCapabilities {
+    /// Whether the checkpoint descriptor contract is defined and stable.
+    pub checkpoint_contract_v1: bool,
+    /// Whether the DA-backed cold projection worker is enabled.
+    pub da_v1_enabled: bool,
+    /// Schema version of the reserved checkpoint shard payload.
+    pub schema_version: u32,
+    /// Reserved `BlobClass::Custom(..)` identifier for query projection shards.
+    pub blob_class_custom_id: u16,
+    /// Reserved codec label for query projection shards.
+    pub codec: String,
+    /// Compression used for reserved query projection shards.
+    pub compression: String,
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
@@ -179,6 +230,29 @@ pub async fn handle_node_capabilities(
             },
             curves: curve_caps,
         },
+        query: NodeQueryCapabilities {
+            aggregate: NodeAggregateQueryCapabilities {
+                v1: true,
+                exact_results: true,
+                supported_resources: vec!["accounts".to_string(), "asset_holders".to_string()],
+            },
+            indexed_snapshot_marker: true,
+            row_enrichment_fields: vec![
+                "primary_alias".to_string(),
+                "primary_alias_name".to_string(),
+                "primary_alias_dataspace".to_string(),
+                "primary_alias_domain".to_string(),
+                "has_primary_alias".to_string(),
+            ],
+            projection: NodeProjectionCapabilities {
+                checkpoint_contract_v1: true,
+                da_v1_enabled: false,
+                schema_version: QUERY_PROJECTION_SCHEMA_VERSION,
+                blob_class_custom_id: QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID,
+                codec: QUERY_PROJECTION_DA_CODEC.to_string(),
+                compression: compression_name(QUERY_PROJECTION_DA_COMPRESSION).to_string(),
+            },
+        },
     })
 }
 
@@ -233,6 +307,15 @@ fn curve_bitmap_from_ids(ids: &[u8]) -> Vec<u64> {
         vec.clear();
     }
     vec
+}
+
+fn compression_name(compression: Compression) -> &'static str {
+    match compression {
+        Compression::Identity => "identity",
+        Compression::Gzip => "gzip",
+        Compression::Deflate => "deflate",
+        Compression::Zstd => "zstd",
+    }
 }
 
 #[cfg(test)]
@@ -503,6 +586,31 @@ mod tests {
             signed_transaction_schema_hash_hex()
         );
         assert_eq!(resp.crypto.curves.registry_version, CURVE_REGISTRY_VERSION);
+        assert!(resp.query.aggregate.v1);
+        assert!(resp.query.aggregate.exact_results);
+        assert_eq!(
+            resp.query.aggregate.supported_resources,
+            vec!["accounts".to_string(), "asset_holders".to_string()]
+        );
+        assert!(resp.query.indexed_snapshot_marker);
+        assert_eq!(
+            resp.query.row_enrichment_fields,
+            vec![
+                "primary_alias".to_string(),
+                "primary_alias_name".to_string(),
+                "primary_alias_dataspace".to_string(),
+                "primary_alias_domain".to_string(),
+                "has_primary_alias".to_string()
+            ]
+        );
+        assert!(resp.query.projection.checkpoint_contract_v1);
+        assert!(!resp.query.projection.da_v1_enabled);
+        assert_eq!(
+            resp.query.projection.blob_class_custom_id,
+            QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID
+        );
+        assert_eq!(resp.query.projection.codec, QUERY_PROJECTION_DA_CODEC);
+        assert_eq!(resp.query.projection.compression, "zstd");
         assert!(
             resp.crypto
                 .curves

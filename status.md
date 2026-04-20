@@ -2,6 +2,52 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: norito JSON serde parity hardening
+- `crates/norito/tests/json_value_serde_parity.rs` adds a deterministic
+  seeded parity corpus over `norito::json::Value`, including bounded nested
+  arrays/objects, deterministic `BTreeMap` object ordering, finite floats, and
+  explicit `NaN` / `+inf` / `-inf` cases converted to `serde_json::Value::Null`
+  for serializer parity checks.
+- `crates/norito/tests/json_serde_api.rs` remains the typed entrypoint coverage
+  for `to_string(...)` / `to_string_pretty(...)`, but is now scoped as
+  representative smoke/regression coverage rather than the broad parity
+  backstop.
+- `crates/norito/src/lib.rs` now matches `serde_json` more closely for the
+  remaining float/pretty formatting gaps that the randomized suite exposed:
+  positive exponents render with `e+...`, empty arrays/objects pretty-print as
+  `[]` / `{}` without blank inner lines, and the stage1 helper self-test block
+  no longer carries the dead `pad_to_align(...)` helper on targets where the
+  SIMD-specific tests are compiled out.
+- `crates/norito/tests/data/json_golden/numbers_edgecases.out.json` was updated
+  to the canonical `e+308` float rendering that now matches the serde parity
+  expectation.
+- Focused validation for this slice:
+  - `cargo fmt --all -- crates/norito/src/lib.rs crates/norito/tests/json_writer_canon.rs crates/norito/tests/json_serde_api.rs crates/norito/tests/json_value_serde_parity.rs`
+  - `CARGO_TARGET_DIR=target/codex-norito-json cargo test -p norito --test json_serde_api -- --nocapture`
+    (`3 passed`)
+  - `CARGO_TARGET_DIR=target/codex-norito-json cargo test -p norito --test json_writer_canon -- --nocapture`
+    (`3 passed`)
+  - `CARGO_TARGET_DIR=target/codex-norito-json cargo test -p norito --test json_golden_loader -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-norito-json cargo test -p norito --test json_value_serde_parity -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-norito-json cargo test -p norito --tests`
+    (passed)
+
+## 2026-04-20 Follow-up: xtask nexus canonical JSON helper alignment
+- `xtask/src/nexus.rs` now keeps `canonical_json` aligned with the Norito JSON
+  API surface by accepting a precomputed `norito::json::Value` instead of a
+  typed `LaneBlockCommitment`.
+- The two lane-commitment fixture paths now perform the typed-to-`Value`
+  conversion explicitly at the call site, keeping the helper scoped to `Value`
+  rendering instead of broader typed JSON serialization.
+- Added a focused regression test that roundtrips the canonical JSON text back
+  into `LaneBlockCommitment`, so the helper stays value-based without changing
+  the emitted fixture format.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=target/codex-check-xtask cargo test -p xtask canonical_json_renders_lane_commitment_value -- --nocapture`
+    (`1 passed`; other `xtask` test targets were filtered out by the name filter)
+
 ## 2026-04-20 Follow-up: Torii contract deploy receipt timeout regression
 - `crates/iroha_torii/src/routing.rs` no longer waits for alias activation on
   plain deploy receipts that only need queue admission metadata. Single

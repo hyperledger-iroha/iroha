@@ -3,7 +3,9 @@
 #![allow(clippy::disallowed_types)]
 
 pub mod cursor;
+pub mod index_status;
 pub mod pagination;
+pub mod projection_checkpoint;
 pub mod snapshot;
 pub mod store;
 
