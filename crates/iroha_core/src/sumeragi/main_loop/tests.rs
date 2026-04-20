@@ -64670,10 +64670,16 @@ fn topology_update_for_local_removal_disconnects() {
     let peer_b = PeerId::new(KeyPair::random().public_key().clone());
 
     let last_advertised: BTreeSet<_> = [peer_a, peer_b].into_iter().collect();
-    let updated = super::topology_update_for_local_removal(&last_advertised)
-        .expect("should advertise disconnect when peers were previously advertised");
+    let updated = super::topology_update_for_local_removal(&last_advertised);
 
     assert!(updated.is_empty());
+
+    let updated_without_prior_advertisement =
+        super::topology_update_for_local_removal(&BTreeSet::new());
+    assert!(
+        updated_without_prior_advertisement.is_empty(),
+        "local removal should advertise an empty topology even before a prior advertisement"
+    );
 }
 
 #[test]

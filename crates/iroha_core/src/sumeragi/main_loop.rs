@@ -13070,14 +13070,8 @@ enum TopologyRefreshDecision {
     AdvertiseForStrays { stray_count: usize },
 }
 
-fn topology_update_for_local_removal(
-    last_advertised: &BTreeSet<PeerId>,
-) -> Option<BTreeSet<PeerId>> {
-    if last_advertised.is_empty() {
-        None
-    } else {
-        Some(BTreeSet::new())
-    }
+fn topology_update_for_local_removal(_last_advertised: &BTreeSet<PeerId>) -> BTreeSet<PeerId> {
+    BTreeSet::new()
 }
 
 fn topology_refresh_decision(
