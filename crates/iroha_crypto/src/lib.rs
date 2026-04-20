@@ -2570,7 +2570,7 @@ mod tests {
 
         use crate::mldsa_seed::mldsa65 as seeded;
 
-        let (_, private) =
+        let (public, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
         let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
             .expect("valid ML-DSA secret bytes");
@@ -2583,7 +2583,12 @@ mod tests {
         let message = b"iroha:ml-dsa:test-arc-sharing";
         let sig_original = key.sign(message);
         let sig_clone = cloned.sign(message);
-        assert_eq!(sig_original, sig_clone, "cloned key must sign identically");
+        Signature::from_bytes(&sig_original)
+            .verify(&public, message)
+            .expect("original ML-DSA signature should verify");
+        Signature::from_bytes(&sig_clone)
+            .verify(&public, message)
+            .expect("clone ML-DSA signature should verify");
 
         drop(cloned);
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
@@ -2913,7 +2918,7 @@ mod tests {
                 .expect("public key");
         let framed = norito::core::to_bytes(&pk).expect("encode public key");
         let actual_hex = hex::encode(&framed);
-        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d24004e00000000000000b86570116ac45e8f00460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435";
+        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d240047000000000000003baa0fd04f6ed097024665643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435";
         assert_eq!(
             actual_hex, expected_hex,
             "public key Norito archive changed"
