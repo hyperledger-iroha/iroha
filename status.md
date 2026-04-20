@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: Izanami Nexus selector and persistence regression sync
+- `crates/izanami/src/config.rs` now resolves the embedded Sora Nexus fee/stake
+  selectors into canonical `AssetDefinitionId`s before Izanami builds genesis
+  and emits its config layer, so alias-shaped embedded selectors such as
+  `xor#universal` no longer panic and the generated layer preserves the
+  effective canonical bootstrap asset IDs.
+- `crates/izanami/src/persistence.rs` test coverage now serializes
+  `XDG_CONFIG_HOME` mutations behind a test-local mutex, removing the
+  parallel-test race that intermittently caused the persisted roundtrip test to
+  observe a different config root and return `None`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p izanami -- --nocapture`
+    (`215 passed; 0 failed`)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: iroha_crypto signature test regressions
 - The w3f BLS multi-message aggregate verifier now stays on the w3f hashing
   and domain-separation path even when `bls-multi-pairing` is enabled, avoiding

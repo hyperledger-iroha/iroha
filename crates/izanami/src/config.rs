@@ -17,7 +17,7 @@ use iroha_config::{
     },
 };
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
 };
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
@@ -512,6 +512,28 @@ fn canonical_addr_literal(addr: &str) -> Result<String> {
     Ok(IrohaSocketAddr::from(parsed).to_literal())
 }
 
+fn resolve_embedded_asset_selector(
+    field_path: &str,
+    selector: &str,
+    canonical_default: &str,
+) -> Result<AssetDefinitionId> {
+    if let Ok(asset_id) = selector.parse() {
+        return Ok(asset_id);
+    }
+
+    selector.parse::<AssetDefinitionAlias>().map_err(|err| {
+        eyre!(
+            "failed to parse embedded {field_path} `{selector}` as a canonical asset definition id or alias: {err}"
+        )
+    })?;
+
+    canonical_default.parse().map_err(|err| {
+        eyre!(
+            "failed to resolve embedded {field_path} alias `{selector}` to canonical asset definition id `{canonical_default}`: {err}"
+        )
+    })
+}
+
 impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
     pub fn sora_defaults() -> Result<Self> {
@@ -577,17 +599,17 @@ impl NexusProfile {
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
         let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
-        let config_layer = build_nexus_layer(&nexus, &sumeragi);
-        let stake_asset_id = nexus
-            .staking
-            .stake_asset_id
-            .parse()
-            .map_err(|err| eyre!("failed to parse embedded nexus stake asset id: {err}"))?;
-        let fee_asset_id = nexus
-            .fees
-            .fee_asset_id
-            .parse()
-            .map_err(|err| eyre!("failed to parse embedded nexus fee asset id: {err}"))?;
+        let stake_asset_id = resolve_embedded_asset_selector(
+            "nexus.staking.stake_asset_id",
+            &nexus.staking.stake_asset_id,
+            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+        )?;
+        let fee_asset_id = resolve_embedded_asset_selector(
+            "nexus.fees.fee_asset_id",
+            &nexus.fees.fee_asset_id,
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )?;
+        let config_layer = build_nexus_layer(&nexus, &sumeragi, &stake_asset_id, &fee_asset_id);
 
         Ok(Self {
             lane_catalog: nexus.lane_catalog,
@@ -642,7 +664,12 @@ fn normalize_lane_metadata(raw: &mut Table) {
     }
 }
 
-fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
+fn build_nexus_layer(
+    nexus: &ActualNexus,
+    sumeragi: &ActualSumeragi,
+    stake_asset_id: &AssetDefinitionId,
+    fee_asset_id: &AssetDefinitionId,
+) -> Table {
     let mut layer = Table::new();
     TomlWriter::new(&mut layer).write(["nexus", "enabled"], true);
     TomlWriter::new(&mut layer).write(
@@ -746,13 +773,10 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
         ["nexus", "routing_policy", "rules"],
         Value::Array(rule_values),
     );
-    TomlWriter::new(&mut layer).write(
-        ["nexus", "fees", "fee_asset_id"],
-        nexus.fees.fee_asset_id.clone(),
-    );
+    TomlWriter::new(&mut layer).write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string());
     TomlWriter::new(&mut layer).write(
         ["nexus", "staking", "stake_asset_id"],
-        nexus.staking.stake_asset_id.clone(),
+        stake_asset_id.to_string(),
     );
 
     TomlWriter::new(&mut layer).write(
