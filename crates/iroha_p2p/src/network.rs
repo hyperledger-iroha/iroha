@@ -5862,6 +5862,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         if !self.allow_trusted_observers() {
             return false;
         }
+        if self.current_topology.is_empty() {
+            return false;
+        }
         let mut updated = self.current_topology.clone();
         updated.retain(|peer_id| {
             let pk = peer_id.public_key();
@@ -8070,6 +8073,24 @@ mod tests {
         assert!(
             network.current_topology.contains(&trusted_id),
             "trusted observers should remain connected across topology updates"
+        );
+    }
+
+    #[test]
+    fn empty_topology_does_not_add_trusted_observers() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let trusted_id = PeerId::from(KeyPair::random().public_key().clone());
+        let mut trusted = HashSet::new();
+        trusted.insert(trusted_id);
+        network.peer_reputations.set_trusted(&trusted);
+
+        network.set_current_topology(UpdateTopology(HashSet::new()));
+
+        assert!(
+            network.current_topology.is_empty(),
+            "empty topology updates should remain empty even with trusted observers"
         );
     }
 
