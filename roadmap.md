@@ -33,6 +33,45 @@ canonical `PublicKey` Norito archive golden.
 - open work after this slice:
   - rerun broader workspace validation during a longer clean window
 
+Latest sync (2026-04-19 Mochi draft/state/supervisor regression sync):
+Mochi's remaining focused regressions now line up with the current data-model
+and supervisor contracts. Compose draft coverage uses fully qualified
+`domain.dataspace` inputs, the state explorer no longer panics when it sees
+opaque canonical asset-definition IDs without a stored domain projection, and
+direct `PeerSpec::write_config` calls now normalize Torii/MCP and DA defaults
+the same way the public builder path does. The standalone Kagami stub also
+emits the required `chain_discriminant`, and the stale pipeline-event fixture
+has been regenerated from the current sample helper.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/compose.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/state.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/src/supervisor.rs`
+  - `/home/mtakemiya/dev/iroha/mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core regenerate_pipeline_event_message_fixture -- --ignored --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core compose::tests:: -- --nocapture`
+    (`30 passed`)
+  - `cargo test -p mochi-core state::tests::state_entry_asset -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p mochi-core supervisor::tests::peer_spec_ -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p mochi-core supervisor::tests::supervisor_ -- --nocapture`
+    (`7 passed`)
+  - `cargo test -p mochi-core supervisor::tests::wipe_and_regenerate_resets_storage_and_genesis -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p mochi-core torii::tests::event_stream_decodes_pipeline_events -- --nocapture`
+    (`1 passed`)
+  - `git diff --check`
+  - `cargo test -p mochi-core`
+    (`244 passed; 0 failed; 4 ignored`; integration tests `3 passed`; doctests `0`)
+- open work after this slice:
+  - rerun broader workspace validation when time allows
+
 Latest sync (2026-04-19 Mochi supervisor Kagami and stream fixture sync):
 The Mochi supervisor integration harness now matches the current external
 `kagami` contract, including the `--version` probe and the newer genesis
