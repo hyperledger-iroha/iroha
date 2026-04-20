@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: Nexus settlement routing and runtime fixture stability
+- `crates/iroha_core/src/queue/router.rs` now routes DvP/PvP settlement
+  transactions by their settlement-leg asset definitions before applying the
+  signer account fallback. Same-dataspace settlements use that dataspace's
+  canonical lane, while mixed-dataspace settlements use the universal/Nexus
+  coordinator lane so universal asset movements are not captured by a private
+  account route.
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now observes the
+  successful cross-dataspace swap route through the pipeline before asserting
+  balances, uses Nexus-authoritative observers for universal settlement
+  history, and retries setup/soak/rollback submissions across Nexus lane
+  observers under localnet contention.
+- `integration_tests/tests/common/sora_runtime_governance.rs` now submits
+  runtime-governance fixture setup transactions asynchronously and waits on the
+  pipeline status endpoint plus explicit visibility checks, avoiding slow
+  `/query` fallback confirmation failures during governance test setup.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib queue::router::tests::settlement_ -- --nocapture`
+    (`3 passed`)
+  - `cargo test -p integration_tests --test nexus_and_streaming should_submit_tick -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture`
+    (`1 passed`; 208.56s)
+  - `cargo test -p integration_tests --test nexus_and_streaming sora_runtime_upgrade_resilience::sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_proposal -- --nocapture`
+    (`1 passed`; 294.97s)
+  - `cargo test -p integration_tests --test nexus_and_streaming sora_runtime_upgrade_resilience::sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition -- --nocapture`
+    (`1 passed`; 284.18s)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: Torii contract deploy receipt timeout regression
 - `crates/iroha_torii/src/routing.rs` no longer waits for alias activation on
   plain deploy receipts that only need queue admission metadata. Single

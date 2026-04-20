@@ -87,9 +87,10 @@ const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
 const OBSERVER_QUERY_TIMEOUT_CAP: Duration = Duration::from_secs(12);
 const OBSERVER_QUERY_TIMEOUT_FLOOR: Duration = Duration::from_secs(2);
+const PERMISSION_VISIBILITY_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SETUP_REGISTER_MINT_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
+const SUBMIT_ENQUEUE_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
-const SWAP_BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
 const ROLLBACK_CAPPED_ATTEMPTS: usize = 2;
 const ROLLBACK_HISTORY_RETRY_TIMEOUT: Duration = Duration::from_secs(4);
 const ROLLBACK_HISTORY_FALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
@@ -504,14 +505,28 @@ fn wait_for_height_with_tick_timeout_across_clients(
     target_height: u64,
     context: &str,
     timeout_duration: Duration,
-    _tick_every_polls: u64,
+    tick_every_polls: u64,
 ) -> Result<SumeragiStatusWire> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
         let mut best_status = None;
-        for client in clients_factory() {
+        let clients = clients_factory();
+        if should_submit_tick(poll_count, tick_every_polls)
+            && let Some(tick_submitter) = clients.first()
+        {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
+        for client in clients {
             match client.get_sumeragi_status_wire() {
                 Ok(status) => {
                     last_height = last_height.max(status.commit_qc.height);
@@ -534,6 +549,7 @@ fn wait_for_height_with_tick_timeout_across_clients(
         {
             return Ok(status);
         }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
@@ -548,10 +564,10 @@ fn wait_for_lane_peers_commit_qc_at_least(
     network: &sandbox::SerializedNetwork,
     lane_index: u32,
     expected_status: &SumeragiStatusWire,
-    _tick_submitter: &Client,
+    tick_submitter: &Client,
     context: &str,
     timeout_duration: Duration,
-    _tick_every_polls: u64,
+    tick_every_polls: u64,
 ) -> Result<()> {
     let start = lane_index as usize * VALIDATORS_PER_LANE;
     let end = start
@@ -564,7 +580,18 @@ fn wait_for_lane_peers_commit_qc_at_least(
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(peers.len());
     let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
+        if should_submit_tick(poll_count, tick_every_polls) {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
         last_observed.clear();
         let mut all_match = true;
         for peer in peers {
@@ -594,6 +621,7 @@ fn wait_for_lane_peers_commit_qc_at_least(
         if all_match {
             return Ok(());
         }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
 
@@ -638,6 +666,36 @@ fn bounded_observer_request_timeout(
         .min(OBSERVER_QUERY_TIMEOUT_CAP)
         .max(OBSERVER_QUERY_TIMEOUT_FLOOR)
         .min(remaining)
+}
+
+fn should_submit_tick(poll_count: u64, tick_every_polls: u64) -> bool {
+    tick_every_polls > 0 && poll_count % tick_every_polls == 0
+}
+
+fn submit_wait_tick(
+    tick_submitter: &Client,
+    context: &str,
+    poll_count: u64,
+    started: Instant,
+    timeout_duration: Duration,
+    last_error: &mut Option<String>,
+) {
+    let mut tick_client = tick_submitter.clone();
+    tick_client.torii_request_timeout =
+        tick_client
+            .torii_request_timeout
+            .min(bounded_observer_request_timeout(
+                started,
+                timeout_duration,
+                1,
+            ));
+    let message = format!("{context} tick {poll_count}");
+    if let Err(err) = tick_client.submit(Log::new(Level::INFO, message)) {
+        *last_error = Some(format!(
+            "tick submit error: {}",
+            render_error_with_debug(&err)
+        ));
+    }
 }
 
 #[test]
@@ -996,7 +1054,7 @@ fn wait_for_expected_balances_with_timeout(
 }
 
 fn wait_for_expected_balances_with_tick_timeout(
-    _tick_submitter: &Client,
+    tick_submitter: &Client,
     expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
@@ -1004,7 +1062,18 @@ fn wait_for_expected_balances_with_tick_timeout(
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(expectations.len());
     let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
+        if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
         last_observed.clear();
         let mut all_match = true;
         let expectation_count = expectations.len();
@@ -1034,6 +1103,7 @@ fn wait_for_expected_balances_with_tick_timeout(
         if all_match {
             return Ok(());
         }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
@@ -1090,7 +1160,7 @@ fn wait_for_account_permissions_across_clients(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     let mut last_error: Option<String> = None;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+    while started.elapsed() <= PERMISSION_VISIBILITY_WAIT_TIMEOUT {
         let mut observed = Vec::new();
         let mut saw_success = false;
         let clients = clients_factory();
@@ -1101,7 +1171,7 @@ fn wait_for_account_permissions_across_clients(
                     .torii_request_timeout
                     .min(bounded_observer_request_timeout(
                         started,
-                        STATUS_WAIT_TIMEOUT,
+                        PERMISSION_VISIBILITY_WAIT_TIMEOUT,
                         client_count.saturating_sub(index),
                     ));
             match client
@@ -1136,7 +1206,8 @@ fn wait_for_account_permissions_across_clients(
         .map(|err| format!("; last permission query error: {err}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+        "{context}: timed out after {:?} waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}",
+        PERMISSION_VISIBILITY_WAIT_TIMEOUT
     ))
 }
 
@@ -1482,6 +1553,35 @@ fn wait_for_committed_rejection_reason_across_clients(
         )),
         CommittedTxOutcome::Rejected(reason) => Ok(reason),
     }
+}
+
+fn submit_transaction_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    transaction: &SignedTransaction,
+    context: &str,
+    request_timeout: Duration,
+) -> Result<HashOf<SignedTransaction>> {
+    let mut last_error: Option<String> = None;
+    let clients = clients_factory();
+    ensure!(
+        !clients.is_empty(),
+        "{context}: no clients available for transaction submission"
+    );
+    for mut client in clients {
+        client.torii_request_timeout = client.torii_request_timeout.min(request_timeout);
+        match client.submit_transaction(transaction) {
+            Ok(hash) => return Ok(hash),
+            Err(err) => {
+                last_error = Some(render_error_with_debug(&err));
+            }
+        }
+    }
+    let suffix = last_error
+        .map(|err| format!("; last submit error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: failed to submit transaction through any routed observer{suffix}"
+    ))
 }
 
 fn wait_for_committed_success_or_height_fallback_across_clients(
@@ -2014,14 +2114,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "setup grants route observation",
         ))?;
         // A queued event from the ingress listener can still reflect the submitter-side lane even
-        // when the authoritative router forwards the transaction elsewhere. This grant targets a
-        // universal asset definition permission, so the authoritative route is the Nexus lane
-        // unless an Approved event proved a different final route.
-        let authoritative_lane_index = if route_observation.approved_height.is_some() {
-            route_observation.lane_id.as_u32()
-        } else {
-            NEXUS_LANE_INDEX
-        };
+        // after the authoritative router forwards the transaction. This grant targets a universal
+        // asset-definition permission, so the authoritative route is the Nexus lane regardless of
+        // the route event lane observed through the submitter.
+        let authoritative_lane_index = NEXUS_LANE_INDEX;
         let pre_barrier_height = match authoritative_lane_index {
             NEXUS_LANE_INDEX => nexus_pre_barrier_height,
             DS1_LANE_INDEX => ds1_pre_barrier_height,
@@ -2126,37 +2222,23 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             SETUP_REGISTER_MINT_QUERY_TIMEOUT,
         )?;
     }
-    let mut swap_outcome_fallbacks = 0usize;
+    let swap_outcome_fallbacks = 0usize;
     let mut swap_nonconverged_fallbacks = 0usize;
-    let current_lane_clients = || {
+    let current_nexus_clients = || {
         (
             leader_targeted_client_for_lane(
                 &network,
                 &alice,
                 &ALICE_ID,
                 ALICE_KEYPAIR.private_key(),
-                DS1_LANE_INDEX,
+                NEXUS_LANE_INDEX,
             ),
             leader_targeted_client_for_lane(
                 &network,
                 &alice,
                 &BOB_ID,
                 BOB_KEYPAIR.private_key(),
-                DS1_LANE_INDEX,
-            ),
-            leader_targeted_client_for_lane(
-                &network,
-                &alice,
-                &ALICE_ID,
-                ALICE_KEYPAIR.private_key(),
-                DS2_LANE_INDEX,
-            ),
-            leader_targeted_client_for_lane(
-                &network,
-                &alice,
-                &BOB_ID,
-                BOB_KEYPAIR.private_key(),
-                DS2_LANE_INDEX,
+                NEXUS_LANE_INDEX,
             ),
         )
     };
@@ -2181,15 +2263,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 SettlementAtomicity::AllOrNothing,
             ),
         );
-        let mut submitter = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
-        );
+        let (submitter, _) = current_nexus_clients();
         let mut successful_swap_synced_status = None;
-        let (successful_swap_tx, successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
+        let (successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
             let pre_barrier_height = submitter
                 .get_sumeragi_status_wire()
@@ -2199,89 +2275,55 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let successful_swap_tx = submitter
                 .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
-            (
-                successful_swap_tx,
-                successful_swap_entry_hash,
-                pre_barrier_height,
-            )
+            let route_observation = rt.block_on(submit_transaction_with_route_observation(
+                &submitter,
+                &successful_swap_tx,
+                "successful swap route observation",
+            ))?;
+            eprintln!(
+                "[swap] successful swap observed lane={} dataspace={} approved_height={:?}",
+                route_observation.lane_id.as_u32(),
+                route_observation.dataspace_id.as_u64(),
+                route_observation.approved_height,
+            );
+            (successful_swap_entry_hash, pre_barrier_height)
         };
         {
             let _phase = phase_timings.phase("execute successful swap: barrier wait");
-            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&successful_swap_tx) {
-                Ok(_) => {
-                    successful_swap_synced_status = Some(
-                        wait_for_committed_success_or_height_fallback_across_clients(
-                            || {
-                                lane_targeted_clients_for_lane(
-                                    &network,
-                                    &alice,
-                                    &ALICE_ID,
-                                    ALICE_KEYPAIR.private_key(),
-                                    DS1_LANE_INDEX,
-                                )
-                            },
-                            successful_swap_entry_hash.clone(),
-                            "successful swap confirmation on ds1 authoritative observer",
-                            "successful swap barrier on ds1 authoritative observer (height fallback)",
-                            successful_swap_pre_barrier_height,
-                            SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                            SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                        )?,
+            match wait_for_committed_success_or_height_fallback_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                successful_swap_entry_hash,
+                "successful swap confirmation on Nexus authoritative observer",
+                "successful swap barrier on Nexus authoritative observer (height fallback)",
+                successful_swap_pre_barrier_height,
+                SWAP_COMMITTED_OUTCOME_TIMEOUT,
+                SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+            ) {
+                Ok(status) => successful_swap_synced_status = Some(status),
+                Err(fallback_err) => {
+                    swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                    eprintln!(
+                        "[swap] successful swap fallback did not converge before balance assertion: {fallback_err}"
                     );
-                }
-                Err(err) => {
-                    let error_text = err.to_string();
-                    if !is_inconclusive_blocking_submit_error(&error_text) {
-                        return Err(err);
-                    }
-                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
-                    match wait_for_committed_success_or_height_fallback_across_clients(
-                        || {
-                            lane_targeted_clients_for_lane(
-                                &network,
-                                &alice,
-                                &ALICE_ID,
-                                ALICE_KEYPAIR.private_key(),
-                                DS1_LANE_INDEX,
-                            )
-                        },
-                        successful_swap_entry_hash,
-                        "successful swap confirmation on ds1 authoritative observer",
-                        "successful swap barrier on ds1 authoritative observer (height fallback)",
-                        successful_swap_pre_barrier_height,
-                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                    ) {
-                        Ok(status) => successful_swap_synced_status = Some(status),
-                        Err(fallback_err) => {
-                            swap_nonconverged_fallbacks =
-                                swap_nonconverged_fallbacks.saturating_add(1);
-                            eprintln!(
-                                "[swap] successful swap fallback did not converge before balance assertion: {fallback_err}"
-                            );
-                        }
-                    }
                 }
             }
         }
         if let Some(status) = successful_swap_synced_status.as_ref() {
-            let (alice_on_ds1, _, _, bob_on_ds2) = current_lane_clients();
+            let (alice_on_nexus, _) = current_nexus_clients();
             wait_for_lane_peers_commit_qc_at_least(
                 &network,
-                DS1_LANE_INDEX,
+                NEXUS_LANE_INDEX,
                 status,
-                &alice_on_ds1,
-                "successful swap ds1 authoritative sync",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_lane_peers_commit_qc_at_least(
-                &network,
-                DS2_LANE_INDEX,
-                status,
-                &bob_on_ds2,
-                "successful swap ds2 authoritative sync",
+                &alice_on_nexus,
+                "successful swap Nexus authoritative sync",
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
             )?;
@@ -2289,37 +2331,32 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
             let mut balance_wait_result = Ok(());
-            for lane_label in ["ds1", "ds2", "ds1", "ds2"] {
-                let (alice_on_ds1, bob_on_ds1, alice_on_ds2, bob_on_ds2) = current_lane_clients();
+            for attempt in 0..4 {
+                let (alice_on_nexus, bob_on_nexus) = current_nexus_clients();
                 let successful_swap_expectations = [
                     BalanceExpectation {
-                        client: &alice_on_ds1,
+                        client: &alice_on_nexus,
                         asset_id: &alice_ds1_asset,
                         expected: Numeric::from(70_u32),
                     },
                     BalanceExpectation {
-                        client: &bob_on_ds1,
+                        client: &bob_on_nexus,
                         asset_id: &bob_ds1_asset,
                         expected: Numeric::from(30_u32),
                     },
                     BalanceExpectation {
-                        client: &alice_on_ds2,
+                        client: &alice_on_nexus,
                         asset_id: &alice_ds2_asset,
                         expected: Numeric::from(45_u32),
                     },
                     BalanceExpectation {
-                        client: &bob_on_ds2,
+                        client: &bob_on_nexus,
                         asset_id: &bob_ds2_asset,
                         expected: Numeric::from(155_u32),
                     },
                 ];
-                let tick_submitter = match lane_label {
-                    "ds1" => &alice_on_ds1,
-                    "ds2" => &bob_on_ds2,
-                    _ => unreachable!("lane label should be known"),
-                };
                 match wait_for_expected_balances_with_tick_timeout(
-                    tick_submitter,
+                    &alice_on_nexus,
                     &successful_swap_expectations,
                     "successful swap balances",
                     Duration::from_secs(12),
@@ -2330,7 +2367,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     }
                     Err(err) => {
                         eprintln!(
-                            "[swap] successful swap balances not visible after {lane_label} tick window: {err}"
+                            "[swap] successful swap balances not visible after Nexus tick window {}: {err}",
+                            attempt + 1
                         );
                         balance_wait_result = Err(err);
                     }
@@ -2359,12 +2397,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             for attempt in 0..SOAK_ITERATION_ATTEMPTS {
                 let attempt_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
                     let retarget_started = Instant::now();
-                    let (
-                        soak_submitter,
-                        current_bob_on_ds1,
-                        current_alice_on_ds2,
-                        current_bob_on_ds2,
-                    ) = current_lane_clients();
+                    let (soak_submitter, soak_bob_observer) = current_nexus_clients();
                     let target_elapsed = retarget_started.elapsed();
                     let forward_swap = DvpIsi::new(
                         format!("soakfwd{iteration}a{attempt}")
@@ -2422,7 +2455,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         .map_err(|err| eyre!(err))?
                         .commit_qc
                         .height;
-                    soak_submitter.submit_transaction(&soak_swap_tx)?;
+                    submit_transaction_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                NEXUS_LANE_INDEX,
+                            )
+                        },
+                        &soak_swap_tx,
+                        "soak paired swaps enqueue on Nexus authoritative observers",
+                        SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+                    )?;
                     let submit_elapsed = submit_started.elapsed();
                     let barrier_started = Instant::now();
                     let _synced_after_paired_swaps = match wait_for_committed_success_across_clients(
@@ -2432,11 +2478,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                 &alice,
                                 &ALICE_ID,
                                 ALICE_KEYPAIR.private_key(),
-                                DS1_LANE_INDEX,
+                                NEXUS_LANE_INDEX,
                             )
                         },
                         soak_swap_entry_hash.clone(),
-                        "soak paired swaps confirmation on ds1 authoritative observer",
+                        "soak paired swaps confirmation on Nexus authoritative observer",
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
                     ) {
                         Ok(()) => soak_submitter
@@ -2460,11 +2506,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                         &alice,
                                         &ALICE_ID,
                                         ALICE_KEYPAIR.private_key(),
-                                        DS1_LANE_INDEX,
+                                        NEXUS_LANE_INDEX,
                                     )
                                 },
                                 pre_barrier_height.saturating_add(1),
-                                "soak paired swaps barrier on ds1 authoritative observer (height fallback)",
+                                "soak paired swaps barrier on Nexus authoritative observer (height fallback)",
                                 SOAK_PHASE_WAIT_TIMEOUT,
                                 SOAK_BARRIER_TICK_EVERY_POLLS,
                             ) {
@@ -2476,11 +2522,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                             &alice,
                                             &ALICE_ID,
                                             ALICE_KEYPAIR.private_key(),
-                                            DS1_LANE_INDEX,
+                                            NEXUS_LANE_INDEX,
                                         )
                                     },
                                     soak_swap_entry_hash.clone(),
-                                    "soak paired swaps confirmation on ds1 authoritative observer (post-barrier-timeout)",
+                                    "soak paired swaps confirmation on Nexus authoritative observer (post-barrier-timeout)",
                                     SOAK_PHASE_WAIT_TIMEOUT,
                                 ) {
                                     Ok(()) => soak_submitter
@@ -2506,17 +2552,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             expected: Numeric::from(70_u32),
                         },
                         BalanceExpectation {
-                            client: &current_bob_on_ds1,
+                            client: &soak_bob_observer,
                             asset_id: &bob_ds1_asset,
                             expected: Numeric::from(30_u32),
                         },
                         BalanceExpectation {
-                            client: &current_alice_on_ds2,
+                            client: &soak_submitter,
                             asset_id: &alice_ds2_asset,
                             expected: Numeric::from(45_u32),
                         },
                         BalanceExpectation {
-                            client: &current_bob_on_ds2,
+                            client: &soak_bob_observer,
                             asset_id: &bob_ds2_asset,
                             expected: Numeric::from(155_u32),
                         },
@@ -2663,24 +2709,56 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     SettlementAtomicity::AllOrNothing,
                 ),
             );
-            let mut submitter = leader_targeted_client_for_lane(
-                &network,
-                &alice,
-                &ALICE_ID,
-                ALICE_KEYPAIR.private_key(),
-                DS1_LANE_INDEX,
-            );
+            let (submitter, _) = current_nexus_clients();
             let failing_swap_tx = submitter
                 .build_transaction([InstructionBox::from(failing_swap)], Metadata::default());
             let entry_hash = failing_swap_tx.hash_as_entrypoint();
             last_attempt_entry_hash = Some(entry_hash.clone());
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&failing_swap_tx) {
-                Ok(_) => {
-                    return Err(eyre!(
-                        "underfunded counter-leg unexpectedly approved on rollback attempt {}",
+            if let Err(err) = submit_transaction_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                &failing_swap_tx,
+                "rollback failing swap enqueue on Nexus authoritative observers",
+                SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+            ) {
+                let error_text = err.to_string();
+                if is_inconclusive_blocking_submit_error(&error_text)
+                    && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
+                {
+                    eprintln!(
+                        "[rollback] inconclusive enqueue on attempt {}; retrying with fresh leader target",
                         attempt + 1
-                    ));
+                    );
+                    continue;
+                }
+                failure_text = Some(error_text);
+                break;
+            }
+
+            match wait_for_committed_rejection_reason_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                entry_hash.clone(),
+                "rollback rejection reason from Nexus authoritative history",
+                ROLLBACK_HISTORY_RETRY_TIMEOUT,
+            ) {
+                Ok(committed_reason) => {
+                    failure_text = Some(committed_reason);
+                    break;
                 }
                 Err(err) => {
                     let error_text = err.to_string();
@@ -2690,30 +2768,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         failure_text = Some(error_text);
                         break;
                     }
-                    if is_inconclusive_blocking_submit_error(&error_text)
+                    if is_inconclusive_committed_outcome_error(&error_text)
                         && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
                     {
-                        if let Ok(committed_reason) =
-                            wait_for_committed_rejection_reason_across_clients(
-                                || {
-                                    lane_targeted_clients_for_lane(
-                                        &network,
-                                        &alice,
-                                        &ALICE_ID,
-                                        ALICE_KEYPAIR.private_key(),
-                                        DS1_LANE_INDEX,
-                                    )
-                                },
-                                entry_hash.clone(),
-                                "rollback rejection reason from ds1 authoritative history",
-                                ROLLBACK_HISTORY_RETRY_TIMEOUT,
-                            )
-                        {
-                            failure_text = Some(committed_reason);
-                            break;
-                        }
                         eprintln!(
-                            "[rollback] inconclusive submit on attempt {}; retrying with fresh leader target",
+                            "[rollback] inconclusive rejection lookup on attempt {}; retrying with fresh leader target",
                             attempt + 1
                         );
                         continue;
@@ -2725,7 +2784,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
         let mut failure_text = failure_text
             .ok_or_else(|| eyre!("rollback rejection attempt did not produce an error"))?;
-        if is_inconclusive_blocking_submit_error(&failure_text) {
+        if is_inconclusive_blocking_submit_error(&failure_text)
+            || is_inconclusive_committed_outcome_error(&failure_text)
+        {
             let entry_hash = last_attempt_entry_hash
                 .ok_or_else(|| eyre!("missing transaction entry hash for rollback fallback"))?;
             eprintln!("[rollback] falling back to committed history lookup for rejection reason");
@@ -2736,11 +2797,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         &alice,
                         &ALICE_ID,
                         ALICE_KEYPAIR.private_key(),
-                        DS1_LANE_INDEX,
+                        NEXUS_LANE_INDEX,
                     )
                 },
                 entry_hash,
-                "rollback rejection reason from ds1 authoritative history fallback",
+                "rollback rejection reason from Nexus authoritative history fallback",
                 ROLLBACK_HISTORY_FALLBACK_TIMEOUT,
             ) {
                 Ok(reason) => {
@@ -2773,13 +2834,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             SettlementAtomicity::AllOrNothing,
                         ),
                     );
-                    let submitter = leader_targeted_client_for_lane(
-                        &network,
-                        &alice,
-                        &ALICE_ID,
-                        ALICE_KEYPAIR.private_key(),
-                        DS1_LANE_INDEX,
-                    );
+                    let (submitter, _) = current_nexus_clients();
                     let fallback_error = submitter
                         .submit_blocking(InstructionBox::from(final_fallback_swap))
                         .expect_err(
@@ -2794,30 +2849,25 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 || failure_text.contains("requires 10000"),
             "unexpected failure message: {failure_text}"
         );
-        let (
-            rollback_alice_on_ds1,
-            rollback_bob_on_ds1,
-            rollback_alice_on_ds2,
-            rollback_bob_on_ds2,
-        ) = current_lane_clients();
+        let (rollback_alice_on_nexus, rollback_bob_on_nexus) = current_nexus_clients();
         let rollback_baseline = [
             BalanceExpectation {
-                client: &rollback_alice_on_ds1,
+                client: &rollback_alice_on_nexus,
                 asset_id: &alice_ds1_asset,
                 expected: Numeric::from(70_u32),
             },
             BalanceExpectation {
-                client: &rollback_bob_on_ds1,
+                client: &rollback_bob_on_nexus,
                 asset_id: &bob_ds1_asset,
                 expected: Numeric::from(30_u32),
             },
             BalanceExpectation {
-                client: &rollback_alice_on_ds2,
+                client: &rollback_alice_on_nexus,
                 asset_id: &alice_ds2_asset,
                 expected: Numeric::from(45_u32),
             },
             BalanceExpectation {
-                client: &rollback_bob_on_ds2,
+                client: &rollback_bob_on_nexus,
                 asset_id: &bob_ds2_asset,
                 expected: Numeric::from(155_u32),
             },
@@ -2867,7 +2917,7 @@ mod tests {
         is_inconclusive_committed_outcome_error, lane_validator_snapshot,
         multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
         npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
-        render_error_with_debug, render_rejection_reason, routed_header_string,
+        render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
     };
     use iroha::data_model::{
@@ -3216,6 +3266,14 @@ mod tests {
             timeout <= Duration::from_secs(3),
             "divided slice should be close to the remaining budget divided by clients"
         );
+    }
+
+    #[test]
+    fn should_submit_tick_fires_on_initial_and_interval_polls() {
+        assert!(should_submit_tick(0, 5));
+        assert!(!should_submit_tick(4, 5));
+        assert!(should_submit_tick(5, 5));
+        assert!(!should_submit_tick(0, 0));
     }
 
     #[test]
