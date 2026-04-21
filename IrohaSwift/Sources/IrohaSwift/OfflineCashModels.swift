@@ -658,9 +658,46 @@ public enum ToriiOfflineCashCodec {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Canonicalizes an amount string to match the Rust `Numeric::Display` format,
+    /// which preserves the input's decimal scale (e.g. "1.00" stays "1.00", not "1").
     public static func canonicalAmountString(_ rawValue: String) throws -> String {
-        let parsed = try parseAmount(rawValue)
-        return NSDecimalNumber(decimal: parsed).stringValue
+        let trimmed = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: "")
+        guard !trimmed.isEmpty else {
+            throw ToriiOfflineAmountError.invalidAmount(rawValue)
+        }
+        let negative = trimmed.hasPrefix("-")
+        var digits = trimmed
+        if digits.hasPrefix("+") || digits.hasPrefix("-") { digits.removeFirst() }
+        var scale = 0
+        var mantissa: [Character] = []
+        var seenDot = false
+        for ch in digits {
+            if ch == "." {
+                if seenDot { throw ToriiOfflineAmountError.invalidAmount(rawValue) }
+                seenDot = true
+                continue
+            }
+            guard ch.isASCII, ch.isNumber else {
+                throw ToriiOfflineAmountError.invalidAmount(rawValue)
+            }
+            mantissa.append(ch)
+            if seenDot { scale += 1 }
+        }
+        guard scale <= 28 else { throw ToriiOfflineAmountError.invalidAmount(rawValue) }
+        while mantissa.count > 1 && mantissa.first == "0" { mantissa.removeFirst() }
+        if mantissa.isEmpty { mantissa = ["0"] }
+        if scale == 0 {
+            let body = String(mantissa)
+            return negative && body != "0" ? "-" + body : body
+        }
+        while mantissa.count <= scale { mantissa.insert("0", at: 0) }
+        let splitAt = mantissa.count - scale
+        let intPart = String(mantissa[0..<splitAt])
+        let fracPart = String(mantissa[splitAt..<mantissa.count])
+        let body = "\(intPart).\(fracPart)"
+        return negative && !mantissa.allSatisfy({ $0 == "0" }) ? "-" + body : body
     }
 
     public static func addAmounts(_ lhs: String, _ rhs: String) throws -> String {
