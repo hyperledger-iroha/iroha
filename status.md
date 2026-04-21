@@ -1,6 +1,18 @@
 # Status
 
-Last updated: 2026-04-20
+Last updated: 2026-04-21
+
+## 2026-04-21 Follow-up: deterministic SoraNet puzzle transcript mismatch regression
+- `crates/iroha_crypto/src/soranet/puzzle.rs` now makes the
+  `rejects_mismatched_transcript_hash` regression deterministic by searching
+  for an alternate transcript binding that provably breaks the minted ticket's
+  Argon2 predicate before asserting rejection.
+- The previous test used a fixed alternate transcript under difficulty `4`,
+  which meant the mismatched binding could still satisfy the puzzle by chance
+  and intermittently pass instead of failing.
+- Focused validation for this slice:
+  - `cargo test -p iroha_crypto soranet::puzzle::tests::rejects_mismatched_transcript_hash -- --exact --nocapture`
+  - `cargo test -p iroha_crypto soranet::puzzle::tests:: -- --nocapture`
 
 ## 2026-04-20 Follow-up: Connect canonical field-layout flags
 - `crates/iroha_torii_shared/src/connect.rs` now forces every nested Connect

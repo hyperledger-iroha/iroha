@@ -478,6 +478,32 @@ mod tests {
         panic!("failed to construct an invalid relay binding candidate")
     }
 
+    fn first_invalid_transcript_hash(
+        ticket: &Ticket,
+        params: &Parameters,
+        base: &ChallengeBinding<'_>,
+    ) -> [u8; 32] {
+        for seed in 0u8..=u8::MAX {
+            let mut transcript = [0u8; 32];
+            for (idx, byte) in transcript.iter_mut().enumerate() {
+                let idx = u8::try_from(idx).expect("transcript index fits in u8");
+                *byte = seed.wrapping_add(idx);
+            }
+            if base.transcript_hash == Some(transcript.as_slice()) {
+                continue;
+            }
+            let candidate =
+                ChallengeBinding::new(base.descriptor_commit, base.relay_id, Some(&transcript));
+            let challenge = derive_challenge(&candidate, ticket.client_nonce, ticket.expires_at);
+            let digest = derive_solution_digest(&challenge, &ticket.solution, params)
+                .expect("digest derivation should succeed");
+            if !leading_zero_bits_at_least(&digest, params.difficulty) {
+                return transcript;
+            }
+        }
+        panic!("failed to construct an invalid transcript binding candidate")
+    }
+
     fn stable_verify_time(ticket: &Ticket, params: &Parameters) -> SystemTime {
         let ttl_floor = params.min_ticket_ttl().as_secs();
         let now_secs = ticket.expires_at.saturating_sub(ttl_floor);
@@ -548,13 +574,13 @@ mod tests {
         let params = test_parameters();
         let mut rng = ChaCha20Rng::from_seed([0xAA; 32]);
         let transcript_a = [0x11; 32];
-        let transcript_b = [0x22; 32];
         let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_a));
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(12), &mut rng).expect("mint");
 
         let now = stable_verify_time(&ticket, &params);
         verify_at(&ticket, &binding, &params, now).expect("expected transcript to verify");
+        let transcript_b = first_invalid_transcript_hash(&ticket, &params, &binding);
         let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_b));
         let err = verify_at(&ticket, &mismatched, &params, now)
             .expect_err("transcript mismatch should reject ticket");
