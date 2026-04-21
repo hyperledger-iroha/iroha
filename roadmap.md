@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii account-query smoke loopback request wiring):
+The reported `account_query_subrouter_exposes_endpoints` red is fixed. The
+smoke now attaches loopback `ConnectInfo<SocketAddr>` to its direct
+`oneshot(...)` requests, so the account query sub-router checks exercise the
+mounted handlers instead of failing the remote-address extractor path first.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/account_query_subrouter_smoke.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test account_query_subrouter_smoke account_query_subrouter_exposes_endpoints -- --nocapture`
+- open work after this slice:
+  - clear the unrelated current-branch `cfg(test)` compile errors in
+    `crates/iroha_torii/src/routing.rs` so broader
+    `cargo test -p iroha_torii ...` package-target validation can run cleanly
+
 Latest sync (2026-04-21 iroha_data_model compute/oracle/offline fixture resync):
 The reported `iroha_data_model` hash/fixture reds were refreshed to the current
 canonical encodings, so the compute, governance, oracle, and offline Poseidon
