@@ -1,6 +1,5 @@
 //! Transaction structures and related implementations.
 use std::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     iter::IntoIterator,
