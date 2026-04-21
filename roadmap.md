@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii accounts smoke loopback request wiring):
+The reported `accounts_endpoints_exist` red is fixed.
+`crates/iroha_torii/tests/accounts_endpoints.rs` now attaches loopback
+`ConnectInfo<SocketAddr>` to each direct `oneshot(...)` request, so the smoke
+exercises the mounted `/v1/accounts`, `/v1/accounts/query`, and
+`/v1/accounts/{account_id}/permissions` routes instead of failing Axum's
+missing-request-extension path first.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/accounts_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_endpoints accounts_endpoints_exist -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported smoke regression
+
 Latest sync (2026-04-21 iroha_core identifier and lane relay test compile unblock):
 The reported `iroha_core` test-build blockers are cleared. Identifier ISI test
 helpers now import `RamLfeReceiptAttestation` directly, and the lane relay
