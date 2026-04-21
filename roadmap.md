@@ -21,6 +21,27 @@ missing-request-extension path first.
   - rerun a broader `cargo test -p iroha_torii ...` package-target window when
     there is budget beyond the reported smoke regression
 
+Latest sync (2026-04-21 iroha_js_host signed-transaction decode and Kaigi fixture resync):
+the reported `iroha_js_host` reds are cleared. The native signed-transaction
+decoder in `crates/iroha_js_host/src/lib.rs` now accepts the bridge’s actual
+supported wire shapes again: versioned signed-transaction bytes, bare adaptive
+payloads, framed Norito payloads, and the supported fixture subset via the
+adaptive fallback path. The stale Kaigi JSON literals in the same test module
+now use fully qualified `domain.dataspace` ids (`wonderland.sora`) so they
+match the current JS builder output and domain parser.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_js_host/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_js_host --lib -- --nocapture`
+- open work after this slice:
+  - rerun the broader JS package parity window if another workspace replay
+    exposes adjacent regressions, but the reported native failures are green
+    again
+
 Latest sync (2026-04-21 iroha_core identifier and lane relay test compile unblock):
 The reported `iroha_core` test-build blockers are cleared. Identifier ISI test
 helpers now import `RamLfeReceiptAttestation` directly, and the lane relay

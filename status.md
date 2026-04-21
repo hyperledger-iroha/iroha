@@ -14,6 +14,23 @@ Last updated: 2026-04-21
   - `cargo fmt --all`
   - `cargo test -p iroha_torii --test accounts_endpoints accounts_endpoints_exist -- --nocapture`
 
+## 2026-04-21 Follow-up: iroha_js_host signed-transaction decode and Kaigi fixture resync
+- Fixed the reported `iroha_js_host` reds in `crates/iroha_js_host/src/lib.rs`.
+  `decode_signed_transaction(...)` now retries the three wire shapes that the
+  JS bridge needs to handle in practice: versioned signed-transaction bytes,
+  bare adaptive `SignedTransaction` payloads, and framed Norito payloads, with
+  a final flagged adaptive fallback for the supported fixture subset.
+- Resynced the stale Kaigi JSON literals in the JS-host test module to the
+  current fully qualified `domain.dataspace` format used by the live JavaScript
+  builders (`wonderland.sora`), so the roundtrip tests now match the canonical
+  domain-id parser instead of feeding legacy bare-domain strings.
+- Added a focused regression proving the JS-host signed-transaction decoder
+  accepts explicit version-byte `1` payloads as documented by the
+  `encode_signed_transaction_norito` helper.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_js_host --lib -- --nocapture`
+
 ## 2026-04-21 Follow-up: iroha_core identifier and lane relay test compile unblock
 - Cleared the reported `iroha_core` test-build regressions in
   `crates/iroha_core/src/smartcontracts/isi/identifier.rs` and
