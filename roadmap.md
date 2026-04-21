@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 iroha_data_model signed-query roundtrip compile unblock):
+The reported `iroha_data_model` clean-build blocker in
+`crates/iroha_data_model/src/query/mod.rs` is cleared. The
+`signed_query_versioned_roundtrip` regression no longer compares
+`QueryRequest` directly through `assert_eq!`; it now uses the existing
+JSON wrapper so the erased iterable-query payload path does not need new
+blanket `PartialEq`/`Debug` impls, and the signature payload assertion now
+compares `&[u8]` directly.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/query/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_data_model signed_query_versioned_roundtrip --lib`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_data_model` window from a fresh target
+    dir when there is enough validation budget beyond the reported blocker
+
 Latest sync (2026-04-21 Torii account-query smoke loopback request wiring):
 The reported `account_query_subrouter_exposes_endpoints` red is fixed. The
 smoke now attaches loopback `ConnectInfo<SocketAddr>` to its direct
@@ -33,10 +52,9 @@ goldens now line up with the live request-hash and Merkle-root outputs again.
 - validation status:
   - `cargo run --quiet --manifest-path /tmp/iroha-fixture-dump.0NfG4i/Cargo.toml`
 - open work after this slice:
-  - clear the unrelated clean-build blocker in
-    `crates/iroha_data_model/src/query/mod.rs` so
-    `cargo test -p iroha_data_model` can be rerun from a fresh target dir after
-    this fixture resync
+  - rerun a broader `cargo test -p iroha_data_model` window from a fresh target
+    dir now that the `crates/iroha_data_model/src/query/mod.rs` clean-build
+    blocker is fixed
 
 Latest sync (2026-04-21 Torii Norito ingress harness compile unblock and loopback request wiring):
 The shared Torii Norito ingress harness compiles again and the direct public

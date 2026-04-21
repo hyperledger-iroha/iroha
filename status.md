@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: iroha_data_model signed-query roundtrip compile unblock
+- `crates/iroha_data_model/src/query/mod.rs` no longer asks `assert_eq!` to
+  compare `QueryRequest` directly inside
+  `json_roundtrip_tests::signed_query_versioned_roundtrip`. That regression
+  test now compares the existing `QueryRequestJson` wrapper instead, which
+  avoids forcing `QueryRequest`/`QueryWithParams` to grow blanket
+  `PartialEq`/`Debug` impls for erased iterable-query payloads.
+- The same test now compares signature payload slices directly and no longer
+  calls `.as_slice()` on values that are already `&[u8]`.
+- Focused validation for this slice:
+  - `cargo test -p iroha_data_model signed_query_versioned_roundtrip --lib`
+
 ## 2026-04-21 Follow-up: Torii account-query smoke uses loopback ConnectInfo
 - `crates/iroha_torii/tests/account_query_subrouter_smoke.rs` now attaches a
   loopback `ConnectInfo<SocketAddr>` extension to each in-process
