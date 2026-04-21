@@ -9254,7 +9254,10 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::{LazyLock, Mutex, MutexGuard},
+    };
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
 
@@ -9956,14 +9959,24 @@ mod advert_tests {
         }
     }
 
-    struct SiteBindingsOverrideGuard;
+    fn site_bindings_override_test_lock() -> &'static Mutex<()> {
+        // Site-binding overrides use a single global path, so tests that mutate
+        // it must not run concurrently.
+        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        &LOCK
+    }
+
+    struct SiteBindingsOverrideGuard(MutexGuard<'static, ()>);
 
     impl SiteBindingsOverrideGuard {
         fn set(path: &std::path::Path) -> Self {
+            let lock = site_bindings_override_test_lock()
+                .lock()
+                .expect("site bindings override test lock poisoned");
             crate::sorafs::site::set_site_bindings_file_override_for_tests(Some(
                 path.to_path_buf(),
             ));
-            Self
+            Self(lock)
         }
     }
 
