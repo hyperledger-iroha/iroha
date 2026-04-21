@@ -538,11 +538,11 @@ export class IsoMessageTimeoutError extends Error {
   }
 }
 
-export class ToriiDataModelCompatibilityError extends Error {
+export class ToriiDataModelMismatchError extends Error {
   constructor(expected, actual, cause) {
     const actualLabel = actual == null ? "missing" : String(actual);
     super(`Torii data model version mismatch (expected ${expected}, got ${actualLabel}).`);
-    this.name = "ToriiDataModelCompatibilityError";
+    this.name = "ToriiDataModelMismatchError";
     this.expected = expected;
     this.actual = actual ?? null;
     if (cause !== undefined) {
@@ -1050,8 +1050,8 @@ export class ToriiClient {
     this._sorafsAliasWarningHook =
       typeof opts.onSorafsAliasWarning === "function" ? opts.onSorafsAliasWarning : null;
     this._statusState = createStatusSnapshotState();
-    this._dataModelCompatibility = { status: "unknown", actual: null };
-    this._dataModelCompatibilityPromise = null;
+    this._dataModelValidation = { status: "unknown", actual: null };
+    this._dataModelValidationPromise = null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
     this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
     this._baseHost = parsedBase.host;
@@ -3656,12 +3656,12 @@ export class ToriiClient {
 
   /**
    * Submit a Norito-encoded transaction payload.
-   * Throws ToriiDataModelCompatibilityError when the node data model version mismatches.
+   * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
   async submitTransaction(payload) {
-    await this._ensureDataModelCompatibility();
+    await this._ensureDataModelValidation();
     const rawPayload = toBuffer(payload);
     const requestOptions = {
       headers: {
@@ -3736,16 +3736,16 @@ export class ToriiClient {
     };
   }
 
-  async _ensureDataModelCompatibility() {
+  async _ensureDataModelValidation() {
     const expected = EXPECTED_DATA_MODEL_VERSION;
-    if (this._dataModelCompatibility.status === "compatible") {
+    if (this._dataModelValidation.status === "matched") {
       return;
     }
-    if (this._dataModelCompatibility.status === "incompatible") {
-      throw new ToriiDataModelCompatibilityError(expected, this._dataModelCompatibility.actual);
+    if (this._dataModelValidation.status === "mismatched") {
+      throw new ToriiDataModelMismatchError(expected, this._dataModelValidation.actual);
     }
-    if (this._dataModelCompatibilityPromise) {
-      return this._dataModelCompatibilityPromise;
+    if (this._dataModelValidationPromise) {
+      return this._dataModelValidationPromise;
     }
     const promise = (async () => {
       let capabilities;
@@ -3753,29 +3753,23 @@ export class ToriiClient {
         capabilities = await this.getNodeCapabilities();
       } catch (error) {
         if (error instanceof ValidationError) {
-          this._dataModelCompatibility = { status: "incompatible", actual: null };
-          throw new ToriiDataModelCompatibilityError(expected, null, error);
-        }
-        if (error instanceof ToriiHttpError && error.status === 404) {
-          // Some deployments do not expose the capability advert yet. In that
-          // case, proceed with the client-side expected model version.
-          this._dataModelCompatibility = { status: "compatible", actual: expected };
-          return;
+          this._dataModelValidation = { status: "mismatched", actual: null };
+          throw new ToriiDataModelMismatchError(expected, null, error);
         }
         throw error;
       }
       const actual = capabilities.dataModelVersion;
       if (actual !== expected) {
-        this._dataModelCompatibility = { status: "incompatible", actual };
-        throw new ToriiDataModelCompatibilityError(expected, actual);
+        this._dataModelValidation = { status: "mismatched", actual };
+        throw new ToriiDataModelMismatchError(expected, actual);
       }
-      this._dataModelCompatibility = { status: "compatible", actual };
+      this._dataModelValidation = { status: "matched", actual };
     })();
-    this._dataModelCompatibilityPromise = promise;
+    this._dataModelValidationPromise = promise;
     promise
       .finally(() => {
-        if (this._dataModelCompatibilityPromise === promise) {
-          this._dataModelCompatibilityPromise = null;
+        if (this._dataModelValidationPromise === promise) {
+          this._dataModelValidationPromise = null;
         }
       })
       .catch(() => {
@@ -4704,7 +4698,7 @@ export class ToriiClient {
     return normalizeSnsSuffixPolicy(payload);
   }
 
-  _normalizeLegacySnsDomainSelector(selector, context) {
+  _normalizeSnsDomainSelector(selector, context) {
     const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
     const dotIndex = normalizedSelector.indexOf(".");
     if (dotIndex <= 0 || dotIndex === normalizedSelector.length - 1) {
@@ -4724,7 +4718,7 @@ export class ToriiClient {
    * @returns {Promise<SnsNameRecord>}
    */
   async getSnsRegistration(selector, options = {}) {
-    const literal = this._normalizeLegacySnsDomainSelector(selector, "getSnsRegistration");
+    const literal = this._normalizeSnsDomainSelector(selector, "getSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(
       options,
       "getSnsRegistration",
@@ -4778,7 +4772,7 @@ export class ToriiClient {
    * @returns {Promise<SnsNameRecord>}
    */
   async renewSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeLegacySnsDomainSelector(selector, "renewSnsRegistration");
+    const literal = this._normalizeSnsDomainSelector(selector, "renewSnsRegistration");
     const payload = normalizeSnsRenewRequest(request, "renewSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "renewSnsRegistration");
     const response = await this._request(
@@ -4809,7 +4803,7 @@ export class ToriiClient {
    * @returns {Promise<SnsNameRecord>}
    */
   async transferSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeLegacySnsDomainSelector(selector, "transferSnsRegistration");
+    const literal = this._normalizeSnsDomainSelector(selector, "transferSnsRegistration");
     const payload = normalizeSnsTransferRequest(request, "transferSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "transferSnsRegistration");
     const response = await this._request(
@@ -4840,7 +4834,7 @@ export class ToriiClient {
    * @returns {Promise<SnsNameRecord>}
   */
   async freezeSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeLegacySnsDomainSelector(selector, "freezeSnsRegistration");
+    const literal = this._normalizeSnsDomainSelector(selector, "freezeSnsRegistration");
     const payload = normalizeSnsFreezeRequest(request, "freezeSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "freezeSnsRegistration");
     const response = await this._request(
@@ -4871,7 +4865,7 @@ export class ToriiClient {
    * @returns {Promise<SnsNameRecord>}
   */
   async unfreezeSnsRegistration(selector, request, options = {}) {
-    const literal = this._normalizeLegacySnsDomainSelector(selector, "unfreezeSnsRegistration");
+    const literal = this._normalizeSnsDomainSelector(selector, "unfreezeSnsRegistration");
     const payload = normalizeSnsGovernanceHook(request, "unfreezeSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "unfreezeSnsRegistration");
     const response = await this._request(
@@ -22003,17 +21997,16 @@ function normaliseChunkerHandle(explicitHandle, manifestBundle, context) {
     manifestBundle,
     `${context}.chunkerHandle`,
   );
-  if (manifestBytes) {
-    try {
-      return deriveDaChunkerHandle(manifestBytes);
-    } catch {
-      if (bundleHandle && typeof bundleHandle === "string" && bundleHandle.trim()) {
-        return bundleHandle.trim();
-      }
-      // Fall back to the default Sorafs chunker identifier for mocked manifests.
-      return "sorafs.sf1@1.0.0";
-    }
-  }
+	  if (manifestBytes) {
+	    try {
+	      return deriveDaChunkerHandle(manifestBytes);
+	    } catch (error) {
+	      throw new TypeError(
+	        `${context}.chunkerHandle could not be derived from manifest bytes`,
+	        { cause: error },
+	      );
+	    }
+	  }
   throw new TypeError(
     `${context}.chunkerHandle is required when the manifest bundle does not expose chunker metadata or manifest bytes`,
   );

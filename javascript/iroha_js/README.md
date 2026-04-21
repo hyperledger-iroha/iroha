@@ -1582,7 +1582,7 @@ const weeklyReport = await torii.getSorafsPorWeeklyReport("2026-W05");
 
 `getSorafsPorStatus`, `exportSorafsPorStatus`, and `getSorafsPorWeeklyReport`
 return Norito bytes (`Buffer` instances). Decode them with `norito::json`, the
-Rust `norito` crate, or another Norito-compatible runtime before inspecting the
+Rust `norito` crate, or another canonical Norito runtime before inspecting the
 structured payloads.
 
 ## UAID Portfolios & Space Directory Manifests
@@ -2111,7 +2111,7 @@ console.log("queued tx:", response.tx_hash_hex);
 console.log("code hash:", response.code_hash_hex);
 ```
 
-Any JSON-compatible payload is cloned before submission so callers can reuse the
+Any JSON-serializable payload is cloned before submission so callers can reuse the
 object elsewhere without mutation. The helper rejects malformed entrypoint
 selectors, missing or invalid gas limits, or invalid contract target selectors
 before the request reaches Torii.
@@ -2626,7 +2626,7 @@ import {
 const journal = new ConnectQueueJournal(preview.sidBase64Url, {
   maxRecordsPerQueue: 32,
   maxBytesPerQueue: 1 << 20,
-  storage: "auto", // use IndexedDB when available, fall back to memory otherwise
+  storage: "indexeddb",
 });
 
 await journal.append(
@@ -3086,9 +3086,9 @@ for (const item of revocations.items) {
 }
 ```
 
-Legacy allowance, certificate, settlement, summary, and revocation-query
-helpers were removed from the public client surface. Use the cash lifecycle,
-transfer, revocation list, and revocation bundle helpers instead.
+Allowance, certificate, settlement, summary, and revocation-query helpers are
+not part of the public client surface. Use the cash lifecycle, transfer,
+revocation list, and revocation bundle helpers instead.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

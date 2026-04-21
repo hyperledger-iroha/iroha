@@ -95,7 +95,7 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(AccountId.matchesForComparison(alias, scopedAlias))
     }
 
-    func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {
+    func testNormalizeForComparisonDoesNotCanonicalizeDomainQualifiedKeyLiterals() {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@BANKA.SBP"
         XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawUpper)

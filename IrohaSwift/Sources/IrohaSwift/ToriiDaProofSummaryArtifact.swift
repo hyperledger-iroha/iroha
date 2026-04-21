@@ -1,6 +1,6 @@
 import Foundation
 
-/// CLI-compatible Proof-of-Retrievability summary artefact.
+/// Proof-of-Retrievability summary artefact for CLI JSON output.
 public struct ToriiDaProofSummaryArtifact: Encodable, Sendable, Equatable {
     public struct ProofRecord: Encodable, Sendable, Equatable {
         public var origin: String

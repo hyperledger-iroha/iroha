@@ -111,8 +111,7 @@ torii.getTransactionStatus(hashHex: envelope.hashHex) { status in
     print(status)
 }
 
-// Await pipeline completion using the helper (falls back to immediate success when
-// the endpoint returns no status payload).
+// Await pipeline completion using the helper.
 sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
@@ -431,14 +430,13 @@ If you need the immediate submission receipt without waiting for a terminal stat
 call `torii.submitTransaction(data: envelope.norito)` directly. The returned
 `ToriiSubmitTransactionResponse` includes the receipt payload and signature; use
 `receipt.hash` (or `receipt.payload.txHash`) to poll with `torii.getTransactionStatus(hashHex:)`.
-`submitTransaction` validates transaction submit compatibility from `/v1/node/capabilities`
+`submitTransaction` validates the transaction submit schema from `/v1/node/capabilities`
 (`data_model_version` + `signed_transaction_schema_hash_hex`) and throws
-`ToriiClientError.incompatibleDataModel` or
-`ToriiClientError.incompatibleTransactionSchema` if the node was built from an incompatible release.
+`ToriiClientError.dataModelMismatch` or
+`ToriiClientError.transactionSchemaMismatch` if the node was built from a mismatched release.
 
-`ToriiClient.getMetrics()` automatically decodes JSON payloads even when Torii forgets to
-set `Content-Type: application/json`, falling back to the Prometheus/text response only
-when JSON decoding fails. Pass `asText: true` to force the text variant.
+`ToriiClient.getMetrics()` requests JSON and requires `Content-Type: application/json`.
+Pass `asText: true` to request the text/Prometheus variant.
 
 Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 
@@ -477,9 +475,9 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-`PipelineTransactionState` covers the common Torii status strings (`.queued`, `.approved`,
-`.committed`, `.applied`, `.rejected`, `.expired`) and falls back to `.other("NAME")` for
-future values.
+`PipelineTransactionState` covers Torii status strings (`.queued`, `.approved`,
+`.committed`, `.applied`, `.rejected`, `.expired`) and maps unrecognized values to
+`.other("NAME")`.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
 polls. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
@@ -954,12 +952,12 @@ platforms, CUDA disabled). Configure before encoding or interacting with the bri
 var accel = AccelerationSettings(enableMetal: true,
                                  merkleMinLeavesMetal: 256,
                                  preferCpuSha2MaxLeavesAarch64: 128)
-accel.apply() // No-op when the native bridge is not bundled.
+accel.apply() // Applies to the required native bridge.
 
 // Or initialize the SDK with explicit settings
 let tunedSDK = IrohaSDK(baseURL: torii.baseURL, accelerationSettings: accel)
 
-// Load the same structure from an iroha_config-compatible JSON file.
+// Load the same structure from an iroha_config JSON file.
 if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "json") {
     do {
         let configSettings = try AccelerationSettings.fromJSONFile(at: configURL)
@@ -990,8 +988,8 @@ if let state = AccelerationSettings.runtimeState() {
 
 `runtimeState()` returns both the applied configuration and the Metal/CUDA runtime
 status exposed by the bridge (`available` reflects whether the backend passed parity
-self-tests on the current host). The helper falls back to `nil` when the Norito
-bridge is not bundled, matching the behaviour of the setter.
+self-tests on the current host). The helper returns `nil` when the Norito bridge
+symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 

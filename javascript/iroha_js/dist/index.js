@@ -21,7 +21,7 @@ export {
   TransactionStatusError,
   TransactionTimeoutError,
   IsoMessageTimeoutError,
-  ToriiDataModelCompatibilityError,
+  ToriiDataModelMismatchError,
   ToriiHttpError,
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,

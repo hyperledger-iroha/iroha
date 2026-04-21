@@ -125,7 +125,7 @@ object AndroidKeystoreAttestationHarness {
                 if (certificates.isNotEmpty()) return certificates
             }
         } catch (_: CertificateException) {
-            // Fall back to single-certificate decoding below.
+            // Decode as a single certificate below.
         }
         ByteArrayInputStream(data).use { single ->
             val certificate = factory.generateCertificate(single) as X509Certificate
@@ -297,7 +297,7 @@ object AndroidKeystoreAttestationHarness {
                 "  --trust-root-dir <path>  Directory containing PEM/DER/CRT trust anchors (recursively scanned).",
                 "  --trust-root-bundle <zip>  ZIP archive containing trusted roots. Repeat as needed.",
                 "  --chain <path>           Explicit attestation chain file (PEM/DER). Overrides bundle.",
-                "  --alias <alias>          Override alias (falls back to alias.txt).",
+                "  --alias <alias>          Override alias from alias.txt.",
                 "  --challenge-hex <hex>    Verification challenge (hex encoded).",
                 "  --challenge-file <path>  File containing hex-encoded challenge.",
                 "  --require-strongbox      Enforce StrongBox attestation.",

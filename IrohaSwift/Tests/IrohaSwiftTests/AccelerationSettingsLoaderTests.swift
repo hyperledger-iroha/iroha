@@ -34,7 +34,7 @@ final class AccelerationSettingsLoaderTests: XCTestCase {
         XCTAssertEqual(settings.merkleMinLeavesMetal, 512)
     }
 
-    func testFallsBackToBundleResource() {
+    func testLoadsBundleResourceWhenEnvironmentIsEmpty() {
         let settings = AccelerationSettingsLoader.load(environment: [:], bundle: Bundle.module)
         XCTAssertFalse(settings.enableMetal)
         XCTAssertEqual(settings.merkleMinLeavesGPU, 128)

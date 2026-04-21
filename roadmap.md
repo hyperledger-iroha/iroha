@@ -2,6 +2,45 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 first-release SDK strictness sweep):
+The Swift, JavaScript, Python, Java, and Kotlin SDKs now follow the
+first-release canonical contract. Bridge-backed SDK APIs require the native
+bridge, SDK codecs use current Norito paths, Connect/key export accepts only the
+current bundle shape, identifier handling matches the domainless account model,
+and Torii/SCCP transaction clients use the current schema. SDK node/schema
+checks now use mismatch/validation terminology, JavaScript and Swift
+transaction submission require node capabilities before posting payloads, and
+Swift metrics requires the declared response format. JavaScript distribution
+output and Swift parity fixtures were regenerated after the API cleanup.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift`
+  - `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js`
+  - `/Users/takemiyamakoto/dev/iroha/python`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android`
+  - `/Users/takemiyamakoto/dev/iroha/java/norito_java`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo run -p connect_norito_bridge --bin swift_parity_regen`
+  - `swift test`
+  - `npm run build:dist`
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/build/codex-js-target npm test`
+  - `python3 -m compileall -q python/iroha_python/src python/iroha_torii_client`
+  - `python3 -m pytest python/iroha_python/tests/testconnect_codec.py python/iroha_python/tests/test_address_format.py python/iroha_python/tests/test_governance_zk_ballot.py python/iroha_torii_client/tests/test_client.py`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `./gradlew :core-jvm:test --console=plain`
+  - `ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :client-android:assembleRelease --console=plain`
+  - `./gradlew :offline-wallet-android:assembleRelease --console=plain`
+  - `./gradlew :norito_java:test --console=plain`
+  - `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml -- --nocapture`
+- open work after this slice:
+  - run full workspace `cargo test --workspace` during a long validation
+    window; no SDK-specific gaps were found in the focused source scans and
+    SDK test suites above
+
 Latest sync (2026-04-21 iroha_js_host signed-transaction decode and Kaigi fixture resync):
 the reported `iroha_js_host` reds are cleared. The native signed-transaction
 decoder in `crates/iroha_js_host/src/lib.rs` now accepts the bridge’s actual

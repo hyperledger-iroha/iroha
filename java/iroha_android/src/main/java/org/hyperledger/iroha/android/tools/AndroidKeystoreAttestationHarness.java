@@ -254,7 +254,7 @@ public final class AndroidKeystoreAttestationHarness {
         return certificates;
       }
     } catch (final CertificateException ex) {
-      // Fall back to single-certificate decoding below.
+      // Decode as a single certificate below.
     }
 
     try (InputStream single = new ByteArrayInputStream(data)) {

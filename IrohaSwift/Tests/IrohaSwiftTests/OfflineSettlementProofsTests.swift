@@ -193,7 +193,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
         XCTAssertTrue(siblings.allSatisfy { !$0.hasPrefix("0x") })
     }
 
-    func testRedeemProofDecodingRejectsLegacyStringDirs() throws {
+    func testRedeemProofDecodingRejectsStringDirs() throws {
         let proof = try makeRedeemRequest().redeemProof
         var jsonObject = try proofJSONObject(for: proof)
         let pathY0 = try mutatedPathY0(in: jsonObject) { path in

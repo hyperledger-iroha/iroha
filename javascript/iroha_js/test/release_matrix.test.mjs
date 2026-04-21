@@ -12,7 +12,7 @@ test("sanitizeLabel normalizes whitespace and punctuation", () => {
   assert.equal(sanitizeLabel("node-20"), "node-20");
 });
 
-test("sanitizeLabel falls back to target", () => {
+test("sanitizeLabel uses target for empty labels", () => {
   assert.equal(sanitizeLabel("   \t"), "target");
   assert.equal(sanitizeLabel("🚀"), "target");
 });

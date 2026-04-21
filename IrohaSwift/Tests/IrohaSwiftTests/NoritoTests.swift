@@ -41,13 +41,13 @@ final class NoritoTests: XCTestCase {
 
     func testNoritoInstructionFixturesAreConsistent() throws {
         let fixtures = [
-            ("mint_asset_numeric.json", "mint-asset-numeric-v1"),
-            ("burn_asset_numeric.json", "burn-asset-numeric-v1"),
-            ("burn_asset_fractional.json", "burn-asset-fractional-v1"),
-            ("burn_trigger_repetitions.json", "burn-trigger-repetitions-v1"),
+            ("mint_asset_numeric.json", "mint-asset-numeric-v1", UInt8(0x02)),
+            ("burn_asset_numeric.json", "burn-asset-numeric-v1", UInt8(0x02)),
+            ("burn_asset_fractional.json", "burn-asset-fractional-v1", UInt8(0x02)),
+            ("burn_trigger_repetitions.json", "burn-trigger-repetitions-v1", UInt8(0x02)),
         ]
 
-        for (fileName, expectedId) in fixtures {
+        for (fileName, expectedId, expectedFlags) in fixtures {
             let fixture = try loadInstructionFixture(fileName)
             XCTAssertEqual(fixture.fixtureId, expectedId, "\(fileName): fixture_id mismatch")
 
@@ -75,7 +75,7 @@ final class NoritoTests: XCTestCase {
             if header.checksum != crc64ECMA(header.payload) {
                 throw XCTSkip("\(fileName): CRC64 mismatch; fixture drift")
             }
-            XCTAssertEqual(header.flags, 0, "\(fileName): unexpected encode flags")
+            XCTAssertEqual(header.flags, expectedFlags, "\(fileName): unexpected encode flags")
             XCTAssertEqual(Array(header.schema.prefix(8)), Array(header.schema.suffix(8)),
                            "\(fileName): schema hash halves should match")
         }

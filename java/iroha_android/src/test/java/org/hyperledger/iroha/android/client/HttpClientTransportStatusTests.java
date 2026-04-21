@@ -31,7 +31,7 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusFailureIncludesRejectionReason();
     waitForTransactionStatusFailureUsesRejectedStatusContentReason();
     waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails();
-    waitForTransactionStatusFallsBackToCompactJsonMessage();
+    waitForTransactionStatusUsesCompactJsonMessage();
     waitForTransactionStatusUsesNestedJsonErrorMessage();
     waitForTransactionStatusUsesErrorsArrayMessage();
     waitForTransactionStatusTruncatesOversizedErrorBody();
@@ -230,7 +230,7 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to fail for unexpected HTTP status";
   }
 
-  private static void waitForTransactionStatusFallsBackToCompactJsonMessage() {
+  private static void waitForTransactionStatusUsesCompactJsonMessage() {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request ->
             CompletableFuture.completedFuture(

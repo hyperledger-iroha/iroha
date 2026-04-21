@@ -20,7 +20,7 @@ public final class TransferWirePayloadEncoderTests {
     encodeAssetTransferAcceptsDataspaceScopedAssetId();
     encodeAssetTransferAcceptsMultisigI105AssetOwner();
     encodeAssetTransferRejectsMalformedAssetId();
-    encodeAssetTransferRejectsLegacyNameDomainAssetId();
+    encodeAssetTransferRejectsNameDomainAssetId();
     encodeAssetTransferRejectsMalformedScopeSuffix();
     encodeAssetTransferAcceptsMlDsaI105WhenCurveSupportEnabled();
     encodeAssetTransferAcceptsGostI105WhenCurveSupportEnabled();
@@ -80,7 +80,7 @@ public final class TransferWirePayloadEncoderTests {
     assert threw : "malformed asset ids must be rejected";
   }
 
-  private static void encodeAssetTransferRejectsLegacyNameDomainAssetId() {
+  private static void encodeAssetTransferRejectsNameDomainAssetId() {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(

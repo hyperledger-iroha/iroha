@@ -4644,7 +4644,6 @@ class SumeragiStatusSnapshot:
     commit_quorum: SumeragiCommitQuorumSummary
     tx_queue: SumeragiTxQueueStatus
     epoch: SumeragiEpochSchedule
-    gossip_fallback_total: int
     block_created_dropped_by_lock_total: int
     block_created_hint_mismatch_total: int
     block_created_proposal_mismatch_total: int
@@ -4686,7 +4685,6 @@ class SumeragiStatusSnapshot:
             )
             view_change_suggest_total = int(payload.get("view_change_suggest_total", 0))
             view_change_install_total = int(payload.get("view_change_install_total", 0))
-            gossip_fallback_total = int(payload.get("gossip_fallback_total", 0))
             block_drop_total = int(payload.get("block_created_dropped_by_lock_total", 0))
             block_hint_total = int(payload.get("block_created_hint_mismatch_total", 0))
             block_proposal_total = int(payload.get("block_created_proposal_mismatch_total", 0))
@@ -4802,7 +4800,6 @@ class SumeragiStatusSnapshot:
             commit_quorum=SumeragiCommitQuorumSummary.from_payload(commit_quorum_payload),
             tx_queue=SumeragiTxQueueStatus.from_payload(tx_queue_payload),
             epoch=SumeragiEpochSchedule.from_payload(epoch_payload),
-            gossip_fallback_total=gossip_fallback_total,
             block_created_dropped_by_lock_total=block_drop_total,
             block_created_hint_mismatch_total=block_hint_total,
             block_created_proposal_mismatch_total=block_proposal_total,
@@ -6900,7 +6897,7 @@ __all__ = [
     "ToriiClient",
     "create_torii_client",
     "TransactionStatusError",
-    "DataModelCompatibilityError",
+    "DataModelMismatchError",
     "signed_transaction_envelope_from_json",
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
@@ -7022,7 +7019,7 @@ class TransactionStatusError(RuntimeError):
         super().__init__(f"transaction {hash_hex} reported failure status {status_repr}")
 
 
-class DataModelCompatibilityError(RuntimeError):
+class DataModelMismatchError(RuntimeError):
     """Raised when the node data model version does not match the SDK."""
 
     def __init__(self, expected: int, actual: Optional[int]) -> None:
@@ -7104,7 +7101,7 @@ class ToriiClient(_BaseToriiClient):
         )
         self._sorafs_alias_metrics: Dict[str, int] = {}
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
-        self._data_model_compatibility = "unknown"
+        self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
 
     @property
@@ -7140,35 +7137,35 @@ class ToriiClient(_BaseToriiClient):
 
         return self._last_sorafs_alias_evaluation
 
-    def _ensure_data_model_compatibility(self) -> None:
-        if self._data_model_compatibility == "compatible":
+    def _ensure_data_model_validation(self) -> None:
+        if self._data_model_validation == "matched":
             return
-        if self._data_model_compatibility == "incompatible":
-            raise DataModelCompatibilityError(DATA_MODEL_VERSION, self._data_model_actual)
+        if self._data_model_validation == "mismatched":
+            raise DataModelMismatchError(DATA_MODEL_VERSION, self._data_model_actual)
 
         try:
             capabilities = self.get_node_capabilities()
         except RuntimeError as error:
             if "data_model_version" in str(error):
-                self._data_model_compatibility = "incompatible"
+                self._data_model_validation = "mismatched"
                 self._data_model_actual = None
-                raise DataModelCompatibilityError(DATA_MODEL_VERSION, None) from error
+                raise DataModelMismatchError(DATA_MODEL_VERSION, None) from error
             raise
         actual = capabilities.data_model_version
         if actual != DATA_MODEL_VERSION:
-            self._data_model_compatibility = "incompatible"
+            self._data_model_validation = "mismatched"
             self._data_model_actual = actual
-            raise DataModelCompatibilityError(DATA_MODEL_VERSION, actual)
-        self._data_model_compatibility = "compatible"
+            raise DataModelMismatchError(DATA_MODEL_VERSION, actual)
+        self._data_model_validation = "matched"
         self._data_model_actual = actual
 
     def submit_transaction(self, payload: bytes) -> Optional[Any]:
         """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`.
 
-        Raises :class:`DataModelCompatibilityError` when the node data model version mismatches.
+        Raises :class:`DataModelMismatchError` when the node data model version mismatches.
         """
 
-        self._ensure_data_model_compatibility()
+        self._ensure_data_model_validation()
         response = self._request(
             "POST",
             "/v1/pipeline/transactions",
@@ -8062,7 +8059,7 @@ class ToriiClient(_BaseToriiClient):
         return self.request_json("GET", "/v1/health", expected_status=(200,))
 
     def get_configuration(self) -> Mapping[str, Any]:
-        """Return the current node configuration as a JSON-compatible mapping."""
+        """Return the current node configuration as a JSON mapping."""
 
         snapshot = self.get_configuration_typed()
         return _configuration_snapshot_to_dict(snapshot)

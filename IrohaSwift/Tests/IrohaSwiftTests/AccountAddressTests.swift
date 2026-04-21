@@ -251,7 +251,7 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(try address.toI105(networkPrefix: 753), literal)
     }
 
-    func testRejectsLegacyFullwidthKanaPayload() throws {
+    func testRejectsNonCanonicalFullwidthKanaPayload() throws {
         let literal = "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
         let nonCanonical = literal.replacingOccurrences(of: "ﾛ", with: "ロ")
 

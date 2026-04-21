@@ -71,7 +71,7 @@ public final class AccountLiteralHardCutTests {
   }
 
   @Test
-  public void connectApprovePreimageRejectsLegacyDomainSuffix() throws Exception {
+  public void connectApprovePreimageRejectsDomainSuffix() throws Exception {
     final byte[] sessionId = fill(0x10, 32);
     final byte[] appPublic = fill(0x20, 32);
     final byte[] walletPublic = fill(0x30, 32);

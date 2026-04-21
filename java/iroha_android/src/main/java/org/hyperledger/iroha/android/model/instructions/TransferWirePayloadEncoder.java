@@ -588,8 +588,9 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding AssetId: { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }
    *
-   * <p>Legacy text input defaults to {@code AssetBalanceScope::Global}. Canonical Norito asset
-   * identifiers preserve the account and scope payload bytes exactly as provided.
+   * <p>Canonical text input uses {@code AssetBalanceScope::Global} when no dataspace suffix is
+   * present. Canonical Norito asset identifiers preserve the account and scope payload bytes
+   * exactly as provided.
    */
   private static final class AssetIdAdapter implements TypeAdapter<AssetId> {
     private static final TypeAdapter<AccountId> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();

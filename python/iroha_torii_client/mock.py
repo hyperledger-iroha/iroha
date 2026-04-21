@@ -1554,7 +1554,6 @@ class _MockState:
                 "view": 3,
                 "subject_block_hash": "deadbeefcafefeed",
             },
-            "gossip_fallback_total": 1,
             "block_created_dropped_by_lock_total": 2,
             "block_created_hint_mismatch_total": 3,
             "block_created_proposal_mismatch_total": 4,
