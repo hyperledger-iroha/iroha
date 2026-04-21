@@ -38,7 +38,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
-            return "Domain id for \(field) must not contain whitespace, '@', '#', or '$' (received '\(value)')."
+            return "Domain id for \(field) must use canonical fully-qualified 'name.dataspace' form with no whitespace or reserved separators (received '\(value)')."
         case let .emptyLabel(field):
             return "Label for \(field) must not be empty."
         case let .malformedLabel(field, value):
@@ -158,13 +158,27 @@ struct TransactionInputValidator {
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyDomainId(field: field)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+            || trimmed.contains("@")
+            || trimmed.contains("#")
+            || trimmed.contains("$")
+        {
             throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
         }
-        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
+        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              !parts[0].isEmpty,
+              !parts[1].isEmpty
+        else {
             throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
         }
-        return trimmed
+        do {
+            let name = try AccountAddress.canonicalizeDomainLabel(String(parts[0]))
+            let dataspace = try AccountAddress.canonicalizeDomainLabel(String(parts[1]))
+            return "\(name).\(dataspace)"
+        } catch {
+            throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+        }
     }
 
     static func sanitizeLabel(_ label: String, field: String) throws -> String {
@@ -240,13 +254,53 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     }
 }
 
+private struct NativeClaimIdentifierExecutionEnvelope: Encodable, Sendable {
+    let programId: String
+    let programDigest: String
+    let backend: String
+    let verificationMode: String
+    let outputHash: String
+    let associatedDataHash: String
+    let executedAtMs: UInt64
+    let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case programDigest = "program_digest"
+        case backend
+        case verificationMode = "verification_mode"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case executedAtMs = "executed_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+}
+
+private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
+    let policyId: String
+    let execution: NativeClaimIdentifierExecutionEnvelope
+    let opaqueId: String
+    let receiptHash: String
+    let uaid: String
+    let accountId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case execution
+        case opaqueId = "opaque_id"
+        case receiptHash = "receipt_hash"
+        case uaid
+        case accountId = "account_id"
+    }
+}
+
 private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
     let signature: String
-    let signaturePayloadHex: String
+    let signaturePayload: NativeClaimIdentifierPayloadEnvelope
 
     private enum CodingKeys: String, CodingKey {
         case signature
-        case signaturePayloadHex = "signature_payload_hex"
+        case signaturePayload = "signature_payload"
     }
 }
 
@@ -420,6 +474,46 @@ private enum ClaimIdentifierSwiftNoritoEncoder {
         }
         return Data(hexString: trimmed)
     }
+}
+
+private func encodeNativeClaimIdentifierReceiptJSON(
+    _ receipt: ToriiIdentifierResolutionReceipt
+) throws -> Data {
+    guard let execution = receipt.signaturePayload.execution,
+          let programId = execution.programId,
+          let programDigest = execution.programDigest,
+          let backend = execution.backend,
+          let verificationMode = execution.verificationMode,
+          let outputHash = execution.outputHash,
+          let associatedDataHash = execution.associatedDataHash else {
+        throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
+            "signature_payload.execution must include program id, digest, backend, verification mode, output hash, and associated data hash."
+        )
+    }
+
+    let payload = NativeClaimIdentifierPayloadEnvelope(
+        policyId: receipt.signaturePayload.policyId,
+        execution: NativeClaimIdentifierExecutionEnvelope(
+            programId: programId,
+            programDigest: programDigest,
+            backend: backend,
+            verificationMode: verificationMode,
+            outputHash: outputHash,
+            associatedDataHash: associatedDataHash,
+            executedAtMs: execution.executedAtMs,
+            expiresAtMs: execution.expiresAtMs
+        ),
+        opaqueId: receipt.signaturePayload.opaqueId,
+        receiptHash: receipt.signaturePayload.receiptHash,
+        uaid: receipt.signaturePayload.uaid,
+        accountId: receipt.signaturePayload.accountId
+    )
+    return try JSONEncoder().encode(
+        NativeClaimIdentifierReceiptEnvelope(
+            signature: receipt.signature,
+            signaturePayload: payload
+        )
+    )
 }
 
 private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
@@ -897,12 +991,7 @@ struct SwiftTransactionEncoder {
 
         if NoritoNativeBridge.shared.isAvailable {
             let privateKey = try privateKeyBytes(from: signingKey)
-            let receiptJSON = try JSONEncoder().encode(
-                NativeClaimIdentifierReceiptEnvelope(
-                    signature: request.receipt.signature,
-                    signaturePayloadHex: request.receipt.signaturePayloadHex
-                )
-            )
+            let receiptJSON = try encodeNativeClaimIdentifierReceiptJSON(request.receipt)
             do {
                 if let native = try NoritoNativeBridge.shared.encodeClaimIdentifier(
                     chainId: ids.chainId,
@@ -1048,8 +1137,7 @@ struct SwiftTransactionEncoder {
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
-                namespace: request.namespace,
-                contractId: request.contractId,
+                contractAddress: request.contractAddress,
                 codeHashHex: request.codeHashHex,
                 abiHashHex: request.abiHashHex,
                 abiVersion: request.abiVersion,

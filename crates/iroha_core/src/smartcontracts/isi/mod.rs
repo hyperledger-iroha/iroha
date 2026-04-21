@@ -242,6 +242,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
@@ -519,7 +520,10 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, isi::error::InvalidParameterError,
+        block::consensus::LaneBlockCommitment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        isi::error::InvalidParameterError,
+        nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob},
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -570,6 +574,55 @@ mod tests {
         state_transaction.apply();
         state_block.commit().unwrap();
         Ok(state)
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_instruction_box_is_registered() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(&block_header);
+        let mut state_transaction = state_block.transaction();
+
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: block_header.height().get(),
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(10),
+            tx_count: 1,
+            total_local_micro: 76,
+            total_xor_due_micro: 1,
+            total_xor_after_haircut_micro: 1,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        };
+        let manifest_root = [0x42; 32];
+        let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
+            .with_manifest_root(Some(manifest_root));
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: envelope.expected_fastpq_proof_digest(Some(envelope.block_height)),
+            verified_at_height: Some(envelope.block_height),
+        }));
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+                envelope,
+                proof_blob: ProofBlob {
+                    payload: manifest_root.to_vec(),
+                    expiry_slot: None,
+                },
+            });
+
+        let is_registered = INSTRUCTION_HANDLERS
+            .iter()
+            .any(|handler| handler(&instruction, &ALICE_ID, &mut state_transaction).is_some());
+
+        assert!(
+            is_registered,
+            "RegisterVerifiedLaneRelay must be wired into INSTRUCTION_HANDLERS"
+        );
+        Ok(())
     }
 
     #[test]

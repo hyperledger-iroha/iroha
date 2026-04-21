@@ -215,7 +215,29 @@ private func expectedTail(forTTL ttl: UInt64?) -> Data {
 final class TxBuilderTests: XCTestCase {
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
-    private static let fixtureDomain = "wonderland"
+    private static let fixtureDomain = "wonderland.universal"
+    private static let fixtureGovernanceContractAddress =
+        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private static let fixtureClaimPolicyId = "email#retail"
+    private static let fixtureClaimProgramId = "identifier_lookup_retail"
+    private static let fixtureClaimProgramDigestHex =
+        "1111111111111111111111111111111111111111111111111111111111111111"
+    private static let fixtureClaimOutputHashHex =
+        "2222222222222222222222222222222222222222222222222222222222222223"
+    private static let fixtureClaimAssociatedDataHashHex =
+        "3333333333333333333333333333333333333333333333333333333333333333"
+    private static let fixtureClaimOpaqueIdHex =
+        "d82f9eab952f7a5241bb2339c0095ebc61958428164ab820fad85952f3574585"
+    private static let fixtureClaimReceiptHashHex =
+        "032df7e7370e04ddbabf0cd40932935a1d2c77a9b8d723bbb9f1472f2791cc71"
+    private static let fixtureClaimUaidHex =
+        "c60973f731ccb57008687f9bc38cc712e3be7ab46d99a1beffd1c9fd61e60a87"
+    private static let fixtureClaimResolvedAtMs: UInt64 = 1_764_450_000_024
+    private static let fixtureClaimExpiresAtMs: UInt64 = 1_764_453_000_056
+    private static let fixtureClaimAccountMultihash =
+        "ed01205634E9071E8662974A22F137972663C4644DC3546A1938E1CAC58DE4CBA8D965"
+    private static let fixtureClaimSignatureHex =
+        "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900"
     private static let fixtureExplorerAccountId = AccountId.make(publicKey: Data(repeating: 0x2A, count: 32))
     private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
@@ -278,6 +300,89 @@ final class TxBuilderTests: XCTestCase {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
+    private func claimFixtureHash(_ hex: String) throws -> Data {
+        guard let bytes = Data(hexString: hex) else {
+            throw FixtureError.invalidKey
+        }
+        return bytes
+    }
+
+    private func makeClaimIdentifierPayloadHex(accountId: String) throws -> String {
+        let policyParts = Self.fixtureClaimPolicyId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+        guard policyParts.count == 2 else {
+            throw FixtureError.invalidKey
+        }
+
+        var policyId = OfflineNoritoWriter()
+        policyId.writeField(OfflineNorito.encodeString(String(policyParts[0])))
+        policyId.writeField(OfflineNorito.encodeString(String(policyParts[1])))
+
+        var programId = OfflineNoritoWriter()
+        programId.writeField(OfflineNorito.encodeString(Self.fixtureClaimProgramId))
+
+        var execution = OfflineNoritoWriter()
+        execution.writeField(programId.data)
+        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimProgramDigestHex)))
+        execution.writeField(OfflineNorito.encodeUInt32(2))
+        execution.writeField(OfflineNorito.encodeUInt32(0))
+        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimOutputHashHex)))
+        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimAssociatedDataHashHex)))
+        execution.writeField(OfflineNorito.encodeUInt64(Self.fixtureClaimResolvedAtMs))
+        execution.writeField(try OfflineNorito.encodeOption(Self.fixtureClaimExpiresAtMs,
+                                                            encode: OfflineNorito.encodeUInt64))
+
+        var payload = OfflineNoritoWriter()
+        payload.writeField(policyId.data)
+        payload.writeField(execution.data)
+        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimOpaqueIdHex)))
+        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimReceiptHashHex)))
+        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimUaidHex)))
+        payload.writeField(try OfflineNorito.encodeAccountId(accountId))
+        return hexEncoded(payload.data)
+    }
+
+    private func makeNativeClaimIdentifierReceiptJSON(
+        _ receipt: ToriiIdentifierResolutionReceipt
+    ) throws -> Data {
+        guard let execution = receipt.signaturePayload.execution,
+              let programId = execution.programId,
+              let programDigest = execution.programDigest,
+              let backend = execution.backend,
+              let verificationMode = execution.verificationMode,
+              let outputHash = execution.outputHash,
+              let associatedDataHash = execution.associatedDataHash else {
+            throw FixtureError.invalidKey
+        }
+
+        let receiptJSON = """
+        {
+          "signature":"\(receipt.signature)",
+          "signature_payload":{
+            "policy_id":"\(receipt.signaturePayload.policyId)",
+            "execution":{
+              "program_id":"\(programId)",
+              "program_digest":"\(programDigest)",
+              "backend":"\(backend)",
+              "verification_mode":"\(verificationMode)",
+              "output_hash":"\(outputHash)",
+              "associated_data_hash":"\(associatedDataHash)",
+              "executed_at_ms":\(execution.executedAtMs),
+              "expires_at_ms":\(execution.expiresAtMs ?? 0)
+            },
+            "opaque_id":"\(receipt.signaturePayload.opaqueId)",
+            "receipt_hash":"\(receipt.signaturePayload.receiptHash)",
+            "uaid":"\(receipt.signaturePayload.uaid)",
+            "account_id":"\(receipt.signaturePayload.accountId)"
+          }
+        }
+        """
+        if execution.expiresAtMs == nil {
+            let withoutExpiry = receiptJSON.replacingOccurrences(of: ",\n              \"expires_at_ms\":0", with: "")
+            return Data(withoutExpiry.utf8)
+        }
+        return Data(receiptJSON.utf8)
+    }
+
     private func requireEd25519Encoder() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
@@ -308,38 +413,53 @@ final class TxBuilderTests: XCTestCase {
 
     private func makeClaimIdentifierRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> ClaimIdentifierRequest {
-        let signatureHex =
-            "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900"
-        let payloadHex =
-            "2B000000000000000D000000000000000500000000000000656D61696C0E00000000000000060000000000000072657461696CDD000000000000001C0000000000000014000000000000000C00000000000000656D61696C5F72657461696C200000000000000075522459A6B0039705A18CE5D21050F39454F440203D6041C454658735DA1D070400000000000000020000000400000000000000000000002000000000000000E12E5429C9C8B146C4EC6DB972DCDEBD6BC84257A4503C0A152E052D345B303D2000000000000000444180A5ECCBC236041F1DC4D5E3BD220B0656261EB55B9D9AE32AA729B5437F0800000000000000987ABF0A9D0100001100000000000000010800000000000000780EC40A9D01000028000000000000002000000000000000D82F9EAB952F7A5241BB2339C0095EBC61958428164AB820FAD85952F35745852000000000000000032DF7E7370E04DDBABF0CD40932935A1D2C77A9B8D723BBB9F1472F2791CC7128000000000000002000000000000000C60973F731CCB57008687F9BC38CC712E3BE7AB46D99A1BEFFD1C9FD61E60A875A00000000000000000000004E00000000000000460000000000000065643031323035363334453930373145383636323937344132324631333739373236363343343634344443333534364131393338453143414335384445344342413844393635"
+        guard let multihashBytes = Data(hexString: Self.fixtureClaimAccountMultihash),
+              multihashBytes.count == 35,
+              multihashBytes.prefix(3) == Data([0xED, 0x01, 0x20]) else {
+            throw FixtureError.invalidKey
+        }
+        let claimAccountId = AccountId.make(publicKey: Data(multihashBytes.dropFirst(3)))
+        let signaturePayloadHex = try makeClaimIdentifierPayloadHex(accountId: claimAccountId)
         let receiptJSON = """
         {
-          "policy_id":"phone#retail",
-          "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
-          "receipt_hash":"\(String(repeating: "55", count: 32))",
-          "uaid":"uaid:\(String(repeating: "66", count: 31))67",
-          "account_id":"\(authority)",
-          "resolved_at_ms":7,
-          "expires_at_ms":107,
+          "policy_id":"\(Self.fixtureClaimPolicyId)",
+          "opaque_id":"opaque:\(Self.fixtureClaimOpaqueIdHex)",
+          "receipt_hash":"\(Self.fixtureClaimReceiptHashHex)",
+          "uaid":"uaid:\(Self.fixtureClaimUaidHex)",
+          "account_id":"\(claimAccountId)",
+          "resolved_at_ms":\(Self.fixtureClaimResolvedAtMs),
+          "expires_at_ms":\(Self.fixtureClaimExpiresAtMs),
           "backend":"bfv-programmed-sha3-256-v1",
-          "signature":"\(signatureHex)",
-          "signature_payload_hex":"\(payloadHex)",
+          "signature":"\(Self.fixtureClaimSignatureHex)",
+          "signature_payload_hex":"\(signaturePayloadHex)",
           "signature_payload":{
-            "policy_id":"phone#retail",
-            "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
-            "receipt_hash":"\(String(repeating: "55", count: 32))",
-            "uaid":"uaid:\(String(repeating: "66", count: 31))67",
-            "account_id":"\(authority)",
+            "policy_id":{
+              "kind":"email",
+              "business_rule":"retail"
+            },
             "execution":{
-              "program_id":"identifier_lookup_retail",
-              "program_digest":"\(String(repeating: "11", count: 32))",
+              "program_id":{
+                "name":"\(Self.fixtureClaimProgramId)"
+              },
+              "program_digest":"hash:\(Self.fixtureClaimProgramDigestHex)#ABCD",
               "backend":"bfv-programmed-sha3-256-v1",
-              "verification_mode":"signed",
-              "output_hash":"\(String(repeating: "22", count: 32))",
-              "associated_data_hash":"\(String(repeating: "33", count: 32))",
-              "executed_at_ms":7,
-              "expires_at_ms":107
-            }
+              "verification_mode":{
+                "mode":"Signed",
+                "value":null
+              },
+              "output_hash":"hash:\(Self.fixtureClaimOutputHashHex)#BCDE",
+              "associated_data_hash":"hash:\(Self.fixtureClaimAssociatedDataHashHex)#CDEF",
+              "executed_at_ms":\(Self.fixtureClaimResolvedAtMs),
+              "expires_at_ms":\(Self.fixtureClaimExpiresAtMs)
+            },
+            "opaque_id":[
+              "hash:\(Self.fixtureClaimOpaqueIdHex.uppercased())#1234"
+            ],
+            "receipt_hash":"hash:\(Self.fixtureClaimReceiptHashHex.uppercased())#5678",
+            "uaid":[
+              "hash:\(Self.fixtureClaimUaidHex.uppercased())#9ABC"
+            ],
+            "account_id":"\(claimAccountId)"
           }
         }
         """
@@ -349,7 +469,7 @@ final class TxBuilderTests: XCTestCase {
         )
         return ClaimIdentifierRequest(chainId: Self.fixtureChainId,
                                       authority: authority,
-                                      accountId: authority,
+                                      accountId: claimAccountId,
                                       receipt: receipt,
                                       ttlMs: ttlMs)
     }
@@ -1221,7 +1341,7 @@ final class TxBuilderTests: XCTestCase {
                                                                       keypair: keypair,
                                                                       creationTimeMs: Self.fixtureCreationTimeMs)
 
-        let receiptJSON = try JSONEncoder().encode(request.receipt)
+        let receiptJSON = try makeNativeClaimIdentifierReceiptJSON(request.receipt)
         guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
             chainId: request.chainId,
             authority: request.authority,
@@ -1253,11 +1373,10 @@ final class TxBuilderTests: XCTestCase {
         let window = GovernanceWindow(lower: 4, upper: 8)
         let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
                                                    authority: authority,
-                                                   namespace: "contracts",
-                                                   contractId: "demo",
+                                                   contractAddress: Self.fixtureGovernanceContractAddress,
                                                    codeHashHex: hexEncoded(codeHash),
                                                    abiHashHex: hexEncoded(abiHash),
-                                                   abiVersion: "1.0.0",
+                                                   abiVersion: "1",
                                                    window: window,
                                                    mode: .plain,
                                                    ttlMs: 20)
@@ -1271,8 +1390,7 @@ final class TxBuilderTests: XCTestCase {
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
-            namespace: request.namespace,
-            contractId: request.contractId,
+            contractAddress: request.contractAddress,
             codeHashHex: request.codeHashHex,
             abiHashHex: request.abiHashHex,
             abiVersion: request.abiVersion,
@@ -1462,8 +1580,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
                                                    authority: authority,
-                                                   namespace: "apps",
-                                                   contractId: "demo.contract",
+                                                   contractAddress: Self.fixtureGovernanceContractAddress,
                                                    codeHashHex: String(repeating: "aa", count: 32),
                                                    abiHashHex: String(repeating: "bb", count: 32),
                                                    abiVersion: "1",

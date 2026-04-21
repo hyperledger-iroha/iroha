@@ -63,7 +63,7 @@ let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", conditio
 irohaSwiftDependencies.append(bridgeDependency)
 testDependencies.append(bridgeDependency)
 // Ensure static bridge object files are retained so runtime dlsym lookups resolve.
-irohaSwiftLinkerSettings.append(.unsafeFlags(["-all_load"], .when(platforms: [.iOS])))
+irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-all_load"], .when(platforms: [.iOS, .macOS])))
 
 var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),

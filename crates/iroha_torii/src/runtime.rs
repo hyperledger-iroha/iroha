@@ -543,11 +543,45 @@ pub async fn handle_node_query_projection_checkpoint_publish(
     state: Arc<iroha_core::state::State>,
     request: NodeProjectionCheckpointPublishRequest,
 ) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
+    handle_node_query_projection_checkpoint_publish_with_app(None, state, request).await
+}
+
+#[cfg(feature = "app_api")]
+/// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs, seed local cache/storage, and persist the checkpoint.
+pub async fn handle_node_query_projection_checkpoint_publish_with_app(
+    app: Option<crate::SharedAppState>,
+    state: Arc<iroha_core::state::State>,
+    request: NodeProjectionCheckpointPublishRequest,
+) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
     let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
     let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
     validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
     for upload in &uploads {
         crate::routing::cache_query_projection_archive_for_query(upload.archive.clone());
+        if let Some(app) = app.as_ref() {
+            match crate::routing::persist_query_projection_archive_for_query(
+                app,
+                &upload.archive,
+                &upload.manifest_digest,
+            ) {
+                Ok(true) => {}
+                Ok(false) => warn!(
+                    resource = upload.archive.resource.as_stable_str(),
+                    partition_id = upload.archive.partition_id,
+                    asset_definition_id = upload.archive.asset_definition_id.as_deref(),
+                    manifest_digest_hex = %hex::encode(upload.manifest_digest.as_bytes()),
+                    "skipping local projection archive seed because reconstructed SoraFS manifest does not match published checkpoint ref"
+                ),
+                Err(err) => warn!(
+                    ?err,
+                    resource = upload.archive.resource.as_stable_str(),
+                    partition_id = upload.archive.partition_id,
+                    asset_definition_id = upload.archive.asset_definition_id.as_deref(),
+                    manifest_digest_hex = %hex::encode(upload.manifest_digest.as_bytes()),
+                    "failed to seed local projection archive store during checkpoint publish"
+                ),
+            }
+        }
     }
     let checkpoint = state
         .publish_query_projection_checkpoint_from_archives(

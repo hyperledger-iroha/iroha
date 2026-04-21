@@ -116,6 +116,48 @@ final class OfflineSettlementProofsTests: XCTestCase {
         )
     }
 
+    func testSettlementCommitmentUsesServerCanonicalJSONWithoutEscapedSlashes() throws {
+        let chainTxHash = "fae019f40d05859a9af5613cb96ba6939149fa960babc06d718ecde27c987b61"
+        let preStateHash = "c0acca41d103901fe944f196c4b34e145a4deaa854b99b8acdb94effb0ba1fe0"
+        let postStateHash = "09c885f971c3529ab4e69d4adf682fca6c1bc57df83afed349faff3145583e75"
+        let expectedCommitment = "7cffb614fa11477fa1b9fef44b92a51d90a14cc3f263798be75f98fa9995a147"
+        let expectedCompositionRoot = "a799551c93e6d325971bbec1a093856dc7cbca61d5c0978b821741ad19bc95d7"
+
+        let settlement = try ToriiOfflineSettlementProofs.buildSettlement(
+            kind: "load",
+            operationId: "cash_load_slash_key_regression",
+            accountId: "i105-test-account",
+            lineageId: "lineage-1",
+            assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+            amount: "200.00",
+            offlinePublicKey: "abc/def+ghi==",
+            authorizationId: "auth-1",
+            preStateHash: preStateHash,
+            postStateHash: postStateHash,
+            chainTxHash: chainTxHash,
+            entryHash: chainTxHash,
+            blockHeight: 710
+        )
+
+        XCTAssertEqual(settlement.settlementCommitmentHex, expectedCommitment)
+        XCTAssertEqual(settlement.proof.publicInputsHex, expectedCommitment)
+        XCTAssertEqual(settlement.proof.envelope.proof.commits.compRoot, expectedCompositionRoot)
+
+        try ToriiOfflineSettlementProofs.verifySettlement(
+            settlement: settlement,
+            kind: "load",
+            operationId: "cash_load_slash_key_regression",
+            accountId: "i105-test-account",
+            lineageId: "lineage-1",
+            assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+            amount: "200.00",
+            offlinePublicKey: "abc/def+ghi==",
+            authorizationId: "auth-1",
+            preStateHash: preStateHash,
+            envelopeStateHash: postStateHash
+        )
+    }
+
     func testRedeemRequestProofJSONUsesCanonicalHexAndByteArrayDirs() throws {
         let request = try makeRedeemRequest()
         let jsonObject = try XCTUnwrap(

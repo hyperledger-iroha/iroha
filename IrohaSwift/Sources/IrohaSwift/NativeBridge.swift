@@ -971,7 +971,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
         UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
@@ -984,7 +983,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt64,
         UInt8,
-        UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -1003,7 +1001,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt64,
         UInt8,
-        UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -4500,7 +4497,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             objectPtr, UInt(objectId.utf8.count),
                                             keyPtr, UInt(key.utf8.count),
                                             keyPtrBytes, UInt(privateKey.count),
-                                            hashPtr, hashLength,
                                             algorithmRaw,
                                             signedPtrPtr,
                                             signedLenPtr,
@@ -4556,8 +4552,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
-        namespace: String,
-        contractId: String,
+        contractAddress: String,
         codeHashHex: String,
         abiHashHex: String,
         abiVersion: String,
@@ -4582,8 +4577,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let status = try withAuthorityChainDiscriminant(authority: authority) {
             chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
-                namespace.withCString { namespacePtr in
-                    contractId.withCString { contractPtr in
+                contractAddress.withCString { contractAddressPtr in
                         codeHashHex.withCString { codeHashPtr in
                             abiHashHex.withCString { abiHashPtr in
                                 abiVersion.withCString { abiVersionPtr in
@@ -4607,8 +4601,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         creationTimeMs,
                                                         ttlValue,
                                                         ttlFlag,
-                                                        namespacePtr, UInt(namespace.utf8.count),
-                                                        contractPtr, UInt(contractId.utf8.count),
+                                                        contractAddressPtr, UInt(contractAddress.utf8.count),
                                                         codeHashPtr, UInt(codeHashHex.utf8.count),
                                                         abiHashPtr, UInt(abiHashHex.utf8.count),
                                                         abiVersionPtr, UInt(abiVersion.utf8.count),
@@ -4631,8 +4624,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                         creationTimeMs,
                                                         ttlValue,
                                                         ttlFlag,
-                                                        namespacePtr, UInt(namespace.utf8.count),
-                                                        contractPtr, UInt(contractId.utf8.count),
+                                                        contractAddressPtr, UInt(contractAddress.utf8.count),
                                                         codeHashPtr, UInt(codeHashHex.utf8.count),
                                                         abiHashPtr, UInt(abiHashHex.utf8.count),
                                                         abiVersionPtr, UInt(abiVersion.utf8.count),
@@ -4656,7 +4648,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
