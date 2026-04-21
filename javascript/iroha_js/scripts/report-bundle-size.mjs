@@ -164,7 +164,7 @@ Options:
 
 async function writeReport(summary, maybeOutPath) {
   const timestamp = summary.recordedAt.replace(/:/g, "-");
-  const fallbackPath = path.resolve(
+  const defaultPath = path.resolve(
     REPO_ROOT,
     "artifacts",
     "js-sdk-bundle-size",
@@ -172,7 +172,7 @@ async function writeReport(summary, maybeOutPath) {
   );
   const outPath = maybeOutPath
     ? path.resolve(process.cwd(), maybeOutPath)
-    : fallbackPath;
+    : defaultPath;
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return outPath;

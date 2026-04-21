@@ -96,6 +96,39 @@ fn authority_has_permission(
     false
 }
 
+fn account_alias_is_open_retail_namespace(world: &impl WorldReadOnly, alias: &AccountAlias) -> bool {
+    let Some(dataspace) = world.dataspace_catalog().by_id(alias.dataspace) else {
+        return false;
+    };
+    let dataspace_alias = dataspace.alias.as_str();
+    let domain_alias = alias.domain.as_ref().map(|domain| domain.name().as_ref());
+    matches!(
+        (dataspace_alias, domain_alias),
+        ("sbp", None) | ("sbp", Some("hbl" | "ubl")) | ("cbuae", None)
+    )
+}
+
+fn authority_controls_open_retail_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    if !account_alias_is_open_retail_namespace(world, alias) {
+        return false;
+    }
+    if world
+        .account_aliases()
+        .get(alias)
+        .is_some_and(|account_id| account_id == authority)
+    {
+        return true;
+    }
+    world
+        .account_rekey_records()
+        .get(alias)
+        .is_some_and(|record| &record.active_account_id == authority)
+}
+
 /// Return `true` when the authority holds the exact permissions required to resolve `alias`.
 pub fn authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
@@ -129,6 +162,10 @@ pub fn authority_can_manage_account_alias(
     authority: &AccountId,
     alias: &AccountAlias,
 ) -> bool {
+    if authority_controls_open_retail_account_alias(world, authority, alias) {
+        return true;
+    }
+
     let dataspace_permission: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
     }

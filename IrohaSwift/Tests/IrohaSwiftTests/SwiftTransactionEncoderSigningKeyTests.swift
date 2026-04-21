@@ -2,19 +2,22 @@ import XCTest
 @testable import IrohaSwift
 
 final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
+    private static let fixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+
     func testEd25519TransferWithFeeSponsorEncodes() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Ed25519 transaction encoder unavailable")
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 0x11, count: 32))
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        let sponsor = try AccountId.makeI105(publicKey: Data(repeating: 0x12, count: 32))
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
-                                      assetDefinitionId: "xor#wonderland",
+                                      assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "2",
                                       destination: authority,
                                       description: "fee-sponsor",
-                                      feeSponsor: "sponsor@sbp",
+                                      feeSponsor: sponsor,
                                       ttlMs: 120)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                   signingKey: signingKey,
@@ -29,15 +32,13 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let seed = Data(repeating: 0x24, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
-        let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
-        let assetDefinitionId = "xor#\(domain)"
         guard let authority = try? AccountId.makeI105(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
-                                      assetDefinitionId: assetDefinitionId,
+                                      assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "5",
                                       destination: authority,
                                       description: nil,
@@ -55,15 +56,13 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let seed = Data(repeating: 0x33, count: Sm2Keypair.privateKeyLength)
         let sm2Keypair = try Sm2Keypair.deriveFromSeed(seed: seed)
         let signingKey = SigningKey.sm2(sm2Keypair)
-        let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
-        let assetDefinitionId = "xor#\(domain)"
         guard let authority = try? AccountId.makeI105(publicKey: sm2Keypair.publicKey, algorithm: "sm2") else {
             throw XCTSkip("SM2 account-id encoding is unavailable in this build.")
         }
         let request = MintRequest(chainId: chainId,
                                   authority: authority,
-                                  assetDefinitionId: assetDefinitionId,
+                                  assetDefinitionId: Self.fixtureAssetDefinitionId,
                                   quantity: "42",
                                   destination: authority,
                                   ttlMs: 90)
@@ -80,13 +79,11 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let privateKey = Data((1...Secp256k1Keypair.privateKeyLength).map(UInt8.init))
         let keypair = try Secp256k1Keypair(privateKey: privateKey)
         let signingKey = SigningKey.secp256k1(keypair)
-        let domain = "wonderland"
         let chainId = "00000000-0000-0000-0000-000000000000"
-        let assetDefinitionId = "xor#\(domain)"
         let authority = try AccountId.makeI105(publicKey: keypair.publicKey, algorithm: "secp256k1")
         let request = TransferRequest(chainId: chainId,
                                       authority: authority,
-                                      assetDefinitionId: assetDefinitionId,
+                                      assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "7",
                                       destination: authority,
                                       description: "secp256k1-transfer",

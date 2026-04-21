@@ -3,9 +3,9 @@ import XCTest
 
 final class RwaInstructionBuildersTests: XCTestCase {
     private let fixtureRwaId =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora"
     private let fixtureRwaIdUpperHash =
-        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities"
+        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities.sora"
 
     private func i105(seed: UInt8) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
@@ -15,7 +15,7 @@ final class RwaInstructionBuildersTests: XCTestCase {
 
     func testRegisterRwaWrapsRawNewRwaObject() throws {
         let rwa = try NoritoJSON.fromJSONObject([
-            "domain": "commodities",
+            "domain": "commodities.sora",
             "quantity": "10.5",
             "spec": ["scale": 1],
             "primary_reference": "vault-cert-001",
@@ -34,7 +34,7 @@ final class RwaInstructionBuildersTests: XCTestCase {
             return XCTFail("Unexpected JSON structure: \(String(describing: object))")
         }
 
-        XCTAssertEqual(innerRwa["domain"] as? String, "commodities")
+        XCTAssertEqual(innerRwa["domain"] as? String, "commodities.sora")
         XCTAssertEqual(innerRwa["quantity"] as? String, "10.5")
         XCTAssertEqual(innerRwa["primary_reference"] as? String, "vault-cert-001")
     }

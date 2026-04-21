@@ -21,9 +21,9 @@ const DEFAULT_TORII_URL =
 const DEFAULT_API_TOKEN = process.env.JS_TORII_API_TOKEN ?? process.env.IROHA_TORII_API_TOKEN;
 const DEFAULT_AUTH_TOKEN = process.env.JS_TORII_AUTH_TOKEN ?? process.env.IROHA_TORII_AUTH_TOKEN;
 
-function parseInteger(value, fallback) {
+function parseInteger(value, defaultValue) {
   if (value === undefined) {
-    return fallback;
+    return defaultValue;
   }
   const num = Number.parseInt(value, 10);
   if (Number.isNaN(num)) {
