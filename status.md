@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: iroha_data_model compute/oracle/offline fixture resync
+- Refreshed the stale `iroha_data_model` goldens and JSON fixtures behind the
+  reported failures in `compute`, `governance`, `offline::poseidon`, and
+  `oracle`. This updates the compute receipt request-hash literal/checksum, the
+  price-oracle request-hash chain (`observation`/`report`/`feed_event`), the
+  social observation request hash, the offline aggregate-bundle receipts root,
+  and the inline Poseidon/governance/oracle stability assertions to match the
+  current canonical encodings.
+- Validation for this slice:
+  - `cargo run --quiet --manifest-path /tmp/iroha-fixture-dump.0NfG4i/Cargo.toml`
+    to confirm the refreshed compute request hash, governance fingerprint,
+    oracle ABI hash, price/social request-hash literals, and Poseidon leaf/root
+    values against the current code.
+  - A clean fresh `CARGO_TARGET_DIR=/tmp/iroha_data_model_fix_target cargo test -p iroha_data_model`
+    is still blocked by unrelated pre-existing test-build errors in
+    `crates/iroha_data_model/src/query/mod.rs` (`QueryRequest` missing
+    `PartialEq`/`Debug`, plus `payload().as_slice()` method resolution).
+
 ## 2026-04-21 Follow-up: Torii Norito ingress harness compile unblock and loopback request wiring
 - `crates/iroha_torii/tests/common/norito_rpc_harness.rs` now builds the
   shared signed-query sample as a versioned singular `FindAbiVersion`

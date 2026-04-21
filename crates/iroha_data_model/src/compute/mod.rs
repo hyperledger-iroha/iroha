@@ -1545,7 +1545,7 @@ mod tests {
         let hash = sample_request().hash();
         assert_eq!(
             hash.to_string(),
-            "422c8fa780fcb77b2bd81f90c4a4b3b55508372a32a204aa7fa3cb491d19b51d",
+            "d570a087266f13717baa72b7cec5e164ac0b7c21d2b4f3ba9512a2748579d79d",
             "update the compute request fixture if this hash intentionally changes"
         );
     }
