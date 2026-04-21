@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii SoraFS site-binding override test isolation
+- `crates/iroha_torii/src/sorafs/api.rs` now serializes tests that mutate the
+  test-only SoraFS site-binding override path, so the global override cannot be
+  swapped or cleared by a different test while a site-binding handler test is
+  still running.
+- This fixes the intermittent
+  `sorafs::api::advert_tests::site_binding_serves_manifest_and_spa_fallback`
+  `404` on `assets/app.js`: the handler logic was sound, but the shared test
+  override could race across parallel test execution.
+- Focused validation for this slice:
+  - `cargo test -p iroha_torii sorafs::api::advert_tests::site_binding_serves_manifest_and_spa_fallback -- --nocapture`
+
 ## 2026-04-21 Follow-up: i105 fullwidth-kana strict-parse assertion cleanup
 - `crates/iroha_data_model/src/account/address.rs` now expects
   `AccountAddress::parse_encoded(...)` to preserve `InvalidI105Char` for

@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii SoraFS site-binding override test isolation):
+The reported
+`sorafs::api::advert_tests::site_binding_serves_manifest_and_spa_fallback`
+red is fixed. `crates/iroha_torii/src/sorafs/api.rs` now serializes tests that
+touch the global test-only site-binding override path, preventing parallel
+tests from clobbering each other's bindings file mid-request and turning valid
+site asset fetches into transient `404`s.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/sorafs/api.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_torii sorafs::api::advert_tests::site_binding_serves_manifest_and_spa_fallback -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package window when there
+    is budget beyond the reported site-binding regression
+
 Latest sync (2026-04-21 i105 fullwidth-kana parser expectation):
 The reported `account::address::tests::i105_rejects_legacy_fullwidth_iroha_kana_inputs`
 red is fixed. `crates/iroha_data_model/src/account/address.rs` now expects
