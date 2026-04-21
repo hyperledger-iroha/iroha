@@ -22,16 +22,46 @@ public struct ToriiOfflineMutationSettlement: Codable, Sendable, Equatable {
         postStateHash: String,
         settlementCommitmentHex: String,
         proof: ToriiOfflineTransparentZkProof
-    ) {
+    ) throws {
         self.kind = kind
         self.operationId = operationId
-        self.chainTxHash = chainTxHash
-        self.entryHash = entryHash
+        self.chainTxHash = try OfflineSettlementFieldCanonicalizer.plainHex(
+            chainTxHash,
+            label: "chain tx hash"
+        )
+        self.entryHash = try OfflineSettlementFieldCanonicalizer.plainHex(
+            entryHash,
+            label: "entry hash"
+        )
         self.blockHeight = blockHeight
-        self.preStateHash = preStateHash
-        self.postStateHash = postStateHash
-        self.settlementCommitmentHex = settlementCommitmentHex
+        self.preStateHash = try OfflineSettlementFieldCanonicalizer.plainHex(
+            preStateHash,
+            label: "pre-state hash"
+        )
+        self.postStateHash = try OfflineSettlementFieldCanonicalizer.plainHex(
+            postStateHash,
+            label: "post-state hash"
+        )
+        self.settlementCommitmentHex = try OfflineSettlementFieldCanonicalizer.plainHex(
+            settlementCommitmentHex,
+            label: "settlement commitment"
+        )
         self.proof = proof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            kind: container.decode(String.self, forKey: .kind),
+            operationId: container.decode(String.self, forKey: .operationId),
+            chainTxHash: container.decode(String.self, forKey: .chainTxHash),
+            entryHash: container.decode(String.self, forKey: .entryHash),
+            blockHeight: container.decode(UInt64.self, forKey: .blockHeight),
+            preStateHash: container.decode(String.self, forKey: .preStateHash),
+            postStateHash: container.decode(String.self, forKey: .postStateHash),
+            settlementCommitmentHex: container.decode(String.self, forKey: .settlementCommitmentHex),
+            proof: container.decode(ToriiOfflineTransparentZkProof.self, forKey: .proof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -60,12 +90,26 @@ public struct ToriiOfflineTransparentZkProof: Codable, Sendable, Equatable {
         recursionDepth: UInt8,
         publicInputsHex: String,
         envelope: ToriiOfflineStarkVerifyEnvelopeV1
-    ) {
-        self.backend = backend
-        self.circuitId = circuitId
+    ) throws {
+        self.backend = OfflineSettlementFieldCanonicalizer.trimmed(backend)
+        self.circuitId = OfflineSettlementFieldCanonicalizer.trimmed(circuitId)
         self.recursionDepth = recursionDepth
-        self.publicInputsHex = publicInputsHex
+        self.publicInputsHex = try OfflineSettlementFieldCanonicalizer.plainHex(
+            publicInputsHex,
+            label: "public inputs"
+        )
         self.envelope = envelope
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            backend: container.decode(String.self, forKey: .backend),
+            circuitId: container.decode(String.self, forKey: .circuitId),
+            recursionDepth: container.decode(UInt8.self, forKey: .recursionDepth),
+            publicInputsHex: container.decode(String.self, forKey: .publicInputsHex),
+            envelope: container.decode(ToriiOfflineStarkVerifyEnvelopeV1.self, forKey: .envelope)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -91,7 +135,16 @@ public struct ToriiOfflineStarkVerifyEnvelopeV1: Codable, Sendable, Equatable {
     ) {
         self.params = params
         self.proof = proof
-        self.transcriptLabel = transcriptLabel
+        self.transcriptLabel = OfflineSettlementFieldCanonicalizer.trimmed(transcriptLabel)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            params: try container.decode(ToriiOfflineStarkFriParamsV1.self, forKey: .params),
+            proof: try container.decode(ToriiOfflineStarkProofV1.self, forKey: .proof),
+            transcriptLabel: try container.decode(String.self, forKey: .transcriptLabel)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -120,7 +173,7 @@ public struct ToriiOfflineStarkFriParamsV1: Codable, Sendable, Equatable {
         merkleArity: UInt8,
         hashFn: UInt8,
         domainTag: String
-    ) {
+    ) throws {
         self.version = version
         self.nLog2 = nLog2
         self.blowupLog2 = blowupLog2
@@ -128,7 +181,24 @@ public struct ToriiOfflineStarkFriParamsV1: Codable, Sendable, Equatable {
         self.queries = queries
         self.merkleArity = merkleArity
         self.hashFn = hashFn
-        self.domainTag = domainTag
+        self.domainTag = try OfflineSettlementFieldCanonicalizer.plainHex(
+            domainTag,
+            label: "domain tag"
+        )
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decode(UInt16.self, forKey: .version),
+            nLog2: container.decode(UInt8.self, forKey: .nLog2),
+            blowupLog2: container.decode(UInt8.self, forKey: .blowupLog2),
+            foldArity: container.decode(UInt8.self, forKey: .foldArity),
+            queries: container.decode(UInt16.self, forKey: .queries),
+            merkleArity: container.decode(UInt8.self, forKey: .merkleArity),
+            hashFn: container.decode(UInt8.self, forKey: .hashFn),
+            domainTag: container.decode(String.self, forKey: .domainTag)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -164,10 +234,23 @@ public struct ToriiOfflineStarkCommitmentsV1: Codable, Sendable, Equatable {
     public let roots: [String]
     public let compRoot: String?
 
-    public init(version: UInt16, roots: [String], compRoot: String?) {
+    public init(version: UInt16, roots: [String], compRoot: String?) throws {
         self.version = version
-        self.roots = roots
-        self.compRoot = compRoot
+        self.roots = try roots.map {
+            try OfflineSettlementFieldCanonicalizer.plainHex($0, label: "stark root")
+        }
+        self.compRoot = try compRoot.map {
+            try OfflineSettlementFieldCanonicalizer.plainHex($0, label: "composition root")
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decode(UInt16.self, forKey: .version),
+            roots: container.decode([String].self, forKey: .roots),
+            compRoot: container.decodeIfPresent(String.self, forKey: .compRoot)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -221,23 +304,29 @@ public struct ToriiOfflineMerklePath: Codable, Sendable, Equatable {
     public let dirs: String
     public let siblings: [String]
 
-    public init(dirs: String, siblings: [String]) {
-        self.dirs = dirs
-        self.siblings = siblings
+    public init(dirs: String, siblings: [String]) throws {
+        self.dirs = try OfflineSettlementFieldCanonicalizer.base64(
+            dirs,
+            label: "Merkle path direction bits"
+        )
+        self.siblings = try siblings.map {
+            try OfflineSettlementFieldCanonicalizer.plainHex($0, label: "merkle sibling")
+        }
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        siblings = try container.decode([String].self, forKey: .siblings)
         let arr = try container.decode([UInt8].self, forKey: .dirs)
-        dirs = Data(arr).base64EncodedString()
+        try self.init(
+            dirs: Data(arr).base64EncodedString(),
+            siblings: container.decode([String].self, forKey: .siblings)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(siblings, forKey: .siblings)
-        let trimmed = dirs.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let decoded = Data(base64Encoded: trimmed) else {
+        guard let decoded = Data(base64Encoded: dirs) else {
             throw EncodingError.invalidValue(
                 dirs,
                 EncodingError.Context(
@@ -266,6 +355,33 @@ public enum ToriiOfflineSettlementProofError: LocalizedError, Equatable {
         case .invalidSettlement(let message):
             return message
         }
+    }
+}
+
+private enum OfflineSettlementFieldCanonicalizer {
+    static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func plainHex(_ value: String, label: String) throws -> String {
+        let normalized = trimmed(value).lowercased()
+        guard !normalized.isEmpty,
+              !normalized.hasPrefix("0x"),
+              normalized.allSatisfy({ $0.isHexDigit }) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement \(label) is invalid.")
+        }
+        return normalized
+    }
+
+    static func base64(_ value: String, label: String) throws -> String {
+        let normalized = trimmed(value)
+        if normalized.isEmpty {
+            return ""
+        }
+        guard let decoded = Data(base64Encoded: normalized) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("\(label) are invalid.")
+        }
+        return decoded.base64EncodedString()
     }
 }
 
@@ -304,12 +420,12 @@ public enum ToriiOfflineSettlementProofs {
             preStateHash: preStateHash,
             receiptKeys: receiptKeys(receipts)
         )
-        return ToriiOfflineTransparentZkProof(
+        return try ToriiOfflineTransparentZkProof(
             backend: settlementBackend,
             circuitId: redeemRequestCircuitId,
             recursionDepth: 1,
             publicInputsHex: commitment,
-            envelope: synthesizeEnvelope(
+            envelope: try synthesizeEnvelope(
                 domainTag: commitment,
                 transcriptLabel: redeemRequestCircuitId
             )
@@ -381,7 +497,7 @@ public enum ToriiOfflineSettlementProofs {
             entryHash: normalizedEntryHash,
             blockHeight: blockHeight
         )
-        return ToriiOfflineMutationSettlement(
+        return try ToriiOfflineMutationSettlement(
             kind: kind,
             operationId: operationId,
             chainTxHash: normalizedChainTxHash,
@@ -390,12 +506,12 @@ public enum ToriiOfflineSettlementProofs {
             preStateHash: normalizedPreStateHash,
             postStateHash: normalizedPostStateHash,
             settlementCommitmentHex: commitment,
-            proof: ToriiOfflineTransparentZkProof(
+            proof: try ToriiOfflineTransparentZkProof(
                 backend: settlementBackend,
                 circuitId: settlementCircuitId,
                 recursionDepth: 1,
                 publicInputsHex: commitment,
-                envelope: synthesizeEnvelope(
+                envelope: try synthesizeEnvelope(
                     domainTag: commitment,
                     transcriptLabel: settlementCircuitId
                 )
@@ -472,7 +588,7 @@ public enum ToriiOfflineSettlementProofs {
         guard proof.envelope.params.domainTag == expectedCommitment else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement proof domain tag is invalid.")
         }
-        let expectedEnvelope = synthesizeEnvelope(
+        let expectedEnvelope = try synthesizeEnvelope(
             domainTag: expectedCommitment,
             transcriptLabel: settlementCircuitId
         )
@@ -542,8 +658,8 @@ public enum ToriiOfflineSettlementProofs {
     private static func synthesizeEnvelope(
         domainTag: String,
         transcriptLabel: String
-    ) -> ToriiOfflineStarkVerifyEnvelopeV1 {
-        let params = ToriiOfflineStarkFriParamsV1(
+    ) throws -> ToriiOfflineStarkVerifyEnvelopeV1 {
+        let params = try ToriiOfflineStarkFriParamsV1(
             version: starkVersion,
             nLog2: starkDomainLog2,
             blowupLog2: starkBlowupLog2,
@@ -561,8 +677,8 @@ public enum ToriiOfflineSettlementProofs {
         let rootData = roots.compactMap { hex in
             Data(hexString: hex)
         }
-        let queries = (0..<Int(starkQueryCount)).map { queryIndex in
-            synthesizeQueryChain(
+        let queries = try (0..<Int(starkQueryCount)).map { queryIndex in
+            try synthesizeQueryChain(
                 queryIndex: queryIndex,
                 params: params,
                 transcriptLabel: transcriptLabel,
@@ -574,7 +690,7 @@ public enum ToriiOfflineSettlementProofs {
             params: params,
             proof: ToriiOfflineStarkProofV1(
                 version: starkVersion,
-                commits: ToriiOfflineStarkCommitmentsV1(
+                commits: try ToriiOfflineStarkCommitmentsV1(
                     version: starkVersion,
                     roots: roots,
                     compRoot: nil
@@ -591,7 +707,7 @@ public enum ToriiOfflineSettlementProofs {
         transcriptLabel: String,
         roots: [Data],
         levelHashes: [Data]
-    ) -> [ToriiOfflineFoldDecommitV1] {
+    ) throws -> [ToriiOfflineFoldDecommitV1] {
         let requiredLayers = Int(params.nLog2)
         var indexAtLayer = deriveQueryIndex(
             transcriptLabel: transcriptLabel,
@@ -607,15 +723,18 @@ public enum ToriiOfflineSettlementProofs {
             let j = indexAtLayer / 2
             let y0Index = j * 2
             let y1Index = y0Index + 1
+            let pathY0 = try zeroMerklePath(index: y0Index, depth: depthCurrent, levelHashes: levelHashes)
+            let pathY1 = try zeroMerklePath(index: y1Index, depth: depthCurrent, levelHashes: levelHashes)
+            let pathZ = try zeroMerklePath(index: j, depth: depthNext, levelHashes: levelHashes)
             chain.append(
                 ToriiOfflineFoldDecommitV1(
                     j: UInt32(j),
                     y0: 0,
                     y1: 0,
-                    pathY0: zeroMerklePath(index: y0Index, depth: depthCurrent, levelHashes: levelHashes),
-                    pathY1: zeroMerklePath(index: y1Index, depth: depthCurrent, levelHashes: levelHashes),
+                    pathY0: pathY0,
+                    pathY1: pathY1,
                     z: 0,
-                    pathZ: zeroMerklePath(index: j, depth: depthNext, levelHashes: levelHashes)
+                    pathZ: pathZ
                 )
             )
             indexAtLayer = j
@@ -670,7 +789,7 @@ public enum ToriiOfflineSettlementProofs {
         index: Int,
         depth: Int,
         levelHashes: [Data]
-    ) -> ToriiOfflineMerklePath {
+    ) throws -> ToriiOfflineMerklePath {
         var dirs = Data(repeating: 0, count: (depth + 7) / 8)
         var siblings: [String] = []
         siblings.reserveCapacity(depth)
@@ -682,7 +801,7 @@ public enum ToriiOfflineSettlementProofs {
                 siblings.append(prefixedHex(levelHashes[level]))
             }
         }
-        return ToriiOfflineMerklePath(
+        return try ToriiOfflineMerklePath(
             dirs: dirs.base64EncodedString(),
             siblings: siblings
         )
@@ -691,11 +810,11 @@ public enum ToriiOfflineSettlementProofs {
     private static func normalizeProof(
         _ proof: ToriiOfflineTransparentZkProof
     ) throws -> ToriiOfflineTransparentZkProof {
-        ToriiOfflineTransparentZkProof(
-            backend: proof.backend.trimmingCharacters(in: .whitespacesAndNewlines),
-            circuitId: proof.circuitId.trimmingCharacters(in: .whitespacesAndNewlines),
+        try ToriiOfflineTransparentZkProof(
+            backend: proof.backend,
+            circuitId: proof.circuitId,
             recursionDepth: proof.recursionDepth,
-            publicInputsHex: try normalizePlainHex(proof.publicInputsHex, label: "public inputs"),
+            publicInputsHex: proof.publicInputsHex,
             envelope: try normalizeEnvelope(proof.envelope)
         )
     }
@@ -704,7 +823,7 @@ public enum ToriiOfflineSettlementProofs {
         _ envelope: ToriiOfflineStarkVerifyEnvelopeV1
     ) throws -> ToriiOfflineStarkVerifyEnvelopeV1 {
         ToriiOfflineStarkVerifyEnvelopeV1(
-            params: ToriiOfflineStarkFriParamsV1(
+            params: try ToriiOfflineStarkFriParamsV1(
                 version: envelope.params.version,
                 nLog2: envelope.params.nLog2,
                 blowupLog2: envelope.params.blowupLog2,
@@ -712,18 +831,14 @@ public enum ToriiOfflineSettlementProofs {
                 queries: envelope.params.queries,
                 merkleArity: envelope.params.merkleArity,
                 hashFn: envelope.params.hashFn,
-                domainTag: try normalizePlainHex(envelope.params.domainTag, label: "domain tag")
+                domainTag: envelope.params.domainTag
             ),
             proof: ToriiOfflineStarkProofV1(
                 version: envelope.proof.version,
-                commits: ToriiOfflineStarkCommitmentsV1(
+                commits: try ToriiOfflineStarkCommitmentsV1(
                     version: envelope.proof.commits.version,
-                    roots: try envelope.proof.commits.roots.map {
-                        try normalizePrefixedHex($0, label: "stark root")
-                    },
-                    compRoot: try envelope.proof.commits.compRoot.map {
-                        try normalizePrefixedHex($0, label: "composition root")
-                    }
+                    roots: envelope.proof.commits.roots,
+                    compRoot: envelope.proof.commits.compRoot
                 ),
                 queries: try envelope.proof.queries.map { chain in
                     try chain.map { decommit in
@@ -739,26 +854,16 @@ public enum ToriiOfflineSettlementProofs {
                     }
                 }
             ),
-            transcriptLabel: envelope.transcriptLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            transcriptLabel: envelope.transcriptLabel
         )
     }
 
     private static func normalizeMerklePath(
         _ path: ToriiOfflineMerklePath
     ) throws -> ToriiOfflineMerklePath {
-        let trimmedDirs = path.dirs.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedDirs.isEmpty {
-            guard let decoded = Data(base64Encoded: trimmedDirs) else {
-                throw ToriiOfflineSettlementProofError.invalidSettlement("Merkle path direction bits are invalid.")
-            }
-            return ToriiOfflineMerklePath(
-                dirs: decoded.base64EncodedString(),
-                siblings: try path.siblings.map { try normalizePrefixedHex($0, label: "merkle sibling") }
-            )
-        }
-        return ToriiOfflineMerklePath(
-            dirs: "",
-            siblings: try path.siblings.map { try normalizePrefixedHex($0, label: "merkle sibling") }
+        try ToriiOfflineMerklePath(
+            dirs: path.dirs,
+            siblings: path.siblings
         )
     }
 
@@ -811,17 +916,7 @@ public enum ToriiOfflineSettlementProofs {
     }
 
     private static func normalizePlainHex(_ value: String, label: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty,
-              !trimmed.hasPrefix("0x"),
-              trimmed.allSatisfy({ $0.isHexDigit }) else {
-            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement \(label) is invalid.")
-        }
-        return trimmed
-    }
-
-    private static func normalizePrefixedHex(_ value: String, label: String) throws -> String {
-        try normalizePlainHex(value, label: label)
+        try OfflineSettlementFieldCanonicalizer.plainHex(value, label: label)
     }
 
     private struct SettlementCommitmentPayload: Encodable {

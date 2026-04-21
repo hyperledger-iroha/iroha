@@ -8606,6 +8606,66 @@ async fn handler_node_query_projection_checkpoint(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
+/// POST /v1/node/query/projection/checkpoint/plan — validate and preview a rebuilt projection checkpoint.
+#[cfg(feature = "app_api")]
+async fn handler_node_query_projection_checkpoint_plan(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: crate::utils::extractors::NoritoJson<
+        crate::runtime::NodeProjectionCheckpointPublishRequest,
+    >,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/node/query/projection/checkpoint/plan",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload =
+        crate::runtime::handle_node_query_projection_checkpoint_plan(app.state.clone(), body.0)
+            .await?;
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
+/// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs and persist the checkpoint.
+#[cfg(feature = "app_api")]
+async fn handler_node_query_projection_checkpoint_publish(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: crate::utils::extractors::NoritoJson<
+        crate::runtime::NodeProjectionCheckpointPublishRequest,
+    >,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/node/query/projection/checkpoint/publish",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload =
+        crate::runtime::handle_node_query_projection_checkpoint_publish(app.state.clone(), body.0)
+            .await?;
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_shard_catalog(
@@ -30129,6 +30189,14 @@ impl Torii {
             #[cfg(feature = "app_api")]
             {
                 router = router.route(
+                    iroha_torii_shared::uri::NODE_QUERY_PROJECTION_CHECKPOINT_PLAN,
+                    post(handler_node_query_projection_checkpoint_plan),
+                );
+                router = router.route(
+                    iroha_torii_shared::uri::NODE_QUERY_PROJECTION_CHECKPOINT_PUBLISH,
+                    post(handler_node_query_projection_checkpoint_publish),
+                );
+                router = router.route(
                     iroha_torii_shared::uri::NODE_QUERY_PROJECTION_SHARD_CATALOG,
                     get(handler_node_query_projection_shard_catalog),
                 );
@@ -37266,6 +37334,14 @@ pub(crate) mod tests_runtime_handlers {
         assert!(caps.query.projection.checkpoint_contract_v1);
         assert!(!caps.query.projection.da_v1_enabled);
         assert_eq!(
+            caps.query.projection.checkpoint_plan_v1,
+            cfg!(feature = "app_api")
+        );
+        assert_eq!(
+            caps.query.projection.checkpoint_publish_v1,
+            cfg!(feature = "app_api")
+        );
+        assert_eq!(
             caps.query.projection.shard_catalog_v1,
             cfg!(feature = "app_api")
         );
@@ -37377,6 +37453,132 @@ pub(crate) mod tests_runtime_handlers {
         );
         assert_eq!(checkpoint.shards.len(), 1);
         assert_eq!(checkpoint.shards[0].resource, "accounts");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload() {
+        use iroha_data_model::Registrable;
+        use iroha_data_model::prelude::{Account, Domain, DomainId};
+
+        let authority = iroha_crypto::KeyPair::random();
+        let alice = iroha_crypto::KeyPair::random();
+        let authority_id =
+            iroha_data_model::account::AccountId::new(authority.public_key().clone());
+        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let domain_id = DomainId::try_new("projection-plan-handler", "universal").expect("domain");
+        let world = iroha_core::state::World::with(
+            [Domain::new(domain_id).build(&authority_id)],
+            [
+                Account::new(authority_id.clone()).build(&authority_id),
+                Account::new(alice_id.clone()).build(&authority_id),
+            ],
+            [],
+        );
+        let app = mk_app_state_for_tests_with_world(world);
+        let partition_id =
+            iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
+                &alice_id.to_string(),
+            );
+
+        let response = super::handler_node_query_projection_checkpoint_plan(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::utils::extractors::NoritoJson(
+                crate::runtime::NodeProjectionCheckpointPublishRequest {
+                    emitted_at_unix: Some(1_714_002_111),
+                    shards: vec![crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                        resource: "accounts".to_owned(),
+                        partition_id,
+                        asset_definition_id: None,
+                        archive_emitted_at_unix: 1_714_002_000,
+                        manifest_digest_hex: hex::encode([0x21; 32]),
+                        storage_ticket_hex: hex::encode([0x31; 32]),
+                    }],
+                },
+            ),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
+            norito::json::from_slice(&body).expect("decode json");
+        assert_eq!(checkpoint.emitted_at_unix, 1_714_002_111);
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert!(
+            app.state.query_projection_checkpoint_snapshot().is_none(),
+            "plan route must not persist checkpoint state"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
+        use iroha_data_model::Registrable;
+        use iroha_data_model::prelude::{Account, Domain, DomainId};
+
+        let authority = iroha_crypto::KeyPair::random();
+        let alice = iroha_crypto::KeyPair::random();
+        let authority_id =
+            iroha_data_model::account::AccountId::new(authority.public_key().clone());
+        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let domain_id =
+            DomainId::try_new("projection-publish-handler", "universal").expect("domain");
+        let world = iroha_core::state::World::with(
+            [Domain::new(domain_id).build(&authority_id)],
+            [
+                Account::new(authority_id.clone()).build(&authority_id),
+                Account::new(alice_id.clone()).build(&authority_id),
+            ],
+            [],
+        );
+        let app = mk_app_state_for_tests_with_world(world);
+        let partition_id =
+            iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
+                &alice_id.to_string(),
+            );
+
+        let response = super::handler_node_query_projection_checkpoint_publish(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::utils::extractors::NoritoJson(
+                crate::runtime::NodeProjectionCheckpointPublishRequest {
+                    emitted_at_unix: Some(1_714_002_333),
+                    shards: vec![crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                        resource: "accounts".to_owned(),
+                        partition_id,
+                        asset_definition_id: None,
+                        archive_emitted_at_unix: 1_714_002_222,
+                        manifest_digest_hex: hex::encode([0x41; 32]),
+                        storage_ticket_hex: hex::encode([0x51; 32]),
+                    }],
+                },
+            ),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
+            norito::json::from_slice(&body).expect("decode json");
+        assert_eq!(checkpoint.emitted_at_unix, 1_714_002_333);
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(
+            app.state
+                .query_projection_checkpoint_snapshot()
+                .expect("persisted")
+                .emitted_at_unix,
+            1_714_002_333
+        );
     }
 
     #[cfg(feature = "app_api")]

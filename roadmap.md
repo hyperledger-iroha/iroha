@@ -2,6 +2,46 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Swift offline model boundary hardening and numeric arithmetic parity):
+The Swift offline cash public models now fail fast on malformed amount fields
+instead of leaving canonicalization to later helper calls, and the public
+offline amount arithmetic helpers now use the same parser and 64-byte mantissa
+limit as offline Norito numeric encoding instead of `Decimal`. The settlement
+proof models now also validate/canonicalize their public hex and base64 fields
+at construction/decode time, so invalid proof objects cannot be built or
+decoded before verification.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineSettlementProofs.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/{OfflineSettlementProofsTests,ToriiOfflineCashEndpointsTests,OfflinePaymentE2ETest}.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/sdk/swift/index*.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cd IrohaSwift && swift test --filter OfflineSettlementProofsTests`
+    (`8 passed`)
+  - `cd IrohaSwift && swift test --filter ToriiOfflineCashEndpointsTests`
+    (`4 passed`)
+  - `cd IrohaSwift && swift test --filter NoritoTests/testNoritoInstructionFixturesAreConsistent`
+    (still fails with the existing encode-flag drift:
+    `mint_asset_numeric.json`, `burn_asset_numeric.json`,
+    `burn_asset_fractional.json`, and `burn_trigger_repetitions.json` report
+    `2` vs `0`)
+  - `cd IrohaSwift && swift test --filter AccountAddressFixtureTests`
+    (`xctest` still exits with signal `11`)
+  - `cd IrohaSwift && swift test`
+    (still blocked by the same package instability: `xctest` exits with signal
+    `11` shortly after entering `AccountAddressFixtureTests`, before the known
+    Norito fixture failures would be reached in the full suite)
+- open work after this slice:
+  - investigate the existing `AccountAddressFixtureTests` signal-11 crash so a
+    clean full Swift package run is possible again
+  - resolve the existing Norito fixture encode-flag drift once the suite can
+    run past the early crash
+
 Latest sync (2026-04-21 deterministic SoraNet puzzle transcript mismatch regression):
 The `iroha_crypto` puzzle transcript-mismatch regression is deterministic
 again. Instead of asserting against one hard-coded alternate transcript under a
@@ -65,23 +105,49 @@ restores explicit `DecodeFromSlice` implementations for `SignedTransaction`,
 decoder swap started tripping public CLI `/query` and `/transaction` requests
 with `invalid magic header` during nested signature decode.
 
+The follow-up cleanup removes the remaining legacy/public-wire ambiguity:
+`iroha_version` now has shared exact-versioned decode helpers, Torii's
+`NoritoVersioned<T>` extractor rejects bare Norito instead of falling back to
+it, and proxied signed queries now travel over the internal Torii bridge as
+versioned bytes rather than the older bare `SignedQuery` encoding.
+
+While validating that path, the Torii test target also exposed an unrelated
+app-API request DTO mismatch in `runtime.rs`: the checkpoint publish request
+used nested shard refs that derived `NoritoDeserialize` but not
+`NoritoSerialize`. Both request structs now derive `NoritoSerialize` too so
+that app-API request decoding compiles consistently.
+
 - shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_version/src/lib.rs`
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/query/mod.rs`
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/transaction/signed.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/transaction/private_kaigi.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/block/mod.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/utils.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/runtime.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/norito_ingress.rs`
   - `/Users/takemiyamakoto/dev/iroha/status.md`
   - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
-  - `cargo fmt --all -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
-  - `git diff --check -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `cargo fmt --all`
+  - `git diff --check -- crates/iroha_version/src/lib.rs crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs crates/iroha_data_model/src/transaction/private_kaigi.rs crates/iroha_data_model/src/block/mod.rs crates/iroha_torii/src/utils.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/common/norito_rpc_harness.rs crates/iroha_torii/tests/norito_ingress.rs`
+  - `cargo test -p iroha_version decode_exact_versioned --lib`
+    (`2 passed`)
   - `CARGO_TARGET_DIR=target/codex-norito-fix3 cargo test -p iroha_data_model versioned_roundtrip --lib -- --nocapture`
     (rerun still compiling/linking under the full default test graph; the first
     compile pass exposed only a test-only `SignedQuery` equality assertion and
     that has been corrected)
+  - `cargo test -p iroha_torii --test norito_ingress public_query_route_rejects_bare_signed_query_payload -- --nocapture`
+    (the first rerun exposed the unrelated `runtime.rs` DTO derive mismatch and
+    that is now fixed; the next rerun is currently blocked by external
+    Cargo package-cache/target locks from other workspace builds)
 - open work after this slice:
   - rerun the focused `iroha_data_model versioned_roundtrip` tests to
     completion
-  - add or rerun a narrow Torii `/query` ingress regression once the current
-    build window is free
+  - rerun the narrow Torii `/query` ingress regression after the current build
+    window clears so the final compile picks up the post-warning cleanup
 
 Latest sync (2026-04-20 Connect canonical field-layout flags):
 Connect frame relaying no longer drops valid control frames during size

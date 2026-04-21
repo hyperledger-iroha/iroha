@@ -115,22 +115,24 @@ struct OfflineNumericComponents {
         self.mantissa = mantissa
     }
 
-    var canonicalString: String {
+    var normalizedMantissaDigits: String {
         var digits = mantissaDigits
         while digits.count > 1 && digits.first == "0" {
             digits.removeFirst()
         }
-        if scale == 0 {
-            return isNegative && digits != "0" ? "-" + digits : digits
-        }
-        while digits.count <= Int(scale) {
-            digits.insert("0", at: digits.startIndex)
-        }
-        let splitAt = digits.index(digits.endIndex, offsetBy: -Int(scale))
-        let intPart = String(digits[..<splitAt])
-        let fracPart = String(digits[splitAt...])
-        let body = "\(intPart).\(fracPart)"
-        return isNegative && digits.contains(where: { $0 != "0" }) ? "-" + body : body
+        return digits
+    }
+
+    var canonicalNumeric: OfflineCanonicalNumeric {
+        OfflineCanonicalNumeric(
+            isNegative: isNegative,
+            scale: scale,
+            digits: normalizedMantissaDigits
+        )
+    }
+
+    var canonicalString: String {
+        canonicalNumeric.canonicalString
     }
 
     func mantissaBytes(maxBytes: Int) throws -> Data {
@@ -141,6 +143,219 @@ struct OfflineNumericComponents {
         } catch {
             throw OfflineNumericParseError.invalid
         }
+    }
+}
+
+struct OfflineCanonicalNumeric {
+    let isNegative: Bool
+    let scale: UInt32
+    let digits: String
+
+    init(isNegative: Bool, scale: UInt32, digits: String) {
+        var normalizedDigits = digits
+        while normalizedDigits.count > 1 && normalizedDigits.first == "0" {
+            normalizedDigits.removeFirst()
+        }
+        let isZero = normalizedDigits.allSatisfy { $0 == "0" }
+        self.isNegative = isZero ? false : isNegative
+        self.scale = scale
+        self.digits = isZero ? "0" : normalizedDigits
+    }
+
+    var canonicalString: String {
+        var formattedDigits = digits
+        if scale == 0 {
+            return isNegative ? "-" + formattedDigits : formattedDigits
+        }
+        while formattedDigits.count <= Int(scale) {
+            formattedDigits.insert("0", at: formattedDigits.startIndex)
+        }
+        let splitAt = formattedDigits.index(formattedDigits.endIndex, offsetBy: -Int(scale))
+        let intPart = String(formattedDigits[..<splitAt])
+        let fracPart = String(formattedDigits[splitAt...])
+        let body = "\(intPart).\(fracPart)"
+        return isNegative ? "-" + body : body
+    }
+
+    func negated() -> OfflineCanonicalNumeric {
+        OfflineCanonicalNumeric(
+            isNegative: !isNegative && digits != "0",
+            scale: scale,
+            digits: digits
+        )
+    }
+
+    func compared(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+        let targetScale = max(scale, other.scale)
+        if let lhsDigits = alignedDigitsIfWithinBounds(targetScale: targetScale),
+           let rhsDigits = other.alignedDigitsIfWithinBounds(targetScale: targetScale) {
+            let magnitudeOrder = Self.compareMagnitudeStrings(lhsDigits, rhsDigits)
+            if isNegative != other.isNegative {
+                return isNegative ? .orderedAscending : .orderedDescending
+            }
+            if isNegative {
+                switch magnitudeOrder {
+                case .orderedAscending: return .orderedDescending
+                case .orderedSame: return .orderedSame
+                case .orderedDescending: return .orderedAscending
+                }
+            }
+            return magnitudeOrder
+        }
+
+        let mantissaOrder = comparedMantissa(to: other)
+        if mantissaOrder != .orderedSame {
+            return mantissaOrder
+        }
+        if scale == other.scale {
+            return .orderedSame
+        }
+        return scale < other.scale ? .orderedAscending : .orderedDescending
+    }
+
+    func adding(
+        _ other: OfflineCanonicalNumeric,
+        maxBytes: Int
+    ) throws -> OfflineCanonicalNumeric {
+        let targetScale = max(scale, other.scale)
+        let lhsDigits = alignedDigits(targetScale: targetScale)
+        let rhsDigits = other.alignedDigits(targetScale: targetScale)
+
+        let resultDigits: String
+        let resultIsNegative: Bool
+        if isNegative == other.isNegative {
+            resultDigits = Self.addMagnitudeStrings(lhsDigits, rhsDigits)
+            resultIsNegative = isNegative
+        } else {
+            switch Self.compareMagnitudeStrings(lhsDigits, rhsDigits) {
+            case .orderedSame:
+                resultDigits = "0"
+                resultIsNegative = false
+            case .orderedDescending:
+                resultDigits = Self.subtractMagnitudeStrings(lhsDigits, rhsDigits)
+                resultIsNegative = isNegative
+            case .orderedAscending:
+                resultDigits = Self.subtractMagnitudeStrings(rhsDigits, lhsDigits)
+                resultIsNegative = other.isNegative
+            }
+        }
+
+        let result = OfflineCanonicalNumeric(
+            isNegative: resultIsNegative,
+            scale: targetScale,
+            digits: resultDigits
+        )
+        try result.validate(maxBytes: maxBytes)
+        return result
+    }
+
+    func subtracting(
+        _ other: OfflineCanonicalNumeric,
+        maxBytes: Int
+    ) throws -> OfflineCanonicalNumeric {
+        try adding(other.negated(), maxBytes: maxBytes)
+    }
+
+    private func alignedDigits(targetScale: UInt32) -> String {
+        guard targetScale > scale else { return digits }
+        return digits + String(repeating: "0", count: Int(targetScale - scale))
+    }
+
+    private func alignedDigitsIfWithinBounds(targetScale: UInt32) -> String? {
+        let aligned = alignedDigits(targetScale: targetScale)
+        var mantissa = try? OfflineBigInt(decimalDigits: aligned)
+        mantissa?.isNegative = isNegative
+        guard let mantissa, (try? mantissa.toTwosComplementBytes(maxBytes: OfflineNorito.maxBigIntBytes)) != nil else {
+            return nil
+        }
+        return aligned
+    }
+
+    private func validate(maxBytes: Int) throws {
+        var mantissa = try OfflineBigInt(decimalDigits: digits)
+        mantissa.isNegative = isNegative
+        _ = try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
+    }
+
+    private func comparedMantissa(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+        if isNegative != other.isNegative {
+            return isNegative ? .orderedAscending : .orderedDescending
+        }
+        let magnitudeOrder = Self.compareMagnitudeStrings(digits, other.digits)
+        if isNegative {
+            switch magnitudeOrder {
+            case .orderedAscending: return .orderedDescending
+            case .orderedSame: return .orderedSame
+            case .orderedDescending: return .orderedAscending
+            }
+        }
+        return magnitudeOrder
+    }
+
+    private static func compareMagnitudeStrings(
+        _ lhs: String,
+        _ rhs: String
+    ) -> ComparisonResult {
+        if lhs.count != rhs.count {
+            return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
+        }
+        if lhs == rhs {
+            return .orderedSame
+        }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    private static func addMagnitudeStrings(_ lhs: String, _ rhs: String) -> String {
+        let lhsDigits = Array(lhs.utf8)
+        let rhsDigits = Array(rhs.utf8)
+        var lhsIndex = lhsDigits.count - 1
+        var rhsIndex = rhsDigits.count - 1
+        var carry = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(max(lhsDigits.count, rhsDigits.count) + 1)
+
+        while lhsIndex >= 0 || rhsIndex >= 0 || carry > 0 {
+            let lhsDigit = lhsIndex >= 0 ? Int(lhsDigits[lhsIndex] - 48) : 0
+            let rhsDigit = rhsIndex >= 0 ? Int(rhsDigits[rhsIndex] - 48) : 0
+            let sum = lhsDigit + rhsDigit + carry
+            result.append(UInt8(sum % 10 + 48))
+            carry = sum / 10
+            lhsIndex -= 1
+            rhsIndex -= 1
+        }
+
+        return String(bytes: result.reversed(), encoding: .utf8) ?? "0"
+    }
+
+    private static func subtractMagnitudeStrings(_ lhs: String, _ rhs: String) -> String {
+        let lhsDigits = Array(lhs.utf8)
+        let rhsDigits = Array(rhs.utf8)
+        var lhsIndex = lhsDigits.count - 1
+        var rhsIndex = rhsDigits.count - 1
+        var borrow = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(lhsDigits.count)
+
+        while lhsIndex >= 0 {
+            let lhsDigit = Int(lhsDigits[lhsIndex] - 48)
+            let rhsDigit = rhsIndex >= 0 ? Int(rhsDigits[rhsIndex] - 48) : 0
+            var diff = lhsDigit - borrow - rhsDigit
+            if diff < 0 {
+                diff += 10
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result.append(UInt8(diff + 48))
+            lhsIndex -= 1
+            rhsIndex -= 1
+        }
+
+        while result.count > 1 && result.last == 48 {
+            result.removeLast()
+        }
+
+        return String(bytes: result.reversed(), encoding: .utf8) ?? "0"
     }
 }
 
@@ -332,6 +547,10 @@ public enum OfflineNorito {
         } catch {
             throw OfflineNoritoError.invalidNumeric(value)
         }
+    }
+
+    static func parseCanonicalNumeric(_ value: String) throws -> OfflineCanonicalNumeric {
+        try parseNumeric(value).canonicalNumeric
     }
 
     static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {

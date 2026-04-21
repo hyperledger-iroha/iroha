@@ -236,6 +236,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_status_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
+    tools.push(iroha_node_query_projection_checkpoint_plan_tool());
+    tools.push(iroha_node_query_projection_checkpoint_publish_tool());
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
@@ -782,6 +784,30 @@ async fn handle_tools_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.node.query_projection_checkpoint_plan" => {
+            match dispatch_iroha_node_query_projection_checkpoint_plan(
+                &app,
+                inbound_headers,
+                &arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.node.query_projection_checkpoint_publish" => {
+            match dispatch_iroha_node_query_projection_checkpoint_publish(
+                &app,
+                inbound_headers,
+                &arguments,
+            )
+            .await
+            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2874,6 +2900,78 @@ async fn dispatch_iroha_node_capabilities(
             .map(str::to_owned),
     )
     .await
+}
+
+async fn dispatch_iroha_node_query_projection_checkpoint_plan(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/node/query/projection/checkpoint/plan",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_node_query_projection_checkpoint_publish(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/node/query/projection/checkpoint/publish",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+fn build_iroha_node_query_projection_checkpoint_body(arguments: &Map) -> Result<Value, String> {
+    let mut body = arguments
+        .get("body")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let payload = body
+        .as_object_mut()
+        .ok_or_else(|| "`body` must be an object".to_owned())?;
+
+    if !payload.contains_key("emitted_at_unix")
+        && let Some(emitted_at_unix) = arguments.get("emitted_at_unix")
+    {
+        payload.insert("emitted_at_unix".into(), emitted_at_unix.clone());
+    }
+    if !payload.contains_key("shards")
+        && let Some(shards) = arguments.get("shards")
+    {
+        payload.insert("shards".into(), shards.clone());
+    }
+    if !payload.contains_key("shards") {
+        return Err("`shards` is required".to_owned());
+    }
+
+    Ok(body)
 }
 
 async fn dispatch_iroha_node_query_projection_shard_catalog(
@@ -8726,6 +8824,108 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
     }
 }
 
+fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.node.query_projection_checkpoint_plan".to_owned(),
+        description:
+            "Validate uploaded shard refs and preview the rebuilt query projection checkpoint (`/v1/node/query/projection/checkpoint/plan`)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/node/query/projection/checkpoint/plan".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "emitted_at_unix": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Unix timestamp recorded on the checkpoint descriptor itself. Defaults to the node clock when omitted."
+                },
+                "shards": {
+                    "type": "array",
+                    "description": "Uploaded shard references that will be rebuilt and validated against the live query snapshot.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "resource",
+                            "partition_id",
+                            "archive_emitted_at_unix",
+                            "manifest_digest_hex",
+                            "storage_ticket_hex"
+                        ],
+                        "properties": {
+                            "resource": { "type": "string" },
+                            "partition_id": { "type": "integer", "minimum": 0 },
+                            "asset_definition_id": { "type": "string" },
+                            "archive_emitted_at_unix": { "type": "integer", "minimum": 0 },
+                            "manifest_digest_hex": { "type": "string" },
+                            "storage_ticket_hex": { "type": "string" }
+                        }
+                    }
+                },
+                "body": { "type": "object" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.node.query_projection_checkpoint_publish".to_owned(),
+        description:
+            "Rebuild uploaded shard refs and persist the query projection checkpoint (`/v1/node/query/projection/checkpoint/publish`)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/node/query/projection/checkpoint/publish".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "emitted_at_unix": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Unix timestamp recorded on the checkpoint descriptor itself. Defaults to the node clock when omitted."
+                },
+                "shards": {
+                    "type": "array",
+                    "description": "Uploaded shard references that will be rebuilt, validated, and persisted as a checkpoint.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "resource",
+                            "partition_id",
+                            "archive_emitted_at_unix",
+                            "manifest_digest_hex",
+                            "storage_ticket_hex"
+                        ],
+                        "properties": {
+                            "resource": { "type": "string" },
+                            "partition_id": { "type": "integer", "minimum": 0 },
+                            "asset_definition_id": { "type": "string" },
+                            "archive_emitted_at_unix": { "type": "integer", "minimum": 0 },
+                            "manifest_digest_hex": { "type": "string" },
+                            "storage_ticket_hex": { "type": "string" }
+                        }
+                    }
+                },
+                "body": { "type": "object" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_shard_catalog".to_owned(),
@@ -14004,6 +14204,16 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.node.capabilities")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_plan")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_publish")
         );
         assert!(
             tools

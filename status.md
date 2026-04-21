@@ -2,6 +2,51 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Swift offline model boundary hardening and numeric arithmetic parity
+- `IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift` now hardens the
+  public offline cash models that own amount strings. `ToriiOfflineSpendAuthorization`,
+  `ToriiOfflineCashState`, `ToriiOfflineAssetSendLimit`,
+  `ToriiOfflineTransferReceipt`, `ToriiOfflineCashLoadRequest`, and
+  `ToriiOfflineCashRedeemRequest` now validate/canonicalize amounts in their
+  public initializers and decode paths instead of allowing invalid values to
+  exist until a later helper or signature path touches them.
+- `IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift` now exposes a
+  canonical numeric value representation with string-based bigint arithmetic on
+  aligned mantissas. The public `ToriiOfflineCashCodec.addAmounts`,
+  `subtractAmounts`, and `compareAmounts` helpers no longer route through
+  `Decimal`; they now share the same parser, scale preservation, and 64-byte
+  mantissa limit as the offline Norito numeric codec.
+- `IrohaSwift/Sources/IrohaSwift/OfflineSettlementProofs.swift` now moves
+  settlement-proof canonicalization to the public model boundary: settlement
+  hex fields, STARK commitment roots, domain tags, public-input hex, and
+  Merkle sibling/base64 fields are canonicalized or rejected in public
+  initializers and on decode, so malformed proof objects cannot be constructed
+  or decoded into memory before verification.
+- `IrohaSwift/Tests/IrohaSwiftTests/OfflineSettlementProofsTests.swift` now
+  covers Rust-scale-preserving arithmetic results, public model
+  canonicalization, public model rejection of malformed amount/proof fields,
+  redeem-proof decode rejection for prefixed hex, and redeem-request decode
+  rejection for malformed amount JSON. `ToriiOfflineCashEndpointsTests.swift`
+  and `OfflinePaymentE2ETest.swift` were updated for the new throwing public
+  initializers, and the Swift docs snippets now show `try` for
+  `ToriiOfflineCashLoadRequest(...)`.
+- Focused validation for this slice:
+  - `cd IrohaSwift && swift test --filter OfflineSettlementProofsTests`
+    (`8 passed`)
+  - `cd IrohaSwift && swift test --filter ToriiOfflineCashEndpointsTests`
+    (`4 passed`)
+  - `cd IrohaSwift && swift test --filter NoritoTests/testNoritoInstructionFixturesAreConsistent`
+    (still fails with the existing encode-flag drift:
+    `mint_asset_numeric.json`, `burn_asset_numeric.json`,
+    `burn_asset_fractional.json`, and `burn_trigger_repetitions.json` report
+    `2` vs `0`)
+  - `cd IrohaSwift && swift test --filter AccountAddressFixtureTests`
+    (`xctest` still exits with signal `11`)
+  - `cd IrohaSwift && swift test`
+    (still blocked by the same package instability: `xctest` exits with signal
+    `11` shortly after entering `AccountAddressFixtureTests`, before the known
+    Norito fixture failures would be reached in the full suite)
+
 ## 2026-04-21 Follow-up: Swift offline settlement proof canonicalization and redeem-manager coverage
 - `IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift` now exposes a
   shared strict numeric parser for offline cash values, and
@@ -46,15 +91,39 @@ Last updated: 2026-04-21
   `TransactionEntrypoint`, and `ExecutionStep` so versioned adaptive payloads
   use the same cursor-based decode path that public Torii ingress expected
   before the derive-based slice decoder swap.
+- `crates/iroha_version/src/lib.rs` now exposes shared
+  `decode_exact_versioned(...)` helpers so the data model's manual versioned
+  decoders all use one exact-slice implementation, and `SignedBlock` has been
+  switched onto the same helper for the deframed-versioned path.
+- `crates/iroha_torii/src/utils.rs` now enforces a versioned-only Norito
+  ingress policy for `NoritoVersioned<T>` instead of silently falling back to
+  bare Norito, and `crates/iroha_torii/src/lib.rs` now proxies signed queries
+  with `encode_versioned()` / `decode_all_versioned(...)` instead of the legacy
+  bare `norito::to_bytes(...)` / `decode_from_bytes(...)` pair.
+- Validation also surfaced an unrelated Torii app-API DTO derive mismatch in
+  `crates/iroha_torii/src/runtime.rs`: `NodeProjectionCheckpointPublishRequest`
+  carried nested shard refs that derived `NoritoDeserialize` but not
+  `NoritoSerialize`. Both request structs now derive `NoritoSerialize` as well
+  so the Torii test target can build that app-API slice.
+- Added focused Torii ingress coverage for accepting versioned signed-query
+  payloads and rejecting bare signed-query payloads in
+  `crates/iroha_torii/tests/norito_ingress.rs`, alongside unit coverage for
+  the shared `iroha_version` exact-versioned helper.
 - Added focused regression coverage for versioned `SignedTransaction` and
   `SignedQuery` roundtrips in the corresponding data-model test modules.
 - Focused validation for this slice:
-  - `cargo fmt --all -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
-  - `git diff --check -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `cargo fmt --all`
+  - `git diff --check -- crates/iroha_version/src/lib.rs crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs crates/iroha_data_model/src/transaction/private_kaigi.rs crates/iroha_data_model/src/block/mod.rs crates/iroha_torii/src/utils.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/common/norito_rpc_harness.rs crates/iroha_torii/tests/norito_ingress.rs`
+  - `cargo test -p iroha_version decode_exact_versioned --lib`
+    (`2 passed`)
   - `CARGO_TARGET_DIR=target/codex-norito-fix3 cargo test -p iroha_data_model versioned_roundtrip --lib -- --nocapture`
     (build/test rerun is still in progress under the crate's heavy default
     feature graph; the first pass surfaced and is already fixed for a
     test-only `SignedQuery` assertion shape issue)
+  - `cargo test -p iroha_torii --test norito_ingress public_query_route_rejects_bare_signed_query_payload -- --nocapture`
+    (validation first failed on the unrelated `runtime.rs` DTO derive mismatch,
+    which is now fixed; final rerun is currently blocked by external Cargo
+    package-cache/target locks from other workspace builds)
 
 ## 2026-04-21 Follow-up: deterministic SoraNet puzzle transcript mismatch regression
 - `crates/iroha_crypto/src/soranet/puzzle.rs` now makes the

@@ -253,7 +253,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
         let senderCounter = senderIdentity.nextCounter()
         let assertionBase64 = stubAssertionBase64(counter: senderCounter)
 
-        let unsignedReceipt = ToriiOfflineTransferReceipt(
+        let unsignedReceipt = try ToriiOfflineTransferReceipt(
             transferId: transferId,
             direction: .outgoing,
             lineageId: senderState.lineageId,
@@ -290,7 +290,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
         print("Outgoing unsigned payload hash: \(payloadHashHex) size: \(unsignedPayload.count)")
 
         let signature = try senderIdentity.sign(unsignedPayload)
-        return ToriiOfflineTransferReceipt(
+        return try ToriiOfflineTransferReceipt(
             transferId: unsignedReceipt.transferId,
             direction: unsignedReceipt.direction,
             lineageId: unsignedReceipt.lineageId,
@@ -360,7 +360,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
         // Build source payload (outgoing transfer payload for the receiver)
         let sourcePayload = try buildSourcePayload(senderState: senderState, outgoingReceipt: outgoingReceipt)
 
-        let unsignedReceipt = ToriiOfflineTransferReceipt(
+        let unsignedReceipt = try ToriiOfflineTransferReceipt(
             transferId: transferId,
             direction: .incoming,
             lineageId: receiverState.lineageId,
@@ -397,7 +397,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
         print("Incoming unsigned payload hash: \(payloadHashHex) size: \(unsignedPayload.count)")
 
         let signature = try receiverIdentity.sign(unsignedPayload)
-        return ToriiOfflineTransferReceipt(
+        return try ToriiOfflineTransferReceipt(
             transferId: unsignedReceipt.transferId,
             direction: unsignedReceipt.direction,
             lineageId: unsignedReceipt.lineageId,
@@ -618,7 +618,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
             innerPayload: payloadJSON
         )
         let proof = try makeDeviceProof(identity: identity, challengeHashHex: challengeHash)
-        let request = ToriiOfflineCashLoadRequest(
+        let request = try ToriiOfflineCashLoadRequest(
             operationId: UUID().uuidString,
             lineageId: lineageId,
             accountId: accountId,
