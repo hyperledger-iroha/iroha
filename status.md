@@ -2,6 +2,60 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Swift offline settlement proof canonicalization and redeem-manager coverage
+- `IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift` now exposes a
+  shared strict numeric parser for offline cash values, and
+  `IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift` uses it for
+  `canonicalAmountString(...)`. The Swift SDK now rejects empty/sign-only
+  forms, scales above 28, and mantissas outside the same 64-byte signed bound
+  enforced by Rust `Numeric`, while still preserving fractional scale and
+  canonicalizing negative zero to unsigned zero.
+- `IrohaSwift/Sources/IrohaSwift/OfflineSettlementProofs.swift` now keeps the
+  offline settlement proof JSON wire format canonical-only: proof hex fields
+  reject `0x`-prefixed legacy input, `ToriiOfflineMerklePath` decodes `dirs`
+  only from JSON byte arrays, and Merkle-path encoding now throws on invalid
+  in-memory base64 instead of silently rewriting malformed paths to `[]`.
+- `IrohaSwift/Tests/IrohaSwiftTests/OfflineSettlementProofsTests.swift` adds
+  regression coverage for the strict numeric bounds, raw redeem-request JSON
+  inspection, rejection of legacy string-form `dirs`, rejection of prefixed
+  proof hex, and fail-fast Merkle-path encoding. `crates/iroha_core/src/smartcontracts/isi/offline.rs`
+  also adds a focused regression proving that an escrow manager redeem credits
+  the controller in `asset.account()` rather than the submitting authority.
+- Focused validation for this slice:
+  - `cd IrohaSwift && swift test --filter OfflineSettlementProofsTests`
+    (`5 passed`)
+  - `cd IrohaSwift && swift test`
+    (the new offline-settlement coverage passed, but the package still has an
+    unrelated pre-existing failure in
+    `NoritoTests.testNoritoInstructionFixturesAreConsistent`, where the
+    numeric fixture encode-flag assertions currently report `2` vs `0`)
+  - `cargo test -p iroha_core redeem_offline_escrow_manager_refunds_controller_not_authority -- --nocapture`
+    (the matched regression passed:
+    `redeem_offline_escrow_manager_refunds_controller_not_authority ... ok`;
+    Cargo then continued enumerating zero-match `iroha_core` integration
+    binaries under the same name filter)
+
+## 2026-04-21 Follow-up: CLI Norito versioned ingress decode regression
+- `crates/iroha_data_model/src/query/mod.rs` now decodes versioned
+  `SignedQuery` bodies through `norito::codec::decode_exact_from_slice(...)`
+  instead of the older generic `DecodeAll` path, and adds an explicit
+  `DecodeFromSlice` implementation that validates the signed-query candidate
+  after decoding the adaptive payload with an active payload context.
+- `crates/iroha_data_model/src/transaction/signed.rs` restores explicit
+  `DecodeFromSlice` implementations for `SignedTransaction`,
+  `TransactionEntrypoint`, and `ExecutionStep` so versioned adaptive payloads
+  use the same cursor-based decode path that public Torii ingress expected
+  before the derive-based slice decoder swap.
+- Added focused regression coverage for versioned `SignedTransaction` and
+  `SignedQuery` roundtrips in the corresponding data-model test modules.
+- Focused validation for this slice:
+  - `cargo fmt --all -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `git diff --check -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `CARGO_TARGET_DIR=target/codex-norito-fix3 cargo test -p iroha_data_model versioned_roundtrip --lib -- --nocapture`
+    (build/test rerun is still in progress under the crate's heavy default
+    feature graph; the first pass surfaced and is already fixed for a
+    test-only `SignedQuery` assertion shape issue)
+
 ## 2026-04-21 Follow-up: deterministic SoraNet puzzle transcript mismatch regression
 - `crates/iroha_crypto/src/soranet/puzzle.rs` now makes the
   `rejects_mismatched_transcript_hash` regression deterministic by searching
