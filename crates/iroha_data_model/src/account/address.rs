@@ -2136,10 +2136,7 @@ mod tests {
 
         let parse_err = AccountAddress::parse_encoded(&fullwidth, Some(CHAIN_DISCRIMINANT_SORA))
             .expect_err("strict parse rejects legacy fullwidth kana");
-        assert_eq!(
-            parse_err.code_str(),
-            AccountAddressErrorCode::UnsupportedAddressFormat.as_str()
-        );
+        assert!(matches!(parse_err, AccountAddressError::InvalidI105Char(_)));
     }
 
     #[test]
