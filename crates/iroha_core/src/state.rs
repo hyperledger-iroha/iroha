@@ -47,8 +47,9 @@ use iroha_data_model::{
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
-        commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation,
-        types::StorageTicketId,
+        commitment::DaCommitmentLocation,
+        pin_intent::DaPinIntentWithLocation,
+        types::{BlobDigest, StorageTicketId},
     },
     error::ParseError,
     events::{
@@ -207,6 +208,13 @@ use crate::{
     },
     query::{
         index_status::{QueryIndexJournal, QueryIndexStatus},
+        projection_checkpoint::{
+            QueryProjectionCheckpoint, QueryProjectionCheckpointPlanError,
+            QueryProjectionCheckpointPublishPlan, QueryProjectionCheckpointShard,
+            QueryProjectionUploadedShardArchive,
+        },
+        projection_checkpoint_journal::QueryProjectionCheckpointJournal,
+        projection_shard::QueryProjectionShardArchive,
         store::LiveQueryStoreHandle,
     },
     role::RoleIdWithOwner,
@@ -1479,7 +1487,6 @@ pub struct World {
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
-    #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
@@ -5997,6 +6004,8 @@ pub struct State {
     pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
     /// Durable latest query-index snapshot marker reconstructed at startup.
     query_index_journal: parking_lot::RwLock<QueryIndexJournal>,
+    /// Durable latest query projection checkpoint descriptor reconstructed at startup.
+    query_projection_checkpoint_journal: parking_lot::RwLock<QueryProjectionCheckpointJournal>,
     /// In-memory DA pin intent index mirrored from the on-chain registry.
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
@@ -16010,6 +16019,14 @@ impl State {
         QueryIndexJournal::journal_path(&root)
     }
 
+    fn query_projection_checkpoint_journal_path(&self) -> PathBuf {
+        let root = self.kura.store_root();
+        if root.as_os_str().is_empty() {
+            return PathBuf::new();
+        }
+        QueryProjectionCheckpointJournal::journal_path(&root)
+    }
+
     fn persist_query_index_status(
         &self,
         indexed_height: u64,
@@ -16056,6 +16073,127 @@ impl State {
     #[must_use]
     pub fn query_index_status_snapshot(&self) -> QueryIndexStatus {
         self.query_index_journal.read().snapshot()
+    }
+
+    /// Fetch the latest durable query projection checkpoint descriptor, if any.
+    #[must_use]
+    pub fn query_projection_checkpoint_snapshot(&self) -> Option<QueryProjectionCheckpoint> {
+        self.query_projection_checkpoint_journal.read().snapshot()
+    }
+
+    /// Persist the latest durable query projection checkpoint descriptor.
+    pub fn persist_query_projection_checkpoint(
+        &self,
+        checkpoint: Option<QueryProjectionCheckpoint>,
+    ) {
+        let path = self.query_projection_checkpoint_journal_path();
+        let mut journal = self.query_projection_checkpoint_journal.write();
+        journal.set_latest(checkpoint);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let measure_bytes = |path: &Path| -> Option<u64> {
+            match std::fs::metadata(path) {
+                Ok(meta) => Some(meta.len()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %path.display(),
+                        "failed to stat query projection checkpoint journal"
+                    );
+                    None
+                }
+            }
+        };
+        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let Err(err) = journal.persist() {
+            warn!(
+                ?err,
+                path = %path.display(),
+                "failed to persist query projection checkpoint journal"
+            );
+        }
+        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
+            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+    }
+
+    /// Build and persist a query projection checkpoint from the current index snapshot.
+    pub fn publish_query_projection_checkpoint(
+        &self,
+        emitted_at_unix: u64,
+        shards: Vec<QueryProjectionCheckpointShard>,
+    ) -> QueryProjectionCheckpoint {
+        let checkpoint = QueryProjectionCheckpoint::from_index_status(
+            self.query_index_status_snapshot(),
+            emitted_at_unix,
+            shards,
+        );
+        self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
+        checkpoint
+    }
+
+    /// Validate uploaded shard archives against the current query-index snapshot and
+    /// build a checkpoint publication plan without mutating state yet.
+    ///
+    /// This lets a future DA worker preflight a large batch of uploaded projection
+    /// shards before it persists the checkpoint descriptor that points at them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryProjectionCheckpointPlanError`] when the uploaded shards do not
+    /// form a coherent immutable checkpoint for the current query-index snapshot.
+    pub fn plan_query_projection_checkpoint_from_archives<I>(
+        &self,
+        emitted_at_unix: u64,
+        uploads: I,
+    ) -> Result<QueryProjectionCheckpointPublishPlan, QueryProjectionCheckpointPlanError>
+    where
+        I: IntoIterator<Item = QueryProjectionUploadedShardArchive>,
+    {
+        QueryProjectionCheckpointPublishPlan::from_uploaded_archives(
+            self.query_index_status_snapshot(),
+            emitted_at_unix,
+            uploads,
+        )
+    }
+
+    /// Build and persist a query projection checkpoint from uploaded shard archives.
+    ///
+    /// This is the intended handoff point for the future DA projection worker: once
+    /// archive blobs have been uploaded and resolved to `(manifest_digest, storage_ticket)`,
+    /// the worker can atomically persist the corresponding checkpoint descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryProjectionCheckpointPlanError`] when the uploaded shards do not
+    /// form a coherent immutable checkpoint for the current query-index snapshot.
+    pub fn publish_query_projection_checkpoint_from_archives<I>(
+        &self,
+        emitted_at_unix: u64,
+        uploads: I,
+    ) -> Result<QueryProjectionCheckpoint, QueryProjectionCheckpointPlanError>
+    where
+        I: IntoIterator<Item = (QueryProjectionShardArchive, BlobDigest, StorageTicketId)>,
+    {
+        let plan = self.plan_query_projection_checkpoint_from_archives(
+            emitted_at_unix,
+            uploads
+                .into_iter()
+                .map(QueryProjectionUploadedShardArchive::from),
+        )?;
+        let checkpoint = plan.into_checkpoint();
+        self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
+        Ok(checkpoint)
     }
 
     fn persist_commit_roster_journal(
@@ -17176,6 +17314,21 @@ impl State {
                 QueryIndexJournal::new(query_index_journal_path)
             }
         };
+        let query_projection_checkpoint_journal_path =
+            QueryProjectionCheckpointJournal::journal_path(&store_root);
+        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
+            query_projection_checkpoint_journal_path.clone(),
+        ) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_projection_checkpoint_journal_path.display(),
+                    "failed to load query projection checkpoint journal; starting empty"
+                );
+                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
+            }
+        };
         let pipeline = iroha_config::parameters::actual::Pipeline {
             ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
                 enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -17275,6 +17428,9 @@ impl State {
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_projection_checkpoint_journal: parking_lot::RwLock::new(
+                query_projection_checkpoint_journal,
+            ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -28663,6 +28819,21 @@ pub(crate) mod deserialize {
                 journal
             }
         };
+        let query_projection_checkpoint_journal_path =
+            QueryProjectionCheckpointJournal::journal_path(&store_root);
+        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
+            query_projection_checkpoint_journal_path.clone(),
+        ) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_projection_checkpoint_journal_path.display(),
+                    "failed to load query projection checkpoint journal; starting empty"
+                );
+                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
+            }
+        };
         let pipeline = default_pipeline();
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
@@ -28687,6 +28858,9 @@ pub(crate) mod deserialize {
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_projection_checkpoint_journal: parking_lot::RwLock::new(
+                query_projection_checkpoint_journal,
+            ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -29182,6 +29356,7 @@ mod tests {
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
     use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
     use iroha_data_model::zk::BackendTag;
@@ -29500,6 +29675,83 @@ mod tests {
                 .as_ref(),
             Some(&alias),
             "effective definition still exposes the persisted binding for inspection"
+        );
+    }
+
+    #[test]
+    fn account_alias_bindings_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let primary_label = alias_in_domain(
+            &domain_id,
+            "primary".parse::<Name>().expect("primary label name"),
+        );
+        let bound_label = alias_in_domain(
+            &domain_id,
+            "issuance".parse::<Name>().expect("bound label name"),
+        );
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let details = AccountDetails::new(
+            Metadata::default(),
+            Some(primary_label.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(bound_label.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            bound_label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                bound_label.clone(),
+                account_id.clone(),
+            ),
+        );
+        world
+            .rebuild_account_alias_index()
+            .expect("rebuild should preserve additional alias bindings");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rebuild should preserve rekey records");
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.account_aliases().get(&primary_label),
+            Some(&account_id)
+        );
+        assert_eq!(view.account_aliases().get(&bound_label), Some(&account_id));
+        assert_eq!(
+            view.account_rekey_records()
+                .get(&bound_label)
+                .expect("bound alias rekey record")
+                .active_account_id,
+            account_id
+        );
+        assert_eq!(
+            view.bound_account_aliases(&account_id)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([primary_label, bound_label])
         );
     }
 
@@ -35444,6 +35696,407 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         assert_eq!(restarted.query_index_status_snapshot(), expected);
+    }
+
+    #[test]
+    fn state_persists_query_projection_checkpoint_journal() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let expected = QueryProjectionCheckpoint::from_index_status(
+            QueryIndexStatus {
+                indexed_height: 99,
+                indexed_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0xAA; 32]))),
+            },
+            1_714_000_999,
+            vec![crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                resource: crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                partition_id: 4,
+                asset_definition_id: Some("pkr#sbp".to_string()),
+                manifest_digest: BlobDigest::new([0x11; 32]),
+                storage_ticket: StorageTicketId::new([0x22; 32]),
+                blob_hash: BlobDigest::new([0x33; 32]),
+            }],
+        );
+        state.persist_query_projection_checkpoint(Some(expected.clone()));
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(expected.clone())
+        );
+
+        let path = state.query_projection_checkpoint_journal_path();
+        assert!(
+            path.exists(),
+            "query projection checkpoint journal should be materialized when store root is set"
+        );
+        let persisted = QueryProjectionCheckpointJournal::load(&path)
+            .expect("load query projection checkpoint journal")
+            .snapshot();
+        assert_eq!(persisted, Some(expected.clone()));
+
+        let restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            restarted.query_projection_checkpoint_snapshot(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_uses_current_index_snapshot() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let checkpoint = state.publish_query_projection_checkpoint(
+            1_714_001_111,
+            vec![
+                crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                    resource:
+                        crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                    partition_id: 2,
+                    asset_definition_id: None,
+                    manifest_digest: BlobDigest::new([0x41; 32]),
+                    storage_ticket: StorageTicketId::new([0x42; 32]),
+                    blob_hash: BlobDigest::new([0x43; 32]),
+                },
+            ],
+        );
+
+        assert_eq!(
+            checkpoint.indexed_height,
+            committed.as_ref().header().height().get()
+        );
+        assert_eq!(
+            checkpoint.indexed_block_hash,
+            Some(committed.as_ref().hash())
+        );
+        assert_eq!(checkpoint.emitted_at_unix, 1_714_001_111);
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(checkpoint.clone())
+        );
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_from_archives_builds_checkpoint_refs() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                state.query_index_status_snapshot(),
+                1_714_002_222,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                7,
+                Some("pkr#sbp".to_string()),
+                2,
+                b"rows".to_vec(),
+            );
+        let expected_blob_hash = archive
+            .build_da_payload()
+            .expect("build payload")
+            .payload_hash;
+
+        let checkpoint = state
+            .publish_query_projection_checkpoint_from_archives(
+                1_714_002_222,
+                vec![(
+                    archive,
+                    BlobDigest::new([0x51; 32]),
+                    StorageTicketId::new([0x52; 32]),
+                )],
+            )
+            .expect("publish checkpoint from archives");
+
+        assert_eq!(
+            checkpoint.indexed_height,
+            committed.as_ref().header().height().get()
+        );
+        assert_eq!(
+            checkpoint.indexed_block_hash,
+            Some(committed.as_ref().hash())
+        );
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(
+            checkpoint.shards[0],
+            crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                partition_id: 7,
+                asset_definition_id: Some("pkr#sbp".to_string()),
+                manifest_digest: BlobDigest::new([0x51; 32]),
+                storage_ticket: StorageTicketId::new([0x52; 32]),
+                blob_hash: expected_blob_hash,
+            }
+        );
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(checkpoint.clone())
+        );
+    }
+
+    #[test]
+    fn state_plan_query_projection_checkpoint_from_archives_rejects_duplicate_shards() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let status = state.query_index_status_snapshot();
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                status,
+                1_714_002_222,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                7,
+                None,
+                2,
+                b"rows".to_vec(),
+            );
+
+        let err = state
+            .plan_query_projection_checkpoint_from_archives(
+                1_714_002_222,
+                vec![
+                    crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new(
+                        archive.clone(),
+                        BlobDigest::new([0x61; 32]),
+                        StorageTicketId::new([0x62; 32]),
+                    ),
+                    crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new(
+                        archive,
+                        BlobDigest::new([0x63; 32]),
+                        StorageTicketId::new([0x64; 32]),
+                    ),
+                ],
+            )
+            .expect_err("duplicate shards must fail");
+
+        assert!(matches!(
+            err,
+            crate::query::projection_checkpoint::QueryProjectionCheckpointPlanError::DuplicateShard {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                partition_id: 7,
+                asset_definition_id: None,
+            }
+        ));
+        assert!(state.query_projection_checkpoint_snapshot().is_none());
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_from_archives_rejects_mismatched_snapshot() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                crate::query::index_status::QueryIndexStatus {
+                    indexed_height: committed.as_ref().header().height().get() + 1,
+                    indexed_block_hash: Some(iroha_crypto::HashOf::from_untyped_unchecked(
+                        iroha_crypto::Hash::new([0x71; iroha_crypto::Hash::LENGTH]),
+                    )),
+                },
+                1_714_002_333,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                9,
+                None,
+                2,
+                b"rows".to_vec(),
+            );
+
+        let err = state
+            .publish_query_projection_checkpoint_from_archives(
+                1_714_002_333,
+                vec![(
+                    archive,
+                    BlobDigest::new([0x72; 32]),
+                    StorageTicketId::new([0x73; 32]),
+                )],
+            )
+            .expect_err("mismatched snapshot must fail");
+
+        assert!(matches!(
+            err,
+            crate::query::projection_checkpoint::QueryProjectionCheckpointPlanError::IndexedHeightMismatch {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                partition_id: 9,
+                ..
+            }
+        ));
+        assert!(state.query_projection_checkpoint_snapshot().is_none());
     }
 
     #[test]
