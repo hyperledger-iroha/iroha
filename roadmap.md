@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii account onboarding smoke loopback request wiring):
+The reported `accounts_onboard_publishes_global_manifest_and_binding` red is
+fixed. `crates/iroha_torii/tests/accounts_onboard.rs` now attaches loopback
+`ConnectInfo<SocketAddr>` to the direct `/v1/accounts/onboard` `oneshot(...)`
+request, so the smoke exercises the mounted handler instead of failing Axum's
+missing-request-extension path first. The failure assertion now also prints the
+response body to make future CI triage less opaque.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/accounts_onboard.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_onboard -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported onboarding smoke regression
+
 Latest sync (2026-04-21 first-release SDK strictness sweep):
 The Swift, JavaScript, Python, Java, and Kotlin SDKs now follow the
 first-release canonical contract. Bridge-backed SDK APIs require the native

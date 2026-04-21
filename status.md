@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii account onboarding smoke loopback request wiring
+- `crates/iroha_torii/tests/accounts_onboard.rs` now attaches a loopback
+  `ConnectInfo<SocketAddr>` extension to the direct `oneshot(...)` request
+  hitting `/v1/accounts/onboard`, matching the mounted app-api handler shape.
+- The single-account onboarding handler in `crates/iroha_torii/src/lib.rs`
+  now enforces remote-address access checks just like the other account app-api
+  routes, so the smoke was failing Axum's missing-request-extension path and
+  returning `500` before it ever exercised the onboarding transaction path.
+- The test assertion now reads and prints the response body on failure, which
+  makes future regressions easier to diagnose from CI logs.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_onboard -- --nocapture`
+
 ## 2026-04-21 Follow-up: first-release SDK strictness sweep
 - Brought the Swift, JavaScript, Python, Java, and Kotlin SDK surfaces in line
   with the first-release contract: native bridge calls are required where the
