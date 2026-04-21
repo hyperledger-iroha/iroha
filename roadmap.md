@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 iroha_js_host signed-transaction decode and Kaigi fixture resync):
+the reported `iroha_js_host` reds are cleared. The native signed-transaction
+decoder in `crates/iroha_js_host/src/lib.rs` now accepts the bridge’s actual
+supported wire shapes again: versioned signed-transaction bytes, bare adaptive
+payloads, framed Norito payloads, and the supported fixture subset via the
+adaptive fallback path. The stale Kaigi JSON literals in the same test module
+now use fully qualified `domain.dataspace` ids (`wonderland.sora`) so they
+match the current JS builder output and domain parser.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_js_host/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_js_host --lib -- --nocapture`
+- open work after this slice:
+  - rerun the broader JS package parity window if another workspace replay
+    exposes adjacent regressions, but the reported native failures are green
+    again
+
 Latest sync (2026-04-21 first-release SDK compatibility cleanup):
 Java/Kotlin SDK compatibility paths are cut over to first-release canonical
 behaviour. Connect envelopes decode only through the current Norito schema, key
