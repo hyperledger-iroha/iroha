@@ -583,23 +583,71 @@ final class ToriiClientTests: XCTestCase {
         return canonicalHex
     }
 
-    private func signedIdentifierReceiptFixture(accountId: String,
-                                                resolvedAtMs: UInt64 = 42,
-                                                expiresAtMs: UInt64? = 142) throws -> (resolverPublicKey: String, signatureHex: String, signaturePayloadHex: String) {
+    private func makeSignedIdentifierReceiptPayload(policyId: String = "phone#retail",
+                                                    accountId: String,
+                                                    opaqueId: String,
+                                                    receiptHash: String,
+                                                    uaid: String,
+                                                    backend: String,
+                                                    programId: String = "identifier_lookup_retail",
+                                                    programDigestHex: String = String(repeating: "11", count: 32),
+                                                    outputHashHex: String = String(repeating: "22", count: 31) + "23",
+                                                    associatedDataHashHex: String = String(repeating: "33", count: 32),
+                                                    resolvedAtMs: UInt64 = 42,
+                                                    expiresAtMs: UInt64? = 142) -> ToriiIdentifierResolutionPayload {
+        ToriiIdentifierResolutionPayload(
+            policyId: policyId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            accountId: accountId,
+            execution: ToriiIdentifierResolutionExecutionPayload(
+                programId: programId,
+                programDigest: programDigestHex,
+                backend: backend,
+                verificationMode: "signed",
+                outputHash: outputHashHex,
+                associatedDataHash: associatedDataHashHex,
+                executedAtMs: resolvedAtMs,
+                expiresAtMs: expiresAtMs
+            )
+        )
+    }
+
+    private func signedIdentifierReceiptFixture(
+        payload: ToriiIdentifierResolutionPayload
+    ) throws -> (resolverPublicKey: String, signatureHex: String) {
         let privateKey = Curve25519.Signing.PrivateKey()
         let multihash = OfflineNorito.publicKeyMultihash(
             algorithm: .ed25519,
             payload: privateKey.publicKey.rawRepresentation
         )
-        let payloadBytes = Data([0x01, 0x02, 0x03, 0x04, 0xA0])
+        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
         var digest = Blake2b.hash256(payloadBytes)
         digest[digest.count - 1] |= 0x01
         let signature = try privateKey.signature(for: digest)
         return (
             resolverPublicKey: "ed25519:\(multihash)",
-            signatureHex: signature.hexUppercased(),
-            signaturePayloadHex: payloadBytes.hexUppercased()
+            signatureHex: signature.hexUppercased()
         )
+    }
+
+    private func identifierReceiptJSON(
+        payload: ToriiIdentifierResolutionPayload,
+        signatureHex: String
+    ) throws -> String {
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        return """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":"\(signatureHex)"
+          }
+        }
+        """
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1025,16 +1073,19 @@ final class ToriiClientTests: XCTestCase {
               "verification_mode":"signed",
               "receipt":{
                 "payload":{
-                  "program_id":{"name":"identifier_lookup_retail"},
-                  "program_digest":"hash:\(String(repeating: "11", count: 32).uppercased())#ABCD",
+                  "program_id":"identifier_lookup_retail",
+                  "program_digest":"\(String(repeating: "11", count: 32))",
                   "backend":"bfv-programmed-sha3-256-v1",
-                  "verification_mode":{"mode":"Signed","value":null},
-                  "output_hash":"hash:\(String(repeating: "22", count: 32).uppercased())#BCDE",
-                  "associated_data_hash":"hash:\(String(repeating: "33", count: 32).uppercased())#CDEF",
+                  "verification_mode":"signed",
+                  "output_hash":"\(String(repeating: "22", count: 32))",
+                  "associated_data_hash":"\(String(repeating: "33", count: 32))",
                   "executed_at_ms":42,
                   "expires_at_ms":142
                 },
-                "signature":"\(String(repeating: "aa", count: 64))"
+                "attestation":{
+                  "kind":"signed",
+                  "signature":"\(String(repeating: "aa", count: 64))"
+                }
               }
             }
             """.data(using: .utf8)!
@@ -1079,19 +1130,19 @@ final class ToriiClientTests: XCTestCase {
     func testVerifyRamLfeReceiptAsync() async throws {
         let receipt: ToriiRamLfeExecutionReceipt = [
             "payload": .object([
-                "program_id": .object(["name": .string("identifier_lookup_retail")]),
-                "program_digest": .string("hash:\(String(repeating: "11", count: 32).uppercased())#ABCD"),
+                "program_id": .string("identifier_lookup_retail"),
+                "program_digest": .string(String(repeating: "11", count: 32)),
                 "backend": .string("bfv-programmed-sha3-256-v1"),
-                "verification_mode": .object([
-                    "mode": .string("Signed"),
-                    "value": .null
-                ]),
-                "output_hash": .string("hash:\(String(repeating: "22", count: 32).uppercased())#BCDE"),
-                "associated_data_hash": .string("hash:\(String(repeating: "33", count: 32).uppercased())#CDEF"),
+                "verification_mode": .string("signed"),
+                "output_hash": .string(String(repeating: "22", count: 32)),
+                "associated_data_hash": .string(String(repeating: "33", count: 32)),
                 "executed_at_ms": .number(42),
                 "expires_at_ms": .number(142)
             ]),
-            "signature": .string(String(repeating: "aa", count: 64))
+            "attestation": .object([
+                "kind": .string("signed"),
+                "signature": .string(String(repeating: "aa", count: 64))
+            ])
         ]
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/ram-lfe/receipts/verify")
@@ -1132,9 +1183,16 @@ final class ToriiClientTests: XCTestCase {
     func testResolveIdentifierAsync() async throws {
         let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let opaqueId = "opaque:\(String(repeating: "11", count: 32))"
-        let receiptHash = String(repeating: "22", count: 32)
+        let receiptHash = String(repeating: "22", count: 31) + "23"
         let uaid = "uaid:\(String(repeating: "33", count: 31))35"
-        let signed = try signedIdentifierReceiptFixture(accountId: accountId)
+        let signedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -1148,29 +1206,10 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "policy_id":"phone#retail",
-              "opaque_id":"\(opaqueId)",
-              "receipt_hash":"\(receiptHash)",
-              "uaid":"\(uaid)",
-              "accountId":"\(accountId)",
-              "resolved_at_ms":42,
-              "expires_at_ms":142,
-              "backend":"bfv-affine-sha3-256-v1",
-              "signature":"\(signed.signatureHex)",
-              "signature_payload_hex":"\(signed.signaturePayloadHex)",
-              "signature_payload":{
-                "policy_id":"phone#retail",
-                "opaque_id":"\(opaqueId)",
-                "receipt_hash":"\(receiptHash)",
-                "uaid":"\(uaid)",
-                "accountId":"\(accountId)",
-                "resolved_at_ms":42,
-                "expires_at_ms":142
-              }
-            }
-            """.data(using: .utf8)!
+            let body = try self.identifierReceiptJSON(
+                payload: signedPayload,
+                signatureHex: signed.signatureHex
+            ).data(using: .utf8)!
             return (response, body)
         }
 
@@ -1197,9 +1236,59 @@ final class ToriiClientTests: XCTestCase {
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
             ramFheProfile: nil,
+            proofVerifier: nil,
             note: nil
         )
-        XCTAssertEqual(try receipt?.verifySignature(using: policy), true)
+        XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierRejectsLegacyReceiptShape() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let opaqueId = "opaque:\(String(repeating: "41", count: 32))"
+        let receiptHash = String(repeating: "51", count: 32)
+        let uaid = "uaid:\(String(repeating: "61", count: 31))63"
+        let signedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":42,
+              "expires_at_ms":142,
+              "backend":"bfv-affine-sha3-256-v1",
+              "signature":"\(signed.signatureHex)",
+              "signature_payload_hex":"01020304A0"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().resolveIdentifier(
+                policyId: "phone#retail",
+                input: "+15551234567"
+            )
+            XCTFail("Expected invalidPayload error")
+        } catch let ToriiClientError.invalidPayload(reason) {
+            XCTAssertTrue(reason.contains("payload") || reason.contains("attestation"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1228,11 +1317,20 @@ final class ToriiClientTests: XCTestCase {
     func testResolveIdentifierDecodesNestedExecutionPayload() async throws {
         let accountId = try canonicalOwnerLiteral()
         let opaqueId = "opaque:\(String(repeating: "77", count: 32))"
-        let receiptHash = String(repeating: "88", count: 32)
+        let receiptHash = String(repeating: "88", count: 31) + "89"
+        let outputHash = String(repeating: "22", count: 31) + "23"
         let uaid = "uaid:\(String(repeating: "99", count: 31))9b"
-        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
-                                                        resolvedAtMs: 42,
-                                                        expiresAtMs: 142)
+        let signedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            backend: "bfv-programmed-sha3-256-v1",
+            outputHashHex: outputHash,
+            resolvedAtMs: 42,
+            expiresAtMs: 142
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -1240,49 +1338,10 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "policy_id":"phone#retail",
-              "opaque_id":"\(opaqueId)",
-              "receipt_hash":"\(receiptHash)",
-              "uaid":"\(uaid)",
-              "accountId":"\(accountId)",
-              "resolved_at_ms":42,
-              "expires_at_ms":142,
-              "backend":"bfv-programmed-sha3-256-v1",
-              "signature":"\(signed.signatureHex)",
-              "signature_payload_hex":"\(signed.signaturePayloadHex)",
-              "signature_payload":{
-                "policy_id":{
-                  "kind":"phone",
-                  "business_rule":"retail"
-                },
-                "execution":{
-                  "program_id":{
-                    "name":"identifier_lookup_retail"
-                  },
-                  "program_digest":"hash:\(String(repeating: "11", count: 32).uppercased())#ABCD",
-                  "backend":"bfv-programmed-sha3-256-v1",
-                  "verification_mode":{
-                    "mode":"Signed",
-                    "value":null
-                  },
-                  "output_hash":"hash:\(String(repeating: "22", count: 32).uppercased())#BCDE",
-                  "associated_data_hash":"hash:\(String(repeating: "33", count: 32).uppercased())#CDEF",
-                  "executed_at_ms":42,
-                  "expires_at_ms":142
-                },
-                "opaque_id":[
-                  "hash:\(String(repeating: "77", count: 32).uppercased())#1234"
-                ],
-                "receipt_hash":"hash:\(receiptHash.uppercased())#5678",
-                "uaid":[
-                  "hash:\(String(repeating: "99", count: 31).uppercased())9B#9ABC"
-                ],
-                "accountId":"\(accountId)"
-              }
-            }
-            """.data(using: .utf8)!
+            let body = try self.identifierReceiptJSON(
+                payload: signedPayload,
+                signatureHex: signed.signatureHex
+            ).data(using: .utf8)!
             return (response, body)
         }
 
@@ -1292,28 +1351,35 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
-        XCTAssertEqual(receipt?.signaturePayload.policyId, "phone#retail")
-        XCTAssertEqual(receipt?.signaturePayload.opaqueId, opaqueId)
-        XCTAssertEqual(receipt?.signaturePayload.receiptHash, receiptHash)
-        XCTAssertEqual(receipt?.signaturePayload.uaid, uaid)
-        XCTAssertEqual(receipt?.signaturePayload.execution?.programId, "identifier_lookup_retail")
-        XCTAssertEqual(receipt?.signaturePayload.execution?.programDigest, String(repeating: "11", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.verificationMode, "signed")
-        XCTAssertEqual(receipt?.signaturePayload.execution?.outputHash, String(repeating: "22", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.associatedDataHash, String(repeating: "33", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.executedAtMs, 42)
-        XCTAssertEqual(receipt?.signaturePayload.execution?.expiresAtMs, 142)
+        XCTAssertEqual(receipt?.payload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.payload.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.payload.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.payload.uaid, uaid)
+        XCTAssertEqual(receipt?.payload.execution.programId, "identifier_lookup_retail")
+        XCTAssertEqual(receipt?.payload.execution.programDigest, String(repeating: "11", count: 32))
+        XCTAssertEqual(receipt?.payload.execution.verificationMode, "signed")
+        XCTAssertEqual(receipt?.payload.execution.outputHash, outputHash)
+        XCTAssertEqual(receipt?.payload.execution.associatedDataHash, String(repeating: "33", count: 32))
+        XCTAssertEqual(receipt?.payload.execution.executedAtMs, 42)
+        XCTAssertEqual(receipt?.payload.execution.expiresAtMs, 142)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testIssueIdentifierClaimReceiptAsync() async throws {
         let accountId = try canonicalOwnerLiteral()
-        let opaqueId = "opaque:\(String(repeating: "44", count: 32))"
+        let opaqueId = "opaque:\(String(repeating: "44", count: 31))45"
         let receiptHash = String(repeating: "55", count: 32)
         let uaid = "uaid:\(String(repeating: "66", count: 31))67"
-        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
-                                                        resolvedAtMs: 7,
-                                                        expiresAtMs: nil)
+        let signedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            backend: "bfv-affine-sha3-256-v1",
+            resolvedAtMs: 7,
+            expiresAtMs: nil
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(
                 request.url?.path,
@@ -1327,27 +1393,10 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "policy_id":"phone#retail",
-              "opaque_id":"\(opaqueId)",
-              "receipt_hash":"\(receiptHash)",
-              "uaid":"\(uaid)",
-              "accountId":"\(accountId)",
-              "resolved_at_ms":7,
-              "backend":"bfv-affine-sha3-256-v1",
-              "signature":"\(signed.signatureHex)",
-              "signature_payload_hex":"\(signed.signaturePayloadHex)",
-              "signature_payload":{
-                "policy_id":"phone#retail",
-                "opaque_id":"\(opaqueId)",
-                "receipt_hash":"\(receiptHash)",
-                "uaid":"\(uaid)",
-                "accountId":"\(accountId)",
-                "resolved_at_ms":7
-              }
-            }
-            """.data(using: .utf8)!
+            let body = try self.identifierReceiptJSON(
+                payload: signedPayload,
+                signatureHex: signed.signatureHex
+            ).data(using: .utf8)!
             return (response, body)
         }
 
@@ -1365,12 +1414,25 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testIssueIdentifierClaimReceiptDecodesNestedExecutionPayload() async throws {
         let accountId = try canonicalOwnerLiteral()
-        let opaqueId = "opaque:\(String(repeating: "aa", count: 32))"
+        let opaqueId = "opaque:\(String(repeating: "aa", count: 31))ab"
         let receiptHash = String(repeating: "bb", count: 32)
+        let programDigest = String(repeating: "12", count: 31) + "13"
+        let outputHash = String(repeating: "23", count: 32)
+        let associatedDataHash = String(repeating: "34", count: 31) + "35"
         let uaid = "uaid:\(String(repeating: "cc", count: 31))cd"
-        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
-                                                        resolvedAtMs: 7,
-                                                        expiresAtMs: 77)
+        let signedPayload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: opaqueId,
+            receiptHash: receiptHash,
+            uaid: uaid,
+            backend: "bfv-programmed-sha3-256-v1",
+            programDigestHex: programDigest,
+            outputHashHex: outputHash,
+            associatedDataHashHex: associatedDataHash,
+            resolvedAtMs: 7,
+            expiresAtMs: 77
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(
                 request.url?.path,
@@ -1381,49 +1443,10 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "policy_id":"phone#retail",
-              "opaque_id":"\(opaqueId)",
-              "receipt_hash":"\(receiptHash)",
-              "uaid":"\(uaid)",
-              "accountId":"\(accountId)",
-              "resolved_at_ms":7,
-              "expires_at_ms":77,
-              "backend":"bfv-programmed-sha3-256-v1",
-              "signature":"\(signed.signatureHex)",
-              "signature_payload_hex":"\(signed.signaturePayloadHex)",
-              "signature_payload":{
-                "policy_id":{
-                  "kind":"phone",
-                  "business_rule":"retail"
-                },
-                "execution":{
-                  "program_id":{
-                    "name":"identifier_lookup_retail"
-                  },
-                  "program_digest":"hash:\(String(repeating: "12", count: 32).uppercased())#CDEF",
-                  "backend":"bfv-programmed-sha3-256-v1",
-                  "verification_mode":{
-                    "mode":"Signed",
-                    "value":null
-                  },
-                  "output_hash":"hash:\(String(repeating: "23", count: 32).uppercased())#DEF0",
-                  "associated_data_hash":"hash:\(String(repeating: "34", count: 32).uppercased())#EF01",
-                  "executed_at_ms":7,
-                  "expires_at_ms":77
-                },
-                "opaque_id":[
-                  "hash:\(String(repeating: "aa", count: 32).uppercased())#0ABC"
-                ],
-                "receipt_hash":"hash:\(receiptHash.uppercased())#1BCD",
-                "uaid":[
-                  "hash:\(String(repeating: "cc", count: 31).uppercased())CD#2CDE"
-                ],
-                "accountId":"\(accountId)"
-              }
-            }
-            """.data(using: .utf8)!
+            let body = try self.identifierReceiptJSON(
+                payload: signedPayload,
+                signatureHex: signed.signatureHex
+            ).data(using: .utf8)!
             return (response, body)
         }
 
@@ -1434,17 +1457,17 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 7)
         XCTAssertEqual(receipt?.expiresAtMs, 77)
-        XCTAssertEqual(receipt?.signaturePayload.policyId, "phone#retail")
-        XCTAssertEqual(receipt?.signaturePayload.opaqueId, opaqueId)
-        XCTAssertEqual(receipt?.signaturePayload.receiptHash, receiptHash)
-        XCTAssertEqual(receipt?.signaturePayload.uaid, uaid)
-        XCTAssertEqual(receipt?.signaturePayload.execution?.programId, "identifier_lookup_retail")
-        XCTAssertEqual(receipt?.signaturePayload.execution?.programDigest, String(repeating: "12", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.verificationMode, "signed")
-        XCTAssertEqual(receipt?.signaturePayload.execution?.outputHash, String(repeating: "23", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.associatedDataHash, String(repeating: "34", count: 32))
-        XCTAssertEqual(receipt?.signaturePayload.execution?.executedAtMs, 7)
-        XCTAssertEqual(receipt?.signaturePayload.execution?.expiresAtMs, 77)
+        XCTAssertEqual(receipt?.payload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.payload.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.payload.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.payload.uaid, uaid)
+        XCTAssertEqual(receipt?.payload.execution.programId, "identifier_lookup_retail")
+        XCTAssertEqual(receipt?.payload.execution.programDigest, programDigest)
+        XCTAssertEqual(receipt?.payload.execution.verificationMode, "signed")
+        XCTAssertEqual(receipt?.payload.execution.outputHash, outputHash)
+        XCTAssertEqual(receipt?.payload.execution.associatedDataHash, associatedDataHash)
+        XCTAssertEqual(receipt?.payload.execution.executedAtMs, 7)
+        XCTAssertEqual(receipt?.payload.execution.expiresAtMs, 77)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1506,6 +1529,7 @@ final class ToriiClientTests: XCTestCase {
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
             ramFheProfile: nil,
+            proofVerifier: nil,
             note: nil
         )
         let request = try policy.plaintextRequest(input: " +1 (555) 123-4567 ")
@@ -1538,6 +1562,7 @@ final class ToriiClientTests: XCTestCase {
                 maxInputBytes: 3
             ),
             ramFheProfile: nil,
+            proofVerifier: nil,
             note: nil
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
@@ -1615,6 +1640,7 @@ final class ToriiClientTests: XCTestCase {
                 maxInputBytes: 63
             ),
             ramFheProfile: nil,
+            proofVerifier: nil,
             note: nil
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"

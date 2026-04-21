@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii generic QueryEnvelope executor expansion
+- Added a shared Torii `QueryEnvelope` row/aggregate executor and routed the
+  current app query resources through it when `select` or `aggregate` is
+  present: accounts, account transactions, account assets, repo agreements,
+  domains, asset definitions, offline allowances/revocations/transfers, NFTs,
+  RWAs, and asset holders. Default no-select/no-aggregate responses keep their
+  legacy route envelopes and item shapes.
+- Expanded query projection rowset payloads and node projection
+  catalog/export/checkpoint planning to cover `accounts`, `account_assets`,
+  `asset_holders`, `asset_definitions`, and `domains`; capability adverts,
+  MCP metadata, OpenAPI text, and Torii docs now list the broader resource set.
+- Validation is in progress: `cargo check -p iroha_torii --features app_api --no-default-features`
+  is currently waiting behind an existing workspace Cargo build lock.
+
 ## 2026-04-21 Follow-up: iroha_data_model compute/oracle/offline fixture resync
 - Refreshed the stale `iroha_data_model` goldens and JSON fixtures behind the
   reported failures in `compute`, `governance`, `offline::poseidon`, and

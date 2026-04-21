@@ -1021,7 +1021,7 @@ fn clear_query_projection_archive_cache_for_tests() {
 }
 
 #[cfg(feature = "app_api")]
-fn app_query_page_cap(state: &Arc<CoreState>) -> u64 {
+fn app_query_page_cap(state: &CoreState) -> u64 {
     let _ = state;
     app_query_limits().max_page_limit
 }
@@ -2408,7 +2408,26 @@ pub struct RamLfeProgramPolicySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub ram_fhe_profile: Option<iroha_crypto::BfvRamProgramProfile>,
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_verifier: Option<RamLfeProofVerifierMetadataDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Public proof-verifier metadata for proof-mode RAM-LFE policies.
+pub struct RamLfeProofVerifierMetadataDto {
+    pub proof_backend: String,
+    pub circuit_id: String,
+    pub public_inputs_schema_hash: String,
+    pub verifying_key_bytes_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -2460,7 +2479,64 @@ pub struct RamLfeExecuteResponseDto {
     pub expires_at_ms: Option<u64>,
     pub backend: String,
     pub verification_mode: String,
-    pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    pub receipt: RamLfeExecutionReceiptDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Canonical public RAM-LFE execution receipt payload.
+pub struct RamLfeExecutionReceiptPayloadDto {
+    pub program_id: String,
+    pub program_digest: String,
+    pub backend: String,
+    pub verification_mode: String,
+    pub output_hash: String,
+    pub associated_data_hash: String,
+    pub executed_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Public receipt attestation union.
+pub struct RamLfeReceiptAttestationDto {
+    pub kind: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_backend: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Canonical public RAM-LFE execution receipt.
+pub struct RamLfeExecutionReceiptDto {
+    pub payload: RamLfeExecutionReceiptPayloadDto,
+    pub attestation: RamLfeReceiptAttestationDto,
 }
 
 #[cfg(feature = "app_api")]
@@ -2530,6 +2606,8 @@ pub struct IdentifierPolicySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub ram_fhe_profile: Option<iroha_crypto::BfvRamProgramProfile>,
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_verifier: Option<RamLfeProofVerifierMetadataDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
@@ -2572,18 +2650,27 @@ pub struct IdentifierResolveRequestDto {
 )]
 /// Successful response emitted by `/v1/identifiers/resolve`.
 pub struct IdentifierResolveResponseDto {
+    pub payload: IdentifierResolutionReceiptPayloadDto,
+    pub attestation: RamLfeReceiptAttestationDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Canonical public identifier-resolution receipt payload.
+pub struct IdentifierResolutionReceiptPayloadDto {
     pub policy_id: String,
+    pub execution: RamLfeExecutionReceiptPayloadDto,
     pub opaque_id: String,
     pub receipt_hash: String,
     pub uaid: String,
     pub account_id: String,
-    pub resolved_at_ms: u64,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub expires_at_ms: Option<u64>,
-    pub backend: String,
-    pub signature: String,
-    pub signature_payload_hex: String,
-    pub signature_payload: iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
 }
 
 #[cfg(feature = "app_api")]
@@ -31029,6 +31116,56 @@ fn project_tx(
 }
 
 #[cfg(feature = "app_api")]
+fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito::json::Map {
+    let projection = project_tx(tx, &None);
+    let mut row = norito::json::Map::new();
+    row.insert(
+        "authority".into(),
+        projection
+            .authority
+            .map_or(norito::json::Value::Null, norito::json::Value::from),
+    );
+    row.insert(
+        "timestamp_ms".into(),
+        projection
+            .timestamp_ms
+            .map_or(norito::json::Value::Null, norito::json::Value::from),
+    );
+    row.insert(
+        "entrypoint_kind".into(),
+        norito::json::Value::from(projection.entrypoint_kind),
+    );
+    row.insert(
+        "entrypoint_hash".into(),
+        norito::json::Value::from(projection.entrypoint_hash),
+    );
+    row.insert(
+        "result_ok".into(),
+        norito::json::Value::from(projection.result_ok),
+    );
+    row.insert(
+        "asset_id".into(),
+        norito::json::Value::Array(
+            tx_collect_asset_ids(tx)
+                .into_iter()
+                .map(|asset_id| norito::json::Value::from(asset_id.to_string()))
+                .collect(),
+        ),
+    );
+    let metadata = match tx.entrypoint() {
+        iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
+            metadata_to_json(signed.metadata())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            metadata_to_json(&tx.metadata)
+        }
+        _ => norito::json::Value::Object(norito::json::Map::new()),
+    };
+    row.insert("metadata".into(), metadata);
+    row
+}
+
+#[cfg(feature = "app_api")]
 fn contract_activity_projection_from_tx(
     tx: &iroha_data_model::query::CommittedTransaction,
 ) -> Option<ContractActivityProjection> {
@@ -32510,6 +32647,51 @@ pub async fn handle_v1_account_transactions_with_policy(
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
+
+    if envelope.select.is_some() || envelope.aggregate.is_some() {
+        if let Some(ref expr) = envelope.filter {
+            fn depth(e: &crate::filter::FilterExpr) -> usize {
+                use crate::filter::FilterExpr as F;
+                match e {
+                    F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
+                    F::Not(inner) => 1 + depth(inner),
+                    _ => 1,
+                }
+            }
+            if depth(expr) > 10 {
+                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            }
+            validate_tx_filter_adapter(expr, &telemetry)?;
+            crate::filter::validate_filter(expr)
+                .map_err(|e| map_filter_error(e, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY))?;
+        }
+        let pagination = enforce_app_pagination(
+            envelope.pagination.limit,
+            envelope.pagination.offset,
+            cap,
+            ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+        )?;
+        let _fetch_size = limits
+            .clamp_fetch_size(envelope.fetch_size)
+            .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+        let rows = committed_txs
+            .iter()
+            .filter(|tx| tx_matches_account_history_subject(tx, &account_id))
+            .filter(|tx| {
+                allowed_asset_selector
+                    .as_ref()
+                    .is_none_or(|expected| tx_matches_asset_selector(tx, expected))
+            })
+            .map(tx_to_query_row)
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ACCOUNT_TRANSACTIONS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let (items, total) = {
         // Validate JSON filter (structural + endpoint-specific) and execute typed predicate (PASS for now)
@@ -39341,8 +39523,8 @@ mod app_api_integration_tests {
 
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
-        let (node, _storage_dir) = sorafs_node_with_temp_storage();
-        let app = crate::reconfigure_sorafs_runtime_for_tests(
+        let (node, _storage_dir) = projection_query_sorafs_node_with_temp_storage();
+        let app = crate::tests_runtime_handlers::reconfigure_sorafs_runtime_for_tests(
             crate::mk_app_state_for_tests(),
             None,
             node,
@@ -39779,6 +39961,16 @@ mod app_api_integration_tests {
         }
     }
 
+    fn projection_query_sorafs_node_with_temp_storage()
+    -> (sorafs_node::NodeHandle, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cfg = sorafs_node::config::StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .build();
+        (sorafs_node::NodeHandle::new(cfg), temp_dir)
+    }
+
     fn seed_projection_registry_manifest_for_test(
         state: &iroha_core::state::State,
         manifest: &sorafs_manifest::ManifestV1,
@@ -40020,9 +40212,9 @@ mod app_api_integration_tests {
             .ingest(fixture.advert.clone(), fixture.issued_at())
             .expect("ingest fixture advert");
 
-        let (node, dir) = sorafs_node_with_temp_storage();
+        let (node, dir) = projection_query_sorafs_node_with_temp_storage();
         (
-            crate::reconfigure_sorafs_runtime_for_tests(
+            crate::tests_runtime_handlers::reconfigure_sorafs_runtime_for_tests(
                 crate::mk_app_state_for_tests(),
                 Some(Arc::new(tokio::sync::RwLock::new(cache))),
                 node,
@@ -49182,6 +49374,74 @@ impl RepoAgreementProjection {
 }
 
 #[cfg(feature = "app_api")]
+fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> norito::json::Map {
+    let mut row = norito::json::Map::new();
+    row.insert("id".into(), Value::from(proj.canonical_id.clone()));
+    row.insert(
+        "initiator".into(),
+        Value::from(proj.initiator_canonical.clone()),
+    );
+    row.insert(
+        "counterparty".into(),
+        Value::from(proj.counterparty_canonical.clone()),
+    );
+    row.insert(
+        "custodian".into(),
+        proj.custodian_canonical
+            .as_ref()
+            .map_or(Value::Null, |value| Value::from(value.clone())),
+    );
+
+    let mut cash_leg = Map::new();
+    cash_leg.insert(
+        "asset_definition_id".into(),
+        Value::from(proj.dto.cash_leg.asset_definition_id.clone()),
+    );
+    cash_leg.insert(
+        "quantity".into(),
+        Value::from(proj.dto.cash_leg.quantity.clone()),
+    );
+    row.insert("cash_leg".into(), Value::Object(cash_leg));
+
+    let mut collateral_leg = Map::new();
+    collateral_leg.insert(
+        "asset_definition_id".into(),
+        Value::from(proj.dto.collateral_leg.asset_definition_id.clone()),
+    );
+    collateral_leg.insert(
+        "quantity".into(),
+        Value::from(proj.dto.collateral_leg.quantity.clone()),
+    );
+    row.insert("collateral_leg".into(), Value::Object(collateral_leg));
+
+    row.insert("rate_bps".into(), Value::from(u64::from(proj.rate_bps)));
+    row.insert(
+        "maturity_timestamp_ms".into(),
+        Value::from(proj.maturity_timestamp_ms),
+    );
+    row.insert(
+        "initiated_timestamp_ms".into(),
+        Value::from(proj.initiated_timestamp_ms),
+    );
+    row.insert(
+        "last_margin_check_timestamp_ms".into(),
+        Value::from(proj.dto.last_margin_check_timestamp_ms),
+    );
+
+    let mut governance = Map::new();
+    governance.insert(
+        "haircut_bps".into(),
+        Value::from(u64::from(proj.dto.governance.haircut_bps)),
+    );
+    governance.insert(
+        "margin_frequency_secs".into(),
+        Value::from(proj.dto.governance.margin_frequency_secs),
+    );
+    row.insert("governance".into(), Value::Object(governance));
+    row
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum RepoAgreementSortField {
     Id,
@@ -52243,6 +52503,7 @@ pub async fn handle_v1_repo_agreements_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let agreements: Vec<_> = world
         .repo_agreements()
@@ -52251,9 +52512,11 @@ pub async fn handle_v1_repo_agreements_query(
         .collect();
 
     if let Some(expr) = envelope.filter.as_mut() {
-        crate::filter::validate_filter(expr)
-            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        validate_repo_filter(expr)?;
+        if !generic_mode {
+            crate::filter::validate_filter(expr)
+                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+            validate_repo_filter(expr)?;
+        }
         canonicalize_repo_filter_literals(expr, &telemetry, ENDPOINT_REPO_AGREEMENTS_LIST)?;
     }
     let filter_ref = envelope.filter.as_ref();
@@ -52271,6 +52534,23 @@ pub async fn handle_v1_repo_agreements_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if generic_mode {
+        let rows = agreements
+            .into_iter()
+            .map(|agreement| {
+                let projection = RepoAgreementProjection::from_agreement(&agreement);
+                repo_agreement_projection_to_query_row(&projection)
+            })
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_REPO_AGREEMENTS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let mapped_iter = agreements.into_iter().filter_map({
         let selectors = selectors.clone();
@@ -52747,23 +53027,39 @@ pub async fn handle_v1_domains_query(
         id: String,
     }
 
-    let crate::filter::QueryEnvelope {
-        sort,
-        pagination,
-        fetch_size,
-        ..
-    } = envelope;
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
+    let sort = envelope.sort.clone();
+    let pagination_controls = envelope.pagination;
+    let fetch_size_requested = envelope.fetch_size;
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
-        pagination.limit,
-        pagination.offset,
+        pagination_controls.limit,
+        pagination_controls.offset,
         cap,
         ENDPOINT_DOMAINS_QUERY,
     )?;
     let limits = app_query_limits();
     let fetch_size = limits
-        .clamp_fetch_size(fetch_size)
+        .clamp_fetch_size(fetch_size_requested)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if generic_mode {
+        let rows = domains
+            .into_iter()
+            .map(|dom| {
+                let mut row = Map::new();
+                row.insert("id".into(), Value::from(dom.id().to_string()));
+                row
+            })
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_DOMAINS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let selectors = compile_domain_sort_spec(&sort);
     let mapped_iter = domains.into_iter().map({
@@ -55239,8 +55535,28 @@ pub async fn handle_v1_accounts_query(
     let world = state.world_view();
     let accounts = collect_subject_accounts(&world);
     drop(world);
-    if envelope.aggregate.is_some() {
-        return handle_v1_accounts_query_aggregate(state, accounts, envelope);
+    if envelope.select.is_some() || envelope.aggregate.is_some() {
+        let rows = accounts
+            .into_iter()
+            .map(|account| {
+                let projected = AccountListItem {
+                    canonical_id: account.id().to_string(),
+                    display_id: crate::account_literal::display_literal(account.id()),
+                    primary_alias: primary_alias_projection_for_account_id(
+                        state.as_ref(),
+                        account.id(),
+                    ),
+                };
+                account_list_item_to_query_row(&projected)
+            })
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ACCOUNTS,
+            envelope,
+            rows,
+            "live",
+        );
     }
 
     let (items, total) = if sort_spec.is_empty() {
@@ -60534,6 +60850,7 @@ pub async fn handle_v1_assets_definitions_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let now_ms = asset_alias_observation_time_ms(&state);
     let alias_bindings: BTreeMap<AssetDefinitionId, AssetAliasBindingDto> = world
@@ -60577,9 +60894,28 @@ pub async fn handle_v1_assets_definitions_query(
         if depth(expr) > 10 {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
-        crate::filter::validate_filter(expr)
-            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        validate_defs_filter_adapter(expr)?;
+        if !generic_mode {
+            crate::filter::validate_filter(expr)
+                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+            validate_defs_filter_adapter(expr)?;
+        }
+    }
+
+    if generic_mode {
+        let rows = definitions
+            .into_iter()
+            .map(|def| {
+                let row = asset_definition_to_json_value(&def, alias_bindings.get(def.id()))?;
+                object_row_from_value(row)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ASSET_DEFINITIONS,
+            envelope,
+            rows,
+            "live",
+        );
     }
 
     let filter_ref = envelope.filter.as_ref();
@@ -62564,6 +62900,7 @@ pub async fn handle_v1_offline_allowances_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let records: Vec<_> = world
         .offline_allowances()
@@ -62610,6 +62947,24 @@ pub async fn handle_v1_offline_allowances_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if generic_mode {
+        let mut rows = Vec::new();
+        for record in records {
+            let item = project_offline_allowance_item(record, &world)?;
+            rows.push(object_row_from_value(offline_allowance_item_to_json(
+                &item,
+                response_now_ms,
+            )?)?);
+        }
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_OFFLINE_ALLOWANCES,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -63572,6 +63927,7 @@ pub async fn handle_v1_offline_revocations_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let records: Vec<_> = world
         .offline_verdict_revocations()
@@ -63596,7 +63952,9 @@ pub async fn handle_v1_offline_revocations_query(
         }
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        validate_offline_revocations_filter_adapter(expr)?;
+        if !generic_mode {
+            validate_offline_revocations_filter_adapter(expr)?;
+        }
         canonicalize_offline_revocation_filter_literals(
             expr,
             Some(state.as_ref()),
@@ -63617,6 +63975,23 @@ pub async fn handle_v1_offline_revocations_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if generic_mode {
+        let rows = records
+            .into_iter()
+            .map(|record| {
+                let item = OfflineVerdictRevocationListItem::from(record);
+                offline_revocation_item_to_json(&item).and_then(object_row_from_value)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_OFFLINE_REVOCATIONS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -65010,6 +65385,7 @@ pub async fn handle_v1_offline_transfers_query(
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let records: Vec<_> = world
         .offline_to_online_transfers()
@@ -65055,6 +65431,23 @@ pub async fn handle_v1_offline_transfers_query(
     let fetch_size = limits
         .clamp_fetch_size(envelope.fetch_size)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if generic_mode {
+        let rows = records
+            .into_iter()
+            .map(|record| {
+                let item = OfflineTransferSummary::from(record);
+                offline_transfer_item_to_json(&item).and_then(object_row_from_value)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_OFFLINE_TRANSFERS,
+            envelope,
+            rows,
+            "live",
+        );
+    }
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -66965,6 +67358,14 @@ fn nft_filter_projection(expr: &FilterExpr, proj: &NftListItem) -> bool {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn nft_to_query_row(nft: &iroha_data_model::nft::Nft) -> norito::json::Map {
+    let mut row = Map::new();
+    row.insert("id".into(), Value::from(nft.id().to_string()));
+    row.insert("metadata".into(), metadata_to_json(nft.content()));
+    row
+}
+
 /// GET /v1/nfts — List NFTs with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -67053,6 +67454,7 @@ pub async fn handle_v1_nfts_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let world = state.world_view();
     let nfts: Vec<_> = world
         .nfts_iter()
@@ -67093,7 +67495,20 @@ pub async fn handle_v1_nfts_query(
         }
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-        validate_nfts_filter_adapter(expr)?;
+        if !generic_mode {
+            validate_nfts_filter_adapter(expr)?;
+        }
+    }
+
+    if generic_mode {
+        let rows = nfts.iter().map(nft_to_query_row).collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_NFTS,
+            envelope,
+            rows,
+            "live",
+        );
     }
 
     let filter_ref = envelope.filter.as_ref();
@@ -67323,6 +67738,7 @@ pub async fn handle_v1_rwas_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let items: Vec<RwaListItem> = state
         .world_view()
         .rwas_iter()
@@ -67359,6 +67775,24 @@ pub async fn handle_v1_rwas_query(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_rwas_filter_adapter(expr)?;
+    }
+
+    if generic_mode {
+        let rows = items
+            .iter()
+            .map(|item| {
+                let mut row = Map::new();
+                row.insert("id".into(), Value::from(item.id.clone()));
+                row
+            })
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_RWAS,
+            envelope,
+            rows,
+            "live",
+        );
     }
 
     let filter_ref = envelope.filter.as_ref();
@@ -70687,6 +71121,8 @@ pub async fn handle_v1_account_assets_query_with_policy(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
+    let generic_envelope = envelope.clone();
     let (acct, _) = parse_account_path_segment_with_state(
         state.as_ref(),
         &account_id,
@@ -70760,7 +71196,23 @@ pub async fn handle_v1_account_assets_query_with_policy(
         crate::filter::validate_filter(expr)
             .map_err(|e| map_filter_error(e, ENDPOINT_ACCOUNTS_ASSETS_QUERY))?;
         // Adapter-level validation (supported fields & types)
-        validate_asset_filter_adapter(expr)?;
+        if !generic_mode {
+            validate_asset_filter_adapter(expr)?;
+        }
+    }
+
+    if generic_mode {
+        let rows = projected_assets
+            .into_iter()
+            .map(|item| account_asset_item_to_query_row(&item))
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ACCOUNT_ASSETS,
+            generic_envelope,
+            rows,
+            "live",
+        );
     }
 
     let filter_ref = filter.as_ref();
@@ -71281,6 +71733,8 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
 ) -> Result<Response> {
     use std::collections::BTreeMap;
 
+    let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
+    let mut generic_envelope = envelope.clone();
     let now_ms = asset_alias_observation_time_ms(&state);
     let (def_id, asset_alias) = {
         let world = state.world_view();
@@ -71294,8 +71748,6 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY);
     let crate::filter::QueryEnvelope {
         filter,
-        select,
-        aggregate,
         sort,
         pagination,
         fetch_size,
@@ -71340,23 +71792,46 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             ENDPOINT_ASSET_HOLDERS_QUERY,
         )?;
     }
-    if aggregate.is_some() {
-        if select.is_some() {
-            return Err(aggregate_validation_error(
-                "select is not supported when aggregate is present",
+    generic_envelope.filter = filter.clone();
+    if generic_mode {
+        if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
+            app.as_ref(),
+            state.as_ref(),
+            &def_id,
+            asset_alias.as_ref(),
+            None,
+        )
+        .await?
+        {
+            let resource = crate::generic_query::registered_resource(
+                crate::generic_query::RESOURCE_ASSET_HOLDERS,
+            )
+            .ok_or_else(|| Error::AppQueryValidation {
+                code: "unsupported_query_resource",
+                message: "resource `asset_holders` is not registered".to_owned(),
+            })?;
+            return crate::generic_query::execute_query_envelope(
+                resource,
+                generic_envelope,
+                rows,
+                app_query_page_cap(state.as_ref()),
+                crate::generic_query::QuerySnapshot::new(
+                    indexed_snapshot.0,
+                    indexed_snapshot.1,
+                    query_source,
+                ),
+            );
+        }
+
+        if !asset_holder_live_aggregate_enabled() {
+            return Err(projection_archive_unavailable_error(
+                "asset holder generic queries require a complete published query projection archive; live holder scans are disabled",
             ));
         }
-        return handle_v1_asset_holders_query_aggregate(
-            app.as_ref(),
-            state,
-            def_id,
-            asset_alias,
-            filter,
-            aggregate,
-            sort,
-            pagination,
-        )
-        .await;
+        iroha_logger::warn!(
+            asset_definition_id = %def_id,
+            "serving asset holder generic query from live state because projection archive cache is incomplete"
+        );
     }
     let world = state.world_view();
     let mut map: BTreeMap<
@@ -71383,6 +71858,34 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         })
         .collect();
     drop(world);
+
+    if generic_mode {
+        let rows = map
+            .into_iter()
+            .map(|((account_id, scope), quantity)| {
+                let canonical_id = account_id.to_string();
+                let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
+                let projected = AssetHolderListItem {
+                    account_id,
+                    canonical_id,
+                    asset: def_id.to_string(),
+                    asset_alias: asset_alias.clone(),
+                    scope: asset_balance_scope_literal(&scope),
+                    quantity,
+                    primary_alias,
+                };
+                asset_holder_item_to_query_row(&projected)
+            })
+            .collect::<Vec<_>>();
+        return execute_generic_resource_query(
+            state.as_ref(),
+            crate::generic_query::RESOURCE_ASSET_HOLDERS,
+            generic_envelope,
+            rows,
+            "live_debug",
+        );
+    }
+
     let filter_ref = filter.as_ref();
     let selectors = compile_asset_holder_sort_spec(&sort);
     let mapped_iter = map.into_iter().filter_map({
@@ -71975,9 +72478,71 @@ fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
 }
 
 #[cfg(feature = "app_api")]
+fn generic_query_snapshot(
+    state: &CoreState,
+    query_source: &'static str,
+) -> crate::generic_query::QuerySnapshot {
+    let (indexed_height, indexed_block_hash) = query_index_snapshot(state);
+    crate::generic_query::QuerySnapshot::new(indexed_height, indexed_block_hash, query_source)
+}
+
+#[cfg(feature = "app_api")]
+fn execute_generic_resource_query(
+    state: &CoreState,
+    resource_id: &str,
+    envelope: crate::filter::QueryEnvelope,
+    rows: Vec<norito::json::Map>,
+    query_source: &'static str,
+) -> Result<Response, Error> {
+    let resource = crate::generic_query::registered_resource(resource_id).ok_or_else(|| {
+        Error::AppQueryValidation {
+            code: "unsupported_query_resource",
+            message: format!("resource `{resource_id}` is not registered"),
+        }
+    })?;
+    crate::generic_query::execute_query_envelope(
+        resource,
+        envelope,
+        rows,
+        app_query_page_cap(state),
+        generic_query_snapshot(state, query_source),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn object_row_from_value(value: Value) -> Result<norito::json::Map, Error> {
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(Error::Query(
+            iroha_data_model::ValidationFail::InternalError(
+                "query row projection did not produce a JSON object".to_owned(),
+            ),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn account_list_item_to_query_row(item: &AccountListItem) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("id".into(), Value::from(item.canonical_id.clone()));
+    insert_primary_alias_fields(&mut row, &item.primary_alias);
+    row
+}
+
+#[cfg(feature = "app_api")]
+fn account_asset_item_to_query_row(item: &AccountAssetListItem) -> norito::json::Map {
+    let mut row = norito::json::Map::new();
+    row.insert("account_id".into(), Value::from(item.account_id.clone()));
+    row.insert("asset".into(), Value::from(item.asset.clone()));
+    row.insert("asset_name".into(), Value::from(item.asset_name.clone()));
+    row.insert(
+        "asset_alias".into(),
+        item.asset_alias
+            .as_ref()
+            .map_or(Value::Null, |value| Value::from(value.clone())),
+    );
+    row.insert("scope".into(), Value::from(item.scope.clone()));
+    row.insert("quantity".into(), Value::from(item.quantity.to_string()));
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
 }

@@ -294,13 +294,27 @@ private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
     }
 }
 
-private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
-    let signature: String
-    let signaturePayload: NativeClaimIdentifierPayloadEnvelope
+private struct NativeClaimIdentifierAttestationEnvelope: Encodable, Sendable {
+    let kind: String
+    let signature: String?
+    let proofBackend: String?
+    let proofB64: String?
 
     private enum CodingKeys: String, CodingKey {
+        case kind
         case signature
-        case signaturePayload = "signature_payload"
+        case proofBackend = "proof_backend"
+        case proofB64 = "proof_b64"
+    }
+}
+
+private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
+    let payload: NativeClaimIdentifierPayloadEnvelope
+    let attestation: NativeClaimIdentifierAttestationEnvelope
+
+    private enum CodingKeys: String, CodingKey {
+        case payload
+        case attestation
     }
 }
 
@@ -312,206 +326,43 @@ private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data
     return bytes
 }
 
-private enum ClaimIdentifierSwiftNoritoEncoder {
-    private static let instructionWireName = "identity::ClaimIdentifier"
-    private static let instructionTypeName = "iroha_data_model::isi::identifier::ClaimIdentifier"
-
-    static func encode(chainId: String,
-                       authority: String,
-                       creationTimeMs: UInt64,
-                       ttlMs: UInt64?,
-                       accountId: String,
-                       receipt: ToriiIdentifierResolutionReceipt,
-                       signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let canonicalAccountId = try validateReceiptAccount(accountId: accountId, receipt: receipt)
-        let claimInstruction = try encodeClaimInstruction(accountId: canonicalAccountId, receipt: receipt)
-        let transactionPayload = try encodeTransactionPayload(chainId: chainId,
-                                                              authority: authority,
-                                                              creationTimeMs: creationTimeMs,
-                                                              ttlMs: ttlMs,
-                                                              instructionPayload: claimInstruction)
-        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signedTransaction = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
-        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
-        let norito = encodeVersionedSignedTransaction(signedTransaction)
-        return SignedTransactionEnvelope(norito: norito,
-                                         signedTransaction: signedTransaction,
-                                         payload: nil,
-                                         transactionHash: transactionHash)
-    }
-
-    private static func validateReceiptAccount(accountId: String,
-                                               receipt: ToriiIdentifierResolutionReceipt) throws -> String {
-        let trimmedReceiptAccount = receipt.accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedReceiptAccount.isEmpty else {
-            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt("account_id must not be empty.")
-        }
-        let validated = try TransactionInputValidator.validate(
-            chainId: "claim-identifier",
-            authorityId: accountId,
-            accountIds: [
-                .init(field: "account", value: accountId),
-                .init(field: "receipt_account", value: trimmedReceiptAccount)
-            ]
-        )
-        guard let canonicalAccount = validated.accountIds["account"],
-              let canonicalReceiptAccount = validated.accountIds["receipt_account"],
-              canonicalAccount == canonicalReceiptAccount else {
-            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
-                "accountId must match receipt.account_id."
-            )
-        }
-        return canonicalAccount
-    }
-
-    private static func encodeClaimInstruction(accountId: String,
-                                               receipt: ToriiIdentifierResolutionReceipt) throws -> Data {
-        let accountPayload = try OfflineNorito.encodeAccountId(accountId)
-        let receiptPayload = try encodeReceipt(receipt)
-        var claimPayload = OfflineNoritoWriter()
-        claimPayload.writeField(accountPayload)
-        claimPayload.writeField(receiptPayload)
-
-        let framedInstruction = noritoEncode(typeName: instructionTypeName,
-                                             payload: claimPayload.data,
-                                             flags: 0)
-        var wireInstruction = OfflineNoritoWriter()
-        wireInstruction.writeField(OfflineNorito.encodeString(instructionWireName))
-        wireInstruction.writeField(OfflineNorito.encodeBytesVec(framedInstruction))
-        return wireInstruction.data
-    }
-
-    private static func encodeReceipt(_ receipt: ToriiIdentifierResolutionReceipt) throws -> Data {
-        guard let receiptPayloadBytes = decodeHex(receipt.signaturePayloadHex, field: "signature_payload_hex") else {
-            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
-                "signature_payload_hex must contain valid hexadecimal bytes."
-            )
-        }
-        guard let signatureBytes = decodeHex(receipt.signature, field: "signature") else {
-            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
-                "signature must contain valid hexadecimal bytes."
-            )
-        }
-
-        var signedReceipt = OfflineNoritoWriter()
-        signedReceipt.writeField(receiptPayloadBytes)
-        signedReceipt.writeField(encodeSomeRawBytes(signatureBytes))
-        signedReceipt.writeField(encodeNoneOption())
-        return signedReceipt.data
-    }
-
-    private static func encodeTransactionPayload(chainId: String,
-                                                 authority: String,
-                                                 creationTimeMs: UInt64,
-                                                 ttlMs: UInt64?,
-                                                 instructionPayload: Data) throws -> Data {
-        let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
-        var transactionPayload = OfflineNoritoWriter()
-        transactionPayload.writeField(OfflineNorito.encodeString(chainId))
-        transactionPayload.writeField(OfflineNorito.encodeString(authority))
-        transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
-        transactionPayload.writeField(executablePayload)
-        transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
-        transactionPayload.writeField(encodeNoneOption())
-        transactionPayload.writeField(encodeEmptyMetadata())
-        return transactionPayload.data
-    }
-
-    private static func encodeExecutable(instructionPayload: Data) -> Data {
-        var instructions = OfflineNoritoWriter()
-        instructions.writeLength(1)
-        instructions.writeField(instructionPayload)
-
-        var executable = OfflineNoritoWriter()
-        executable.writeUInt32LE(0)
-        executable.writeField(instructions.data)
-        return executable.data
-    }
-
-    private static func encodeSignedTransaction(signature: Data,
-                                                transactionPayload: Data) -> Data {
-        var signedTransaction = OfflineNoritoWriter()
-        signedTransaction.writeField(OfflineNorito.encodeConstVec(signature))
-        signedTransaction.writeField(transactionPayload)
-        signedTransaction.writeField(encodeNoneOption())
-        signedTransaction.writeField(encodeNoneOption())
-        return signedTransaction.data
-    }
-
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineNoritoWriter()
-        entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
-        return entrypoint.data
-    }
-
-    private static func encodeEmptyMetadata() -> Data {
-        var metadata = OfflineNoritoWriter()
-        metadata.writeLength(0)
-        return metadata.data
-    }
-
-    private static func encodeSomeRawBytes(_ value: Data) -> Data {
-        var option = OfflineNoritoWriter()
-        option.writeUInt8(1)
-        let payload = OfflineNorito.encodeBytesVec(value)
-        option.writeField(payload)
-        return option.data
-    }
-
-    private static func encodeNoneOption() -> Data {
-        Data([0])
-    }
-
-    private static func decodeHex(_ value: String, field: String) -> Data? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            _ = field
-            return nil
-        }
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            return Data(hexString: String(trimmed.dropFirst(2)))
-        }
-        return Data(hexString: trimmed)
-    }
-}
-
 private func encodeNativeClaimIdentifierReceiptJSON(
     _ receipt: ToriiIdentifierResolutionReceipt
 ) throws -> Data {
-    guard let execution = receipt.signaturePayload.execution,
-          let programId = execution.programId,
-          let programDigest = execution.programDigest,
-          let backend = execution.backend,
-          let verificationMode = execution.verificationMode,
-          let outputHash = execution.outputHash,
-          let associatedDataHash = execution.associatedDataHash else {
-        throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
-            "signature_payload.execution must include program id, digest, backend, verification mode, output hash, and associated data hash."
-        )
+    do {
+        _ = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: receipt)
+    } catch let ToriiClientError.invalidPayload(message) {
+        throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(message)
     }
+    let execution = receipt.payload.execution
 
     let payload = NativeClaimIdentifierPayloadEnvelope(
-        policyId: receipt.signaturePayload.policyId,
+        policyId: receipt.payload.policyId,
         execution: NativeClaimIdentifierExecutionEnvelope(
-            programId: programId,
-            programDigest: programDigest,
-            backend: backend,
-            verificationMode: verificationMode,
-            outputHash: outputHash,
-            associatedDataHash: associatedDataHash,
+            programId: execution.programId,
+            programDigest: execution.programDigest,
+            backend: execution.backend,
+            verificationMode: execution.verificationMode,
+            outputHash: execution.outputHash,
+            associatedDataHash: execution.associatedDataHash,
             executedAtMs: execution.executedAtMs,
             expiresAtMs: execution.expiresAtMs
         ),
-        opaqueId: receipt.signaturePayload.opaqueId,
-        receiptHash: receipt.signaturePayload.receiptHash,
-        uaid: receipt.signaturePayload.uaid,
-        accountId: receipt.signaturePayload.accountId
+        opaqueId: receipt.payload.opaqueId,
+        receiptHash: receipt.payload.receiptHash,
+        uaid: receipt.payload.uaid,
+        accountId: receipt.payload.accountId
+    )
+    let attestation = NativeClaimIdentifierAttestationEnvelope(
+        kind: receipt.attestation.kind,
+        signature: receipt.attestation.signature,
+        proofBackend: receipt.attestation.proofBackend,
+        proofB64: receipt.attestation.proofB64
     )
     return try JSONEncoder().encode(
         NativeClaimIdentifierReceiptEnvelope(
-            signature: receipt.signature,
-            signaturePayload: payload
+            payload: payload,
+            attestation: attestation
         )
     )
 }
@@ -982,43 +833,35 @@ struct SwiftTransactionEncoder {
     static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
                                       signingKey: SigningKey,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let receiptAccountId = request.receipt.payload.accountId
         let ids = try TransactionInputValidator.validate(chainId: request.chainId,
                                                          authorityId: request.authority,
                                                          accountIds: [
-                                                            TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
+                                                            TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId),
+                                                            TransactionInputValidator.NamedAccountId(field: "receipt_account", value: receiptAccountId)
                                                          ])
         let canonicalAccountId = ids.accountIds["account"] ?? request.accountId
-
-        if NoritoNativeBridge.shared.isAvailable {
-            let privateKey = try privateKeyBytes(from: signingKey)
-            let receiptJSON = try encodeNativeClaimIdentifierReceiptJSON(request.receipt)
-            do {
-                if let native = try NoritoNativeBridge.shared.encodeClaimIdentifier(
-                    chainId: ids.chainId,
-                    authority: ids.authorityId,
-                    creationTimeMs: creationTimeMs,
-                    ttlMs: request.ttlMs,
-                    accountId: canonicalAccountId,
-                    receiptJSON: receiptJSON,
-                    privateKey: privateKey,
-                    algorithm: signingKey.algorithm
-                ) {
-                    return try wrap(native: native)
-                }
-            } catch let error as NativeBridgeError {
-                throw SwiftTransactionEncoderError.nativeBridgeError(error)
-            }
+        guard canonicalAccountId == ids.accountIds["receipt_account"] else {
+            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
+                "accountId must match receipt.payload.account_id."
+            )
         }
 
-        return try ClaimIdentifierSwiftNoritoEncoder.encode(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            accountId: canonicalAccountId,
-            receipt: request.receipt,
-            signingKey: signingKey
-        )
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let receiptJSON = try encodeNativeClaimIdentifierReceiptJSON(request.receipt)
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeClaimIdentifier(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                accountId: canonicalAccountId,
+                receiptJSON: receiptJSON,
+                privateKey: privateKey,
+                algorithm: signingKey.algorithm
+            )
+        }
+        return try wrap(native: native)
     }
 
     static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,

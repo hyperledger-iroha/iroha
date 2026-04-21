@@ -27,11 +27,11 @@ isi! {
 impl crate::seal::Instruction for ActivateIdentifierPolicy {}
 
 isi! {
-    /// Bind a resolver-signed opaque identifier receipt to the UAID attached to an account.
+    /// Bind an attested opaque identifier receipt to the UAID attached to an account.
     pub struct ClaimIdentifier {
         /// Account whose UAID should own the receipt-bound opaque identifier.
         pub account: AccountId,
-        /// Signed receipt emitted by the configured identifier resolver.
+        /// Receipt emitted by the configured identifier resolver.
         pub receipt: IdentifierResolutionReceipt,
     }
 }

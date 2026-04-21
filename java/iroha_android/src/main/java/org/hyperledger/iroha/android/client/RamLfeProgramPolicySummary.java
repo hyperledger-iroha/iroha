@@ -13,6 +13,7 @@ public final class RamLfeProgramPolicySummary {
   private final String inputEncryption;
   private final String inputEncryptionPublicParameters;
   private final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded;
+  private final RamLfeProofVerifierMetadata proofVerifier;
   private final String note;
 
   public RamLfeProgramPolicySummary(
@@ -26,6 +27,32 @@ public final class RamLfeProgramPolicySummary {
       final String inputEncryptionPublicParameters,
       final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded,
       final String note) {
+    this(
+        programId,
+        owner,
+        active,
+        resolverPublicKey,
+        backend,
+        verificationMode,
+        inputEncryption,
+        inputEncryptionPublicParameters,
+        inputEncryptionPublicParametersDecoded,
+        note,
+        null);
+  }
+
+  public RamLfeProgramPolicySummary(
+      final String programId,
+      final String owner,
+      final boolean active,
+      final String resolverPublicKey,
+      final String backend,
+      final String verificationMode,
+      final String inputEncryption,
+      final String inputEncryptionPublicParameters,
+      final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded,
+      final String note,
+      final RamLfeProofVerifierMetadata proofVerifier) {
     this.programId = Objects.requireNonNull(programId, "programId");
     this.owner = Objects.requireNonNull(owner, "owner");
     this.active = active;
@@ -35,6 +62,7 @@ public final class RamLfeProgramPolicySummary {
     this.inputEncryption = inputEncryption;
     this.inputEncryptionPublicParameters = inputEncryptionPublicParameters;
     this.inputEncryptionPublicParametersDecoded = inputEncryptionPublicParametersDecoded;
+    this.proofVerifier = proofVerifier;
     this.note = note;
   }
 
@@ -72,6 +100,10 @@ public final class RamLfeProgramPolicySummary {
 
   public IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded() {
     return inputEncryptionPublicParametersDecoded;
+  }
+
+  public RamLfeProofVerifierMetadata proofVerifier() {
+    return proofVerifier;
   }
 
   public String note() {

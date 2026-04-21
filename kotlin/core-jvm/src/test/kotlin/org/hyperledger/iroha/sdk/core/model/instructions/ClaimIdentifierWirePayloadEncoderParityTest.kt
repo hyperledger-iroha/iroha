@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.client.IdentifierReceiptAttestation
+import org.hyperledger.iroha.sdk.client.IdentifierResolutionExecutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionPayload
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionReceipt
 import org.hyperledger.iroha.sdk.core.model.WirePayload
@@ -15,8 +17,7 @@ import kotlin.test.assertIs
  * instruction using the current Rust data model and outputs:
  * - Line 1: full wire payload hex
  * - Line 2: account I105
- * - Line 3: receipt payload bytes hex
- * - Line 4: signature bytes hex
+ * - Line 3: signature bytes hex
  */
 class ClaimIdentifierWirePayloadEncoderParityTest {
 
@@ -25,30 +26,34 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         val lines = FixtureGeneratorRunner.run("claim-identifier")
         val rustHex = lines[0]
         val accountId = lines[1]
-        val receiptPayloadHex = lines[2]
-        val signatureHex = lines[3]
+        val signatureHex = lines[2]
+        val fixtureHash = "ab".repeat(32)
 
-        val dummyPayload = IdentifierResolutionPayload(
-            policyId = "unused",
-            opaqueId = "unused",
-            receiptHash = "unused",
-            uaid = "unused",
+        val payload = IdentifierResolutionPayload(
+            policyId = "phone#e164",
+            execution = IdentifierResolutionExecutionPayload(
+                programId = "parity_test",
+                programDigest = fixtureHash,
+                backend = "hkdf-sha3-512-prf-v1",
+                verificationMode = "signed",
+                outputHash = fixtureHash,
+                associatedDataHash = fixtureHash,
+                executedAtMs = 1_735_000_000_000L,
+                expiresAtMs = null,
+            ),
+            opaqueId = "opaque:$fixtureHash",
+            receiptHash = fixtureHash,
+            uaid = "uaid:$fixtureHash",
             accountId = accountId,
-            resolvedAtMs = 0L,
-            expiresAtMs = null,
         )
         val receipt = IdentifierResolutionReceipt(
-            policyId = "unused",
-            opaqueId = "unused",
-            receiptHash = "unused",
-            uaid = "unused",
-            accountId = accountId,
-            resolvedAtMs = 0L,
-            expiresAtMs = null,
-            backend = "unused",
-            signature = signatureHex,
-            signaturePayloadHex = receiptPayloadHex,
-            signaturePayload = dummyPayload,
+            payload = payload,
+            attestation = IdentifierReceiptAttestation(
+                kind = "signed",
+                signature = signatureHex,
+                proofBackend = null,
+                proofB64 = null,
+            ),
         )
 
         val instruction = ClaimIdentifierWirePayloadEncoder.encode(accountId, receipt)

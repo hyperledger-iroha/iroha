@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 /** Summary entry returned by `GET /v1/identifier-policies`. */
-class IdentifierPolicySummary(
+class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val policyId: String,
     @JvmField val owner: String,
     @JvmField val active: Boolean,
@@ -12,6 +12,7 @@ class IdentifierPolicySummary(
     @JvmField val inputEncryptionPublicParameters: String?,
     @JvmField val inputEncryptionPublicParametersDecoded: IdentifierBfvPublicParameters?,
     @JvmField val note: String?,
+    @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
 ) {
     fun plaintextRequest(input: String): IdentifierResolveRequest =
         IdentifierResolveRequest.plaintext(this, input)

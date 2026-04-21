@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # builder stage
 FROM rust:slim-bookworm AS builder
 
@@ -16,7 +18,11 @@ ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="irohad iroha kagami"
 ARG USE_PREBUILT="0"
-RUN set -e; \
+ARG IROHA_GIT_COMMIT_HASH=""
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    set -e; \
     mkdir -p /outbin; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
         for bin in ${BINARIES}; do \
@@ -28,7 +34,7 @@ RUN set -e; \
         for bin in ${BINARIES}; do \
             set -- "$@" --bin "$bin"; \
         done; \
-        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" mold --run "$@"; \
+        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
         for bin in ${BINARIES}; do \
             cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
         done; \

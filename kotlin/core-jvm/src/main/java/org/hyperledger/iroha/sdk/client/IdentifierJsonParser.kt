@@ -31,7 +31,12 @@ object IdentifierJsonParser {
                             "identifier policy list.items[$i].input_encryption_public_parameters_decoded"),
                         "identifier policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
-                    optionalString(item["note"])
+                    optionalString(item["note"]),
+                    if (item["proof_verifier"] == null) null
+                    else parseProofVerifier(
+                        expectObject(item["proof_verifier"], "identifier policy list.items[$i].proof_verifier"),
+                        "identifier policy list.items[$i].proof_verifier"
+                    )
                 )
             )
         }
@@ -44,21 +49,17 @@ object IdentifierJsonParser {
     @JvmStatic
     fun parseResolutionReceipt(payload: ByteArray): IdentifierResolutionReceipt {
         val root = expectObject(parse(payload, "identifier resolution receipt"), "identifier resolution receipt")
+        val receiptPayload = parseResolutionPayload(
+            expectObject(root["payload"], "identifier resolution receipt.payload"),
+            "identifier resolution receipt.payload"
+        )
+        val attestation = parseReceiptAttestation(
+            expectObject(root["attestation"], "identifier resolution receipt.attestation"),
+            "identifier resolution receipt.attestation"
+        )
         return IdentifierResolutionReceipt(
-            requiredString(root["policy_id"], "identifier resolution receipt.policy_id"),
-            canonicalizeOpaque(requiredString(root["opaque_id"], "identifier resolution receipt.opaque_id"), "identifier resolution receipt.opaque_id"),
-            canonicalizeHex32(requiredString(root["receipt_hash"], "identifier resolution receipt.receipt_hash"), "identifier resolution receipt.receipt_hash"),
-            UaidLiteral.canonicalize(requiredString(root["uaid"], "identifier resolution receipt.uaid"), "identifier resolution receipt.uaid"),
-            requiredString(root["account_id"], "identifier resolution receipt.account_id"),
-            asLong(root["resolved_at_ms"], "identifier resolution receipt.resolved_at_ms"),
-            if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "identifier resolution receipt.expires_at_ms") else null,
-            requiredString(root["backend"], "identifier resolution receipt.backend"),
-            requiredString(root["signature"], "identifier resolution receipt.signature"),
-            canonicalizeHex(requiredString(root["signature_payload_hex"], "identifier resolution receipt.signature_payload_hex"), "identifier resolution receipt.signature_payload_hex"),
-            parseResolutionPayload(
-                expectObject(root["signature_payload"], "identifier resolution receipt.signature_payload"),
-                "identifier resolution receipt.signature_payload"
-            )
+            receiptPayload,
+            attestation
         )
     }
 
@@ -171,16 +172,61 @@ object IdentifierJsonParser {
         )
     }
 
+    private fun parseProofVerifier(root: Map<String, Any?>, context: String): RamLfeProofVerifierMetadata =
+        RamLfeProofVerifierMetadata(
+            requiredString(root["proof_backend"], "$context.proof_backend"),
+            requiredString(root["circuit_id"], "$context.circuit_id"),
+            canonicalizeHex32(requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
+            requiredString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
+        )
+
     private fun parseResolutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionPayload {
+        val execution = parseResolutionExecutionPayload(
+            expectObject(root["execution"], "$context.execution"),
+            "$context.execution"
+        )
         return IdentifierResolutionPayload(
             requiredString(root["policy_id"], "$context.policy_id"),
+            execution,
             canonicalizeOpaque(requiredString(root["opaque_id"], "$context.opaque_id"), "$context.opaque_id"),
             canonicalizeHex32(requiredString(root["receipt_hash"], "$context.receipt_hash"), "$context.receipt_hash"),
             UaidLiteral.canonicalize(requiredString(root["uaid"], "$context.uaid"), "$context.uaid"),
-            requiredString(root["account_id"], "$context.account_id"),
-            asLong(root["resolved_at_ms"], "$context.resolved_at_ms"),
+            requiredString(root["account_id"], "$context.account_id")
+        )
+    }
+
+    private fun parseResolutionExecutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionExecutionPayload =
+        IdentifierResolutionExecutionPayload(
+            requiredString(root["program_id"], "$context.program_id"),
+            canonicalizeHex32(requiredString(root["program_digest"], "$context.program_digest"), "$context.program_digest"),
+            requiredString(root["backend"], "$context.backend").lowercase(),
+            requiredString(root["verification_mode"], "$context.verification_mode").lowercase(),
+            canonicalizeHex32(requiredString(root["output_hash"], "$context.output_hash"), "$context.output_hash"),
+            canonicalizeHex32(requiredString(root["associated_data_hash"], "$context.associated_data_hash"), "$context.associated_data_hash"),
+            asLong(root["executed_at_ms"], "$context.executed_at_ms"),
             if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "$context.expires_at_ms") else null
         )
+
+    private fun parseReceiptAttestation(root: Map<String, Any?>, context: String): IdentifierReceiptAttestation {
+        val kind = requiredString(root["kind"], "$context.kind").lowercase()
+        return when (kind) {
+            "signed" -> {
+                val signature = canonicalizeHex(requiredString(root["signature"], "$context.signature"), "$context.signature")
+                check(root["proof_backend"] == null && root["proof_b64"] == null) {
+                    "$context signed attestation must not include proof fields"
+                }
+                IdentifierReceiptAttestation(kind, signature, null, null)
+            }
+            "proof" -> {
+                val backend = requiredString(root["proof_backend"], "$context.proof_backend")
+                val proofB64 = requiredString(root["proof_b64"], "$context.proof_b64")
+                check(root["signature"] == null) {
+                    "$context proof attestation must not include signature"
+                }
+                IdentifierReceiptAttestation(kind, null, backend, proofB64)
+            }
+            else -> error("$context.kind must be signed or proof")
+        }
     }
 
     private fun asLongList(value: Any?, path: String): List<Long> {

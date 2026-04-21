@@ -86,7 +86,7 @@ public final class HttpClientTransportTests {
     identifierPoliciesRequestParsesResponse();
     ramLfeProgramPoliciesRequestParsesResponse();
     identifierResolveRequestParsesResponse();
-    identifierResolveRequestParsesStructuredSignaturePayloadResponse();
+    identifierResolveRequestParsesProgrammedReceiptResponse();
     identifierResolveRequestAllowsNotFound();
     identifierClaimLookupAllowsNotFound();
     identifierClaimReceiptUsesAccountPath();
@@ -1084,7 +1084,7 @@ public final class HttpClientTransportTests {
   }
 
   private static IdentifierReceiptFixture signedIdentifierReceiptFixture(
-      final long resolvedAtMs, final Long expiresAtMs) {
+      final IdentifierResolutionPayload payload) {
     try {
       final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
       final KeyPair keyPair = generator.generateKeyPair();
@@ -1092,7 +1092,7 @@ public final class HttpClientTransportTests {
       final byte[] rawPublicKey =
           java.util.Arrays.copyOfRange(
               publicKeyBytes, publicKeyBytes.length - 32, publicKeyBytes.length);
-      final byte[] payloadBytes = new byte[] {0x01, 0x02, 0x03, 0x04, (byte) 0xA0};
+      final byte[] payloadBytes = IdentifierReceiptCanonicalEncoder.encodePayload(payload);
       final byte[] message = IrohaHash.prehash(payloadBytes);
       final Signature signer = Signature.getInstance("Ed25519");
       signer.initSign(keyPair.getPrivate());
@@ -1100,60 +1100,87 @@ public final class HttpClientTransportTests {
       final byte[] signature = signer.sign();
       return new IdentifierReceiptFixture(
           "ed25519:" + PublicKeyCodec.encodePublicKeyMultihash(0x01, rawPublicKey),
-          hex(payloadBytes),
-          hex(signature),
-          resolvedAtMs,
-          expiresAtMs);
+          hex(signature));
     } catch (final Exception ex) {
       throw new IllegalStateException("failed to build signed identifier receipt fixture", ex);
     }
   }
 
+  private static String identifierReceiptJson(
+      final IdentifierResolutionPayload payload, final String signatureHex) {
+    return "{"
+        + "\"payload\":"
+        + identifierPayloadJson(payload)
+        + ",\"attestation\":{\"kind\":\"signed\",\"signature\":"
+        + jsonString(signatureHex)
+        + "}"
+        + "}";
+  }
+
+  private static String identifierPayloadJson(final IdentifierResolutionPayload payload) {
+    return "{"
+        + "\"policy_id\":"
+        + jsonString(payload.policyId())
+        + ",\"execution\":"
+        + identifierExecutionJson(payload.execution())
+        + ",\"opaque_id\":"
+        + jsonString(payload.opaqueId())
+        + ",\"receipt_hash\":"
+        + jsonString(payload.receiptHash())
+        + ",\"uaid\":"
+        + jsonString(payload.uaid())
+        + ",\"account_id\":"
+        + jsonString(payload.accountId())
+        + "}";
+  }
+
+  private static String identifierExecutionJson(
+      final IdentifierResolutionExecutionPayload execution) {
+    final String expires =
+        execution.expiresAtMs() == null ? "" : ",\"expires_at_ms\":" + execution.expiresAtMs();
+    return "{"
+        + "\"program_id\":"
+        + jsonString(execution.programId())
+        + ",\"program_digest\":"
+        + jsonString(execution.programDigest())
+        + ",\"backend\":"
+        + jsonString(execution.backend())
+        + ",\"verification_mode\":"
+        + jsonString(execution.verificationMode())
+        + ",\"output_hash\":"
+        + jsonString(execution.outputHash())
+        + ",\"associated_data_hash\":"
+        + jsonString(execution.associatedDataHash())
+        + ",\"executed_at_ms\":"
+        + execution.executedAtMs()
+        + expires
+        + "}";
+  }
+
+  private static String jsonString(final String value) {
+    return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+  }
+
   private static void identifierResolveRequestParsesResponse() {
     final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
-    final String json =
-        "{"
-            + "\"policy_id\":\"phone#retail\","
-            + "\"opaque_id\":\"opaque:"
-            + "11".repeat(32)
-            + "\","
-            + "\"receipt_hash\":\""
-            + "22".repeat(32)
-            + "\","
-            + "\"uaid\":\"uaid:"
-            + "33".repeat(31)
-            + "35\","
-            + "\"account_id\":\""
-            + accountId
-            + "\","
-            + "\"resolved_at_ms\":42,"
-            + "\"expires_at_ms\":142,"
-            + "\"backend\":\"bfv-affine-sha3-256-v1\","
-            + "\"signature\":\""
-            + signed.signatureHex()
-            + "\","
-            + "\"signature_payload_hex\":\""
-            + signed.signaturePayloadHex()
-            + "\","
-            + "\"signature_payload\":{"
-            + "\"policy_id\":\"phone#retail\","
-            + "\"opaque_id\":\"opaque:"
-            + "11".repeat(32)
-            + "\","
-            + "\"receipt_hash\":\""
-            + "22".repeat(32)
-            + "\","
-            + "\"uaid\":\"uaid:"
-            + "33".repeat(31)
-            + "35\","
-            + "\"account_id\":\""
-            + accountId
-            + "\","
-            + "\"resolved_at_ms\":42,"
-            + "\"expires_at_ms\":142"
-            + "}"
-            + "}";
+    final IdentifierResolutionPayload payload =
+        new IdentifierResolutionPayload(
+            "phone#retail",
+            new IdentifierResolutionExecutionPayload(
+                "identifier_lookup_retail",
+                "11".repeat(32),
+                "bfv-affine-sha3-256-v1",
+                "signed",
+                "22".repeat(32),
+                "33".repeat(32),
+                42L,
+                142L),
+            "opaque:" + "11".repeat(32),
+            "22".repeat(32),
+            "uaid:" + "33".repeat(31) + "35",
+            accountId);
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+    final String json = identifierReceiptJson(payload, signed.signatureHex());
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -1184,7 +1211,7 @@ public final class HttpClientTransportTests {
             null,
             null,
             null);
-    assert receipt.verifySignature(policy) : "Receipt signature verification must succeed";
+    assert receipt.verifyAttestation(policy) : "Receipt signature verification must succeed";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Identifier resolve request must be captured";
@@ -1198,66 +1225,27 @@ public final class HttpClientTransportTests {
         : "Identifier resolve payload mismatch";
   }
 
-  private static void identifierResolveRequestParsesStructuredSignaturePayloadResponse() {
+  private static void identifierResolveRequestParsesProgrammedReceiptResponse() {
     final String accountId =
         "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
-    final String json =
-        "{"
-            + "\"policy_id\":\"email#retail\","
-            + "\"opaque_id\":\"opaque:"
-            + "11".repeat(32)
-            + "\","
-            + "\"receipt_hash\":\""
-            + "22".repeat(32)
-            + "\","
-            + "\"uaid\":\"uaid:"
-            + "33".repeat(31)
-            + "35\","
-            + "\"account_id\":\""
-            + accountId
-            + "\","
-            + "\"resolved_at_ms\":42,"
-            + "\"expires_at_ms\":142,"
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"signature\":\""
-            + signed.signatureHex()
-            + "\","
-            + "\"signature_payload_hex\":\""
-            + signed.signaturePayloadHex()
-            + "\","
-            + "\"signature_payload\":{"
-            + "\"policy_id\":{\"kind\":\"email\",\"business_rule\":\"retail\"},"
-            + "\"execution\":{"
-            + "\"program_id\":{\"name\":\"email_retail\"},"
-            + "\"program_digest\":\"hash:"
-            + "44".repeat(32)
-            + "#3f8a\","
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
-            + "\"output_hash\":\"hash:"
-            + "55".repeat(32)
-            + "#3245\","
-            + "\"associated_data_hash\":\"hash:"
-            + "66".repeat(32)
-            + "#0184\","
-            + "\"executed_at_ms\":42,"
-            + "\"expires_at_ms\":142"
-            + "},"
-            + "\"opaque_id\":[\"hash:"
-            + "11".repeat(32)
-            + "#4944\"],"
-            + "\"receipt_hash\":\"hash:"
-            + "22".repeat(32)
-            + "#b7f2\","
-            + "\"uaid\":[\"hash:"
-            + "33".repeat(31)
-            + "35#3153\"],"
-            + "\"account_id\":\""
-            + accountId
-            + "\""
-            + "}"
-            + "}";
+    final IdentifierResolutionPayload payload =
+        new IdentifierResolutionPayload(
+            "email#retail",
+            new IdentifierResolutionExecutionPayload(
+                "email_retail",
+                "44".repeat(32),
+                "bfv-programmed-sha3-256-v1",
+                "signed",
+                "55".repeat(32),
+                "66".repeat(32),
+                42L,
+                142L),
+            "opaque:" + "11".repeat(32),
+            "22".repeat(32),
+            "uaid:" + "33".repeat(31) + "35",
+            accountId);
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+    final String json = identifierReceiptJson(payload, signed.signatureHex());
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -1292,7 +1280,7 @@ public final class HttpClientTransportTests {
             null,
             null,
             null);
-    assert receipt.verifySignature(policy)
+    assert receipt.verifyAttestation(policy)
         : "Structured receipt signature verification must succeed";
   }
 
@@ -1332,47 +1320,24 @@ public final class HttpClientTransportTests {
 
   private static void identifierClaimReceiptUsesAccountPath() {
     final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(7L, null);
-    final String json =
-        "{"
-            + "\"policy_id\":\"phone#retail\","
-            + "\"opaque_id\":\"opaque:"
-            + "44".repeat(32)
-            + "\","
-            + "\"receipt_hash\":\""
-            + "55".repeat(32)
-            + "\","
-            + "\"uaid\":\"uaid:"
-            + "66".repeat(31)
-            + "67\","
-            + "\"account_id\":\""
-            + accountId
-            + "\","
-            + "\"resolved_at_ms\":7,"
-            + "\"backend\":\"bfv-affine-sha3-256-v1\","
-            + "\"signature\":\""
-            + signed.signatureHex()
-            + "\","
-            + "\"signature_payload_hex\":\""
-            + signed.signaturePayloadHex()
-            + "\","
-            + "\"signature_payload\":{"
-            + "\"policy_id\":\"phone#retail\","
-            + "\"opaque_id\":\"opaque:"
-            + "44".repeat(32)
-            + "\","
-            + "\"receipt_hash\":\""
-            + "55".repeat(32)
-            + "\","
-            + "\"uaid\":\"uaid:"
-            + "66".repeat(31)
-            + "67\","
-            + "\"account_id\":\""
-            + accountId
-            + "\","
-            + "\"resolved_at_ms\":7"
-            + "}"
-            + "}";
+    final IdentifierResolutionPayload payload =
+        new IdentifierResolutionPayload(
+            "phone#retail",
+            new IdentifierResolutionExecutionPayload(
+                "identifier_lookup_retail",
+                "44".repeat(32),
+                "bfv-affine-sha3-256-v1",
+                "signed",
+                "55".repeat(32),
+                "66".repeat(32),
+                7L,
+                null),
+            "opaque:" + "44".repeat(32),
+            "55".repeat(32),
+            "uaid:" + "66".repeat(31) + "67",
+            accountId);
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+    final String json = identifierReceiptJson(payload, signed.signatureHex());
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -1942,27 +1907,27 @@ public final class HttpClientTransportTests {
 
   private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
     final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
-    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
-    final IdentifierResolutionReceipt receipt =
-        new IdentifierResolutionReceipt(
+    final IdentifierResolutionPayload payload =
+        new IdentifierResolutionPayload(
             "phone#retail",
+            new IdentifierResolutionExecutionPayload(
+                "identifier_lookup_retail",
+                "11".repeat(32),
+                "bfv-affine-sha3-256-v1",
+                "signed",
+                "22".repeat(32),
+                "33".repeat(32),
+                42L,
+                142L),
             "opaque:" + "11".repeat(32),
             "22".repeat(32),
             "uaid:" + "33".repeat(31) + "35",
-            accountId,
-            42L,
-            142L,
-            "bfv-affine-sha3-256-v1",
-            signed.signatureHex(),
-            signed.signaturePayloadHex(),
-            new IdentifierResolutionPayload(
-                "phone#retail",
-                "opaque:" + "11".repeat(32),
-                "22".repeat(32),
-                "uaid:" + "33".repeat(31) + "35",
-                accountId,
-                42L,
-                142L));
+            accountId);
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
+    final IdentifierResolutionReceipt receipt =
+        new IdentifierResolutionReceipt(
+            payload,
+            new IdentifierReceiptAttestation("signed", signed.signatureHex(), null, null));
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "phone#retail",
@@ -2011,10 +1976,7 @@ public final class HttpClientTransportTests {
 
   private record IdentifierReceiptFixture(
       String resolverPublicKey,
-      String signaturePayloadHex,
-      String signatureHex,
-      long resolvedAtMs,
-      Long expiresAtMs) {}
+      String signatureHex) {}
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
     private TransportRequest lastRequest;

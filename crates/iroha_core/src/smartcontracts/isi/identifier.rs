@@ -8,7 +8,7 @@ use iroha_data_model::{
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierResolutionReceipt},
     prelude::*,
     proof::VerifyingKeyBox,
-    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramPolicy},
+    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramPolicy, RamLfeReceiptAttestation},
     zk::OpenVerifyEnvelope,
 };
 use iroha_telemetry::metrics;
@@ -511,10 +511,10 @@ pub mod isi {
 
         match program_policy.verification_mode {
             RamLfeVerificationMode::Signed => {
-                if receipt.proof.is_some() {
+                if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
                     return Err(Error::InvariantViolation(
                         format!(
-                            "Identifier receipt for policy {} must not include a proof in signed mode",
+                            "Identifier receipt for policy {} must carry a signed attestation",
                             policy.id
                         )
                         .into(),
@@ -533,25 +533,17 @@ pub mod isi {
                     })?;
             }
             RamLfeVerificationMode::Proof => {
-                if receipt.signature.is_some() {
+                let RamLfeReceiptAttestation::Proof(proof) = &receipt.attestation else {
                     return Err(Error::InvariantViolation(
                         format!(
-                            "Identifier receipt for policy {} must not include a signature in proof mode",
+                            "Identifier receipt for policy {} must carry a proof attestation",
                             policy.id
                         )
                         .into(),
                     ));
-                }
+                };
                 verify_execution_proof(
-                    receipt.proof.as_ref().ok_or_else(|| {
-                        Error::InvariantViolation(
-                            format!(
-                                "Identifier receipt for policy {} is missing a proof",
-                                policy.id
-                            )
-                            .into(),
-                        )
-                    })?,
+                    proof,
                     execution,
                     public_parameters.proof_verifier.as_ref().ok_or_else(|| {
                         Error::InvariantViolation(
@@ -620,13 +612,6 @@ pub mod isi {
                 .into(),
             ));
         }
-        if Hash::prehashed(envelope.vk_hash) != verifier.verifying_key_hash {
-            return Err(Error::InvariantViolation(
-                "RAM-LFE proof verifying-key hash does not match verifier metadata"
-                    .to_owned()
-                    .into(),
-            ));
-        }
         if Hash::new(&envelope.public_inputs) != verifier.public_inputs_schema_hash {
             return Err(Error::InvariantViolation(
                 "RAM-LFE proof public-input schema hash does not match verifier metadata"
@@ -639,7 +624,7 @@ pub mod isi {
             verifier.proof_backend.clone().into(),
             verifier.verifying_key_bytes.clone(),
         );
-        if Hash::prehashed(crate::zk::hash_vk(&verifying_key)) != verifier.verifying_key_hash {
+        if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
             return Err(Error::InvariantViolation(
                 "RAM-LFE verifier metadata contains a mismatched verifying key"
                     .to_owned()
@@ -803,8 +788,7 @@ mod tests {
         let signature: Signature = SignatureOf::new(resolver.private_key(), &payload).into();
         IdentifierResolutionReceipt {
             payload,
-            signature: Some(signature),
-            proof: None,
+            attestation: RamLfeReceiptAttestation::Signed(signature),
         }
     }
 
@@ -1149,7 +1133,9 @@ mod tests {
             b"+15551234567",
         );
         receipt.payload.receipt_hash = Hash::prehashed([0; Hash::LENGTH]);
-        receipt.signature = Some(SignatureOf::new(resolver.private_key(), &receipt.payload).into());
+        receipt.attestation = RamLfeReceiptAttestation::Signed(
+            SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+        );
         let err = ClaimIdentifier {
             account: owner.clone(),
             receipt,

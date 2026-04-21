@@ -8870,7 +8870,10 @@ fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
                             "storage_ticket_hex"
                         ],
                         "properties": {
-                            "resource": { "type": "string" },
+                            "resource": {
+                                "type": "string",
+                                "description": "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`)."
+                            },
                             "partition_id": { "type": "integer", "minimum": 0 },
                             "asset_definition_id": { "type": "string" },
                             "archive_emitted_at_unix": { "type": "integer", "minimum": 0 },
@@ -8921,7 +8924,10 @@ fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
                             "storage_ticket_hex"
                         ],
                         "properties": {
-                            "resource": { "type": "string" },
+                            "resource": {
+                                "type": "string",
+                                "description": "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`)."
+                            },
                             "partition_id": { "type": "integer", "minimum": 0 },
                             "asset_definition_id": { "type": "string" },
                             "archive_emitted_at_unix": { "type": "integer", "minimum": 0 },
@@ -8956,7 +8962,7 @@ fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
             "properties": {
                 "resource": {
                     "type": "string",
-                    "description": "Projection resource family (`accounts` or `asset_holders`)."
+                    "description": "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`)."
                 },
                 "asset_definition_id": {
                     "type": "string",

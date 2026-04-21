@@ -39,18 +39,25 @@ public final class RamLfeJsonParser {
                       "ram-lfe program policy list.items[" + i + "].verification_mode")),
               optionalString(item.get("input_encryption")),
               optionalString(item.get("input_encryption_public_parameters")),
-              item.get("input_encryption_public_parameters_decoded") == null
-                  ? null
-                  : parseBfvPublicParameters(
-                      expectObject(
-                          item.get("input_encryption_public_parameters_decoded"),
+	              item.get("input_encryption_public_parameters_decoded") == null
+	                  ? null
+	                  : parseBfvPublicParameters(
+	                      expectObject(
+	                          item.get("input_encryption_public_parameters_decoded"),
                           "ram-lfe program policy list.items["
                               + i
                               + "].input_encryption_public_parameters_decoded"),
-                      "ram-lfe program policy list.items["
-                          + i
-                          + "].input_encryption_public_parameters_decoded"),
-              optionalString(item.get("note"))));
+	                      "ram-lfe program policy list.items["
+	                          + i
+	                          + "].input_encryption_public_parameters_decoded"),
+	              optionalString(item.get("note")),
+	              item.get("proof_verifier") == null
+	                  ? null
+	                  : parseProofVerifier(
+	                      expectObject(
+	                          item.get("proof_verifier"),
+	                          "ram-lfe program policy list.items[" + i + "].proof_verifier"),
+	                      "ram-lfe program policy list.items[" + i + "].proof_verifier")));
     }
     final long total =
         root.containsKey("total")
@@ -189,6 +196,14 @@ public final class RamLfeJsonParser {
     return trimmed.toLowerCase(Locale.ROOT);
   }
 
+  private static String canonicalizeHex32(final String value, final String context) {
+    final String normalized = canonicalizeHex(value, context);
+    if (normalized.length() != 64) {
+      throw new IllegalArgumentException(context + " must contain 32 bytes");
+    }
+    return normalized;
+  }
+
   private static String normalizedMode(final String value) {
     return value.trim().toLowerCase(Locale.ROOT);
   }
@@ -214,6 +229,18 @@ public final class RamLfeJsonParser {
             asLongList(publicKey.get("b"), context + ".public_key.b"),
             asLongList(publicKey.get("a"), context + ".public_key.a")),
         Math.toIntExact(asLong(root.get("max_input_bytes"), context + ".max_input_bytes")));
+  }
+
+  private static RamLfeProofVerifierMetadata parseProofVerifier(
+      final Map<String, Object> root, final String context) {
+    return new RamLfeProofVerifierMetadata(
+        requiredString(root.get("proof_backend"), context + ".proof_backend"),
+        requiredString(root.get("circuit_id"), context + ".circuit_id"),
+        canonicalizeHex32(
+            requiredString(
+                root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash"),
+            context + ".public_inputs_schema_hash"),
+        requiredString(root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64"));
   }
 
   private static List<Long> asLongList(final Object value, final String path) {

@@ -19,19 +19,16 @@ object IdentifierReceiptVerifier {
         require(receipt.policyId == policy.policyId) {
             "receipt policyId does not match the supplied policy"
         }
-        val payload = receipt.signaturePayload
-        require(
-            receipt.policyId == payload.policyId
-                && receipt.opaqueId == payload.opaqueId
-                && receipt.receiptHash == payload.receiptHash
-                && receipt.uaid == payload.uaid
-                && receipt.accountId == payload.accountId
-                && receipt.resolvedAtMs == payload.resolvedAtMs
-                && receipt.expiresAtMs == payload.expiresAtMs
-        ) { "receipt top-level fields do not match signaturePayload" }
-        val payloadBytes = hexToBytes(receipt.signaturePayloadHex)
+        require(receipt.attestation.kind == "signed") {
+            "only signed identifier receipt attestations can be verified with a resolver public key"
+        }
+        val payloadBytes = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
         val message = IrohaHash.prehash(payloadBytes)
-        val signatureBytes = hexToBytes(receipt.signature)
+        val signatureBytes = hexToBytes(
+            requireNotNull(receipt.attestation.signature) {
+                "signed attestation is missing signature"
+            }
+        )
         val keyPayload = decodePublicKeyLiteral(policy.resolverPublicKey)
             ?: throw IllegalArgumentException("resolverPublicKey is not a valid multihash literal")
         return when (keyPayload.curveId) {

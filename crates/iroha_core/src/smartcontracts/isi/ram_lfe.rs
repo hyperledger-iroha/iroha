@@ -5,7 +5,10 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     proof::VerifyingKeyBox,
-    ram_lfe::{RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramPolicy},
+    ram_lfe::{
+        RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramPolicy,
+        RamLfeReceiptAttestation,
+    },
     zk::OpenVerifyEnvelope,
 };
 use iroha_telemetry::metrics;
@@ -223,9 +226,9 @@ pub fn validate_execution_receipt(
 
     match program_policy.verification_mode {
         RamLfeVerificationMode::Signed => {
-            if receipt.proof.is_some() {
+            if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
                 return Err(format!(
-                    "RAM-LFE receipt for program {} must not include a proof in signed mode",
+                    "RAM-LFE receipt for program {} must carry a signed attestation",
                     program_policy.program_id
                 ));
             }
@@ -239,19 +242,14 @@ pub fn validate_execution_receipt(
                 })?;
         }
         RamLfeVerificationMode::Proof => {
-            if receipt.signature.is_some() {
+            let RamLfeReceiptAttestation::Proof(proof) = &receipt.attestation else {
                 return Err(format!(
-                    "RAM-LFE receipt for program {} must not include a signature in proof mode",
+                    "RAM-LFE receipt for program {} must carry a proof attestation",
                     program_policy.program_id
                 ));
-            }
+            };
             verify_execution_proof(
-                receipt.proof.as_ref().ok_or_else(|| {
-                    format!(
-                        "RAM-LFE receipt for program {} is missing a proof",
-                        program_policy.program_id
-                    )
-                })?,
+                proof,
                 payload,
                 public_parameters.proof_verifier.as_ref().ok_or_else(|| {
                     format!(
@@ -297,9 +295,6 @@ fn verify_execution_proof(
             envelope.circuit_id, verifier.circuit_id
         ));
     }
-    if Hash::prehashed(envelope.vk_hash) != verifier.verifying_key_hash {
-        return Err("RAM-LFE proof verifying-key hash does not match verifier metadata".to_owned());
-    }
     if Hash::new(&envelope.public_inputs) != verifier.public_inputs_schema_hash {
         return Err(
             "RAM-LFE proof public-input schema hash does not match verifier metadata".to_owned(),
@@ -310,7 +305,7 @@ fn verify_execution_proof(
         verifier.proof_backend.clone().into(),
         verifier.verifying_key_bytes.clone(),
     );
-    if Hash::prehashed(crate::zk::hash_vk(&verifying_key)) != verifier.verifying_key_hash {
+    if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
         return Err("RAM-LFE verifier metadata contains a mismatched verifying key".to_owned());
     }
     let expected_instances = expected_execution_payload_hash_instances(

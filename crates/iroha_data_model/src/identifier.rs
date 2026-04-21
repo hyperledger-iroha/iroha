@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, string::String, vec::Vec};
 
-use iroha_crypto::{Hash, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Hash, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -10,8 +10,7 @@ use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
     nexus::UniversalAccountId,
-    proof::ProofBox,
-    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
+    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation},
 };
 
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
@@ -199,7 +198,7 @@ pub struct IdentifierClaimRecord {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Signed receipt emitted by identifier resolution services.
+/// Receipt emitted by identifier resolution services.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -208,14 +207,8 @@ pub struct IdentifierClaimRecord {
 pub struct IdentifierResolutionReceipt {
     /// Canonical payload covered by the attestation.
     pub payload: IdentifierResolutionReceiptPayload,
-    /// Resolver signature over the canonical receipt payload in signed mode.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub signature: Option<Signature>,
-    /// Proof attachment over the canonical receipt payload in proof mode.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub proof: Option<ProofBox>,
+    /// Explicit receipt attestation.
+    pub attestation: RamLfeReceiptAttestation,
 }
 
 /// Canonical payload covered by an identifier-resolution receipt signature.
@@ -270,7 +263,7 @@ impl IdentifierResolutionReceipt {
     /// Returns the underlying signature verification error when the signature is invalid.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
         SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
-            self.signature.clone().ok_or_else(|| {
+            self.attestation.signature().cloned().ok_or_else(|| {
                 iroha_crypto::Error::Other("identifier receipt is missing a signature".to_owned())
             })?,
         )
@@ -386,13 +379,14 @@ mod tests {
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
             account_id: AccountId::new(account_signatory),
         };
-        let receipt = IdentifierResolutionReceipt {
-            payload: payload.clone(),
-            signature: None,
-            proof: None,
-        };
         let signer = KeyPair::random();
         let signature = SignatureOf::new(signer.private_key(), &payload);
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            attestation: RamLfeReceiptAttestation::Signed(iroha_crypto::Signature::from_bytes(
+                signature.payload(),
+            )),
+        };
 
         assert_eq!(receipt.payload_bytes(), payload.encode());
         signature
