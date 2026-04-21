@@ -118,7 +118,7 @@ use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet, VecDeque},
     num::NonZeroUsize,
     panic::AssertUnwindSafe,
     sync::OnceLock,
@@ -5321,20 +5321,20 @@ static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
 #[cfg(test)]
-static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS: LazyLock<RwLock<HashSet<u32>>> =
+static SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS: LazyLock<RwLock<HashSet<[u8; 32]>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
 #[cfg(test)]
 /// Serialize SCCP message-proof override tests and temporarily allow synthetic
-/// transparent proof generation for the selected counterparty domain.
-pub(crate) fn sccp_message_proof_override_guard_for_tests(counterparty_domain: u32) -> impl Drop {
+/// transparent proof generation for the selected message bundle.
+pub(crate) fn sccp_message_proof_override_guard_for_tests(message_id: [u8; 32]) -> impl Drop {
     struct Guard {
         _guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+            SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
                 .write()
                 .expect("SCCP message proof override registry poisoned")
                 .clear();
@@ -5344,19 +5344,19 @@ pub(crate) fn sccp_message_proof_override_guard_for_tests(counterparty_domain: u
     let guard = SCCP_MESSAGE_PROOF_OVERRIDE_TEST_LOCK
         .lock()
         .expect("SCCP message proof override lock poisoned");
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
         .write()
         .expect("SCCP message proof override registry poisoned")
-        .insert(counterparty_domain);
+        .insert(message_id);
     Guard { _guard: guard }
 }
 
 #[cfg(test)]
-fn sccp_message_proof_override_enabled_for_tests(counterparty_domain: u32) -> bool {
-    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_DOMAINS
+fn sccp_message_proof_override_enabled_for_tests(message_id: [u8; 32]) -> bool {
+    SCCP_MESSAGE_PROOF_OVERRIDE_TEST_MESSAGE_IDS
         .read()
         .expect("SCCP message proof override registry poisoned")
-        .contains(&counterparty_domain)
+        .contains(&message_id)
 }
 
 #[cfg(test)]
@@ -5372,14 +5372,15 @@ struct SyntheticSccpTransparentProofArtifactV1 {
 fn synthetic_bridge_proof_from_sccp_message_bundle_for_tests(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<Result<iroha_data_model::bridge::BridgeProof>> {
+    if !sccp_message_proof_override_enabled_for_tests(bundle.commitment.message_id) {
+        return None;
+    }
+
     let (backend, manifest_hash, counterparty_domain) =
         match sccp_message_backend_descriptor(&bundle.payload) {
             Ok(descriptor) => descriptor,
             Err(err) => return Some(Err(err)),
         };
-    if !sccp_message_proof_override_enabled_for_tests(counterparty_domain) {
-        return None;
-    }
 
     let finality = match decode_nexus_bridge_finality_proof(&bundle.finality_proof) {
         Some(finality) => finality,

@@ -2,6 +2,62 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii projection checkpoint upload helper restore):
+The `iroha_torii` projection checkpoint plan/publish handlers compile again.
+`crates/iroha_torii/src/runtime.rs` now restores the missing
+`build_query_projection_uploaded_archives(...)` helper so uploaded checkpoint
+refs are rebuilt into canonical shard archives with the same
+resource/partition/asset-selector rules as the shard export path, and the
+helper has direct regression coverage for the `asset_holders` selector
+requirement.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/runtime.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
+- open work after this slice:
+  - broader `cargo test -p iroha_torii ...` package-target validation is still
+    blocked by unrelated pre-existing compile errors under
+    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+
+Latest sync (2026-04-21 Torii targeted limiter and SCCP disabled-lane regression repair):
+The four reported `iroha_torii` library reds are green again. Small-capacity
+rate limiters no longer split their tiny bucket budget across multiple shards,
+the SCCP synthetic proof override is now scoped to the exact test bundle that
+requested it instead of the whole counterparty domain, and the lightweight
+`KisoHandle::mock` / Connect bus helpers now tolerate construction from
+synchronous tests by hosting their background tasks on a dedicated
+current-thread Tokio runtime when no reactor is already running.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/limits.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/connect.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/kiso.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib limits::tests::limiter_caps_bucket_growth -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_proof_submit_rejects_disabled_sccp_message_bundle_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_prepares_ephemeral_settlement_contract_call -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_derives_settlement_route_from_transfer_bundle -- --exact`
+  - broader `cargo test -p iroha_torii ...` package-target validation still
+    stops in unrelated pre-existing compile errors under
+    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+- open work after this slice:
+  - fix or isolate the unrelated `iroha_torii` integration-test compile errors
+    in `tests/common/norito_rpc_harness.rs`
+  - rerun a broader Torii package validation window once those package-target
+    build errors are addressed
+
 Latest sync (2026-04-21 Swift offline model boundary hardening and numeric arithmetic parity):
 The Swift offline cash public models now fail fast on malformed amount fields
 instead of leaving canonicalization to later helper calls, and the public

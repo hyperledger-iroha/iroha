@@ -6,6 +6,7 @@
 //! flow and a relay bus that bridges app↔wallet connections locally and, when
 //! enabled, propagates frames over the Iroha P2P network between nodes.
 
+use core::future::Future;
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -49,6 +50,23 @@ pub(crate) const CLOSE_CODE_HEARTBEAT: u16 = 4003;
 pub(crate) const CLOSE_REASON_HEARTBEAT: &str = "connect_heartbeat_timeout";
 pub(crate) const CLOSE_REASON_ROLE_DIRECTION_MISMATCH: &str = "connect_role_direction_mismatch";
 pub(crate) const CLOSE_REASON_SEQUENCE_VIOLATION: &str = "connect_sequence_violation";
+
+fn spawn_background_task<F>(task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(task);
+    } else {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("connect background runtime");
+            runtime.block_on(task);
+        });
+    }
+}
 
 #[derive(Clone)]
 pub struct Bus {
@@ -301,7 +319,7 @@ impl Bus {
 
     fn start_cleaner(&self) {
         let me = self.clone();
-        tokio::spawn(async move {
+        spawn_background_task(async move {
             let interval = Duration::from_secs(30);
             loop {
                 tokio::time::sleep(interval).await;
@@ -2344,7 +2362,7 @@ impl Bus {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
 
         let me = self.clone();
-        tokio::spawn(async move {
+        spawn_background_task(async move {
             {
                 let mut w = me.p2p.write().await;
                 *w = Some(network.clone());

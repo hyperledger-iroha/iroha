@@ -2,6 +2,54 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii projection checkpoint upload helper restore
+- `crates/iroha_torii/src/runtime.rs` now restores the missing
+  `build_query_projection_uploaded_archives(...)` helper used by the
+  projection checkpoint plan/publish app API handlers. The helper rebuilds
+  canonical `accounts` and `asset_holders` shard archives from the uploaded
+  checkpoint refs, reuses the existing partition/resource validation and
+  asset-holder selector rules from the shard export path, and parses manifest
+  digest / storage ticket ids with the existing fixed-width hex helpers so the
+  checkpoint handlers compile again.
+- Added direct regression coverage for the checkpoint upload helper's
+  `asset_holders` validation path: requests that omit
+  `asset_definition_id` for an asset-holder shard now fail through the expected
+  query-conversion error path before archive rebuild.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
+
+## 2026-04-21 Follow-up: Torii limiter eviction, SCCP disabled-lane races, and sync test runtime assumptions
+- `crates/iroha_torii/src/limits.rs` now sizes rate-limiter shards by a
+  minimum per-shard bucket budget instead of splitting very small capacities
+  across multiple shards. Tiny limiters keep a single eviction domain again,
+  which restores deterministic bucket capping for the `max_buckets = 2`
+  regression case.
+- `crates/iroha_torii/src/routing.rs` now scopes the SCCP synthetic
+  proof-override test helper by `message_id` instead of counterparty domain,
+  and `crates/iroha_torii/src/lib.rs` updates the settlement tests to register
+  the specific bundle they need. Disabled-lane bridge proof/message submit
+  tests no longer race with settlement tests that intentionally opt into the
+  synthetic proof shortcut.
+- `crates/iroha_core/src/kiso.rs` and `crates/iroha_torii/src/connect.rs` now
+  fall back to a dedicated current-thread Tokio runtime when their lightweight
+  test helpers are constructed outside an ambient Tokio runtime. This restores
+  the synchronous hosted-topology status test without changing the production
+  async path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib limits::tests::limiter_caps_bucket_growth -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_proof_submit_rejects_disabled_sccp_message_bundle_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_prepares_ephemeral_settlement_contract_call -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_derives_settlement_route_from_transfer_bundle -- --exact`
+  - broader `cargo test -p iroha_torii ...` package-target validation is still
+    blocked by unrelated pre-existing compile errors in
+    `crates/iroha_torii/tests/common/norito_rpc_harness.rs` that affect the
+    `configuration_endpoint` and `norito_ingress` test targets
+
 ## 2026-04-21 Follow-up: Swift offline model boundary hardening and numeric arithmetic parity
 - `IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift` now hardens the
   public offline cash models that own amount strings. `ToriiOfflineSpendAuthorization`,

@@ -158,61 +158,89 @@ impl KisoHandle {
     /// updates/subscriptions with pre-seeded watch channels.
     pub fn mock(state: &Config) -> Self {
         let dto = ConfigGetDTO::from(state);
-        let (actor_sender, mut actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let (actor_sender, actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let logger = state.logger.clone();
         let network_acl = Actor::snapshot_network_acl(state);
         let soranet_handshake = state.network.soranet_handshake.clone();
         let confidential_gas = state.confidential.gas;
-        tokio::spawn(async move {
-            let (logger_tx, _) = watch::channel(logger);
-            let (network_acl_tx, _) = watch::channel(network_acl);
-            let (handshake_tx, _) = watch::channel(soranet_handshake);
-            let (confidential_gas_tx, _) = watch::channel(confidential_gas);
-            let mut dto_snapshot = dto;
-            while let Some(msg) = actor_receiver.recv().await {
-                match msg {
-                    Message::GetDTO { respond_to } => {
-                        let _ = respond_to.send(dto_snapshot.clone());
-                    }
-                    Message::UpdateWithDTO { dto, respond_to } => {
-                        // Update the exposed Norito-RPC summary if provided; ignore the rest to
-                        // keep the mock lightweight.
-                        if let Some(transport) = dto.transport.as_ref() {
-                            if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
-                                if let Some(enabled) = norito_rpc.enabled {
-                                    dto_snapshot.transport.norito_rpc.enabled = enabled;
-                                }
-                                if let Some(stage) = norito_rpc.stage.as_ref() {
-                                    dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
-                                }
-                                if let Some(require_mtls) = norito_rpc.require_mtls {
-                                    dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
-                                }
-                                if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
-                                    dto_snapshot.transport.norito_rpc.canary_allowlist_size =
-                                        allowlist.len();
-                                }
-                            }
-                        }
-                        let _ = respond_to.send(Ok(()));
-                    }
-                    Message::SubscribeOnLogLevel { respond_to } => {
-                        let _ = respond_to.send(logger_tx.subscribe());
-                    }
-                    Message::SubscribeOnNetworkAcl { respond_to } => {
-                        let _ = respond_to.send(network_acl_tx.subscribe());
-                    }
-                    Message::SubscribeOnSoranetHandshake { respond_to } => {
-                        let _ = respond_to.send(handshake_tx.subscribe());
-                    }
-                    Message::SubscribeOnConfidentialGas { respond_to } => {
-                        let _ = respond_to.send(confidential_gas_tx.subscribe());
-                    }
-                }
-            }
-        });
+        crate::gas::configure_confidential_gas(confidential_gas.into());
+        let mock_actor = run_mock_actor(
+            actor_receiver,
+            logger,
+            network_acl,
+            soranet_handshake,
+            confidential_gas,
+            dto,
+        );
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(mock_actor);
+        } else {
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test Kiso mock runtime");
+                runtime.block_on(mock_actor);
+            });
+        }
         Self {
             actor: actor_sender,
+        }
+    }
+}
+
+async fn run_mock_actor(
+    mut actor_receiver: mpsc::Receiver<Message>,
+    logger: LoggerConfig,
+    network_acl: NetworkAcl,
+    soranet_handshake: ActualSoranetHandshake,
+    confidential_gas: ActualConfidentialGas,
+    dto: ConfigGetDTO,
+) {
+    let (logger_tx, _) = watch::channel(logger);
+    let (network_acl_tx, _) = watch::channel(network_acl);
+    let (handshake_tx, _) = watch::channel(soranet_handshake);
+    let (confidential_gas_tx, _) = watch::channel(confidential_gas);
+    let mut dto_snapshot = dto;
+    while let Some(msg) = actor_receiver.recv().await {
+        match msg {
+            Message::GetDTO { respond_to } => {
+                let _ = respond_to.send(dto_snapshot.clone());
+            }
+            Message::UpdateWithDTO { dto, respond_to } => {
+                // Update the exposed Norito-RPC summary if provided; ignore the rest to
+                // keep the mock lightweight.
+                if let Some(transport) = dto.transport.as_ref() {
+                    if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
+                        if let Some(enabled) = norito_rpc.enabled {
+                            dto_snapshot.transport.norito_rpc.enabled = enabled;
+                        }
+                        if let Some(stage) = norito_rpc.stage.as_ref() {
+                            dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
+                        }
+                        if let Some(require_mtls) = norito_rpc.require_mtls {
+                            dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
+                        }
+                        if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
+                            dto_snapshot.transport.norito_rpc.canary_allowlist_size =
+                                allowlist.len();
+                        }
+                    }
+                }
+                let _ = respond_to.send(Ok(()));
+            }
+            Message::SubscribeOnLogLevel { respond_to } => {
+                let _ = respond_to.send(logger_tx.subscribe());
+            }
+            Message::SubscribeOnNetworkAcl { respond_to } => {
+                let _ = respond_to.send(network_acl_tx.subscribe());
+            }
+            Message::SubscribeOnSoranetHandshake { respond_to } => {
+                let _ = respond_to.send(handshake_tx.subscribe());
+            }
+            Message::SubscribeOnConfidentialGas { respond_to } => {
+                let _ = respond_to.send(confidential_gas_tx.subscribe());
+            }
         }
     }
 }
