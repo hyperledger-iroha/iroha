@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii mock Sumeragi gossip seed sync):
+The reported `sumeragi_summary_commands_against_torii_mock` red is fixed.
+`python/iroha_torii_client/mock.py` now seeds `gossip_fallback_total = 1` in
+the default `/v1/sumeragi/status` payload, and
+`python/iroha_torii_client/tests/test_client.py` now has a focused regression
+that checks the seeded mock snapshot directly.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/python/iroha_torii_client/mock.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/python/iroha_torii_client/tests/test_client.py`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k mock_server_seeds_sumeragi_status_snapshot`
+  - `cargo test -p iroha_cli sumeragi_summary_commands_against_torii_mock -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+    window when there is budget beyond the reported mock-summary regression
+
 Latest sync (2026-04-21 i105 fullwidth-kana parser expectation):
 The reported `account::address::tests::i105_rejects_legacy_fullwidth_iroha_kana_inputs`
 red is fixed. `crates/iroha_data_model/src/account/address.rs` now expects

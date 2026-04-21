@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii mock Sumeragi gossip seed sync
+- `python/iroha_torii_client/mock.py` now seeds
+  `gossip_fallback_total = 1` in the default `/v1/sumeragi/status` payload,
+  matching the `iroha_cli` smoke expectation for
+  `sumeragi_summary_commands_against_torii_mock`.
+- `python/iroha_torii_client/tests/test_client.py` now includes a focused
+  regression that hits the mock server directly and asserts the seeded status
+  snapshot still carries the Sumeragi gossip counter.
+- Focused validation for this slice:
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k mock_server_seeds_sumeragi_status_snapshot`
+  - `cargo test -p iroha_cli sumeragi_summary_commands_against_torii_mock -- --nocapture`
+
 ## 2026-04-21 Follow-up: i105 fullwidth-kana strict-parse assertion cleanup
 - `crates/iroha_data_model/src/account/address.rs` now expects
   `AccountAddress::parse_encoded(...)` to preserve `InvalidI105Char` for

@@ -1511,6 +1511,21 @@ def test_contract_helpers_against_mock_server() -> None:
         server.stop()
 
 
+def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.get(f"{server.base_url.rstrip('/')}/v1/sumeragi/status", timeout=5.0)
+        response.raise_for_status()
+
+        payload = response.json()
+
+        assert payload["leader_index"] == 2
+        assert payload["gossip_fallback_total"] == 1
+        assert payload["rbc_store"]["persist_drops_total"] == 2
+    finally:
+        server.stop()
+
+
 def test_contract_bundle_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
     try:
