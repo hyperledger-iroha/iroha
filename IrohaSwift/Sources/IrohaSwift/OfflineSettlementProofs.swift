@@ -239,6 +239,14 @@ public struct ToriiOfflineMerklePath: Codable, Sendable, Equatable {
         }
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(siblings, forKey: .siblings)
+        // Server expects dirs as an array of bytes (Vec<u8>), not base64.
+        let bytes: [UInt8] = Data(base64Encoded: dirs).map { [UInt8]($0) } ?? []
+        try container.encode(bytes, forKey: .dirs)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case dirs, siblings
     }
@@ -548,7 +556,7 @@ public enum ToriiOfflineSettlementProofs {
             prefixedHex(levels[Int(starkDomainLog2) - layer])
         }
         let rootData = roots.compactMap { hex in
-            Data(hexString: String(hex.dropFirst(2)))
+            Data(hexString: hex)
         }
         let queries = (0..<Int(starkQueryCount)).map { queryIndex in
             synthesizeQueryChain(
@@ -784,7 +792,7 @@ public enum ToriiOfflineSettlementProofs {
     }
 
     private static func prefixedHex(_ data: Data) -> String {
-        "0x" + data.hexEncodedString()
+        data.hexEncodedString()
     }
 
     private static func littleEndianData(_ value: UInt16) -> Data {
@@ -810,7 +818,7 @@ public enum ToriiOfflineSettlementProofs {
     }
 
     private static func normalizePrefixedHex(_ value: String, label: String) throws -> String {
-        "0x" + (try normalizePlainHex(value, label: label))
+        try normalizePlainHex(value, label: label)
     }
 
     private struct SettlementCommitmentPayload: Encodable {
