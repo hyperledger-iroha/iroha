@@ -157,7 +157,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--extra-accounts <EXTRA_ACCOUNTS>` — Extra accounts to pre-register (in wonderland)
 
   Default value: `0`
-* `--sample-asset` — Register a sample asset and mint to the default account
+* `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in offline-cash asset is always emitted
 
   Default value: `false`
 * `--block-time-ms <MILLISECONDS>` — Override the consensus block time (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other
@@ -500,9 +500,9 @@ Generate per-client CLI configs from a base client.toml
 
 * `--base-config <PATH>` — Base client config to copy `chain`, `torii_url`, and `basic_auth` from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
-* `--domain <DOMAIN>` — Account domain for generated client configs
+* `--domain <DOMAIN>` — Fully qualified account domain for generated client configs
 
-  Default value: `acme`
+  Default value: `acme.universal`
 * `--seed-prefix <SEED>` — Seed prefix for deterministic key generation (`<prefix>-<name>`)
 
   Default value: `demo`

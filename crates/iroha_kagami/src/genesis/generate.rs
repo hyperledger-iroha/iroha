@@ -591,11 +591,13 @@ impl<T: Write> RunArgs<T> for Args {
             resolved_vrf_seed,
             build_line,
         )?;
-        let _chain_discriminant = profile_defaults
+        let chain_discriminant = profile_defaults
             .as_ref()
             .and_then(|defaults| defaults.chain_discriminant)
             .or_else(|| known_chain_discriminant_for_chain_id(summary_chain.as_str()))
-            .map(ChainDiscriminantGuard::enter);
+            .unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
+        let genesis = genesis.with_chain_discriminant(chain_discriminant);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
         let json = norito::json::to_json_pretty(&genesis)?;
         writeln!(writer, "{json}").wrap_err("failed to write serialized genesis to the buffer")?;
         if let Some(profile) = profile {
