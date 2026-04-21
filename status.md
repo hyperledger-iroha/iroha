@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: i105 fullwidth-kana strict-parse assertion cleanup
+- `crates/iroha_data_model/src/account/address.rs` now expects
+  `AccountAddress::parse_encoded(...)` to preserve `InvalidI105Char` for
+  legacy full-width kana payload symbols once a valid ASCII i105 sentinel is
+  present.
+- This matches the documented strict-parse contract and the adjacent
+  `parse_encoded_preserves_malformed_i105_errors` coverage: unsupported-format
+  remains reserved for non-i105 / missing-sentinel inputs, while malformed
+  i105 payloads keep their semantic decode errors.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model i105_rejects_legacy_fullwidth_iroha_kana_inputs -- --nocapture`
+  - `cargo test -p iroha_data_model --lib parse_encoded_preserves_malformed_i105_errors -- --nocapture`
+
 ## 2026-04-21 Follow-up: Torii account onboarding smoke loopback request wiring
 - `crates/iroha_torii/tests/accounts_onboard.rs` now attaches a loopback
   `ConnectInfo<SocketAddr>` extension to the direct `oneshot(...)` request

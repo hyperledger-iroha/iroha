@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 i105 fullwidth-kana parser expectation):
+The reported `account::address::tests::i105_rejects_legacy_fullwidth_iroha_kana_inputs`
+red is fixed. `crates/iroha_data_model/src/account/address.rs` now expects
+strict `parse_encoded(...)` to return `InvalidI105Char` for legacy
+full-width kana payload symbols after a valid ASCII i105 sentinel, matching
+the parser's preserved semantic-error contract and the adjacent malformed-i105
+regression coverage.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/account/address.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model i105_rejects_legacy_fullwidth_iroha_kana_inputs -- --nocapture`
+  - `cargo test -p iroha_data_model --lib parse_encoded_preserves_malformed_i105_errors -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_data_model ...` package window when
+    there is budget beyond this targeted address-parser regression
+
 Latest sync (2026-04-21 Torii account onboarding smoke loopback request wiring):
 The reported `accounts_onboard_publishes_global_manifest_and_binding` red is
 fixed. `crates/iroha_torii/tests/accounts_onboard.rs` now attaches loopback
