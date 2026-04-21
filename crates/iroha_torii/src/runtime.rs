@@ -848,62 +848,6 @@ pub async fn handle_node_query_projection_shard_export(
 }
 
 #[cfg(feature = "app_api")]
-fn build_query_projection_uploaded_archives(
-    state: &iroha_core::state::State,
-    shards: Vec<NodeProjectionCheckpointPublishShardRef>,
-) -> Result<Vec<QueryProjectionUploadedShardArchive>, crate::Error> {
-    let mut uploads = Vec::with_capacity(shards.len());
-
-    for (index, shard) in shards.into_iter().enumerate() {
-        validate_projection_partition_id(shard.partition_id)?;
-
-        let archive = match shard.resource.trim().to_ascii_lowercase().as_str() {
-            "accounts" => build_accounts_projection_shard_archive(
-                state,
-                shard.partition_id,
-                shard.archive_emitted_at_unix,
-            )?,
-            "asset_holders" => {
-                let selector = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        projection_export_conversion_error(format!(
-                            "asset_definition_id is required for asset_holders checkpoint shard `shards[{index}]`"
-                        ))
-                    })?;
-                build_asset_holders_projection_shard_archive(
-                    state,
-                    selector,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            other => {
-                return Err(projection_export_conversion_error(format!(
-                    "unsupported projection resource `{other}`; expected `accounts` or `asset_holders`"
-                )));
-            }
-        };
-
-        let manifest_field = format!("shards[{index}].manifest_digest_hex");
-        let storage_ticket_field = format!("shards[{index}].storage_ticket_hex");
-        let manifest_digest = parse_blob_digest_hex(&shard.manifest_digest_hex, &manifest_field)?;
-        let storage_ticket =
-            parse_storage_ticket_hex(&shard.storage_ticket_hex, &storage_ticket_field)?;
-        uploads.push(QueryProjectionUploadedShardArchive::new(
-            archive,
-            manifest_digest,
-            storage_ticket,
-        ));
-    }
-
-    Ok(uploads)
-}
-
-#[cfg(feature = "app_api")]
 fn build_projection_shard_catalog_response(
     resource: QueryProjectionResourceKind,
     indexed_height: u64,
@@ -1872,10 +1816,10 @@ mod tests {
             0x11,
             0x21,
         );
-        let first_shard = request.shards.first().expect("accounts shard");
+        let first_partition_id = request.shards.first().expect("accounts shard").partition_id;
         let archive = build_accounts_projection_shard_archive(
             state.as_ref(),
-            first_shard.partition_id,
+            first_partition_id,
             archive_emitted_at_unix,
         )
         .expect("archive");
@@ -1898,7 +1842,7 @@ mod tests {
             build_accounts_projection_shard_catalog_entries(state.as_ref()).len()
         );
         assert_eq!(response.shards[0].resource, "accounts");
-        assert_eq!(response.shards[0].partition_id, first_shard.partition_id);
+        assert_eq!(response.shards[0].partition_id, first_partition_id);
         assert_eq!(
             response.shards[0].manifest_digest_hex,
             hex::encode([0x11; 32])
@@ -1919,6 +1863,7 @@ mod tests {
     async fn node_query_projection_checkpoint_plan_rejects_incomplete_shard_set() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
+        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
         let authority = iroha_crypto::KeyPair::random();
         let authority_id =
@@ -1953,8 +1898,13 @@ mod tests {
             .await
             .expect_err("incomplete shard set must fail");
 
-        let message = err.to_string();
-        assert!(message.contains("canonical live shard catalog"));
+        let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            message,
+        ))) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(message.contains("checkpoint shard set must match"));
         assert!(message.contains("missing"));
     }
 

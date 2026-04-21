@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii projection checkpoint helper dedupe and test borrow fix
+- `crates/iroha_torii/src/runtime.rs` now keeps a single
+  `build_query_projection_uploaded_archives(...)` implementation. The
+  duplicate copy that had been left later in the module is removed, which
+  clears the `E0428` duplicate-definition failure in the `iroha_torii` lib
+  target while preserving the checkpoint upload helper variant that rejects
+  unsupported `accounts` selectors and uses the checkpoint-specific resource
+  validation path.
+- The checkpoint-plan regression test now copies the first shard's
+  `partition_id` before moving the request into
+  `handle_node_query_projection_checkpoint_plan(...)`, which clears the
+  `E0505` moved-after-borrow failure in the unit-test build. The incomplete
+  shard-set regression also now asserts against the underlying conversion
+  payload instead of `err.to_string()`, so it checks the stable validator
+  message directly.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
+
 ## 2026-04-21 Follow-up: Torii projection checkpoint upload helper restore
 - `crates/iroha_torii/src/runtime.rs` now restores the missing
   `build_query_projection_uploaded_archives(...)` helper used by the

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii projection checkpoint helper dedupe and test borrow fix):
+The `iroha_torii` checkpoint-plan lib target is back to compiling cleanly.
+`crates/iroha_torii/src/runtime.rs` now removes the accidental duplicate
+`build_query_projection_uploaded_archives(...)` definition that had been left
+below the shard-export helper, keeps the checkpoint-specific upload helper
+variant, and shortens the checkpoint-plan test borrow so the request can be
+moved into the async handler without tripping `E0505`. The incomplete
+shard-set regression now asserts against the inner conversion payload instead
+of the lossy top-level error string.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/runtime.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
+- open work after this slice:
+  - broader `cargo test -p iroha_torii ...` package-target validation is still
+    blocked by unrelated pre-existing compile errors under
+    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+
 Latest sync (2026-04-21 Torii projection checkpoint upload helper restore):
 The `iroha_torii` projection checkpoint plan/publish handlers compile again.
 `crates/iroha_torii/src/runtime.rs` now restores the missing
