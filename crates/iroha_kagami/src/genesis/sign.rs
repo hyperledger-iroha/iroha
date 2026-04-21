@@ -1436,20 +1436,16 @@ mod tests {
     }
 
     fn minimal_genesis_file() -> PathBuf {
-        let mut genesis_file = tempfile::Builder::new()
+        let genesis_file = tempfile::Builder::new()
             .prefix("kagami-genesis-test-")
             .tempfile()
             .expect("create temp genesis file");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Permissioned",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        write!(genesis_file, "{genesis_json}").expect("write genesis json");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
+        fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
         path
     }
@@ -1461,6 +1457,7 @@ mod tests {
             .expect("create temp genesis file");
         let genesis_json = r#"{
             "chain": "test-chain",
+            "chain_discriminant": 1,
             "executor": null,
             "ivm_dir": ".",
             "transactions": [
