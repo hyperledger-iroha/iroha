@@ -2919,6 +2919,76 @@ fn canonical_manifest_validators(
     Ok(validators)
 }
 
+fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return false;
+    };
+    instructions.iter().any(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<ProposeRuntimeUpgrade>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<ActivateRuntimeUpgrade>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<CancelRuntimeUpgrade>()
+                .is_some()
+    })
+}
+
+fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bool {
+    let metadata = tx.metadata();
+    let has_governance_contract_address =
+        metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY).is_some();
+    let has_contract_address_hint = metadata.get(&*CONTRACT_ADDRESS_METADATA_KEY).is_some();
+
+    let mut contract_targets_seen = false;
+    let mut register_code_seen = false;
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                if instruction
+                    .as_any()
+                    .downcast_ref::<ActivateContractInstance>()
+                    .is_some()
+                    || instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                        .is_some()
+                {
+                    contract_targets_seen = true;
+                } else {
+                    let any = instruction.as_any();
+                    if any.is::<RegisterSmartContractCode>()
+                        || any.is::<RegisterSmartContractBytes>()
+                        || any.is::<RemoveSmartContractBytes>()
+                    {
+                        register_code_seen = true;
+                    }
+                }
+            }
+        }
+        Executable::ContractCall(_) => {
+            contract_targets_seen = true;
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {}
+    }
+
+    let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
+        && (has_governance_contract_address || has_contract_address_hint);
+
+    register_code_seen || contract_targets_seen || ivm_with_contract_metadata
+}
+
+fn tx_requires_manifest_validator_gating(rules: &GovernanceRules, tx: &SignedTransaction) -> bool {
+    tx_contains_runtime_upgrade_instruction(tx)
+        || (!rules.protected_namespaces.is_empty()
+            && tx_touches_manifest_protected_namespace_surface(tx))
+}
+
 #[allow(clippy::too_many_lines)]
 fn enforce_manifest_protected_namespaces(
     alias: &str,
@@ -3260,24 +3330,27 @@ fn enforce_lane_policies(
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
-            if !rules.validators.is_empty()
-                && !allows_multisig_envelope_authority
-                && !rules
-                    .validators
-                    .iter()
-                    .any(|validator| validator == tx.authority())
-            {
-                return Err(reject_lane_policy(
-                    &lane_alias,
-                    "authority not part of lane validator set".to_string(),
-                ));
-            }
+            let governance_sensitive = tx_requires_manifest_validator_gating(rules, tx);
+            if governance_sensitive {
+                if !rules.validators.is_empty()
+                    && !allows_multisig_envelope_authority
+                    && !rules
+                        .validators
+                        .iter()
+                        .any(|validator| validator == tx.authority())
+                {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "authority not part of lane validator set".to_string(),
+                    ));
+                }
 
-            let quorum_required = !allows_multisig_envelope_authority
-                && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                && !rules.validators.is_empty();
-            if quorum_required {
-                enforce_manifest_quorum(&lane_alias, rules, tx)?;
+                let quorum_required = !allows_multisig_envelope_authority
+                    && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                    && !rules.validators.is_empty();
+                if quorum_required {
+                    enforce_manifest_quorum(&lane_alias, rules, tx)?;
+                }
             }
 
             enforce_manifest_protected_namespaces(
@@ -4895,6 +4968,70 @@ pub mod tests {
         assert!(
             result.is_ok(),
             "lane validator gating should not reject multisig propose envelopes from live signers: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_ignores_non_governance_transactions() {
+        let chain: ChainId = "lane-validator-gating-plain-transfer".parse().unwrap();
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (validator_a, _) = gen_account_in("wonderland");
+        let (validator_b, _) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let authority_account = new_account_in_domain(&authority, &domain_id).build(&authority);
+        let validator_a_account =
+            new_account_in_domain(&validator_a, &domain_id).build(&validator_a);
+        let validator_b_account =
+            new_account_in_domain(&validator_b, &domain_id).build(&validator_b);
+        let world = World::with(
+            [domain],
+            [authority_account, validator_a_account, validator_b_account],
+            [],
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "sbp".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_string()),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/sbp.manifest.json")),
+                governance_rules: Some(GovernanceRules {
+                    validators: vec![validator_a.clone(), validator_b.clone()],
+                    quorum: Some(2),
+                    ..GovernanceRules::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
+            .sign(authority_keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
         );
     }
 

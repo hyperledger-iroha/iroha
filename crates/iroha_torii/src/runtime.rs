@@ -1,7 +1,7 @@
 //! Runtime upgrade app API handlers.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -230,7 +230,7 @@ pub struct NodeProjectionCheckpointShardRef {
 pub struct NodeProjectionCheckpointPublishRequest {
     /// Unix timestamp recorded on the checkpoint descriptor itself. Defaults to now.
     pub emitted_at_unix: Option<u64>,
-    /// Uploaded shard references that should be rebuilt and validated against the live snapshot.
+    /// Uploaded shard references that must cover the canonical non-empty live shard set.
     pub shards: Vec<NodeProjectionCheckpointPublishShardRef>,
 }
 
@@ -250,6 +250,51 @@ pub struct NodeProjectionCheckpointPublishShardRef {
     pub manifest_digest_hex: String,
     /// Storage ticket resolving the uploaded shard archive in DA, hex-encoded.
     pub storage_ticket_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ProjectionCheckpointShardKey {
+    resource: QueryProjectionResourceKind,
+    partition_id: u32,
+    asset_definition_id: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+impl ProjectionCheckpointShardKey {
+    fn from_archive(archive: &QueryProjectionShardArchive) -> Self {
+        Self {
+            resource: archive.resource,
+            partition_id: archive.partition_id,
+            asset_definition_id: archive.asset_definition_id.clone(),
+        }
+    }
+
+    fn from_catalog_entry(
+        resource: QueryProjectionResourceKind,
+        entry: NodeProjectionShardCatalogEntry,
+    ) -> Self {
+        Self {
+            resource,
+            partition_id: entry.partition_id,
+            asset_definition_id: entry.asset_definition_id,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match &self.asset_definition_id {
+            Some(asset_definition_id) => format!(
+                "{}/partition={}/asset={asset_definition_id}",
+                self.resource.as_stable_str(),
+                self.partition_id
+            ),
+            None => format!(
+                "{}/partition={}",
+                self.resource.as_stable_str(),
+                self.partition_id
+            ),
+        }
+    }
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
@@ -485,6 +530,7 @@ pub async fn handle_node_query_projection_checkpoint_plan(
 ) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
     let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
     let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
+    validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
     let plan = state
         .plan_query_projection_checkpoint_from_archives(emitted_at_unix, uploads)
         .map_err(projection_checkpoint_plan_error)?;
@@ -499,6 +545,7 @@ pub async fn handle_node_query_projection_checkpoint_publish(
 ) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
     let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
     let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
+    validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
     let checkpoint = state
         .publish_query_projection_checkpoint_from_archives(
             emitted_at_unix,
@@ -541,6 +588,162 @@ fn node_projection_checkpoint_response(
                 blob_hash_hex: hex::encode(shard.blob_hash.as_bytes()),
             })
             .collect(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn build_query_projection_uploaded_archives(
+    state: &iroha_core::state::State,
+    shards: Vec<NodeProjectionCheckpointPublishShardRef>,
+) -> Result<Vec<QueryProjectionUploadedShardArchive>, crate::Error> {
+    let mut uploads = Vec::with_capacity(shards.len());
+
+    for shard in shards {
+        validate_projection_partition_id(shard.partition_id)?;
+        let manifest_digest =
+            parse_blob_digest_hex(&shard.manifest_digest_hex, "manifest_digest_hex")?;
+        let storage_ticket =
+            parse_storage_ticket_hex(&shard.storage_ticket_hex, "storage_ticket_hex")?;
+
+        let archive = match shard.resource.trim().to_ascii_lowercase().as_str() {
+            "accounts" => {
+                if let Some(asset_definition_id) = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    return Err(projection_export_conversion_error(format!(
+                        "asset_definition_id is not supported for accounts checkpoint shards (got `{asset_definition_id}`)"
+                    )));
+                }
+                build_accounts_projection_shard_archive(
+                    state,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
+            "asset_holders" => {
+                let selector = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        projection_export_conversion_error(
+                            "asset_definition_id is required for asset_holders checkpoint shards"
+                                .to_owned(),
+                        )
+                    })?;
+                build_asset_holders_projection_shard_archive(
+                    state,
+                    selector,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
+            other => {
+                return Err(projection_export_conversion_error(format!(
+                    "unsupported checkpoint shard resource `{other}`; expected `accounts` or `asset_holders`"
+                )));
+            }
+        };
+
+        uploads.push(QueryProjectionUploadedShardArchive::new(
+            archive,
+            manifest_digest,
+            storage_ticket,
+        ));
+    }
+
+    Ok(uploads)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_projection_checkpoint_shard_set(
+    state: &iroha_core::state::State,
+    uploads: &[QueryProjectionUploadedShardArchive],
+) -> Result<(), crate::Error> {
+    let expected = build_expected_projection_checkpoint_shard_keys(state)?;
+    let actual: BTreeSet<_> = uploads
+        .iter()
+        .map(|upload| ProjectionCheckpointShardKey::from_archive(&upload.archive))
+        .collect();
+
+    let missing_count = expected.difference(&actual).count();
+    let unexpected_count = actual.difference(&expected).count();
+    if missing_count == 0 && unexpected_count == 0 {
+        return Ok(());
+    }
+
+    let missing_preview = expected
+        .difference(&actual)
+        .take(8)
+        .map(ProjectionCheckpointShardKey::describe)
+        .collect::<Vec<_>>();
+    let unexpected_preview = actual
+        .difference(&expected)
+        .take(8)
+        .map(ProjectionCheckpointShardKey::describe)
+        .collect::<Vec<_>>();
+
+    let mut problems = Vec::new();
+    if missing_count > 0 {
+        problems.push(format!(
+            "missing {missing_count} shard(s): {}{}",
+            missing_preview.join(", "),
+            preview_suffix(missing_count, missing_preview.len())
+        ));
+    }
+    if unexpected_count > 0 {
+        problems.push(format!(
+            "unexpected {unexpected_count} shard(s): {}{}",
+            unexpected_preview.join(", "),
+            preview_suffix(unexpected_count, unexpected_preview.len())
+        ));
+    }
+
+    Err(projection_export_conversion_error(format!(
+        "checkpoint shard set must match the canonical live shard catalog; {}",
+        problems.join("; ")
+    )))
+}
+
+#[cfg(feature = "app_api")]
+fn build_expected_projection_checkpoint_shard_keys(
+    state: &iroha_core::state::State,
+) -> Result<BTreeSet<ProjectionCheckpointShardKey>, crate::Error> {
+    let mut expected = BTreeSet::new();
+    expected.extend(
+        build_accounts_projection_shard_catalog_entries(state)
+            .into_iter()
+            .map(|entry| {
+                ProjectionCheckpointShardKey::from_catalog_entry(
+                    QueryProjectionResourceKind::Accounts,
+                    entry,
+                )
+            }),
+    );
+    expected.extend(
+        build_asset_holders_projection_shard_catalog_entries(state, None)?
+            .into_iter()
+            .map(|entry| {
+                ProjectionCheckpointShardKey::from_catalog_entry(
+                    QueryProjectionResourceKind::AssetHolders,
+                    entry,
+                )
+            }),
+    );
+    Ok(expected)
+}
+
+#[cfg(feature = "app_api")]
+fn preview_suffix(total: usize, shown: usize) -> String {
+    let remaining = total.saturating_sub(shown);
+    if remaining == 0 {
+        String::new()
+    } else {
+        format!(" (+{remaining} more)")
     }
 }
 
@@ -1289,6 +1492,32 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "app_api")]
+    fn accounts_checkpoint_request_for_state(
+        state: &std::sync::Arc<State>,
+        emitted_at_unix: u64,
+        archive_emitted_at_unix: u64,
+        manifest_seed: u8,
+        ticket_seed: u8,
+    ) -> NodeProjectionCheckpointPublishRequest {
+        let shards = build_accounts_projection_shard_catalog_entries(state.as_ref())
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| NodeProjectionCheckpointPublishShardRef {
+                resource: "accounts".to_string(),
+                partition_id: entry.partition_id,
+                asset_definition_id: None,
+                archive_emitted_at_unix,
+                manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(index as u8); 32]),
+                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(index as u8); 32]),
+            })
+            .collect();
+        NodeProjectionCheckpointPublishRequest {
+            emitted_at_unix: Some(emitted_at_unix),
+            shards,
+        }
+    }
+
     #[tokio::test]
     async fn runtime_abi_hash_matches_ivm() {
         // Build a minimal state (not used by the handler, but required by signature)
@@ -1578,12 +1807,19 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        let partition_id = query_projection_default_partition_for_account(&alice_id.to_string());
         let archive_emitted_at_unix = 1_714_001_111;
         let checkpoint_emitted_at_unix = 1_714_001_222;
+        let request = accounts_checkpoint_request_for_state(
+            &state,
+            checkpoint_emitted_at_unix,
+            archive_emitted_at_unix,
+            0x11,
+            0x21,
+        );
+        let first_shard = request.shards.first().expect("accounts shard");
         let archive = build_accounts_projection_shard_archive(
             state.as_ref(),
-            partition_id,
+            first_shard.partition_id,
             archive_emitted_at_unix,
         )
         .expect("archive");
@@ -1591,45 +1827,79 @@ mod tests {
             .clone()
             .into_checkpoint_shard(
                 BlobDigest::new([0x11; 32]),
-                StorageTicketId::new([0x22; 32]),
+                StorageTicketId::new([0x21; 32]),
             )
             .expect("checkpoint shard");
 
-        let response = handle_node_query_projection_checkpoint_plan(
-            state.clone(),
-            NodeProjectionCheckpointPublishRequest {
-                emitted_at_unix: Some(checkpoint_emitted_at_unix),
-                shards: vec![NodeProjectionCheckpointPublishShardRef {
-                    resource: "accounts".to_string(),
-                    partition_id,
-                    asset_definition_id: None,
-                    archive_emitted_at_unix,
-                    manifest_digest_hex: hex::encode([0x11; 32]),
-                    storage_ticket_hex: hex::encode([0x22; 32]),
-                }],
-            },
-        )
-        .await
-        .expect("plan");
+        let response = handle_node_query_projection_checkpoint_plan(state.clone(), request)
+            .await
+            .expect("plan");
 
         assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
         assert_eq!(response.indexed_height, 0);
-        assert_eq!(response.shards.len(), 1);
+        assert_eq!(
+            response.shards.len(),
+            build_accounts_projection_shard_catalog_entries(state.as_ref()).len()
+        );
         assert_eq!(response.shards[0].resource, "accounts");
-        assert_eq!(response.shards[0].partition_id, partition_id);
+        assert_eq!(response.shards[0].partition_id, first_shard.partition_id);
         assert_eq!(
             response.shards[0].manifest_digest_hex,
             hex::encode([0x11; 32])
         );
         assert_eq!(
             response.shards[0].storage_ticket_hex,
-            hex::encode([0x22; 32])
+            hex::encode([0x21; 32])
         );
         assert_eq!(
             response.shards[0].blob_hash_hex,
             hex::encode(expected_shard.blob_hash.as_bytes())
         );
         assert!(state.query_projection_checkpoint_snapshot().is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_checkpoint_plan_rejects_incomplete_shard_set() {
+        use iroha_data_model::Registrable;
+        use iroha_data_model::prelude::{Account, Domain, DomainId};
+
+        let authority = iroha_crypto::KeyPair::random();
+        let authority_id =
+            iroha_data_model::account::AccountId::new(authority.public_key().clone());
+        let domain_id = DomainId::try_new("projection-plan-gap", "universal").expect("domain");
+        let mut accounts = vec![Account::new(authority_id.clone()).build(&authority_id)];
+        for _ in 0..32 {
+            let key_pair = iroha_crypto::KeyPair::random();
+            let account_id =
+                iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+            accounts.push(Account::new(account_id).build(&authority_id));
+        }
+        let world = iroha_core::state::World::with(
+            [Domain::new(domain_id).build(&authority_id)],
+            accounts,
+            [],
+        );
+        let state = std::sync::Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let mut request =
+            accounts_checkpoint_request_for_state(&state, 1_714_001_260, 1_714_001_250, 0x51, 0x61);
+        assert!(
+            request.shards.len() >= 2,
+            "expected more than one live account shard for completeness validation"
+        );
+        request.shards.pop();
+
+        let err = handle_node_query_projection_checkpoint_plan(state, request)
+            .await
+            .expect_err("incomplete shard set must fail");
+
+        let message = err.to_string();
+        assert!(message.contains("canonical live shard catalog"));
+        assert!(message.contains("missing"));
     }
 
     #[cfg(feature = "app_api")]
@@ -1657,32 +1927,28 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        let partition_id = query_projection_default_partition_for_account(&alice_id.to_string());
         let checkpoint_emitted_at_unix = 1_714_001_333;
+        let request = accounts_checkpoint_request_for_state(
+            &state,
+            checkpoint_emitted_at_unix,
+            1_714_001_300,
+            0x31,
+            0x41,
+        );
 
-        let response = handle_node_query_projection_checkpoint_publish(
-            state.clone(),
-            NodeProjectionCheckpointPublishRequest {
-                emitted_at_unix: Some(checkpoint_emitted_at_unix),
-                shards: vec![NodeProjectionCheckpointPublishShardRef {
-                    resource: "accounts".to_string(),
-                    partition_id,
-                    asset_definition_id: None,
-                    archive_emitted_at_unix: 1_714_001_300,
-                    manifest_digest_hex: hex::encode([0x31; 32]),
-                    storage_ticket_hex: hex::encode([0x41; 32]),
-                }],
-            },
-        )
-        .await
-        .expect("publish");
+        let response = handle_node_query_projection_checkpoint_publish(state.clone(), request)
+            .await
+            .expect("publish");
 
         assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
         let persisted = state
             .query_projection_checkpoint_snapshot()
             .expect("persisted checkpoint");
         assert_eq!(persisted.emitted_at_unix, checkpoint_emitted_at_unix);
-        assert_eq!(persisted.shards.len(), 1);
+        assert_eq!(
+            persisted.shards.len(),
+            build_accounts_projection_shard_catalog_entries(state.as_ref()).len()
+        );
         assert_eq!(
             response.shards[0].blob_hash_hex,
             hex::encode(persisted.shards[0].blob_hash.as_bytes())

@@ -7,11 +7,7 @@ enum BridgePolicyHint {
     private static let relativeBridgePath = "../dist/NoritoBridge.xcframework"
 
     static var message: String {
-        #if IROHASWIFT_BRIDGE_OPTIONAL
-        return "NoritoBridge.xcframework is not available in this build. Place it under \(relativeBridgePath) and rebuild to enable native helpers."
-        #else
-        return "Add NoritoBridge.xcframework under \(relativeBridgePath) to enable native helpers."
-        #endif
+        "NoritoBridge.xcframework is required under \(relativeBridgePath) for native helpers."
     }
 
     static func unavailableMessage(_ prefix: String) -> String {

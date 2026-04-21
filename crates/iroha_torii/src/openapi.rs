@@ -2980,7 +2980,7 @@ fn runtime_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Rebuilds the referenced shard archives from the live node snapshot, validates them against the uploaded manifest/ticket set, and returns the checkpoint descriptor without persisting it."
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and returns the checkpoint descriptor without persisting it."
                         .to_owned(),
                 ),
             );
@@ -3026,7 +3026,7 @@ fn runtime_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Rebuilds the referenced shard archives from the live node snapshot, validates them against the uploaded manifest/ticket set, and persists the resulting checkpoint descriptor."
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and persists the resulting checkpoint descriptor."
                         .to_owned(),
                 ),
             );
