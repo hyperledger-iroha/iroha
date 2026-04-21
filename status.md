@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii projection checkpoint upload helper restore
+- `crates/iroha_torii/src/runtime.rs` now restores the missing
+  `build_query_projection_uploaded_archives(...)` helper used by the
+  projection checkpoint plan/publish app API handlers. The helper rebuilds
+  canonical `accounts` and `asset_holders` shard archives from the uploaded
+  checkpoint refs, reuses the existing partition/resource validation and
+  asset-holder selector rules from the shard export path, and parses manifest
+  digest / storage ticket ids with the existing fixed-width hex helpers so the
+  checkpoint handlers compile again.
+- Added direct regression coverage for the checkpoint upload helper's
+  `asset_holders` validation path: requests that omit
+  `asset_definition_id` for an asset-holder shard now fail through the expected
+  query-conversion error path before archive rebuild.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
+
 ## 2026-04-21 Follow-up: Torii limiter eviction, SCCP disabled-lane races, and sync test runtime assumptions
 - `crates/iroha_torii/src/limits.rs` now sizes rate-limiter shards by a
   minimum per-shard bucket budget instead of splitting very small capacities
