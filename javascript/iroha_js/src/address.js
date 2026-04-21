@@ -1008,6 +1008,10 @@ export class AccountAddress {
     return address;
   }
 
+  static fromAccountId(accountId, expectedPrefix) {
+    return AccountAddress.parseEncoded(accountId, expectedPrefix).address;
+  }
+
   static parseEncoded(input, expectedPrefix) {
     if (typeof input !== "string") {
       throw new TypeError("account address literal must be a string");

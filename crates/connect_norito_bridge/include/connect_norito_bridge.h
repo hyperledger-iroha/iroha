@@ -21,6 +21,9 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_NONCE -303
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
 
+// ---------------- Bridge ABI ----------------
+uint32_t connect_norito_bridge_abi_version(void);
+
 // ---------------- Chain discriminant helpers ----------------
 uint16_t connect_norito_get_chain_discriminant(void);
 uint16_t connect_norito_set_chain_discriminant(uint16_t discriminant);

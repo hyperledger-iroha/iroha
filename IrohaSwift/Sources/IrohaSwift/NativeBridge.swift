@@ -27,18 +27,23 @@ enum NoritoBridgeLoader {
         case missing(path: String)
         case hashMismatch(path: String, expected: String, actual: String?)
         case versionMismatch(path: String, expected: String, actual: String?)
+        case abiMismatch(path: String, expected: UInt32, actual: UInt32?)
     }
 
     static let expectedVersion = "0.1.0"
+    static let expectedBridgeAbiVersion: UInt32 = 1
     private static let expectedHashes: [String: String] = [
         "macos-arm64": "fcdcb9f488985556ae82f2d2ef48a92f5ebc9ae6739ff9e3cc3b47830c7d1f8f",
         "ios-arm64": "962ad99cb7ee30946771b302026feb4411ebcf500ff1bf960284e9e7118f8e91",
         "ios-arm64_x86_64-simulator": "aedfbbf4e4ca3151e40d336a584c1162d1a2ad4b67ed20c21bf7c3c47bb1bb7f"
     ]
     private static let requiredSymbols = [
+        "connect_norito_bridge_abi_version",
         "connect_norito_free",
         "connect_norito_encode_transfer_signed_transaction"
     ]
+
+    private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
 
     private struct ArtifactManifest {
         let version: String
@@ -63,17 +68,19 @@ enum NoritoBridgeLoader {
                 let debugHandle = debugDylibURL.path.withCString { ptr in
                     dlopen(ptr, RTLD_NOW | RTLD_GLOBAL)
                 }
-                let hasFree = hasRequiredSymbols(in: debugHandle)
+                let abiVersion = bridgeAbiVersion(in: debugHandle)
+                let hasCurrentAbi = hasRequiredSymbols(in: debugHandle)
                 let hasTransfer = debugHandle.flatMap {
                     dlsym($0, "connect_norito_encode_transfer_signed_transaction")
                 } != nil
                 NSLog(
-                    "[NoritoBridgeLoader] debug dylib handle=%@, hasFree=%d, hasTransfer=%d",
+                    "[NoritoBridgeLoader] debug dylib handle=%@, hasCurrentAbi=%d, abi=%@, hasTransfer=%d",
                     debugHandle == nil ? "nil" : "ok",
-                    hasFree ? 1 : 0,
+                    hasCurrentAbi ? 1 : 0,
+                    abiVersion.map(String.init) ?? "nil",
                     hasTransfer ? 1 : 0
                 )
-                if let debugHandle, hasFree, hasTransfer {
+                if let debugHandle, hasCurrentAbi, hasTransfer {
                     return (debugHandle, .valid(path: "debug.dylib", identifier: currentIdentifier()))
                 }
                 if let debugHandle {
@@ -90,12 +97,6 @@ enum NoritoBridgeLoader {
             return (executableHandle, .valid(path: executableURL.path, identifier: currentIdentifier()))
         }
 
-        if let defaultHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL),
-           hasRequiredSymbols(in: defaultHandle) {
-            NSLog("[NoritoBridgeLoader] loaded bridge symbols from RTLD_DEFAULT")
-            return (defaultHandle, .valid(path: "RTLD_DEFAULT", identifier: currentIdentifier()))
-        }
-
         var lastFailure: ValidationStatus = .missing(path: defaultBridgeBinaryPath())
         for path in candidateLibraryPaths() {
             let status = validateBridge(at: path, allowUntrustedLocation: false)
@@ -108,13 +109,24 @@ enum NoritoBridgeLoader {
                    hasRequiredSymbols(in: handle) {
                     return (handle, status)
                 }
+                let actualAbi = bridgeAbiVersion(in: handle)
                 if let handle {
                     dlclose(handle)
                 }
-                lastFailure = .missing(path: path)
+                lastFailure = .abiMismatch(
+                    path: path,
+                    expected: expectedBridgeAbiVersion,
+                    actual: actualAbi
+                )
             default:
                 lastFailure = status
             }
+        }
+
+        if let defaultHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL),
+           hasRequiredSymbols(in: defaultHandle) {
+            NSLog("[NoritoBridgeLoader] loaded bridge symbols from RTLD_DEFAULT")
+            return (defaultHandle, .valid(path: "RTLD_DEFAULT", identifier: currentIdentifier()))
         }
 
         return (nil, lastFailure)
@@ -125,7 +137,16 @@ enum NoritoBridgeLoader {
         for symbol in requiredSymbols where dlsym(handle, symbol) == nil {
             return false
         }
-        return true
+        return bridgeAbiVersion(in: handle) == expectedBridgeAbiVersion
+    }
+
+    private static func bridgeAbiVersion(in handle: UnsafeMutableRawPointer?) -> UInt32? {
+        guard let handle,
+              let symbol = dlsym(handle, "connect_norito_bridge_abi_version") else {
+            return nil
+        }
+        let function = unsafeBitCast(symbol, to: BridgeAbiVersionFn.self)
+        return function()
     }
 
     private static func openImageIfSymbolsPresent(at url: URL) -> UnsafeMutableRawPointer? {
@@ -2726,6 +2747,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         case .versionMismatch(let path, let expected, let actual):
             return BridgePolicyHint.unavailableMessage(
                 "NoritoBridge version mismatch for \(path) (expected \(expected), actual \(actual ?? "nil"))."
+            )
+        case .abiMismatch(let path, let expected, let actual):
+            return BridgePolicyHint.unavailableMessage(
+                "NoritoBridge ABI mismatch for \(path) (expected \(expected), actual \(actual.map(String.init) ?? "nil"))."
             )
         }
         #else

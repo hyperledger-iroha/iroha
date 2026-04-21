@@ -508,12 +508,13 @@ pub fn seed_default_namespace_policies(world: &mut World) {
             .get(&key)
             .and_then(|bytes| SuffixPolicyV1::decode(&mut bytes.as_slice()).ok());
         match existing_policy {
-            Some(mut existing_policy)
-                if upgrade_legacy_default_namespace_policy(namespace, &mut existing_policy) =>
-            {
-                world.smart_contract_state.insert(key, existing_policy.encode());
+            Some(mut existing_policy) => {
+                if upgrade_legacy_default_namespace_policy(namespace, &mut existing_policy) {
+                    world
+                        .smart_contract_state
+                        .insert(key, existing_policy.encode());
+                }
             }
-            Some(_) => {}
             None => {
                 world.smart_contract_state.insert(key, policy.encode());
             }
@@ -1311,6 +1312,12 @@ mod tests {
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
                 alias: "banking".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(10),
+                alias: "sbp".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },

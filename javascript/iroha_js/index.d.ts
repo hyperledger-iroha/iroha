@@ -115,6 +115,10 @@ export class AccountAddress {
     encoded: string,
     expectedPrefix?: number | string | bigint,
   ): AccountAddress;
+  static fromAccountId(
+    accountId: string,
+    expectedPrefix?: number | string | bigint,
+  ): AccountAddress;
   static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,

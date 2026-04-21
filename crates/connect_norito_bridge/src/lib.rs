@@ -94,6 +94,8 @@ use sorafs_car::{
 };
 use zeroize::Zeroize;
 
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 1;
+
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
 const ERR_CHAIN_ID_PARSE: c_int = -3;
@@ -254,6 +256,16 @@ impl BridgeError {
 }
 
 type BridgeResult<T> = Result<T, BridgeError>;
+
+/// Return the current native bridge C ABI version.
+///
+/// Clients that resolve symbols dynamically must check this before calling other
+/// entrypoints; stale bridge artifacts can otherwise crash before Rust receives
+/// enough arguments to validate the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION
+}
 
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
