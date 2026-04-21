@@ -1173,6 +1173,19 @@ mod tests {
             .and_then(|tx| tx.get("instructions"))
             .and_then(JsonValue::as_array)
             .expect("public Taira genesis.json must include bootstrap instructions");
+        let xor_asset_definition_id = first_tx_instructions
+            .iter()
+            .find(|instruction| {
+                instruction
+                    .get("SetAssetDefinitionAlias")
+                    .and_then(|binding| binding.get("alias"))
+                    .and_then(JsonValue::as_str)
+                    == Some("xor#universal")
+            })
+            .and_then(|instruction| instruction.get("SetAssetDefinitionAlias"))
+            .and_then(|binding| binding.get("asset_definition_id"))
+            .and_then(JsonValue::as_str)
+            .expect("public Taira genesis.json must bind xor#universal");
         let xor_universal = first_tx_instructions
             .iter()
             .find(|instruction| {
@@ -1181,9 +1194,9 @@ mod tests {
                     .and_then(|register| register.get("AssetDefinition"))
                     .and_then(|asset| asset.get("id"))
                     .and_then(JsonValue::as_str)
-                    == Some("xor#universal")
+                    == Some(xor_asset_definition_id)
             })
-            .expect("public Taira genesis.json must register xor#universal");
+            .expect("public Taira genesis.json must register the canonical xor asset");
         let confidential_mode = xor_universal
             .get("Register")
             .and_then(|register| register.get("AssetDefinition"))

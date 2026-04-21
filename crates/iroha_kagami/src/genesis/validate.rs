@@ -249,6 +249,7 @@ mod tests {
     fn run_rejects_missing_consensus_mode() {
         let manifest = r#"{
             "chain": "0",
+            "chain_discriminant": 1,
             "executor": null,
             "ivm_dir": ".",
             "transactions": [
@@ -275,15 +276,10 @@ mod tests {
 
     #[test]
     fn run_accepts_permissioned_on_iroha3() {
-        let manifest = r#"{
-            "chain": "0",
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Permissioned",
-            "transactions": [
-                {}
-            ]
-        }"#;
+        let manifest = GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from("."))
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
 
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), manifest).expect("write manifest");

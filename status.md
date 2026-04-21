@@ -21,6 +21,26 @@ Last updated: 2026-04-21
   - `cargo test -p iroha_torii --lib node_capabilities -- --nocapture`
   - `cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
 
+## 2026-04-21 Follow-up: Kagami genesis schema drift and codec samples resynced
+- Fixed the reported `iroha_kagami` reds caused by schema/fixture drift:
+  `crates/iroha_kagami/src/genesis/generate.rs` now stamps the resolved
+  `chain_discriminant` into generated manifests before JSON serialization, so
+  profile-generated account literals and the manifest header stay in sync.
+- `crates/iroha_kagami/src/localnet.rs` now derives and embeds DA proof-policy
+  bundles only when the selected build line actually enables DA/RBC. That
+  keeps Iroha2 localnet generation from round-tripping intentionally
+  `da.enabled = false` peer configs through the current DA-on runtime parser.
+- Refreshed stale Kagami tests/fixtures to match the current data model:
+  minimal genesis manifests in `sign`, `normalize`, `validate`, and `swarm`
+  now use current-schema manifests carrying `chain_discriminant`; the public
+  Taira wizard test now follows the canonical XOR asset registration plus
+  alias binding; `samples/codec/{account,domain}.{json,bin}` were regenerated;
+  and `crates/iroha_kagami/CommandLineHelp.md` was regenerated from the
+  current CLI definitions.
+- Validation for this slice:
+  - `cargo test -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --nocapture`
+  - `cargo test -p iroha_kagami`
+
 ## 2026-04-21 Follow-up: Torii generic QueryEnvelope executor expansion
 - Added a shared Torii `QueryEnvelope` row/aggregate executor and routed the
   current app query resources through it when `select` or `aggregate` is
