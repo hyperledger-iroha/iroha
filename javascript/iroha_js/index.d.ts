@@ -9368,6 +9368,44 @@ export function buildRegisterAccountInstruction({
   metadata?: object | null;
 }): object;
 
+export function buildRegisterAssetDefinitionInstruction(options: {
+  assetDefinitionId?: string;
+  asset_definition_id?: string;
+  id?: string;
+  name?: string;
+  description?: string | null;
+  alias?: string | null;
+  logo?: string | null;
+  scale?: NumericLike | null;
+  mintable?: string;
+  mintOnce?: boolean;
+  metadata?: object | null;
+  balanceScopePolicy?: string;
+  balance_scope_policy?: string;
+  confidentialPolicy?: object;
+  confidential_policy?: object;
+}): object;
+
+export function buildGrantAccountPermissionInstruction(options: {
+  accountId?: string;
+  destinationAccountId?: string;
+  destination?: string;
+  permission?: {
+    name: string;
+    payload?: JsonValue;
+  };
+  name?: string;
+  payload?: JsonValue;
+}): object;
+
+export function buildSetAssetDefinitionAliasInstruction(options: {
+  assetDefinitionId?: string;
+  asset_definition_id?: string;
+  alias?: string | null;
+  leaseExpiryMs?: NumericLike | null;
+  lease_expiry_ms?: NumericLike | null;
+}): object;
+
 export function buildExecuteTriggerInstruction(
   trigger: string,
   args?: JsonValue,

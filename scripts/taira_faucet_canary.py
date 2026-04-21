@@ -119,15 +119,6 @@ def claim_faucet(account_id: str, torii_root: str) -> dict[str, Any]:
         body,
     )
     if claim_status not in (200, 202):
-        rendered = claim if isinstance(claim, str) else json.dumps(claim, sort_keys=True)
-        if claim_status == 400 and "positive faucet asset balance" in rendered:
-            return {
-                "puzzle": puzzle,
-                "request": body,
-                "response_status": claim_status,
-                "response": claim,
-                "status": "already-funded",
-            }
         raise RuntimeError(f"faucet claim failed: status={claim_status} body={claim!r}")
     return {
         "puzzle": puzzle,

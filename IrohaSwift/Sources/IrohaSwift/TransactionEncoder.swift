@@ -220,6 +220,7 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     case nativeBridgeError(NativeBridgeError)
     case unsupportedSigningAlgorithm(SigningAlgorithm)
     case invalidClaimIdentifierReceipt(String)
+    case invalidNativeSignedTransaction(String)
 
     public var errorDescription: String? {
         switch self {
@@ -233,6 +234,8 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
             return "Signing algorithm \(algorithm) is not supported by this encoder."
         case let .invalidClaimIdentifierReceipt(reason):
             return "ClaimIdentifier receipt is invalid: \(reason)"
+        case let .invalidNativeSignedTransaction(reason):
+            return "Native signed transaction is invalid: \(reason)"
         }
     }
 }
@@ -247,10 +250,17 @@ private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
     }
 }
 
+private let signedTransactionWireVersion: UInt8 = 1
+
+private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data {
+    var bytes = Data([signedTransactionWireVersion])
+    bytes.append(signedTransaction)
+    return bytes
+}
+
 private enum ClaimIdentifierSwiftNoritoEncoder {
     private static let instructionWireName = "identity::ClaimIdentifier"
     private static let instructionTypeName = "iroha_data_model::isi::identifier::ClaimIdentifier"
-    private static let signedTransactionTypeName = "iroha_data_model::transaction::signed::model::SignedTransaction"
 
     static func encode(chainId: String,
                        authority: String,
@@ -269,7 +279,7 @@ private enum ClaimIdentifierSwiftNoritoEncoder {
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
         let signedTransaction = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
         let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
-        let norito = noritoEncode(typeName: signedTransactionTypeName, payload: signedTransaction, flags: 0)
+        let norito = encodeVersionedSignedTransaction(signedTransaction)
         return SignedTransactionEnvelope(norito: norito,
                                          signedTransaction: signedTransaction,
                                          payload: nil,
@@ -415,7 +425,6 @@ private enum ClaimIdentifierSwiftNoritoEncoder {
 private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
     private static let instructionWireName = "identity::SetPrimaryAccountAlias"
     private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias"
-    private static let signedTransactionTypeName = "iroha_data_model::transaction::signed::model::SignedTransaction"
 
     static func encode(chainId: String,
                        authority: String,
@@ -445,7 +454,7 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
             transactionPayload: transactionPayload
         )
         let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
-        let norito = noritoEncode(typeName: signedTransactionTypeName, payload: signedTransaction, flags: 0)
+        let norito = encodeVersionedSignedTransaction(signedTransaction)
         return SignedTransactionEnvelope(
             norito: norito,
             signedTransaction: signedTransaction,
@@ -544,8 +553,6 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
 }
 
 struct SwiftTransactionEncoder {
-    private static let signedTransactionType = "iroha_data_model::transaction::signed::model::SignedTransaction"
-
     private static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
         guard NoritoNativeBridge.shared.isAvailable else {
             throw SwiftTransactionEncoderError.nativeBridgeUnavailable
@@ -560,18 +567,18 @@ struct SwiftTransactionEncoder {
         }
     }
 
-    private static func wrap(native: NativeSignedTransaction) -> SignedTransactionEnvelope {
-        if let framed = noritoDecodeFrame(native.signedBytes) {
-            return SignedTransactionEnvelope(norito: native.signedBytes,
-                                             signedTransaction: framed.payload,
-                                             payload: nil,
-                                             transactionHash: native.hash)
+    private static func wrap(native: NativeSignedTransaction) throws -> SignedTransactionEnvelope {
+        guard native.signedBytes.first == signedTransactionWireVersion else {
+            throw SwiftTransactionEncoderError.invalidNativeSignedTransaction(
+                "missing version byte \(signedTransactionWireVersion)"
+            )
         }
-        let norito = noritoEncode(typeName: signedTransactionType,
-                                  payload: native.signedBytes,
-                                  flags: 0x04)
-        return SignedTransactionEnvelope(norito: norito,
-                                         signedTransaction: native.signedBytes,
+        let signedTransaction = Data(native.signedBytes.dropFirst())
+        guard !signedTransaction.isEmpty else {
+            throw SwiftTransactionEncoderError.invalidNativeSignedTransaction("empty signed transaction payload")
+        }
+        return SignedTransactionEnvelope(norito: native.signedBytes,
+                                         signedTransaction: signedTransaction,
                                          payload: nil,
                                          transactionHash: native.hash)
     }
@@ -616,7 +623,7 @@ struct SwiftTransactionEncoder {
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeMint(request: MintRequest,
@@ -650,7 +657,7 @@ struct SwiftTransactionEncoder {
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeBurn(request: BurnRequest,
@@ -684,7 +691,7 @@ struct SwiftTransactionEncoder {
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeShield(request: ShieldRequest,
@@ -721,7 +728,7 @@ struct SwiftTransactionEncoder {
                                                        privateKey: privateKey,
                                                        algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeUnshield(request: UnshieldRequest,
@@ -758,7 +765,7 @@ struct SwiftTransactionEncoder {
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeZkTransfer(request: ZkTransferRequest,
@@ -792,7 +799,7 @@ struct SwiftTransactionEncoder {
                                                            privateKey: privateKey,
                                                            algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeRegisterZkAsset(request: RegisterZkAssetRequest,
@@ -834,7 +841,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeMultisigRegister(request: MultisigRegisterRequest,
@@ -866,7 +873,7 @@ struct SwiftTransactionEncoder {
                                                                  privateKey: privateKey,
                                                                  algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
@@ -907,7 +914,7 @@ struct SwiftTransactionEncoder {
                     privateKey: privateKey,
                     algorithm: signingKey.algorithm
                 ) {
-                    return wrap(native: native)
+                    return try wrap(native: native)
                 }
             } catch let error as NativeBridgeError {
                 throw SwiftTransactionEncoderError.nativeBridgeError(error)
@@ -988,7 +995,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeRemoveMetadata(request: RemoveMetadataRequest,
@@ -1018,7 +1025,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeProposeDeploy(request: ProposeDeployContractRequest,
@@ -1052,7 +1059,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeCastPlainBallot(request: CastPlainBallotRequest,
@@ -1087,7 +1094,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeCastZkBallot(request: CastZkBallotRequest,
@@ -1117,7 +1124,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     private static func normalizeZkBallotPublicInputs(_ data: Data) throws -> Data {
@@ -1296,7 +1303,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeFinalizeReferendum(request: FinalizeReferendumRequest,
@@ -1324,7 +1331,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodePersistCouncil(request: PersistCouncilRequest,
@@ -1360,7 +1367,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     private static func privateKeyBytes(from signingKey: SigningKey) throws -> Data {

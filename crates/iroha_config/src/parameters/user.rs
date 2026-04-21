@@ -15940,7 +15940,7 @@ pub struct ToriiFaucet {
     pub private_key: ExposedPrivateKey,
     /// Asset definition distributed by the faucet.
     pub asset_definition_id: String,
-    /// Fixed quantity transferred to each eligible account.
+    /// Fixed quantity transferred by each accepted faucet claim.
     pub amount: String,
     /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
     #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]

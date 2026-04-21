@@ -209,12 +209,12 @@ enum NoritoBridgeLoader {
         }
 
         if candidates.isEmpty {
-            let fallback = [
+            let defaultCandidates = [
                 binaryURL.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json"),
                 binaryURL.deletingLastPathComponent().deletingLastPathComponent()
                     .appendingPathComponent("NoritoBridge.artifacts.json")
             ]
-            for url in fallback where !seen.contains(url.path) {
+            for url in defaultCandidates where !seen.contains(url.path) {
                 seen.insert(url.path)
                 candidates.append(url)
             }
@@ -1942,7 +1942,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
-        fallbackAccountAddressDiscriminant(authority)
+        inferredAccountAddressDiscriminant(authority)
     }
 
     private func withAuthorityChainDiscriminant<R>(
@@ -2294,10 +2294,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.offlineBlindingFromSeedFn = nil
             }
-            // `offline_receipt_challenge` gained the `sender_certificate_id` arguments in a newer ABI.
-            // Older bridge binaries can still export the same symbol name with the legacy signature,
-            // which would make this function pointer call unsafe. Require a newer offline symbol as
-            // an ABI marker before enabling the native challenge entrypoint.
+            // Require the full current offline ABI before enabling the native challenge entrypoint.
             if self.offlineBlindingFromSeedFn == nil {
                 self.offlineReceiptChallengeFn = nil
             }
@@ -2947,7 +2944,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
     #endif
 
-    private func fallbackAccountAddressDiscriminant(_ literal: String) -> UInt16? {
+    private func inferredAccountAddressDiscriminant(_ literal: String) -> UInt16? {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("sora") {
             return 753
@@ -3023,7 +3020,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         )
         return NativeAccountAddressParseResult(
             canonicalBytes: try address.canonicalBytes(),
-            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+            networkPrefix: expectedPrefix ?? inferredAccountAddressDiscriminant(literal)
         )
         #else
         let address = try AccountAddress.parseEncodedSwiftOnly(
@@ -3032,7 +3029,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         )
         return NativeAccountAddressParseResult(
             canonicalBytes: try address.canonicalBytes(),
-            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+            networkPrefix: expectedPrefix ?? inferredAccountAddressDiscriminant(literal)
         )
         #endif
     }
@@ -4130,12 +4127,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) throws -> NativeSignedTransaction? {
         #if canImport(Darwin)
         guard let freeFn else { return nil }
-        let fallbackClaimIdentifierFn: EncodeClaimIdentifierFn? = nil
-        let fallbackClaimIdentifierWithAlgFn: EncodeClaimIdentifierWithAlgFn? = nil
-        let resolvedClaimIdentifierFn = encodeClaimIdentifierFn ?? fallbackClaimIdentifierFn
-        let resolvedClaimIdentifierWithAlgFn = encodeClaimIdentifierWithAlgFn ?? fallbackClaimIdentifierWithAlgFn
-        let useAlg = algorithm != .ed25519 && resolvedClaimIdentifierWithAlgFn != nil
-        guard useAlg || resolvedClaimIdentifierFn != nil else { return nil }
+        let useAlg = algorithm != .ed25519 && encodeClaimIdentifierWithAlgFn != nil
+        guard useAlg || encodeClaimIdentifierFn != nil else { return nil }
 
         var signedPtr: UnsafeMutablePointer<UInt8>? = nil
         var signedLen: UInt = 0
@@ -4162,8 +4155,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         return -1
                                     }
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                        if useAlg, let resolvedClaimIdentifierWithAlgFn {
-                                            return resolvedClaimIdentifierWithAlgFn(
+                                        if useAlg, let encodeClaimIdentifierWithAlgFn {
+                                            return encodeClaimIdentifierWithAlgFn(
                                                 chainPtr, UInt(chainId.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
@@ -4178,8 +4171,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 hashPtr,
                                                 hashLength
                                             )
-                                        } else if let resolvedClaimIdentifierFn {
-                                            return resolvedClaimIdentifierFn(
+                                        } else if let encodeClaimIdentifierFn {
+                                            return encodeClaimIdentifierFn(
                                                 chainPtr, UInt(chainId.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,

@@ -34,14 +34,14 @@ SoraNet handshake guide (`docs/source/soranet_handshake.md`).
 
 ### 3. Media Types & Negotiation
 
-- **Requests** MUST set `Content-Type: application/x-norito`. Torii will attempt
-  to decode invalid payloads as Norito first, falling back to Norito-backed JSON
-  only if no `Content-Type` is provided (`crates/iroha_torii/src/utils.rs:576`).
+- **Requests** MUST set `Content-Type: application/x-norito` for Norito routes.
+  JSON routes require an explicit JSON media type; Torii does not reinterpret a
+  malformed Norito body as JSON (`crates/iroha_torii/src/utils.rs:576`).
 - **Responses** honour the `Accept` header via
   `negotiate_response_format` (`crates/iroha_torii/src/utils.rs:63`):
   - If `application/x-norito` (optionally with parameters) is present with the
     highest quality factor, Torii replies with Norito bytes.
-  - Otherwise Torii falls back to Norito JSON (`application/json`) so clients
+  - Otherwise Torii replies with Norito JSON (`application/json`) so clients
     without binary support can interoperate.
 - Media type parameters are ignored during negotiation. JSON callers may send
   `application/json`, `text/json`, or any `application/*+json` media type.
@@ -91,11 +91,10 @@ Torii re-computes the checksum after decompression.
    into strongly typed Norito models using `NoritoQuery`
   (`crates/iroha_torii/src/utils.rs:705`).
 4. Some routes accept versioned envelopes. When the route uses
-   `NoritoVersioned<T>`, Torii first attempts to decode the incoming bytes using
-   `iroha_version` framing before falling back to plain Norito
-  (`crates/iroha_torii/src/utils.rs:380`). Clients should prefer the versioned
-   framing when invoking versioned data-model types (e.g., transactions and
-   blocks) so future schema upgrades can be negotiated.
+   `NoritoVersioned<T>`, Torii requires `iroha_version` framing and rejects
+   plain Norito payloads (`crates/iroha_torii/src/utils.rs:380`). Clients must
+   use versioned framing when invoking versioned data-model types such as
+   signed transactions, signed queries, and blocks.
 
 Example submission (payload prepared separately):
 
@@ -131,6 +130,7 @@ curl \
 | --- | --- | --- | --- | --- |
 | Signed queries | `POST /query` (aliased by the pipeline router) | `SignedQuery` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5387`](/crates/iroha_torii/src/lib.rs#L5387) | Norito or JSON `QueryResultBox` depending on `Accept` | The handler streams results through `handle_queries`/`handle_queries_with_opts`, honouring pagination and cursor overrides (`crates/iroha_torii/src/routing.rs:9472`). |
 | Contracts & verifying keys | `POST /v1/contracts/{deploy,call,call/simulate,view,call/multisig/propose,call/multisig/approve}`; `POST /v1/zk/vk/{register,update,deprecate}` | `DeployContractDto`, `ContractCallDto`, `ContractCallSimulateDto`, `ContractViewDto`, `MultisigContractCallProposeDto`, `MultisigContractCallApproveDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto` | Structured Norito/JSON DTOs for deploy, call, simulate, view, and multisig participation | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Public runtime calls now build compact `Executable::ContractCall` transactions by reference, so Norito-RPC callers no longer resend full contract bytecode/manifests on every invocation. |
+| Aggregate DSL reads | `POST /v1/assets/{definition_id}/holders/query` | `QueryEnvelope` with `filter`, `aggregate`, `sort`, and `pagination` | JSON/Norito dynamic rows with `indexed_height`, `indexed_block_hash`, and `query_source` | Exact SBP-style directory reads can group PKR holders by `primary_alias_domain`, compute `distinct_count(account_id)`, and `sum(quantity)`. When matching projection shards are checkpointed, Torii serves from the DA projection cache (`query_source=projection_da_cache`) instead of the live holder map. |
 | ZK proof orchestration | `POST /v1/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v1/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
 | SoraFS storage APIs | `/v1/sorafs/{pin,capacity,deal,replication,por}/*` | `RegisterPinManifestDto`, `RegisterCapacityDeclarationDto`, `RecordDealUsageDto`, `RecordPorChallengeDto`, `RecordPorProofDto`, etc.[`crates/iroha_torii/src/routing.rs:5624`](/crates/iroha_torii/src/routing.rs#L5624)[`crates/iroha_torii/src/routing.rs:6385`](/crates/iroha_torii/src/routing.rs#L6385) | Norito acknowledgements with policy enforcement metadata | All admissions run through shared helpers that emit deterministic telemetry and queue transactions when on-chain mutations are required. |
 | Connect pairing | `POST /v1/connect/session` (plus `DELETE/GET` companions) | `ConnectSessionRequest`[`crates/iroha_torii/src/routing.rs:1613`](/crates/iroha_torii/src/routing.rs#L1613) | Norito `ConnectSessionResponse` / status DTOs | Sessions inherit the same Norito negotiation so wallets and dApps can reuse binary codecs while bridging to WebSocket upgrades. |
@@ -142,8 +142,8 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
 - **Decode & negotiation failures.** Schema mismatches, CRC failures, or unsupported layout bits trigger `400 Bad Request` or `415 Unsupported Media Type` before business logic runs. The response body is a UTF-8 diagnostic string emitted by the Norito extractor so clients can surface actionable errors.
 - **Validation and permission errors.** Domain-level failures propagate through `Error::Query` and reuse the `ValidationFail` → status mapping in `Error::query_status_code`[`crates/iroha_torii/src/lib.rs:9647`](/crates/iroha_torii/src/lib.rs#L9647). Examples: `NotPermitted` → `403`, `Find(_)` → `404`, `Expired` → `410`, `CapacityLimit` → `429`.
 - **Queue backpressure.** Admission failures bubble through `Error::PushIntoQueue`, which selects status codes (`429`, `400`, `409`, `500`) via `status_code_for_queue_error`[`crates/iroha_torii/src/lib.rs:9717`](/crates/iroha_torii/src/lib.rs#L9717) and returns a Norito `QueueErrorEnvelope` containing queue depth, capacity, and saturation flags[`crates/iroha_torii/src/lib.rs:9730`](/crates/iroha_torii/src/lib.rs#L9730). Applicable responses include `X-Iroha-Queue-Depth`, `X-Iroha-Queue-Capacity`, `X-Iroha-Queue-State`, and a `Retry-After: 1` hint for transient saturation.
-- **Generic envelopes.** All other errors are serialized as Norito `ErrorEnvelope { code, message }`[`crates/iroha_torii/src/lib.rs:8445`](/crates/iroha_torii/src/lib.rs#L8445). Clients should surface the machine-readable `code` first (`queue_full`, `already_enqueued`, etc.) and fall back to the message for human diagnostics.
-- **Plain-text fallbacks.** When extraction fails before a typed handler is selected, Axum returns a plain-string body (e.g., “invalid Norito body: checksum mismatch”). SDKs SHOULD treat unknown content types as fatal and relay the payload verbatim to avoid swallowing diagnostics.
+- **Generic envelopes.** All other errors are serialized as Norito `ErrorEnvelope { code, message }`[`crates/iroha_torii/src/lib.rs:8445`](/crates/iroha_torii/src/lib.rs#L8445). Clients should surface the machine-readable `code` first (`queue_full`, `already_enqueued`, etc.) and use `message` only as human diagnostics.
+- **Plain-text extraction errors.** When extraction fails before a typed handler is selected, Axum returns a plain-string body (e.g., “invalid Norito body: checksum mismatch”). SDKs SHOULD treat unknown content types as fatal and relay the payload verbatim to avoid swallowing diagnostics.
 
 ### 9. Control Channels & Observability
 

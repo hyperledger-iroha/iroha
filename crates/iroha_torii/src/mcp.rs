@@ -194,7 +194,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             }
 
             // Keep OpenAPI-derived names stable regardless of mutable `operationId` fields.
-            let operation_id = fallback_operation_id(method_key, path);
+            let operation_id = generated_operation_id(method_key, path);
             let description = operation
                 .get("summary")
                 .and_then(Value::as_str)
@@ -2432,7 +2432,7 @@ fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bo
     false
 }
 
-fn fallback_operation_id(method: &str, path: &str) -> String {
+fn generated_operation_id(method: &str, path: &str) -> String {
     let mut out = String::new();
     out.push_str(method);
     out.push('_');
@@ -6630,43 +6630,20 @@ async fn dispatch_iroha_transactions_submit(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let mut adapted = arguments.clone();
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        if let Some(encoded) = arguments
-            .get("signed_tx_base64")
-            .or_else(|| arguments.get("tx_base64"))
-            .and_then(Value::as_str)
-        {
-            adapted.insert("body_base64".into(), Value::String(encoded.to_owned()));
-        } else if let Some(encoded_hex) = arguments
-            .get("body_hex")
-            .or_else(|| arguments.get("signed_tx_hex"))
-            .or_else(|| arguments.get("tx_hex"))
-            .and_then(Value::as_str)
-        {
-            let bytes = hex::decode(encoded_hex)
-                .map_err(|err| format!("transaction hex payload must be valid hex: {err}"))?;
-            adapted.insert(
-                "body_base64".into(),
-                Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
-            );
-        }
-    }
-
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        return Err("one of `body_base64`, `signed_tx_base64`, `tx_base64`, `body_hex`, `signed_tx_hex`, `tx_hex`, or `body` is required".to_owned());
-    }
-
-    let (body, content_type) = build_request_body(&adapted)?;
+    let body = canonical_norito_body_base64(
+        arguments,
+        "versioned SignedTransaction",
+        &["body_base64", "headers", "accept"],
+    )?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/transaction",
-        adapted.get("headers"),
+        arguments.get("headers"),
         body,
-        content_type,
-        adapted
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+        arguments
             .get("accept")
             .and_then(Value::as_str)
             .map(str::to_owned),
@@ -6679,48 +6656,59 @@ async fn dispatch_iroha_queries_submit(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let mut adapted = arguments.clone();
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        if let Some(encoded) = arguments
-            .get("signed_query_base64")
-            .or_else(|| arguments.get("query_base64"))
-            .and_then(Value::as_str)
-        {
-            adapted.insert("body_base64".into(), Value::String(encoded.to_owned()));
-        } else if let Some(encoded_hex) = arguments
-            .get("body_hex")
-            .or_else(|| arguments.get("signed_query_hex"))
-            .or_else(|| arguments.get("query_hex"))
-            .and_then(Value::as_str)
-        {
-            let bytes = hex::decode(encoded_hex)
-                .map_err(|err| format!("query hex payload must be valid hex: {err}"))?;
-            adapted.insert(
-                "body_base64".into(),
-                Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
-            );
-        }
-    }
-
-    if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
-        return Err("one of `body_base64`, `signed_query_base64`, `query_base64`, `body_hex`, `signed_query_hex`, `query_hex`, or `body` is required".to_owned());
-    }
-
-    let (body, content_type) = build_request_body(&adapted)?;
+    let body = canonical_norito_body_base64(
+        arguments,
+        "versioned SignedQuery",
+        &["body_base64", "headers", "accept"],
+    )?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/query",
-        adapted.get("headers"),
+        arguments.get("headers"),
         body,
-        content_type,
-        adapted
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+        arguments
             .get("accept")
             .and_then(Value::as_str)
             .map(str::to_owned),
     )
     .await
+}
+
+fn canonical_norito_body_base64(
+    arguments: &Map,
+    label: &str,
+    allowed_fields: &[&str],
+) -> Result<Vec<u8>, String> {
+    reject_unknown_arguments(
+        arguments,
+        allowed_fields,
+        &format!("canonical {label} submission"),
+    )?;
+    let encoded = arguments
+        .get("body_base64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("body_base64 is required for canonical {label} submission"))?;
+    decode_base64_any(encoded)
+        .ok_or_else(|| "body_base64 must be valid base64/base64url".to_owned())
+}
+
+fn reject_unknown_arguments(
+    arguments: &Map,
+    allowed_fields: &[&str],
+    context: &str,
+) -> Result<(), String> {
+    for field in arguments.keys() {
+        if !allowed_fields.contains(&field.as_str()) {
+            return Err(format!(
+                "unexpected `{field}` for {context}; allowed fields: {}",
+                allowed_fields.join(", ")
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
@@ -6830,7 +6818,24 @@ async fn dispatch_iroha_transactions_submit_and_wait(
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
 
-    let submit = dispatch_iroha_transactions_submit(app, inbound_headers, arguments).await?;
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "body_base64",
+            "hash",
+            "transaction_hash",
+            "timeout_ms",
+            "poll_interval_ms",
+            "terminal_statuses",
+            "status_accept",
+            "headers",
+            "accept",
+        ],
+        "canonical submit-and-wait transaction submission",
+    )?;
+    let submit_arguments = canonical_submit_arguments(arguments);
+    let submit =
+        dispatch_iroha_transactions_submit(app, inbound_headers, &submit_arguments).await?;
     let submit_status = submit.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
@@ -6854,6 +6859,16 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         terminal_statuses,
     )
     .await
+}
+
+fn canonical_submit_arguments(arguments: &Map) -> Map {
+    let mut submit_arguments = Map::new();
+    for field in ["body_base64", "headers", "accept"] {
+        if let Some(value) = arguments.get(field) {
+            submit_arguments.insert(field.to_owned(), value.clone());
+        }
+    }
+    submit_arguments
 }
 
 async fn dispatch_iroha_transactions_wait(
@@ -12426,7 +12441,7 @@ fn iroha_asset_holders_tool() -> ToolSpec {
 fn iroha_asset_holders_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders.query".to_owned(),
-        description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported).".to_owned(),
+        description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported). Supports exact aggregate DSL queries, for example SBP PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`; published projection shards may serve the response with `query_source=projection_da_cache`.".to_owned(),
         method: Method::POST,
         path_template: "/v1/assets/{definition_id}/holders/query".to_owned(),
         input_schema: norito::json!({
@@ -13144,43 +13159,19 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
 fn iroha_queries_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.queries.submit".to_owned(),
-        description: "Submit a signed query encoded as Norito bytes (`signed_query_base64`/`query_base64`/hex shortcuts supported).".to_owned(),
+        description:
+            "Submit a versioned SignedQuery encoded as canonical Norito bytes in `body_base64`."
+                .to_owned(),
         method: Method::POST,
         path_template: "/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["body_base64"],
             "properties": {
                 "body_base64": {
                     "type": "string",
-                    "description": "Base64/base64url encoded SignedQuery bytes."
-                },
-                "signed_query_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "query_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "body_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded SignedQuery bytes."
-                },
-                "signed_query_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "query_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "body": {
-                    "description": "Optional JSON request body; use only when submitting JSON query envelopes."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/x-norito)."
+                    "description": "Base64/base64url encoded versioned SignedQuery bytes."
                 },
                 "headers": {
                     "type": "object",
@@ -13424,43 +13415,17 @@ fn iroha_blocks_get_tool() -> ToolSpec {
 fn iroha_transactions_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit".to_owned(),
-        description: "Submit a versioned SignedTransaction encoded as Norito bytes (`signed_tx_base64`/`tx_base64`/hex shortcuts supported).".to_owned(),
+        description: "Submit a versioned SignedTransaction encoded as canonical Norito bytes in `body_base64`.".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["body_base64"],
             "properties": {
                 "body_base64": {
                     "type": "string",
                     "description": "Base64/base64url encoded versioned SignedTransaction bytes."
-                },
-                "signed_tx_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "tx_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "body_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded versioned SignedTransaction bytes."
-                },
-                "signed_tx_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "tx_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "body": {
-                    "description": "Optional JSON request body; use only when submitting JSON SignedTransaction envelopes."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/x-norito)."
                 },
                 "headers": {
                     "type": "object",
@@ -13475,43 +13440,17 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
 fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
-        description: "Submit a versioned SignedTransaction and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
+        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["body_base64"],
             "properties": {
                 "body_base64": {
                     "type": "string",
                     "description": "Base64/base64url encoded versioned SignedTransaction bytes."
-                },
-                "signed_tx_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "tx_base64": {
-                    "type": "string",
-                    "description": "Alias for `body_base64`."
-                },
-                "body_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded versioned SignedTransaction bytes."
-                },
-                "signed_tx_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "tx_hex": {
-                    "type": "string",
-                    "description": "Alias for `body_hex`."
-                },
-                "body": {
-                    "description": "Optional JSON request body; use only when submitting JSON transaction envelopes."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/x-norito)."
                 },
                 "hash": {
                     "type": "string",

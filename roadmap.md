@@ -2,6 +2,46 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 first-release canonical Norito submission cleanup):
+The transaction/query submission path is now canonical-only for the first
+release. Torii MCP exposes only `body_base64` for versioned `SignedTransaction`
+and `SignedQuery` bytes, rejects unexpected payload fields generically, and
+always forwards those bodies as `application/x-norito`. The confidential relay
+and native bridge signed-transaction decoders now accept only
+`iroha_version`-framed `SignedTransaction` bytes, while Connect envelope and
+identifier-receipt parsing no longer use unchecked schema or alternate payload
+branches. The Swift SDK now preserves the versioned native envelope returned by
+the bridge and rejects native signed bytes without version byte `1`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/mcp.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/connect_norito_bridge/{Cargo.toml,src/lib.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/{NativeBridge,TransactionEncoder,TxBuilder}.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/torii/norito_rpc.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/portal/docs/devportal/torii-rpc-overview.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `git diff --check -- ...` for the touched Rust, Swift, and doc files
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p connect_norito_bridge parse_identifier_receipt_ --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p connect_norito_bridge signed_transaction_ --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_post_transaction_rejects_unknown_payload_field -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_query_submit -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_error -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_post_transaction_dispatches_binary_payload -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-canonical-norito cargo test -p iroha_torii confidential_relay_decodes_only_versioned_signed_transaction --lib -- --nocapture`
+  - `cd IrohaSwift && swift test --filter TxBuilderTests/testSetPrimaryAccountAliasUsesDataspaceIdInEncoding`
+  - `cd IrohaSwift && swift test --filter TxBuilderTests/testBuildClaimIdentifierProducesEnvelope`
+- open work after this slice:
+  - investigate the existing native bridge authority failures that still block
+    broad `cd IrohaSwift && swift test --filter TxBuilderTests` in this
+    environment when many native transaction tests use RTLD_DEFAULT bridge
+    symbols
+
 Latest sync (2026-04-21 Torii projection checkpoint upload helper restore):
 The `iroha_torii` projection checkpoint plan/publish handlers compile again.
 `crates/iroha_torii/src/runtime.rs` now restores the missing

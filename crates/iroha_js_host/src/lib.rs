@@ -67,6 +67,7 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
+        AssetDefinitionAlias,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
     },
@@ -79,11 +80,11 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
-        RemoveKeyValue, ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer,
-        TransferBox, Unregister, UnregisterBox,
+        RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
+        SetKeyValue, Transfer, TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -118,6 +119,7 @@ use iroha_data_model::{
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,
     peer::{Peer, PeerId},
+    permission::Permission,
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::ContractManifest,
@@ -6067,6 +6069,102 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Transfer instruction variant; expected keys: Asset, Domain, AssetDefinition, or Nft",
                 ));
             }
+            if let Some(json::Value::Object(mut grant_map)) = map.remove("Grant") {
+                if let Some(json::Value::Object(mut fields)) = grant_map.remove("Permission") {
+                    let object_value = required_value(&mut fields, "object", "Grant.Permission")?;
+                    let destination = parse_account_id_value(
+                        required_value(&mut fields, "destination", "Grant.Permission")?,
+                        "Grant.Permission.destination",
+                    )?;
+                    if !fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Grant.Permission contains unsupported fields: {}",
+                                fields.keys().cloned().collect::<Vec<_>>().join(",")
+                            ),
+                        ));
+                    }
+                    let mut permission_fields = match object_value {
+                        json::Value::Object(map) => map,
+                        other => {
+                            return Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "Grant.Permission.object must be an object (found {other:?})"
+                                ),
+                            ));
+                        }
+                    };
+                    permission_fields
+                        .entry("payload".to_owned())
+                        .or_insert(json::Value::Null);
+                    let permission: Permission =
+                        json::from_value(json::Value::Object(permission_fields))
+                            .map_err(norito_to_napi)?;
+                    let grant = Grant::account_permission(permission, destination);
+                    return Ok(InstructionBox::from(GrantBox::Permission(grant)));
+                }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "unsupported Grant instruction variant; expected key: Permission",
+                ));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("SetAssetDefinitionAlias") {
+                let asset_definition_id: AssetDefinitionId = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetDefinitionAlias",
+                    )?,
+                    "SetAssetDefinitionAlias.asset_definition_id",
+                )?
+                .parse()
+                .map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "invalid SetAssetDefinitionAlias.asset_definition_id literal: {err}"
+                        ),
+                    )
+                })?;
+                let alias = parse_optional_string_value(
+                    fields.remove("alias"),
+                    "SetAssetDefinitionAlias.alias",
+                )?
+                .map(|literal| {
+                    literal.parse::<AssetDefinitionAlias>().map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("invalid SetAssetDefinitionAlias.alias literal: {err}"),
+                        )
+                    })
+                })
+                .transpose()?;
+                let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(parse_u64_value(
+                        value,
+                        "SetAssetDefinitionAlias.lease_expiry_ms",
+                    )?),
+                };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetDefinitionAlias contains unsupported fields: {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(",")
+                        ),
+                    ));
+                }
+                let instruction = match alias {
+                    Some(alias) => {
+                        SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
+                    }
+                    None => SetAssetDefinitionAlias::clear(asset_definition_id),
+                };
+                return Ok(InstructionBox::from(instruction));
+            }
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterRwa") {
                 let rwa_value = required_value(&mut fields, "rwa", "RegisterRwa")?;
                 let json::Value::Object(mut fields) = rwa_value else {
@@ -7262,6 +7360,57 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Burn".to_owned(), json::Value::Object(burn_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(grant_box) = instruction_ref.as_any().downcast_ref::<GrantBox>() {
+        if let GrantBox::Permission(grant) = grant_box {
+            let mut fields = json::Map::new();
+            fields.insert(
+                "object".to_owned(),
+                json::to_value(grant.object()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "destination".to_owned(),
+                json::to_value(grant.destination()).map_err(norito_to_napi)?,
+            );
+            let mut grant_map = json::Map::new();
+            grant_map.insert("Permission".to_owned(), json::Value::Object(fields));
+            let mut outer = json::Map::new();
+            outer.insert("Grant".to_owned(), json::Value::Object(grant_map));
+            return Ok(json::Value::Object(outer));
+        }
+    }
+
+    if let Some(alias) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetDefinitionAlias>()
+    {
+        let mut fields = json::Map::new();
+        fields.insert(
+            "asset_definition_id".to_owned(),
+            json::Value::String(alias.asset_definition_id().to_string()),
+        );
+        fields.insert(
+            "alias".to_owned(),
+            alias.alias().as_ref().map_or(json::Value::Null, |value| {
+                json::Value::String(value.to_string())
+            }),
+        );
+        fields.insert(
+            "lease_expiry_ms".to_owned(),
+            alias
+                .lease_expiry_ms()
+                .as_ref()
+                .map_or(json::Value::Null, |value| {
+                    json::Value::Number(json::Number::from(*value))
+                }),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetDefinitionAlias".to_owned(),
+            json::Value::Object(fields),
+        );
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(execute_trigger) = instruction_ref.as_any().downcast_ref::<ExecuteTrigger>() {

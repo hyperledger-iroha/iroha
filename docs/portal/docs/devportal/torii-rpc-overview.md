@@ -26,8 +26,9 @@ curl \
   https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
-1. Serialize your payload with the Norito codec (`iroha_client`, SDK helpers, or
-   `norito::to_bytes`).
+1. Serialize your payload with the SDK helper for the target route. Versioned
+   data-model routes such as signed transaction and signed query submission
+   require `iroha_version` framing, not a standalone Norito frame.
 2. Send the request with `Content-Type: application/x-norito`.
 3. Request a Norito response using `Accept: application/x-norito`.
 4. Decode the response using the matching SDK helper.
@@ -73,7 +74,7 @@ portal consumed.
 | Symptom | Where it appears | Likely cause | Fix |
 | --- | --- | --- | --- |
 | `415 Unsupported Media Type` | Torii response | Missing or incorrect `Content-Type` header | Set `Content-Type: application/x-norito` before sending the payload. |
-| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii response body/headers | Fixture schema hash differs from the Torii build | Regenerate fixtures with `cargo xtask norito-rpc-fixtures` and confirm the hash in `fixtures/norito_rpc/schema_hashes.json`; fall back to JSON if the endpoint has not enabled Norito yet. |
+| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii response body/headers | Fixture schema hash differs from the Torii build | Regenerate fixtures with `cargo xtask norito-rpc-fixtures` and confirm the hash in `fixtures/norito_rpc/schema_hashes.json`; do not retry the same payload with a different codec. |
 | `{"error":"origin_forbidden"}` (HTTP 403) | Try It proxy response | Request came from an origin that is not listed in `TRYIT_PROXY_ALLOWED_ORIGINS` | Add the portal origin (e.g., `https://docs.devnet.sora.example`) to the env var and restart the proxy. |
 | `{"error":"rate_limited"}` (HTTP 429) | Try It proxy response | Per-IP quota exceeded the `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` budget | Increase the limit for internal load testing or wait until the window resets (see `retryAfterMs` in the JSON response). |
 | `{"error":"upstream_timeout"}` (HTTP 504) or `{"error":"upstream_error"}` (HTTP 502) | Try It proxy response | Torii timed out or the proxy could not reach the configured backend | Verify that `TRYIT_PROXY_TARGET` is reachable, check Torii health, or retry with a larger `TRYIT_PROXY_TIMEOUT_MS`. |

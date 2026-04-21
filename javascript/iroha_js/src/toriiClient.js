@@ -19809,6 +19809,13 @@ function normalizeContractCallRequest(input) {
       "contractCall.gasAssetId",
     );
   }
+  const feeSponsor = record.fee_sponsor ?? record.feeSponsor;
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    normalized.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "contractCall.feeSponsor",
+    );
+  }
   const gasLimit = record.gas_limit ?? record.gasLimit;
   normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
     gasLimit,

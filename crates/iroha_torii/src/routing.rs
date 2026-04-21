@@ -69,6 +69,12 @@ use iroha_core::{
         SignatureVerificationFail,
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_core::query::{
+    projection_checkpoint::QueryProjectionResourceKind,
+    projection_rowset::{QueryProjectionAssetHolderRow, QueryProjectionShardRowSet},
+    projection_shard::QueryProjectionShardArchive,
+};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
     self,
@@ -861,6 +867,78 @@ struct EffectivePagination {
     limit: Option<u64>,
     offset: u64,
     cap: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QueryProjectionArchiveCacheKey {
+    resource: QueryProjectionResourceKind,
+    partition_id: u32,
+    asset_definition_id: Option<String>,
+    indexed_height: u64,
+    indexed_block_hash_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+static QUERY_PROJECTION_ARCHIVE_CACHE: LazyLock<
+    RwLock<BTreeMap<QueryProjectionArchiveCacheKey, QueryProjectionShardArchive>>,
+> = LazyLock::new(|| RwLock::new(BTreeMap::new()));
+
+#[cfg(feature = "app_api")]
+fn query_projection_block_hash_hex(
+    hash: Option<HashOf<BlockHeader>>,
+) -> Option<String> {
+    hash.map(|hash| hex::encode(hash.as_ref().as_ref()))
+}
+
+#[cfg(feature = "app_api")]
+fn query_projection_archive_cache_key(
+    archive: &QueryProjectionShardArchive,
+) -> QueryProjectionArchiveCacheKey {
+    QueryProjectionArchiveCacheKey {
+        resource: archive.resource,
+        partition_id: archive.partition_id,
+        asset_definition_id: archive.asset_definition_id.clone(),
+        indexed_height: archive.indexed_height,
+        indexed_block_hash_hex: query_projection_block_hash_hex(archive.indexed_block_hash),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn query_projection_checkpoint_cache_key(
+    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
+    checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
+) -> QueryProjectionArchiveCacheKey {
+    QueryProjectionArchiveCacheKey {
+        resource: shard.resource,
+        partition_id: shard.partition_id,
+        asset_definition_id: shard.asset_definition_id.clone(),
+        indexed_height: checkpoint.indexed_height,
+        indexed_block_hash_hex: query_projection_block_hash_hex(checkpoint.indexed_block_hash),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn cache_query_projection_archive_for_query(
+    archive: QueryProjectionShardArchive,
+) {
+    match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
+        Ok(mut cache) => {
+            cache.insert(query_projection_archive_cache_key(&archive), archive);
+        }
+        Err(_) => {
+            iroha_logger::warn!(
+                "query projection archive cache lock poisoned; snapshot aggregate cache not updated"
+            );
+        }
+    }
+}
+
+#[cfg(all(feature = "app_api", test))]
+fn clear_query_projection_archive_cache_for_tests() {
+    if let Ok(mut cache) = QUERY_PROJECTION_ARCHIVE_CACHE.write() {
+        cache.clear();
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -34960,24 +35038,28 @@ mod tx_query_integration_smoke {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn confidential_relay_decodes_bare_norito_signed_transaction() {
+    fn confidential_relay_decodes_only_versioned_signed_transaction() {
+        use iroha_version::codec::EncodeVersioned;
+
         let (authority, keypair) = account_with_key();
         let chain: dm::ChainId = "test-chain".parse().unwrap();
         let tx = dm::TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(keypair.private_key());
-        let bytes = norito::to_bytes(&tx).expect("encode signed transaction");
-        let raw_bytes = norito::codec::Encode::encode(&tx);
+        let versioned = tx.encode_versioned();
+        let bare = norito::codec::Encode::encode(&tx);
+        let framed = norito::to_bytes(&tx).expect("encode framed signed transaction");
+        let entrypoint = dm::TransactionEntrypoint::External(tx.clone()).encode_versioned();
 
-        let decoded = decode_relay_signed_transaction(&hex::encode(bytes))
-            .expect("decode bare norito signed transaction");
-        let raw_decoded = decode_relay_signed_transaction(&hex::encode(raw_bytes))
-            .expect("decode raw encoded signed transaction");
+        let decoded = decode_relay_signed_transaction(&hex::encode(versioned))
+            .expect("decode versioned signed transaction");
 
         assert_eq!(decoded.chain(), &chain);
         assert_eq!(decoded.authority(), &authority);
-        assert_eq!(raw_decoded.chain(), &chain);
-        assert_eq!(raw_decoded.authority(), &authority);
+        assert!(decode_relay_signed_transaction(&hex::encode(bare)).is_err());
+        assert!(decode_relay_signed_transaction(&hex::encode(framed)).is_err());
+        assert!(decode_relay_signed_transaction(&hex::encode(entrypoint)).is_err());
+        assert!(decode_relay_signed_transaction("0x01").is_err());
     }
 
     #[tokio::test]
@@ -39133,19 +39215,22 @@ mod app_api_integration_tests {
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let response = handle_v1_asset_holders_query(
             state,
-            axum::extract::Path("rose#centralbank".to_owned()),
+            axum::extract::Path("pkr#sbp".to_owned()),
             crate::utils::extractors::NoritoJson(QueryEnvelope {
                 query: None,
                 filter: Some(crate::filter::FilterExpr::And(vec![
-                    crate::filter::FilterExpr::Eq(
-                        crate::filter::FieldPath("scope".into()),
-                        norito::json::Value::from("global"),
-                    ),
                     crate::filter::FilterExpr::In(
                         crate::filter::FieldPath("primary_alias_domain".into()),
                         vec![
-                            norito::json::Value::from("hbl.universal"),
-                            norito::json::Value::from("ubl.universal"),
+                            norito::json::Value::from("hbl.sbp"),
+                            norito::json::Value::from("ubl.sbp"),
+                        ],
+                    ),
+                    crate::filter::FilterExpr::Nin(
+                        crate::filter::FieldPath("primary_alias".into()),
+                        vec![
+                            norito::json::Value::from("cbdc@hbl.sbp"),
+                            norito::json::Value::from("cbdc@ubl.sbp"),
                         ],
                     ),
                 ])),
@@ -39197,18 +39282,136 @@ mod app_api_integration_tests {
 
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.universal")
-        );
-        assert_eq!(items[0]["user_count"].as_u64(), Some(1));
-        assert_eq!(items[0]["pkr_total"].as_str(), Some("10"));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.universal")
-        );
+        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
+        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
+        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["pkr_total"].as_str(), Some("20"));
+        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+    }
+
+    #[tokio::test]
+    async fn asset_holders_query_aggregate_uses_cached_projection_shards_when_published() {
+        let _guard = app_query_limits_guard();
+        clear_query_projection_archive_cache_for_tests();
+
+        let (state, _, _) = build_asset_holder_aggregate_fixture_state();
+        let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
+            state.clone(),
+            "asset_holders".to_owned(),
+            crate::runtime::NodeProjectionShardCatalogQuery {
+                asset_definition_id: Some("pkr#sbp".to_owned()),
+                offset: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("projection catalog");
+        assert!(!catalog.entries.is_empty(), "fixture should produce holder shards");
+
+        let mut checkpoint_shards = Vec::new();
+        for entry in &catalog.entries {
+            let archive = crate::runtime::handle_node_query_projection_shard_export(
+                state.clone(),
+                "asset_holders".to_owned(),
+                entry.partition_id,
+                crate::runtime::NodeProjectionShardExportQuery {
+                    asset_definition_id: Some("pkr#sbp".to_owned()),
+                },
+            )
+            .await
+            .expect("projection shard export");
+            cache_query_projection_archive_for_query(archive.clone());
+            checkpoint_shards.push(
+                archive
+                    .into_checkpoint_shard(
+                        iroha_data_model::da::types::BlobDigest::new([
+                            entry.partition_id as u8;
+                            32
+                        ]),
+                        iroha_data_model::da::types::StorageTicketId::new([
+                            entry.partition_id.wrapping_add(1) as u8;
+                            32
+                        ]),
+                    )
+                    .expect("checkpoint shard"),
+            );
+        }
+        state.publish_query_projection_checkpoint(1_714_111_000, checkpoint_shards);
+
+        let response = handle_v1_asset_holders_query(
+            state,
+            axum::extract::Path("pkr#sbp".to_owned()),
+            crate::utils::extractors::NoritoJson(QueryEnvelope {
+                query: None,
+                filter: Some(crate::filter::FilterExpr::And(vec![
+                    crate::filter::FilterExpr::In(
+                        crate::filter::FieldPath("primary_alias_domain".into()),
+                        vec![
+                            norito::json::Value::from("hbl.sbp"),
+                            norito::json::Value::from("ubl.sbp"),
+                        ],
+                    ),
+                    crate::filter::FilterExpr::Nin(
+                        crate::filter::FieldPath("primary_alias".into()),
+                        vec![
+                            norito::json::Value::from("cbdc@hbl.sbp"),
+                            norito::json::Value::from("cbdc@ubl.sbp"),
+                        ],
+                    ),
+                ])),
+                select: None,
+                aggregate: Some(crate::filter::AggregateSpec {
+                    group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
+                    metrics: vec![
+                        crate::filter::AggregateMetric {
+                            alias: "user_count".into(),
+                            r#fn: crate::filter::AggregateFn::DistinctCount,
+                            field: Some(crate::filter::FieldPath("account_id".into())),
+                        },
+                        crate::filter::AggregateMetric {
+                            alias: "pkr_total".into(),
+                            r#fn: crate::filter::AggregateFn::Sum,
+                            field: Some(crate::filter::FieldPath("quantity".into())),
+                        },
+                    ],
+                    having: None,
+                }),
+                sort: vec![crate::filter::SortKey {
+                    key: crate::filter::FieldPath("primary_alias_domain".into()),
+                    order: crate::filter::Order::Asc,
+                }],
+                pagination: crate::filter::Pagination {
+                    limit: Some(8),
+                    offset: 0,
+                },
+                fetch_size: None,
+            }),
+            MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let payload = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_slice(&payload).expect("json response");
+        assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
+
+        let items = parsed["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
+        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
+        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
+        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+        clear_query_projection_archive_cache_for_tests();
     }
 
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
@@ -39258,43 +39461,100 @@ mod app_api_integration_tests {
     -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
+        let kp_c = iroha_crypto::KeyPair::random();
+        let kp_d = iroha_crypto::KeyPair::random();
+        let kp_e = iroha_crypto::KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
         let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
+        let hbl_settlement_id: AccountId = AccountId::new(kp_c.public_key().clone());
+        let ubl_settlement_id: AccountId = AccountId::new(kp_d.public_key().clone());
+        let ubl_user_id: AccountId = AccountId::new(kp_e.public_key().clone());
 
         let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
-        let rose_def: AssetDefinitionId =
+        let pkr_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");
-        let rose_definition = AssetDefinition::numeric(rose_def.clone())
-            .with_name("rose".to_owned())
+        let pkr_definition = AssetDefinition::numeric(pkr_def.clone())
+            .with_name("pkr".to_owned())
             .build(&alice_id);
+        let sbp_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
         let assets = vec![
             Asset::new(
-                AssetId::new(rose_def.clone(), alice_id.clone()),
+                AssetId::new(pkr_def.clone(), alice_id.clone()),
                 Numeric::from(10_u32),
             ),
             Asset::new(
-                AssetId::new(rose_def.clone(), bob_id.clone()),
-                Numeric::from(20_u32),
+                AssetId::with_scope(
+                    pkr_def.clone(),
+                    alice_id.clone(),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(sbp_dataspace_id),
+                ),
+                Numeric::from(3_u32),
+            ),
+            Asset::new(
+                AssetId::new(pkr_def.clone(), bob_id.clone()),
+                Numeric::from(2_u32),
+            ),
+            Asset::new(
+                AssetId::new(pkr_def.clone(), ubl_user_id.clone()),
+                Numeric::from(5_u32),
+            ),
+            Asset::new(
+                AssetId::new(pkr_def.clone(), hbl_settlement_id.clone()),
+                Numeric::from(125_u32),
+            ),
+            Asset::new(
+                AssetId::new(pkr_def.clone(), ubl_settlement_id.clone()),
+                Numeric::from(75_u32),
             ),
         ];
         let domain = Domain::new(domain_id).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let bob_account = Account::new(bob_id.clone()).build(&alice_id);
+        let hbl_settlement_account = Account::new(hbl_settlement_id.clone()).build(&alice_id);
+        let ubl_settlement_account = Account::new(ubl_settlement_id.clone()).build(&alice_id);
+        let ubl_user_account = Account::new(ubl_user_id.clone()).build(&alice_id);
         let world = World::with_assets(
             [domain],
-            [alice_account, bob_account],
-            [rose_definition],
+            [
+                alice_account,
+                bob_account,
+                ubl_user_account,
+                hbl_settlement_account,
+                ubl_settlement_account,
+            ],
+            [pkr_definition],
             assets,
             [],
         );
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
+        let mut state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
-        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.universal");
-        bind_account_alias_for_test(&state, &bob_id, "bob@ubl.universal");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: sbp_dataspace_id,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("sbp dataspace catalog");
+        Arc::get_mut(&mut state)
+            .expect("unique state")
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                dataspace_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            })
+            .expect("install sbp nexus config");
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#sbp");
+        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.sbp");
+        bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.sbp");
+        bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.sbp");
+        bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.sbp");
+        bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.sbp");
 
         (state, alice_id, bob_id)
     }
@@ -53514,49 +53774,21 @@ fn confidential_notes_cursor(cursor: Option<&str>) -> Result<Option<u64>> {
 
 #[cfg(feature = "app_api")]
 fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
-    let trimmed = raw.trim().trim_start_matches("0x");
+    let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(confidential_invalid_request(
             "signed_tx_hex must not be empty",
         ));
     }
+    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        return Err(confidential_invalid_request(
+            "signed_tx_hex must be plain hex without 0x prefix",
+        ));
+    }
     let bytes =
         hex::decode(trimmed).map_err(|_| confidential_invalid_request("invalid signed_tx_hex"))?;
-    if let Ok(tx) =
-        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
-    {
-        return Ok(tx);
-    }
-    if let Ok((tx, used)) = SignedTransaction::decode_from_slice(&bytes) {
-        if used == bytes.len() {
-            return Ok(tx);
-        }
-    }
-    if let Ok(tx) = norito::decode_from_bytes::<SignedTransaction>(&bytes) {
-        return Ok(tx);
-    }
-    if let Ok(TransactionEntrypoint::External(tx)) =
-        <TransactionEntrypoint as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
-            &bytes,
-        )
-    {
-        return Ok(tx);
-    }
-    if let Ok((TransactionEntrypoint::External(tx), used)) =
-        TransactionEntrypoint::decode_from_slice(&bytes)
-    {
-        if used == bytes.len() {
-            return Ok(tx);
-        }
-    }
-    if let Ok(TransactionEntrypoint::External(tx)) =
-        norito::decode_from_bytes::<TransactionEntrypoint>(&bytes)
-    {
-        return Ok(tx);
-    }
-    Err(confidential_invalid_request(
-        "invalid signed transaction bytes",
-    ))
+    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
+        .map_err(|_| confidential_invalid_request("invalid versioned signed transaction bytes"))
 }
 
 #[cfg(feature = "app_api")]
@@ -54090,24 +54322,15 @@ pub async fn handle_v1_accounts_faucet(
 
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
-    let (account_exists, destination_balance, source_balance) = {
+    let (account_exists, source_balance) = {
         let world = app.state.world_view();
         let account_exists = world.account(&account_id).is_ok();
-        let destination_balance = match world.asset(&destination_asset_id) {
-            Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => iroha_primitives::numeric::Numeric::zero(),
-        };
         let source_balance = match world.asset(&source_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => iroha_primitives::numeric::Numeric::zero(),
         };
-        (account_exists, destination_balance, source_balance)
+        (account_exists, source_balance)
     };
-    if destination_balance > iroha_primitives::numeric::Numeric::zero() {
-        return Err(faucet_invalid_request(
-            "account already has a positive faucet asset balance",
-        ));
-    }
     if source_balance < faucet.amount.clone() {
         return Err(faucet_invalid_request("faucet is out of funds"));
     }
@@ -70517,30 +70740,6 @@ pub async fn handle_v1_asset_holders_query(
         .asset_definition(&def_id)
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
-    let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
-    let mut map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
-    > = BTreeMap::new();
-    for asset in assets {
-        let acct = asset.id().account().clone();
-        let scope = asset.id().scope().clone();
-        let entry = map
-            .entry((acct, scope))
-            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
-            *entry = sum;
-        }
-    }
-    let alias_cache: BTreeMap<_, _> = map
-        .keys()
-        .map(|(account_id, _)| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id(state.as_ref(), account_id),
-            )
-        })
-        .collect();
     drop(world);
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY);
     let crate::filter::QueryEnvelope {
@@ -70601,14 +70800,37 @@ pub async fn handle_v1_asset_holders_query(
             state,
             def_id,
             asset_alias,
-            map,
-            alias_cache,
             filter,
             aggregate,
             sort,
             pagination,
         );
     }
+    let world = state.world_view();
+    let mut map: BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    > = BTreeMap::new();
+    for asset in world.assets_by_definition_iter(&def_id) {
+        let acct = asset.id().account().clone();
+        let scope = asset.id().scope().clone();
+        let entry = map
+            .entry((acct, scope))
+            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
+        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
+            *entry = sum;
+        }
+    }
+    let alias_cache: BTreeMap<_, _> = map
+        .keys()
+        .map(|(account_id, _)| {
+            (
+                account_id.clone(),
+                primary_alias_projection_for_account_id(state.as_ref(), account_id),
+            )
+        })
+        .collect();
+    drop(world);
     let filter_ref = filter.as_ref();
     let selectors = compile_asset_holder_sort_spec(&sort);
     let mapped_iter = map.into_iter().filter_map({
@@ -70929,7 +71151,12 @@ fn validate_aggregate_sort_fields(
 #[cfg(feature = "app_api")]
 enum AggregateMetricState {
     Count(u64),
-    DistinctCount(BTreeSet<String>),
+    // Exact for the currently allowed distinct fields: accounts emit unique `id`
+    // rows, and asset-holder rows are reduced in `account_id` order.
+    DistinctCount {
+        last_value: Option<String>,
+        count: u64,
+    },
     Sum(Option<iroha_primitives::numeric::Numeric>),
     Min(Option<iroha_primitives::numeric::Numeric>),
     Max(Option<iroha_primitives::numeric::Numeric>),
@@ -70946,7 +71173,10 @@ impl AggregateMetricState {
 
         match metric.r#fn {
             FnKind::Count => Ok(Self::Count(0)),
-            FnKind::DistinctCount => Ok(Self::DistinctCount(BTreeSet::new())),
+            FnKind::DistinctCount => Ok(Self::DistinctCount {
+                last_value: None,
+                count: 0,
+            }),
             FnKind::Sum => Ok(Self::Sum(None)),
             FnKind::Min => Ok(Self::Min(None)),
             FnKind::Max => Ok(Self::Max(None)),
@@ -70969,7 +71199,7 @@ impl AggregateMetricState {
                 *total = total.saturating_add(1);
                 Ok(())
             }
-            (Self::DistinctCount(values), FnKind::DistinctCount) => {
+            (Self::DistinctCount { last_value, count }, FnKind::DistinctCount) => {
                 let field = metric
                     .field
                     .as_ref()
@@ -70980,7 +71210,10 @@ impl AggregateMetricState {
                             err.to_string(),
                         ))
                     })?;
-                    values.insert(encoded);
+                    if last_value.as_ref() != Some(&encoded) {
+                        *count = count.saturating_add(1);
+                        *last_value = Some(encoded);
+                    }
                 }
                 Ok(())
             }
@@ -71056,7 +71289,7 @@ impl AggregateMetricState {
     fn finalize(self) -> Result<Value> {
         match self {
             Self::Count(total) => Ok(Value::from(total)),
-            Self::DistinctCount(values) => Ok(Value::from(values.len() as u64)),
+            Self::DistinctCount { count, .. } => Ok(Value::from(count)),
             Self::Sum(total) | Self::Min(total) | Self::Max(total) => Ok(total
                 .map(|value| Value::from(value.to_string()))
                 .unwrap_or(Value::Null)),
@@ -71205,6 +71438,8 @@ fn build_aggregate_response(
     sort: &[crate::filter::SortKey],
     pagination: EffectivePagination,
     having: Option<&crate::filter::FilterExpr>,
+    indexed_snapshot: Option<(u64, Option<String>)>,
+    query_source: &'static str,
 ) -> Result<Response, Error> {
     if let Some(expr) = having {
         rows.retain(|row| evaluate_filter_on_aggregate_row(expr, row));
@@ -71220,7 +71455,8 @@ fn build_aggregate_response(
         .skip(offset)
         .take(limit)
         .collect::<Vec<_>>();
-    let (indexed_height, indexed_block_hash) = query_index_snapshot(state);
+    let (indexed_height, indexed_block_hash) =
+        indexed_snapshot.unwrap_or_else(|| query_index_snapshot(state));
 
     let mut top = norito::json::Map::new();
     top.insert(
@@ -71233,6 +71469,7 @@ fn build_aggregate_response(
         "indexed_block_hash".into(),
         indexed_block_hash.map_or(Value::Null, Value::from),
     );
+    top.insert("query_source".into(), Value::from(query_source));
     let body = norito::json::to_json_pretty(&top).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             err.to_string(),
@@ -71426,8 +71663,7 @@ fn handle_v1_accounts_query_aggregate(
     let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
     validate_accounts_aggregate_request(&aggregate, &sort)?;
 
-    let mut rows = Vec::new();
-    for account in accounts {
+    let rows = accounts.into_iter().filter_map(|account| {
         let projected = AccountListItem {
             canonical_id: account.id().to_string(),
             display_id: crate::account_literal::display_literal(account.id()),
@@ -71436,10 +71672,10 @@ fn handle_v1_accounts_query_aggregate(
         if let Some(expr) = filter.as_ref()
             && !account_filter_projection(expr, &projected)
         {
-            continue;
+            return None;
         }
-        rows.push(account_list_item_to_query_row(&projected));
-    }
+        Some(account_list_item_to_query_row(&projected))
+    });
 
     let aggregated = aggregate_rows(rows, &aggregate)?;
     let cap = app_query_page_cap(&state);
@@ -71455,6 +71691,8 @@ fn handle_v1_accounts_query_aggregate(
         &sort,
         pagination,
         aggregate.having.as_ref(),
+        None,
+        "live",
     )
 }
 
@@ -71463,11 +71701,6 @@ fn handle_v1_asset_holders_query_aggregate(
     state: Arc<CoreState>,
     def_id: AssetDefinitionId,
     asset_alias: Option<String>,
-    map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
-    >,
-    alias_cache: BTreeMap<AccountId, PrimaryAliasProjection>,
     filter: Option<crate::filter::FilterExpr>,
     aggregate: Option<crate::filter::AggregateSpec>,
     sort: Vec<crate::filter::SortKey>,
@@ -71476,27 +71709,72 @@ fn handle_v1_asset_holders_query_aggregate(
     let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
     validate_asset_holders_aggregate_request(&aggregate, &sort)?;
 
-    let mut rows = Vec::new();
-    let asset = def_id.to_string();
-    for ((account_id, scope), quantity) in map {
-        let canonical_id = account_id.to_string();
-        let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-        let projected = AssetHolderListItem {
-            account_id: account_id.clone(),
-            canonical_id,
-            asset: asset.clone(),
-            asset_alias: asset_alias.clone(),
-            scope: asset_balance_scope_literal(&scope),
-            quantity,
-            primary_alias,
-        };
-        if let Some(expr) = filter.as_ref()
-            && !filter_asset_holder_item(expr, &projected)
-        {
-            continue;
-        }
-        rows.push(asset_holder_item_to_query_row(&projected));
+    if let Some((rows, indexed_snapshot)) = asset_holder_projection_cached_query_rows(
+        state.as_ref(),
+        &def_id,
+        asset_alias.as_ref(),
+        filter.as_ref(),
+    )? {
+        let aggregated = aggregate_rows(rows, &aggregate)?;
+        return build_aggregate_response(
+            state.as_ref(),
+            aggregated,
+            &sort,
+            pagination,
+            aggregate.having.as_ref(),
+            Some(indexed_snapshot),
+            "projection_da_cache",
+        );
     }
+
+    let world = state.world_view();
+    let mut map: BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    > = BTreeMap::new();
+    for asset in world.assets_by_definition_iter(&def_id) {
+        let account_id = asset.id().account().clone();
+        let scope = asset.id().scope().clone();
+        let entry = map
+            .entry((account_id, scope))
+            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
+        if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
+            *entry = sum;
+        }
+    }
+    let alias_cache: BTreeMap<_, _> = map
+        .keys()
+        .map(|(account_id, _)| {
+            (
+                account_id.clone(),
+                primary_alias_projection_for_account_id(state.as_ref(), account_id),
+            )
+        })
+        .collect();
+    drop(world);
+
+    let asset = def_id.to_string();
+    let rows = map
+        .into_iter()
+        .filter_map(|((account_id, scope), quantity)| {
+            let canonical_id = account_id.to_string();
+            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
+            let projected = AssetHolderListItem {
+                account_id: account_id.clone(),
+                canonical_id,
+                asset: asset.clone(),
+                asset_alias: asset_alias.clone(),
+                scope: asset_balance_scope_literal(&scope),
+                quantity,
+                primary_alias,
+            };
+            if let Some(expr) = filter.as_ref()
+                && !filter_asset_holder_item(expr, &projected)
+            {
+                return None;
+            }
+            Some(asset_holder_item_to_query_row(&projected))
+        });
 
     let aggregated = aggregate_rows(rows, &aggregate)?;
     build_aggregate_response(
@@ -71505,7 +71783,120 @@ fn handle_v1_asset_holders_query_aggregate(
         &sort,
         pagination,
         aggregate.having.as_ref(),
+        None,
+        "live",
     )
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_projection_row_to_query_row(
+    asset: &str,
+    asset_alias: Option<&str>,
+    row: QueryProjectionAssetHolderRow,
+) -> norito::json::Map {
+    let mut map = norito::json::Map::new();
+    map.insert("account_id".into(), Value::from(row.account_id));
+    map.insert("asset".into(), Value::from(asset.to_owned()));
+    map.insert(
+        "asset_alias".into(),
+        asset_alias.map_or(Value::Null, |value| Value::from(value.to_owned())),
+    );
+    map.insert("scope".into(), Value::from(row.scope));
+    map.insert("quantity".into(), Value::from(row.quantity.to_string()));
+    insert_primary_alias_fields(
+        &mut map,
+        &PrimaryAliasProjection {
+            literal: row.primary_alias,
+            name: row.primary_alias_name,
+            dataspace: row.primary_alias_dataspace,
+            domain: row.primary_alias_domain,
+            has_primary_alias: row.has_primary_alias,
+        },
+    );
+    map
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_projection_cached_query_rows(
+    state: &CoreState,
+    def_id: &AssetDefinitionId,
+    endpoint_asset_alias: Option<&String>,
+    filter: Option<&crate::filter::FilterExpr>,
+) -> Result<Option<(Vec<norito::json::Map>, (u64, Option<String>))>, Error> {
+    let Some(checkpoint) = state.query_projection_checkpoint_snapshot() else {
+        return Ok(None);
+    };
+    let asset_definition_id = def_id.to_string();
+    let shards = checkpoint
+        .shards
+        .iter()
+        .filter(|shard| {
+            shard.resource == QueryProjectionResourceKind::AssetHolders
+                && shard.asset_definition_id.as_deref() == Some(asset_definition_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    if shards.is_empty() {
+        return Ok(None);
+    }
+
+    let cache = match QUERY_PROJECTION_ARCHIVE_CACHE.read() {
+        Ok(cache) => cache,
+        Err(_) => {
+            iroha_logger::warn!(
+                "query projection archive cache lock poisoned; falling back to live aggregate"
+            );
+            return Ok(None);
+        }
+    };
+    let mut rows = Vec::new();
+    for shard in shards {
+        let key = query_projection_checkpoint_cache_key(shard, &checkpoint);
+        let Some(archive) = cache.get(&key) else {
+            return Ok(None);
+        };
+        let rowset: QueryProjectionShardRowSet =
+            norito::decode_from_bytes(&archive.payload).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "failed to decode cached query projection rowset: {err}"
+                )))
+            })?;
+        let QueryProjectionShardRowSet::AssetHolders(rowset) = rowset else {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "cached query projection archive has non-holder rowset".into(),
+                ),
+            ));
+        };
+        if rowset.partition_id != shard.partition_id
+            || rowset.asset_definition_id != asset_definition_id
+        {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "cached query projection archive does not match checkpoint shard".into(),
+                ),
+            ));
+        }
+        let row_asset_alias = rowset
+            .asset_alias
+            .as_deref()
+            .or(endpoint_asset_alias.map(String::as_str));
+        for row in rowset.rows {
+            let projected =
+                asset_holder_projection_row_to_query_row(&asset_definition_id, row_asset_alias, row);
+            if filter.is_some_and(|expr| !evaluate_filter_on_aggregate_row(expr, &projected)) {
+                continue;
+            }
+            rows.push(projected);
+        }
+    }
+
+    Ok(Some((
+        rows,
+        (
+            checkpoint.indexed_height,
+            query_projection_block_hash_hex(checkpoint.indexed_block_hash),
+        ),
+    )))
 }
 
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.

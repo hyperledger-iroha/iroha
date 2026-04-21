@@ -13,6 +13,7 @@ iroha_crypto = { workspace = true, default-features = false, features = ["std"] 
 iroha_data_model = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
+iroha_version = { workspace = true }
 ivm = { workspace = true }
 libc = "0.2.177"
 blake3.workspace = true

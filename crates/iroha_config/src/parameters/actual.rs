@@ -6015,7 +6015,7 @@ pub struct ToriiFaucet {
     /// This may be either a canonical Base58 asset definition identifier or an
     /// on-chain asset alias that must be resolved against world state.
     pub asset_definition_id: String,
-    /// Fixed quantity transferred to each eligible account.
+    /// Fixed quantity transferred by each accepted faucet claim.
     pub amount: Numeric,
     /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
     pub pow_difficulty_bits: u8,
