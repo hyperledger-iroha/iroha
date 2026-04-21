@@ -15854,16 +15854,7 @@ async fn execute_torii_query_via_proxy(
     routing_decision: RoutingDecision,
     format: ResponseFormat,
 ) -> Response {
-    let query_bytes = match norito::to_bytes(&query) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialization_failure",
-                format!("failed to encode proxied signed query: {error}"),
-            );
-        }
-    };
+    let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&query);
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
@@ -17540,7 +17531,9 @@ async fn execute_incoming_torii_proxy_request(
             query_bytes,
             expected_route,
             response_format,
-        } => match norito::decode_from_bytes::<SignedQuery>(&query_bytes) {
+        } => match <SignedQuery as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+            &query_bytes,
+        ) {
             Ok(query) => match resolve_signed_query_routing_for_app(app.as_ref(), &query) {
                 Ok(routing_decision) => {
                     let routing_decision = effective_proxy_signed_query_routing_decision(
@@ -17588,7 +17581,7 @@ async fn execute_incoming_torii_proxy_request(
             Err(error) => torii_proxy_error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_proxy_request",
-                format!("failed to decode proxied signed query: {error}"),
+                format!("failed to decode proxied versioned signed query: {error}"),
             ),
         },
         ToriiProxyRequestKindV1::VerifiedQuery {

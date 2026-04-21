@@ -19,6 +19,8 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::Log,
+    prelude::FindDomains,
+    query::{QueryRequest, QueryWithFilter, QueryWithParams},
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_logger::Level;
@@ -133,4 +135,35 @@ pub fn sample_transaction_bytes() -> Vec<u8> {
 #[allow(dead_code)]
 pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
     TransactionEntrypoint::External(sample_signed_transaction()).encode_versioned()
+}
+
+/// Construct a signed query payload suitable for public `/query` tests.
+#[allow(dead_code)]
+pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
+    let key_pair = KeyPair::random();
+    let account = AccountId::of(key_pair.public_key().clone());
+    let query = QueryWithParams::new(
+        QueryWithFilter::new_with_query(
+            Box::new(FindDomains),
+            iroha_data_model::predicate::CompoundPredicate::PASS,
+            iroha_data_model::query::SelectorTuple::default(),
+        )
+        .into(),
+        Default::default(),
+    );
+    QueryRequest::Start(query)
+        .with_authority(account)
+        .sign(&key_pair)
+}
+
+/// Construct a versioned signed-query payload suitable for public `/query` tests.
+#[allow(dead_code)]
+pub fn sample_query_bytes() -> Vec<u8> {
+    sample_signed_query().encode_versioned()
+}
+
+/// Construct a bare signed-query payload used to assert legacy ingress rejection.
+#[allow(dead_code)]
+pub fn sample_bare_query_bytes() -> Vec<u8> {
+    norito::to_bytes(&sample_signed_query()).expect("encode bare signed query")
 }
