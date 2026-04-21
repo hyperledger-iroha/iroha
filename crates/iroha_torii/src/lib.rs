@@ -8579,6 +8579,103 @@ async fn handler_node_capabilities(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
+/// GET /v1/node/query/projection/checkpoint — wrapper enforcing access policy.
+async fn handler_node_query_projection_checkpoint(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/node/query/projection/checkpoint",
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let Some(payload) =
+        crate::runtime::handle_node_query_projection_checkpoint(app.state.clone()).await
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
+/// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
+#[cfg(feature = "app_api")]
+async fn handler_node_query_projection_shard_catalog(
+    State(app): State<SharedAppState>,
+    AxPath(resource): AxPath<String>,
+    AxQuery(query): AxQuery<crate::runtime::NodeProjectionShardCatalogQuery>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/node/query/projection/catalog",
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_node_query_projection_shard_catalog(
+        app.state.clone(),
+        resource,
+        query,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
+/// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
+#[cfg(feature = "app_api")]
+async fn handler_node_query_projection_shard_export(
+    State(app): State<SharedAppState>,
+    AxPath((resource, partition_id)): AxPath<(String, u32)>,
+    AxQuery(query): AxQuery<crate::runtime::NodeProjectionShardExportQuery>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/node/query/projection/shards",
+    )
+    .await?;
+    let payload = crate::runtime::handle_node_query_projection_shard_export(
+        app.state.clone(),
+        resource,
+        partition_id,
+        query,
+    )
+    .await?;
+    let body = norito::to_bytes(&payload).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "failed to encode query projection shard archive: {err}"
+            )),
+        ))
+    })?;
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    Ok(response)
+}
+
 async fn handler_runtime_upgrades_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -30032,6 +30129,18 @@ impl Torii {
                     iroha_torii_shared::uri::NODE_CAPABILITIES,
                     get(handler_node_capabilities),
                 )
+                .route(
+                    iroha_torii_shared::uri::NODE_QUERY_PROJECTION_CHECKPOINT,
+                    get(handler_node_query_projection_checkpoint),
+                );
+            #[cfg(feature = "app_api")]
+            {
+                router = router.route(
+                    iroha_torii_shared::uri::NODE_QUERY_PROJECTION_SHARD_CATALOG,
+                    get(handler_node_query_projection_shard_catalog),
+                );
+            }
+            let mut router = router
                 // ZK and attachments grouped sub-router
                 .merge(zk_router)
                 .route(
@@ -30050,6 +30159,14 @@ impl Torii {
                     iroha_torii_shared::uri::RUNTIME_UPGRADES_CANCEL,
                     post(handler_runtime_cancel_upgrade),
                 );
+
+            #[cfg(feature = "app_api")]
+            {
+                router = router.route(
+                    iroha_torii_shared::uri::NODE_QUERY_PROJECTION_SHARD_EXPORT,
+                    get(handler_node_query_projection_shard_export),
+                );
+            }
 
             router = router
                 .route(
@@ -37117,7 +37234,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(metrics.abi_version, 1);
 
         let caps_resp = super::handler_node_capabilities(
-            State(app),
+            State(app.clone()),
             headers,
             crate::loopback_connect_info(),
             None,
@@ -37155,16 +37272,183 @@ pub(crate) mod tests_runtime_handlers {
         );
         assert!(caps.query.projection.checkpoint_contract_v1);
         assert!(!caps.query.projection.da_v1_enabled);
+        assert_eq!(
+            caps.query.projection.shard_catalog_v1,
+            cfg!(feature = "app_api")
+        );
+        assert_eq!(
+            caps.query.projection.archive_export_v1,
+            cfg!(feature = "app_api")
+        );
+        assert_eq!(caps.query.projection.archive_version, 1);
         assert_eq!(caps.query.projection.blob_class_custom_id, 1001);
         assert_eq!(
             caps.query.projection.codec,
             "application/x-iroha-query-shard+norito+zstd"
         );
+        assert_eq!(
+            caps.query.projection.rowset_codec,
+            "application/x-iroha-query-shard-rowset+norito"
+        );
         assert_eq!(caps.query.projection.compression, "zstd");
+        assert_eq!(caps.query.projection.default_partition_count, 4096);
+        assert!(
+            caps.query
+                .projection
+                .metadata_keys
+                .contains(&"query_projection.locator".to_string())
+        );
+        if cfg!(feature = "app_api") {
+            assert_eq!(
+                caps.query.projection.export_supported_resources,
+                vec!["accounts".to_string(), "asset_holders".to_string()]
+            );
+        } else {
+            assert!(caps.query.projection.export_supported_resources.is_empty());
+        }
+        assert!(
+            caps.query
+                .projection
+                .latest_checkpoint_indexed_height
+                .is_none()
+        );
+        assert!(
+            caps.query
+                .projection
+                .latest_checkpoint_block_hash_hex
+                .is_none()
+        );
         assert!(
             !caps.crypto.sm.allowed_signing.is_empty(),
             "allowed_signing must advertise at least one algorithm"
         );
+
+        let checkpoint_absent = super::handler_node_query_projection_checkpoint(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(
+            checkpoint_absent.status(),
+            axum::http::StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
+        let app = mk_app_state_for_tests();
+        let expected_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::new([0x6A; iroha_crypto::Hash::LENGTH]),
+            );
+        app.state.persist_query_projection_checkpoint(Some(
+            iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint::from_index_status(
+                iroha_core::query::index_status::QueryIndexStatus {
+                    indexed_height: 55,
+                    indexed_block_hash: Some(expected_hash),
+                },
+                1_714_000_555,
+                vec![iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                    resource:
+                        iroha_core::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                    partition_id: 3,
+                    asset_definition_id: None,
+                    manifest_digest: iroha_data_model::da::types::BlobDigest::new([0x11; 32]),
+                    storage_ticket: iroha_data_model::da::types::StorageTicketId::new([0x22; 32]),
+                    blob_hash: iroha_data_model::da::types::BlobDigest::new([0x33; 32]),
+                }],
+            ),
+        ));
+
+        let response = super::handler_node_query_projection_checkpoint(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
+            norito::json::from_slice(&body).expect("decode json");
+        assert_eq!(checkpoint.indexed_height, 55);
+        assert_eq!(
+            checkpoint.indexed_block_hash_hex,
+            Some(hex::encode(expected_hash.as_ref()))
+        );
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(checkpoint.shards[0].resource, "accounts");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
+        let app = mk_app_state_for_tests();
+        let response = super::handler_node_query_projection_shard_catalog(
+            State(app),
+            AxPath("accounts".to_owned()),
+            AxQuery(crate::runtime::NodeProjectionShardCatalogQuery {
+                asset_definition_id: None,
+                offset: Some(0),
+                limit: Some(32),
+            }),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
+            norito::json::from_slice(&body).expect("decode json");
+        assert_eq!(catalog.resource, "accounts");
+        assert_eq!(catalog.limit, 32);
+        assert_eq!(catalog.offset, 0);
+        assert!(catalog.total_entries >= catalog.entries.len() as u64);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_shard_export_handler_returns_binary_archive() {
+        let app = mk_app_state_for_tests();
+        let response = super::handler_node_query_projection_shard_export(
+            State(app),
+            AxPath(("accounts".to_owned(), 0)),
+            AxQuery(crate::runtime::NodeProjectionShardExportQuery {
+                asset_definition_id: None,
+            }),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(axum::http::HeaderValue::as_bytes),
+            Some(b"application/octet-stream".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let archive: iroha_core::query::projection_shard::QueryProjectionShardArchive =
+            norito::decode_from_bytes(&bytes).expect("decode archive");
+        assert_eq!(
+            archive.resource,
+            iroha_core::query::projection_checkpoint::QueryProjectionResourceKind::Accounts
+        );
+        assert_eq!(archive.partition_id, 0);
     }
 
     #[tokio::test]

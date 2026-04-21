@@ -111,6 +111,14 @@ pub mod uri {
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
+    /// Node: latest persisted query projection checkpoint descriptor
+    pub const NODE_QUERY_PROJECTION_CHECKPOINT: &str = "/v1/node/query/projection/checkpoint";
+    /// Node: enumerate the canonical live query projection shard catalog for one resource family
+    pub const NODE_QUERY_PROJECTION_SHARD_CATALOG: &str =
+        "/v1/node/query/projection/catalog/{resource}";
+    /// Node: export one canonical query projection shard archive
+    pub const NODE_QUERY_PROJECTION_SHARD_EXPORT: &str =
+        "/v1/node/query/projection/shards/{resource}/{partition_id}";
     /// Runtime: get the active ABI version
     pub const RUNTIME_ABI_ACTIVE: &str = "/v1/runtime/abi/active";
     /// Runtime: get canonical ABI hash for the node's active policy

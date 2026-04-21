@@ -826,6 +826,80 @@ impl Queue {
         Ok(())
     }
 
+    fn tx_contains_runtime_upgrade_instruction(tx: &CheckedTransaction<'_>) -> bool {
+        let Executable::Instructions(instructions) = tx.as_ref().as_ref().instructions() else {
+            return false;
+        };
+        instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .is_some()
+        })
+    }
+
+    fn tx_touches_manifest_protected_namespace_surface(tx: &CheckedTransaction<'_>) -> bool {
+        let signed = tx.as_ref().as_ref();
+        let metadata = signed.metadata();
+        let has_governance_contract_address =
+            metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY).is_some();
+        let has_contract_address_hint = metadata.get(&*CONTRACT_ADDRESS_METADATA_KEY).is_some();
+
+        let mut contract_targets_seen = false;
+        let mut register_code_seen = false;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                        .is_some()
+                        || instruction
+                            .as_any()
+                            .downcast_ref::<DeactivateContractInstance>()
+                            .is_some()
+                    {
+                        contract_targets_seen = true;
+                    } else {
+                        let any = instruction.as_any();
+                        if any.is::<RegisterSmartContractCode>()
+                            || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<RemoveSmartContractBytes>()
+                        {
+                            register_code_seen = true;
+                        }
+                    }
+                }
+            }
+            Executable::ContractCall(_) => {
+                contract_targets_seen = true;
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
+        }
+
+        let ivm_with_contract_metadata = matches!(signed.instructions(), Executable::Ivm(_))
+            && (has_governance_contract_address || has_contract_address_hint);
+
+        register_code_seen || contract_targets_seen || ivm_with_contract_metadata
+    }
+
+    fn tx_requires_manifest_validator_gating(
+        rules: &GovernanceRules,
+        tx: &CheckedTransaction<'_>,
+    ) -> bool {
+        Self::tx_contains_runtime_upgrade_instruction(tx)
+            || (!rules.protected_namespaces.is_empty()
+                && Self::tx_touches_manifest_protected_namespace_surface(tx))
+    }
+
     fn collect_manifest_approvals(
         alias: &str,
         tx: &CheckedTransaction<'_>,
@@ -895,9 +969,9 @@ impl Queue {
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
         world: &impl WorldReadOnly,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if rules.protected_namespaces.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
 
         let signed = tx.as_ref().as_ref();
@@ -1005,6 +1079,11 @@ impl Queue {
         let contract_instr_seen =
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
+        if !contract_instr_seen {
+            let _ = world;
+            return Ok(false);
+        }
+
         if contract_instr_seen
             && metadata_governance_contract_address.is_none()
             && !matches!(signed.instructions(), Executable::ContractCall(_))
@@ -1040,7 +1119,7 @@ impl Queue {
 
         let _ = world;
 
-        Ok(())
+        Ok(true)
     }
 
     fn enforce_runtime_upgrade_hook(
@@ -1049,28 +1128,7 @@ impl Queue {
         tx: &CheckedTransaction<'_>,
     ) -> Result<bool, Error> {
         let signed = tx.as_ref().as_ref();
-        let mut contains_runtime_upgrade = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if instruction
-                    .as_any()
-                    .downcast_ref::<ProposeRuntimeUpgrade>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<ActivateRuntimeUpgrade>()
-                        .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<CancelRuntimeUpgrade>()
-                        .is_some()
-                {
-                    contains_runtime_upgrade = true;
-                    break;
-                }
-            }
-        }
-        if !contains_runtime_upgrade {
+        if !Self::tx_contains_runtime_upgrade_instruction(tx) {
             return Ok(false);
         }
 
@@ -1765,89 +1823,97 @@ impl Queue {
                         | Executable::IvmProved(_)
                         | Executable::Ivm(_) => false,
                     };
-                if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("missing_authority");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err: Error::GovernanceNotPermitted {
-                            alias,
-                            reason:
-                                "authority-free transactions cannot satisfy lane validator gating"
+                let governance_sensitive =
+                    Self::tx_requires_manifest_validator_gating(rules, &checked);
+                if governance_sensitive {
+                    if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("missing_authority");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err: Error::GovernanceNotPermitted {
+                                alias: alias.clone(),
+                                reason: "authority-free transactions cannot satisfy lane validator gating"
                                     .to_string(),
-                        },
-                    });
-                }
-                if let Some(authority) = checked.as_ref().authority_opt()
-                    && !rules.validators.is_empty()
-                    && !allows_multisig_envelope_authority
-                    && !rules
-                        .validators
-                        .iter()
-                        .any(|validator| validator == authority)
-                {
-                    iroha_logger::warn!(
-                        lane = %alias,
-                        authority = %authority,
-                        "rejecting transaction not signed by governance validator"
-                    );
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("non_validator_authority");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err: Error::GovernanceNotPermitted {
-                            alias,
-                            reason: "authority not part of lane validator set".to_string(),
-                        },
-                    });
-                }
-                let quorum_required = !allows_multisig_envelope_authority
-                    && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                    && !rules.validators.is_empty();
-                let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
-                if quorum_required {
-                    match quorum_result {
-                        Ok(()) => {
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_quorum_enforcement("satisfied");
-                        }
-                        Err(err) => {
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_quorum_enforcement("rejected");
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_admission("quorum_rejected");
-                            return Err(Failure {
-                                tx: Box::new(checked.as_accepted().clone()),
-                                err,
-                            });
-                        }
+                            },
+                        });
                     }
-                } else if let Err(err) = quorum_result {
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("quorum_rejected");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    });
-                }
-                if let Err(err) =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world)
-                {
-                    #[cfg(feature = "telemetry")]
-                    if !rules.protected_namespaces.is_empty() {
-                        telemetry_handle.record_protected_namespace_enforcement("rejected");
+                    if let Some(authority) = checked.as_ref().authority_opt()
+                        && !rules.validators.is_empty()
+                        && !allows_multisig_envelope_authority
+                        && !rules
+                            .validators
+                            .iter()
+                            .any(|validator| validator == authority)
+                    {
+                        iroha_logger::warn!(
+                            lane = %alias,
+                            authority = %authority,
+                            "rejecting transaction not signed by governance validator"
+                        );
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("non_validator_authority");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err: Error::GovernanceNotPermitted {
+                                alias: alias.clone(),
+                                reason: "authority not part of lane validator set".to_string(),
+                            },
+                        });
                     }
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("protected_namespace_rejected");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    });
+                    let quorum_required = !allows_multisig_envelope_authority
+                        && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                        && !rules.validators.is_empty();
+                    let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
+                    if quorum_required {
+                        match quorum_result {
+                            Ok(()) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_quorum_enforcement("satisfied");
+                            }
+                            Err(err) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_quorum_enforcement("rejected");
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_admission("quorum_rejected");
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err,
+                                });
+                            }
+                        }
+                    } else if let Err(err) = quorum_result {
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("quorum_rejected");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err,
+                        });
+                    }
                 }
+                let protected_namespace_result =
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world);
+                let protected_namespace_applied = match protected_namespace_result {
+                    Ok(applied) => applied,
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        if !rules.protected_namespaces.is_empty() {
+                            telemetry_handle.record_protected_namespace_enforcement("rejected");
+                        }
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("protected_namespace_rejected");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err,
+                        });
+                    }
+                };
                 #[cfg(feature = "telemetry")]
-                if !rules.protected_namespaces.is_empty() {
+                if protected_namespace_applied {
                     telemetry_handle.record_protected_namespace_enforcement("allowed");
                 }
+                #[cfg(not(feature = "telemetry"))]
+                let _ = protected_namespace_applied;
                 let runtime_hook_result =
                     Self::enforce_runtime_upgrade_hook(&alias, rules, &checked);
                 let runtime_hook_applied = match runtime_hook_result {
@@ -4249,7 +4315,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn governance_manifest_validators_gate_admission() {
+    async fn governance_manifest_allows_ordinary_transactions_from_non_validator_authorities() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         #[cfg(feature = "telemetry")]
@@ -4294,27 +4360,18 @@ pub mod tests {
         queue
             .push(validator_tx, state.view())
             .expect("validator should be admitted");
+
+        let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
+        queue.push(other_tx, state.view()).expect(
+            "ordinary governed-lane transactions must not require end users to be validators",
+        );
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["allowed"])
                 .get(),
-            1
-        );
-
-        let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
-        let err = queue
-            .push(other_tx, state.view())
-            .expect_err("non-validator should be rejected");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
-        #[cfg(feature = "telemetry")]
-        assert_eq!(
-            metrics
-                .governance_manifest_admission_total
-                .with_label_values(&["non_validator_authority"])
-                .get(),
-            1
+            2
         );
     }
 
@@ -4662,11 +4719,14 @@ pub mod tests {
 
         let (validator_primary, primary_keypair) = gen_account_in("wonderland");
         let (validator_secondary, _secondary_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_primary.clone(), validator_secondary.clone()],
             quorum: Some(2),
+            protected_namespaces: protected,
             ..GovernanceRules::default()
         };
         let status = LaneManifestStatus {
@@ -4684,8 +4744,32 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_primary,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+
         // Without additional approvals the quorum rule must reject the transaction.
-        let tx = accepted_tx_by(validator_primary.clone(), &primary_keypair, &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        let tx = accepted_tx_with(
+            validator_primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![activate.clone()],
+            metadata,
+        );
         let err = queue
             .push(tx, state.view())
             .expect_err("quorum without approvals should reject");
@@ -4710,6 +4794,10 @@ pub mod tests {
         // Attach metadata listing the secondary validator so the quorum threshold is satisfied.
         let mut metadata = Metadata::default();
         metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
             Json::new(vec![validator_secondary.to_string()]),
         );
@@ -4717,7 +4805,7 @@ pub mod tests {
             validator_primary.clone(),
             &primary_keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate],
             metadata,
         );
         queue
@@ -4736,6 +4824,90 @@ pub mod tests {
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["allowed"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_rejects_non_validator_authority_for_protected_contract_ops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(Metrics::default());
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(metrics.clone(), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        let (other_id, other_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone()],
+            protected_namespaces: protected,
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let tx = accepted_tx_with(
+            other_id.clone(),
+            &other_keypair,
+            &time_source,
+            vec![activate],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("protected contract operations must still require validator authority");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_manifest_admission_total
+                .with_label_values(&["non_validator_authority"])
                 .get(),
             1
         );

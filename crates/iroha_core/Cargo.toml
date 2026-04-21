@@ -167,6 +167,7 @@ nonzero_ext = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
 blake3 = "1.8.2"
+zstd = { workspace = true }
 curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }

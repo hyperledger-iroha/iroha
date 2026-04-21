@@ -236,6 +236,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_status_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
+    tools.push(iroha_node_query_projection_shard_catalog_tool());
+    tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
     tools.push(iroha_time_status_tool());
     tools.push(iroha_api_versions_tool());
@@ -780,6 +782,26 @@ async fn handle_tools_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.node.query_projection_shard_catalog" => {
+            match dispatch_iroha_node_query_projection_shard_catalog(
+                &app,
+                inbound_headers,
+                &arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.node.query_projection_checkpoint" => {
+            match dispatch_iroha_node_query_projection_checkpoint(&app, inbound_headers, &arguments)
+                .await
+            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2843,6 +2865,71 @@ async fn dispatch_iroha_node_capabilities(
         inbound_headers,
         Method::GET,
         "/v1/node/capabilities",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_node_query_projection_shard_catalog(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let resource = arguments
+        .get("resource")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`resource` is required".to_owned())?;
+    let path_value = norito::json!({ "resource": resource });
+    let route = fill_path_template(
+        "/v1/node/query/projection/catalog/{resource}",
+        Some(&path_value),
+    )?;
+
+    let mut query = Map::new();
+    if let Some(asset_definition_id) = arguments.get("asset_definition_id") {
+        query.insert("asset_definition_id".into(), asset_definition_id.clone());
+    }
+    if let Some(offset) = arguments.get("offset") {
+        query.insert("offset".into(), offset.clone());
+    }
+    if let Some(limit) = arguments.get("limit") {
+        query.insert("limit".into(), limit.clone());
+    }
+    let query_value = (!query.is_empty()).then(|| Value::Object(query));
+    let route = append_query(route, query_value.as_ref())?;
+
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_node_query_projection_checkpoint(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/node/query/projection/checkpoint",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -8639,6 +8726,69 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
     }
 }
 
+fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.node.query_projection_shard_catalog".to_owned(),
+        description:
+            "Enumerate the live query projection shard catalog for one resource family (`/v1/node/query/projection/catalog/{resource}`)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/node/query/projection/catalog/{resource}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource"],
+            "properties": {
+                "resource": {
+                    "type": "string",
+                    "description": "Projection resource family (`accounts` or `asset_holders`)."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "description": "Optional canonical or alias asset-definition selector used to narrow `asset_holders` entries."
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Stable entry offset within the canonical ordered catalog."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Maximum number of entries to return."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.node.query_projection_checkpoint".to_owned(),
+        description:
+            "Fetch the latest query projection checkpoint descriptor (`/v1/node/query/projection/checkpoint`)."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/node/query/projection/checkpoint".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_time_now_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.now".to_owned(),
@@ -13854,6 +14004,16 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.node.capabilities")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.node.query_projection_shard_catalog")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.node.query_projection_checkpoint")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.time.now"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.time.status"));
