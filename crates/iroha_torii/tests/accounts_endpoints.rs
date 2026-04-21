@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -110,6 +111,7 @@ async fn accounts_endpoints_exist() {
         .oneshot(
             Request::builder()
                 .uri("/v1/accounts?offset=0")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -128,6 +130,7 @@ async fn accounts_endpoints_exist() {
                 .method("POST")
                 .uri("/v1/accounts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -147,6 +150,7 @@ async fn accounts_endpoints_exist() {
                 .uri(format!(
                     "/v1/accounts/{canonical_account}/permissions?offset=0"
                 ))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
