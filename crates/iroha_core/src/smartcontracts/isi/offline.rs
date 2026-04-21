@@ -1668,7 +1668,7 @@ pub mod isi {
                 "offline redeem amount must be positive",
             ));
         }
-        refund_allowance_from_escrow(state_transaction, &asset, authority, &amount)
+        refund_allowance_from_escrow(state_transaction, &asset, asset.account(), &amount)
     }
 
     fn register_allowance(
