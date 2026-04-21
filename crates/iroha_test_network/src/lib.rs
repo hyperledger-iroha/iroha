@@ -9312,7 +9312,7 @@ mod tests {
 
     #[test]
     fn enables_norito_rpc_ga_stage_for_test_networks() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
         let base_layer = network
             .config_layers()
             .find(|layer| {
@@ -10680,13 +10680,14 @@ exit 0
             }
         }
 
-        let default_network = NetworkBuilder::new().with_peers(3).build();
+        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
         assert_trusted_entries(&default_network);
 
-        let explicit_network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .build();
+        let explicit_network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers(),
+        );
         assert_trusted_entries(&explicit_network);
     }
 
@@ -10967,14 +10968,14 @@ exit 0
 
     #[test]
     fn config_layers_without_pop_excludes_bls_entries() {
-        let network = NetworkBuilder::new()
-            .without_auto_populated_trusted_peers()
-            .with_peers(2)
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .without_auto_populated_trusted_peers()
+                .with_peers(2),
+        );
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
-        dbg!(&base);
 
         assert!(base.get("trusted_peers_bls").is_none());
         assert!(base.get("trusted_peers_pop").is_none());
@@ -11212,10 +11213,11 @@ exit 0
         let conflict = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
         )));
-        let network = NetworkBuilder::new()
-            .with_genesis_instruction(conflict)
-            .with_data_availability_enabled(false)
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_genesis_instruction(conflict)
+                .with_data_availability_enabled(false),
+        );
         let isi = network.genesis_isi();
         let da_enabled_values = isi
             .iter()
@@ -11286,13 +11288,14 @@ exit 0
     #[test]
     fn default_npos_builder_bootstraps_validators() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers()
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                }),
+        );
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
@@ -11542,10 +11545,11 @@ exit 0
     #[test]
     fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers(),
+        );
         let genesis = network.genesis();
         let validator_ids = network
             .peers()
@@ -11583,7 +11587,7 @@ exit 0
 
     #[test]
     fn default_builder_sets_parseable_nexus_account_literals() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
 
         let mut merged = Table::new();
         for layer in network.config_layers() {
@@ -11617,7 +11621,7 @@ exit 0
 
     #[test]
     fn default_builder_uses_localnet_pipeline_time() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
 
         assert_eq!(network.pipeline_time(), LOCALNET_PIPELINE_TIME);
 
@@ -11661,7 +11665,8 @@ exit 0
     #[test]
     fn explicit_pipeline_time_injects_sumeragi_params() {
         let duration = Duration::from_secs(9);
-        let network = NetworkBuilder::new().with_pipeline_time(duration).build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_pipeline_time(duration));
 
         assert_eq!(network.pipeline_time(), duration);
 
@@ -11787,9 +11792,8 @@ exit 0
     #[test]
     fn block_sync_gossip_period_override_is_applied() {
         let period = Duration::from_millis(750);
-        let network = NetworkBuilder::new()
-            .with_block_sync_gossip_period(period)
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_block_sync_gossip_period(period));
 
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer present");
@@ -12073,7 +12077,7 @@ exit 0
     fn genesis_is_cached_and_deterministic() {
         // Repeated calls to `Network::genesis()` must return the exact same block
         // so that multiple peers submitting genesis use identical bytes.
-        let network = NetworkBuilder::new().with_peers(4).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let g1 = network.genesis();
         let g2 = network.genesis();
 

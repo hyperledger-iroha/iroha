@@ -26,6 +26,38 @@ exercise the same remote metadata path as the live router.
     window now that `configuration_endpoint` and `norito_ingress` build and
     execute again
 
+Latest sync (2026-04-21 iroha_test_network permit convoy regression repair):
+The reported `iroha_test_network` red shard no longer serializes config/genesis
+assertions on the shared default permit namespace. The touched tests now use
+`build_with_isolated_permit(...)`, so a config-only test cannot hold the
+global `limit=1` permit long enough to starve unrelated tests, and the
+two-build `config_layers_include_trusted_peer_pop_and_bls` case no longer
+deadlocks itself by attempting a second `NetworkBuilder::build()` while the
+first `Network` is still alive.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network --lib tests::enables_norito_rpc_ga_stage_for_test_networks -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::config_layers_include_trusted_peer_pop_and_bls -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::config_layers_without_pop_excludes_bls_entries -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::builder_replaces_conflicting_da_enabled_parameter_with_resolved_value -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::default_npos_builder_bootstraps_validators -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::default_builder_grants_soracloud_management_to_validator_runtime_signers -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::default_builder_sets_parseable_nexus_account_literals -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::default_builder_uses_localnet_pipeline_time -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::explicit_pipeline_time_injects_sumeragi_params -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::block_sync_gossip_period_override_is_applied -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::genesis_is_cached_and_deterministic -- --exact --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::config_layers_ -- --nocapture`
+  - `cargo test -p iroha_test_network --lib tests::default_builder_ -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_test_network --lib` window when
+    there is enough validation budget beyond the reported failing shard
+
 Latest sync (2026-04-21 first-release canonical Norito submission cleanup):
 The transaction/query submission path is now canonical-only for the first
 release. Torii MCP exposes only `body_base64` for versioned `SignedTransaction`
