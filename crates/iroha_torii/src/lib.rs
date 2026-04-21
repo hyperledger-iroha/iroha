@@ -39924,8 +39924,6 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn bridge_message_submit_prepares_ephemeral_settlement_contract_call() {
         routing::clear_sccp_bundles_for_tests();
-        let _proof_override =
-            routing::sccp_message_proof_override_guard_for_tests(iroha_sccp::SCCP_DOMAIN_ETH);
 
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());
@@ -39964,6 +39962,7 @@ pub(crate) mod tests_runtime_handlers {
             route_id: b"eth:sora:weth".to_vec(),
         });
         let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let _proof_override = routing::sccp_message_proof_override_guard_for_tests(message_id);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
             bundle_app.state.as_ref(),
             hex::encode(message_id),
@@ -40055,8 +40054,6 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn bridge_message_submit_derives_settlement_route_from_transfer_bundle() {
         routing::clear_sccp_bundles_for_tests();
-        let _proof_override =
-            routing::sccp_message_proof_override_guard_for_tests(iroha_sccp::SCCP_DOMAIN_ETH);
 
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());
@@ -40095,6 +40092,7 @@ pub(crate) mod tests_runtime_handlers {
             route_id: route_name.as_ref().as_bytes().to_vec(),
         });
         let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let _proof_override = routing::sccp_message_proof_override_guard_for_tests(message_id);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
             bundle_app.state.as_ref(),
             hex::encode(message_id),

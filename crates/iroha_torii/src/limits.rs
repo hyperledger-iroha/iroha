@@ -49,6 +49,7 @@ struct TokenBucket {
 
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
 const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
+const MIN_BUCKETS_PER_SHARD: usize = 64;
 const PREAUTH_NOFILE_RESERVE: u64 = 128;
 
 impl ShardedLimiter {
@@ -58,7 +59,10 @@ impl ShardedLimiter {
         let shard_count = if disabled {
             1
         } else {
-            max_buckets.min(DEFAULT_RATE_LIMITER_SHARDS).max(1)
+            max_buckets
+                .div_ceil(MIN_BUCKETS_PER_SHARD)
+                .min(DEFAULT_RATE_LIMITER_SHARDS)
+                .max(1)
         };
         let rate_per_sec = rate_per_sec.unwrap_or(0.0);
         let base_capacity = max_buckets / shard_count;
