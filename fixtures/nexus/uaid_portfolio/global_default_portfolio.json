@@ -1,7 +1,5 @@
 {
-  "uaid": [
-    "hash:5B19D94748E8629E1000C18EE0D6C5CBA3F3F51CB293F262E345F65B6B01BD99#FA04"
-  ],
+  "uaid": "uaid:5b19d94748e8629e1000c18ee0d6c5cba3f3f51cb293f262e345f65b6b01bd99",
   "dataspaces": [
     {
       "dataspace_id": 0,
@@ -12,14 +10,14 @@
           "label": null,
           "assets": [
             {
-              "asset_id": "78GDVxQE17JDQzP6TuvvYxoF5q5B",
-              "asset_definition_id": "78GDVxQE17JDQzP6TuvvYxoF5q5B",
-              "quantity": "875"
+              "asset_id": "4xmB7KmeLcoWBY9fXWrqoNoG8sD6#sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+              "asset_definition_id": "4xmB7KmeLcoWBY9fXWrqoNoG8sD6",
+              "quantity": "320"
             },
             {
-              "asset_id": "4qjUdo1shUjFsepZCgmvWzwCEsqq",
-              "asset_definition_id": "4qjUdo1shUjFsepZCgmvWzwCEsqq",
-              "quantity": "320"
+              "asset_id": "5xXNi7cGmAJcM1cirt9NE69iBMKa#sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+              "asset_definition_id": "5xXNi7cGmAJcM1cirt9NE69iBMKa",
+              "quantity": "875"
             }
           ]
         }

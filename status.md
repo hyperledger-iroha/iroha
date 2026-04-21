@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii accounts portfolio fixture registration and route smoke refresh
+- `crates/iroha_torii/tests/accounts_portfolio.rs` now registers fixture asset
+  definitions with explicit human-facing names (`cash`/`points`), matching the
+  current `AssetDefinition::numeric(...)` builder contract enforced by
+  `Register::asset_definition(...)`.
+- The same test now attaches loopback `ConnectInfo<SocketAddr>` to each direct
+  `/v1/accounts/{uaid}/portfolio` `oneshot(...)` request and prints the
+  response body on status mismatches, so the smoke exercises the mounted
+  handler instead of Axum's missing-request-extension `500` path.
+- `fixtures/nexus/uaid_portfolio/global_default_portfolio.json` is resynced to
+  the current portfolio JSON shape: `uaid` is serialized as a single
+  `uaid:<hex>` string and `asset_id` rows use canonical balance-bucket literals
+  (`<asset_definition>#<account>`).
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_portfolio --features app_api -- --nocapture`
+
 ## 2026-04-21 Follow-up: Torii mock Sumeragi gossip seed sync
 - `python/iroha_torii_client/mock.py` now seeds
   `gossip_fallback_total = 1` in the default `/v1/sumeragi/status` payload,
