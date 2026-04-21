@@ -269,22 +269,7 @@ impl iroha_version::codec::EncodeVersioned for PrivateKaigiTransaction {
 
 impl iroha_version::codec::DecodeVersioned for PrivateKaigiTransaction {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        use iroha_version::error::Error;
-
-        let Some((&version, payload)) = input.split_first() else {
-            return Err(Error::NotVersioned);
-        };
-
-        if !Self::supported_versions().contains(&version) {
-            return Err(Error::UnsupportedVersion(Box::new(
-                iroha_version::UnsupportedVersion::new(
-                    version,
-                    iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
-                ),
-            )));
-        }
-
-        norito::codec::decode_exact_from_slice(payload).map_err(Error::from)
+        iroha_version::codec::decode_exact_versioned(input)
     }
 }
 
