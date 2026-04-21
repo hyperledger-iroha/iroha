@@ -60,6 +60,7 @@ fn ensure_connect_layout(flags: u8) -> Result<(), Error> {
 }
 
 fn encode_field<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     let (payload, flags) = norito::codec::encode_with_header_flags(value);
     ensure_connect_layout(flags)?;
     Ok(payload)
@@ -1112,6 +1113,19 @@ mod tests {
     }
 
     #[test]
+    fn ping_frame_roundtrip_bare() {
+        let frame = ConnectFrameV1 {
+            sid: [0x33; 32],
+            dir: Dir::WalletToApp,
+            seq: 2,
+            kind: FrameKind::Control(ConnectControlV1::Ping { nonce: 7 }),
+        };
+        let bytes = encode_connect_frame_bare(&frame).expect("encode bare");
+        let decoded = decode_connect_frame_bare(&bytes).expect("decode bare");
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
     fn server_event_block_proof_roundtrip() {
         let frame = ConnectFrameV1 {
             sid: [9u8; 32],
@@ -1127,6 +1141,25 @@ mod tests {
         };
         let bytes = encode_connect_frame_framed(&frame).expect("encode framed");
         let decoded = decode_connect_frame_framed(&bytes).expect("decode framed");
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn server_event_block_proof_roundtrip_bare() {
+        let frame = ConnectFrameV1 {
+            sid: [0x44; 32],
+            dir: Dir::AppToWallet,
+            seq: 8,
+            kind: FrameKind::Control(ConnectControlV1::ServerEvent {
+                event: ServerEventV1::BlockProofs {
+                    height: 6,
+                    entry_hash: "cd34".into(),
+                    proofs_json: r#"{"baz":"qux"}"#.into(),
+                },
+            }),
+        };
+        let bytes = encode_connect_frame_bare(&frame).expect("encode bare");
+        let decoded = decode_connect_frame_bare(&bytes).expect("decode bare");
         assert_eq!(decoded, frame);
     }
 
