@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-20
 
+## 2026-04-20 Follow-up: Connect canonical field-layout flags
+- `crates/iroha_torii_shared/src/connect.rs` now forces every nested Connect
+  field encode through `CONNECT_LAYOUT_FLAGS` before collecting Norito header
+  flags. The Connect wire format remains fixed to the documented zero-flag
+  layout instead of inheriting Norito's default per-field `COMPACT_LEN`
+  behavior, which had started rejecting valid `ConnectFrameV1` encodes with
+  `UnsupportedFeature("connect layout flags")`.
+- Added direct bare-frame regression coverage for `Ping` and
+  `ServerEvent::BlockProofs` so the wire encoder is exercised on the exact
+  control frames that the Torii relay uses for heartbeat tracking and
+  server-side notifications.
+- This restores local Connect relay delivery in `iroha_torii`: heartbeat pings
+  are recorded again, server events no longer stall behind a dropped initial
+  frame, and the `connect::tests::` unit-test subset completes instead of
+  hanging on undelivered relay frames.
+- Focused validation for this slice:
+  - `env CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib connect::tests::heartbeat_failure_detected -- --exact --nocapture`
+    (`1 passed`; cold isolated build)
+  - `timeout 120s /tmp/iroha-codex-target/debug/deps/iroha_torii-2992fe931990acf2 connect::tests:: --nocapture`
+    (`33 passed`)
+  - `git diff --check`
+
 ## 2026-04-20 Follow-up: norito JSON serde parity hardening
 - `crates/norito/tests/json_value_serde_parity.rs` adds a deterministic
   seeded parity corpus over `norito::json::Value`, including bounded nested

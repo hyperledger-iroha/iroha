@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-20
 
+Latest sync (2026-04-20 Connect canonical field-layout flags):
+Connect frame relaying no longer drops valid control frames during size
+accounting. `iroha_torii_shared` now encodes nested Connect fields under the
+documented `CONNECT_LAYOUT_FLAGS = 0` policy before validating Norito header
+flags, which restores `Ping` heartbeat tracking and server-event delivery in
+`iroha_torii`. The previously failing/hanging `connect::tests::` subset now
+completes cleanly, and the wire module has direct bare-frame regressions for
+`Ping` and `ServerEvent::BlockProofs`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii_shared/src/connect.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `env CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib connect::tests::heartbeat_failure_detected -- --exact --nocapture`
+    (`1 passed`; cold isolated build)
+  - `timeout 120s /tmp/iroha-codex-target/debug/deps/iroha_torii-2992fe931990acf2 connect::tests:: --nocapture`
+    (`33 passed`)
+  - `git diff --check`
+- open work after this slice:
+  - rerun the `iroha_torii_shared` bare-frame roundtrip subset in the isolated
+    target during the next validation window so the new low-level regressions
+    are recorded independently of the Torii relay coverage
+
 Latest sync (2026-04-20 Torii bridge message submit SCCP test alignment):
 The Torii bridge-message-submit handler tests are aligned with the current SCCP
 rollout state again. The disabled inbound lane regression now checks the
