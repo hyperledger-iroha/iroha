@@ -182,19 +182,26 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         json_entry("account_id", user_id.to_string()),
     ]);
     let body = norito::json::to_json(&body).expect("serialize onboarding request");
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/accounts/onboard")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .unwrap(),
-        )
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/v1/accounts/onboard")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+
+    let resp = app.clone().oneshot(req).await.expect("onboarding response");
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
-        .expect("onboarding response");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        .expect("read response body");
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&bytes)
+    );
 
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
