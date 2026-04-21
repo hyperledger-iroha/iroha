@@ -33,8 +33,7 @@ public struct AccelerationSettings: Codable, Sendable {
         self.preferCpuSha2MaxLeavesX86 = (preferCpuSha2MaxLeavesX86 ?? -1) >= 0 ? preferCpuSha2MaxLeavesX86 : nil
     }
 
-    /// Applies the settings to the shared native bridge.
-    /// If the bridge does not expose acceleration configuration yet, this call is a no-op.
+    /// Applies the settings to the required shared native bridge.
     public func apply() {
         NoritoNativeBridge.shared.applyAccelerationSettings(self)
     }
@@ -163,12 +162,12 @@ public extension AccelerationSettings {
 
 #if canImport(Darwin)
 public extension AccelerationSettings {
-    /// Returns the last applied acceleration configuration from the native bridge, if available.
+    /// Returns the last applied acceleration configuration from the native bridge.
     static func currentAppliedSettings() -> AccelerationSettings? {
         NoritoNativeBridge.shared.currentAccelerationSettings()
     }
 
-    /// Returns the combined acceleration configuration + runtime status, if available.
+    /// Returns the combined acceleration configuration + runtime status.
     static func runtimeState() -> AccelerationState? {
         NoritoNativeBridge.shared.currentAccelerationState()
     }

@@ -32,7 +32,7 @@ public final class InstructionBoxTests {
   @Test
   public void fromNoritoRejectsMissingWirePayload() {
     final Map<String, String> args = new LinkedHashMap<>();
-    args.put("action", "LegacyInstruction");
+    args.put("action", "UnsupportedInstruction");
     boolean threw = false;
     try {
       InstructionBox.fromNorito(InstructionKind.CUSTOM, args);

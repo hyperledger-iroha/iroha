@@ -5038,12 +5038,12 @@ test(
     assert.match(
       xml,
       new RegExp(`<MsgId>${instructionId}</MsgId>`),
-      "MsgId should fall back to instruction id",
+      "MsgId should use instruction id when omitted",
     );
     assert.match(
       xml,
       new RegExp(`<BizMsgIdr>${instructionId}</BizMsgIdr>`),
-      "BizMsgIdr should fall back to instruction id",
+      "BizMsgIdr should use instruction id when omitted",
     );
     assert.match(
       xml,

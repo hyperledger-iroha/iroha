@@ -58,7 +58,7 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
   assert.ok(verifyEd25519(message, signature, publicKey));
 });
 
-test("ToriiClient canonical auth falls back to a raw Node transport for UTF-8 account headers", async (t) => {
+test("ToriiClient canonical auth uses raw Node transport for UTF-8 account headers", async (t) => {
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
   const requests = [];

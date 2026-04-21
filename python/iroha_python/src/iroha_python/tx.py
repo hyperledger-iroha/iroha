@@ -79,13 +79,13 @@ def _normalize_metadata(metadata: MetadataLike) -> Optional[Mapping[str, Any]]:
         return None
     if not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping when provided")
-    # Round-trip through JSON to ensure only JSON-compatible values remain (e.g., Decimal -> str).
+    # Round-trip through JSON to ensure only JSON-serializable values remain (e.g., Decimal -> str).
     serialized = json.dumps(metadata, default=str)
     return json.loads(serialized)
 
 
 def _normalize_json_value(value: Any, context: str) -> Any:
-    """Convert nested payloads to JSON-compatible values, stringifying Decimals when needed."""
+    """Convert nested payloads to JSON-serializable values, stringifying Decimals when needed."""
 
     try:
         serialized = json.dumps(value, default=str)

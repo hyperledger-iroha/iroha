@@ -15,7 +15,7 @@ public final class MultisigRegisterInstructionTests {
 
   public static void main(final String[] args) {
     testArgumentSchema();
-    testRejectsLegacyAccountLiterals();
+    testRejectsDomainQualifiedAccountLiterals();
     testDerivedControllerIsRejected();
   }
 
@@ -51,7 +51,7 @@ public final class MultisigRegisterInstructionTests {
     System.out.println("[IrohaAndroid] MultisigRegisterInstruction tests passed.");
   }
 
-  private static void testRejectsLegacyAccountLiterals() {
+  private static void testRejectsDomainQualifiedAccountLiterals() {
     final String canonical = sampleI105((byte) 0x21);
     final MultisigSpec spec =
         MultisigSpec.builder()

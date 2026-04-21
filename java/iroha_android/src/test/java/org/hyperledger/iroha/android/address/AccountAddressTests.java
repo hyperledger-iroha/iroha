@@ -23,7 +23,7 @@ public final class AccountAddressTests {
     mixedI105LiteralRoundTrip();
     i105PrefixMismatchThrows();
     i105RejectsFullwidthSentinel();
-    i105RejectsLegacyFullwidthKana();
+    i105RejectsNonCanonicalFullwidthKana();
     i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
@@ -186,7 +186,7 @@ public final class AccountAddressTests {
     assert fromI105Threw : "fullwidth sentinel literal must be rejected by fromI105";
   }
 
-  private static void i105RejectsLegacyFullwidthKana() throws Exception {
+  private static void i105RejectsNonCanonicalFullwidthKana() throws Exception {
     final String canonical =
         "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7";
     final String nonCanonical = canonical.replaceFirst("ﾛ", "ロ");

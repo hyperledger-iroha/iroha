@@ -191,7 +191,7 @@ test("ToriiClient openConnectWebSocket delegates to provided implementation", ()
   });
 });
 
-test("openConnectWebSocket falls back to second-argument options when no protocols", () => {
+test("openConnectWebSocket uses second-argument options when no protocols are set", () => {
   DualArgRecordingWebSocket.instances.length = 0;
   openConnectWebSocket({
     baseUrl: "https://torii.integration.example",

@@ -10,7 +10,7 @@ import XCTest
 //   2. Bob:   setup  → sync incoming receipt       → balance == 4
 //
 // Requires a running local Iroha node at IROHA_NODE_URL (default http://127.0.0.1:8080),
-// a local `iroha` CLI, and a compatible client config. Skips automatically and
+// a local `iroha` CLI, and a matching client config. Skips automatically and
 // quickly when the environment is not provisioned.
 
 @available(iOS 15.0, macOS 12.0, *)

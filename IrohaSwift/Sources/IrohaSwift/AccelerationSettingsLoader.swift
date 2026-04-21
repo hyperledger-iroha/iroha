@@ -26,7 +26,7 @@ public enum AccelerationSettingsLoader {
     }
 
     /// Resolve acceleration settings by checking the environment first and then bundled configs.
-    /// Falls back to the default `AccelerationSettings` when no valid manifest is found.
+    /// Uses default `AccelerationSettings` when no valid manifest is found.
     public static func load(
         environmentKey: String = defaultEnvironmentKey,
         environment: [String: String] = ProcessInfo.processInfo.environment,

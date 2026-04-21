@@ -3,14 +3,19 @@ import XCTest
 
 final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
     private static let fixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+    private static let fixturePrivateKeyHex =
+        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
     func testEd25519TransferWithFeeSponsorEncodes() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Ed25519 transaction encoder unavailable")
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 0x11, count: 32))
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let sponsor = try AccountId.makeI105(publicKey: Data(repeating: 0x12, count: 32))
+        guard let privateKeyBytes = Data(hexString: Self.fixturePrivateKeyHex) else {
+            throw XCTSkip("Invalid fixture private key")
+        }
+        let signingKey = try SigningKey.fromMultihashPrivateKey(privateKeyBytes)
+        let authority = AccountId.make(publicKey: try signingKey.publicKey())
+        let sponsorKeypair = try Keypair(privateKeyBytes: Data(repeating: 0x12, count: 32))
+        let sponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,

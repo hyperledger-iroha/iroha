@@ -27,7 +27,7 @@ final class IrohaSDKSigningAlgorithmTests: XCTestCase {
         XCTAssertEqual(try signingKey.publicKey(), try second.publicKey())
     }
 
-    func testLegacyKeypairRemainsEd25519Compatible() throws {
+    func testKeypairSeedMaterialUsesEd25519() throws {
         let keypair = try Keypair.generate()
         let sdk = IrohaSDK(baseURL: baseURL)
 

@@ -13,7 +13,7 @@ public final class HttpTransportExecutorFakeTests {
 
   public static void main(final String[] args) {
     shouldReturnPathSpecificResponses();
-    shouldFallBackToGlobalQueue();
+    shouldUseGlobalQueueWhenPathQueueIsEmpty();
     shouldUseDefaultResponseWhenQueuesEmpty();
     shouldResetQueues();
     System.out.println("[IrohaAndroid] FakeHttpTransportExecutor tests passed.");
@@ -37,7 +37,7 @@ public final class HttpTransportExecutorFakeTests {
         : "path-specific body should be preserved";
   }
 
-  private static void shouldFallBackToGlobalQueue() {
+  private static void shouldUseGlobalQueueWhenPathQueueIsEmpty() {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportResponse globalResponse =
         new TransportResponse(201, "global".getBytes(StandardCharsets.UTF_8), "", Map.of());

@@ -3,7 +3,6 @@
 import { Buffer } from "node:buffer";
 import { domainToASCII } from "node:url";
 import { blake2b256 } from "./blake2b.js";
-import { getNativeBinding } from "./native.js";
 import {
   canonicalCurveAlgorithm,
   CURVE_PUBLIC_KEY_LENGTH,
@@ -30,9 +29,6 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   bytes.set(Buffer.from("iroha-ms-policy", "ascii"));
   return bytes;
 })();
-
-let cachedNativeAddressCodec;
-let nativeAddressCodecResolved = false;
 
 const BASE58_ALPHABET = Array.from(
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
@@ -988,17 +984,8 @@ export class AccountAddress {
         ? undefined
         : normalizeI105DiscriminantInput(
             expectedPrefix,
-            "AccountAddress.fromI105 expectedPrefix",
-          );
-    const nativeParsed = parseWithNativeCodec(
-      encoded,
-      normalizedExpectedDiscriminant,
-    );
-    if (nativeParsed) {
-      const address = AccountAddress.fromCanonicalBytes(nativeParsed.canonicalBytes);
-      assertCanonicalI105Literal(literal, address);
-      return address;
-    }
+	            "AccountAddress.fromI105 expectedPrefix",
+	          );
     const [, canonical] = decodeSupportedI105String(
       encoded,
       normalizedExpectedDiscriminant,
@@ -1065,10 +1052,6 @@ export class AccountAddress {
 
   canonicalHex() {
     const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, DEFAULT_I105_DISCRIMINANT);
-    if (rendered?.canonicalHex) {
-      return rendered.canonicalHex;
-    }
     return `0x${Buffer.from(canonical).toString("hex")}`;
   }
 
@@ -1076,12 +1059,8 @@ export class AccountAddress {
     const normalizedDiscriminant = normalizeI105DiscriminantInput(
       prefix,
       "AccountAddress.toI105 chainDiscriminant",
-    );
+	);
     const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, normalizedDiscriminant);
-    if (rendered?.i105) {
-      return rendered.i105;
-    }
     return encodeI105String(normalizedDiscriminant, canonical);
   }
 
@@ -1159,142 +1138,6 @@ function tryExtractI105Discriminant(literal) {
   } catch {
     return undefined;
   }
-}
-
-function initNativeAddressCodec(binding) {
-  if (!binding) {
-    return null;
-  }
-  if (
-    typeof binding.accountAddressParseEncoded !== "function" ||
-    typeof binding.accountAddressRender !== "function"
-  ) {
-    return null;
-  }
-  return {
-    parseEncoded: binding.accountAddressParseEncoded.bind(binding),
-    render: binding.accountAddressRender.bind(binding),
-  };
-}
-
-function resolveNativeBinding() {
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
-}
-
-function getNativeAddressCodec() {
-  if (!nativeAddressCodecResolved) {
-    cachedNativeAddressCodec = initNativeAddressCodec(resolveNativeBinding());
-    nativeAddressCodecResolved = true;
-  }
-  return cachedNativeAddressCodec;
-}
-
-export function __resetAddressNativeStateForTests() {
-  cachedNativeAddressCodec = undefined;
-  nativeAddressCodecResolved = false;
-}
-
-function parseWithNativeCodec(input, expectedPrefix) {
-  const nativeAddressCodec = getNativeAddressCodec();
-  if (!nativeAddressCodec) {
-    return null;
-  }
-  try {
-    const parsed = nativeAddressCodec.parseEncoded(String(input), expectedPrefix ?? null);
-    if (!parsed) {
-      return null;
-    }
-    const canonical = parsed.canonical_bytes;
-    if (!canonical || canonical.length === 0) {
-      // Some native codec builds may return an empty canonical payload for
-      // otherwise parseable literals. Fall back to the pure-JS codec path.
-      return null;
-    }
-    return {
-      canonicalBytes: Uint8Array.from(canonical),
-      chainDiscriminant: parsed.network_prefix ?? undefined,
-    };
-  } catch (error) {
-    const converted = convertNativeCodecError(error);
-    if (
-      converted instanceof AccountAddressError &&
-      (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
-        converted.code === AccountAddressErrorCode.INVALID_I105_CHAR ||
-        converted.code === AccountAddressErrorCode.CHECKSUM_MISMATCH ||
-        converted.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
-        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
-        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
-    ) {
-      return null;
-    }
-    throw converted;
-  }
-}
-
-function renderWithNativeCodec(canonicalBytes, chainDiscriminant = DEFAULT_I105_DISCRIMINANT) {
-  const nativeAddressCodec = getNativeAddressCodec();
-  if (!nativeAddressCodec) {
-    return null;
-  }
-  const normalizedDiscriminant = normalizeI105DiscriminantInput(
-    chainDiscriminant,
-    "renderWithNativeCodec chainDiscriminant",
-  );
-  try {
-    const bytes = Buffer.isBuffer(canonicalBytes)
-      ? canonicalBytes
-      : Uint8Array.from(canonicalBytes);
-    const rendered = nativeAddressCodec.render(bytes, normalizedDiscriminant);
-    if (!rendered) {
-      return null;
-    }
-    return {
-      canonicalHex: rendered.canonical_hex,
-      i105: rendered.i105,
-    };
-  } catch (error) {
-    const converted = convertNativeCodecError(error);
-    if (
-      converted instanceof AccountAddressError &&
-      (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
-        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
-        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
-    ) {
-      return null;
-    }
-    throw converted;
-  }
-}
-
-function convertNativeCodecError(error) {
-  if (!error || typeof error.message !== "string") {
-    return new AccountAddressError(
-      AccountAddressErrorCode.INVALID_LENGTH,
-      "native address codec failure",
-      { cause: error },
-    );
-  }
-  const trimmed = error.message.trim();
-  const match = /^([A-Z0-9_]+):\s*(.*)$/.exec(trimmed);
-  if (match) {
-    const [, code, rest] = match;
-    if (ACCOUNT_ADDRESS_ERROR_CODES.has(code)) {
-      return new AccountAddressError(code, rest || "address codec failure", {
-        cause: error,
-      });
-    }
-  }
-  return new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, trimmed, {
-    cause: error,
-  });
 }
 
 export function encodeI105AccountAddress(canonicalBytes, options = {}) {

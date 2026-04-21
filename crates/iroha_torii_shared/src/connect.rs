@@ -411,11 +411,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
     let tag = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let payload_len = usize::try_from(u64::from_le_bytes(bytes[4..12].try_into().unwrap()))
         .expect("connect payload length fits in usize");
-    #[cfg(test)]
-    eprintln!(
-        "decode_connect_control_payload tag={tag} payload_len={payload_len} total_bytes={}",
-        bytes.len()
-    );
     let body_start = 12usize;
     let body_end = body_start
         .checked_add(payload_len)
@@ -460,11 +455,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
         }
         1 => {
             let wallet_pk_len = read_len(body, &mut offset)?;
-            #[cfg(test)]
-            eprintln!(
-                "approve decode wallet_pk_len={wallet_pk_len} body_len={}",
-                body.len()
-            );
             let wallet_pk =
                 decode_field_with_len::<[u8; 32]>(body, &mut offset, wallet_pk_len, "wallet_pk")?;
             let account_id_len = read_len(body, &mut offset)?;
@@ -552,10 +542,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
         }
     };
     if offset != payload_len {
-        #[cfg(test)]
-        eprintln!(
-            "ConnectControlV1 decode mismatch: tag={tag} expected={payload_len} used={offset}"
-        );
         return Err(Error::Message(format!(
             "ConnectControlV1 length mismatch: expected {payload_len} used {offset}"
         )));
@@ -1087,16 +1073,10 @@ mod tests {
     }
 
     #[test]
-    fn frame_kind_roundtrip_debug_payload_decode() {
+    fn frame_kind_roundtrip_payload_decode() {
         norito::disable_packed_struct_layout();
         let fk = FrameKind::Control(ConnectControlV1::Ping { nonce: 7 });
         let payload = encode_frame_kind_payload(&fk).expect("encode");
-        eprintln!(
-            "[debug] payload_len={} tag_le={} head={:02x?}",
-            payload.len(),
-            u32::from_le_bytes(payload[0..4].try_into().unwrap()),
-            &payload[..payload.len().min(32)]
-        );
         let framed =
             norito::core::frame_bare_with_header_flags::<FrameKind>(&payload, CONNECT_LAYOUT_FLAGS)
                 .expect("frame payload");
@@ -1110,10 +1090,6 @@ mod tests {
     fn connect_control_roundtrip_header() {
         norito::disable_packed_struct_layout();
         let ctrl = sample_approve_control();
-        if let ConnectControlV1::Approve { wallet_pk, .. } = &ctrl {
-            let enc = encode_field(wallet_pk).expect("encode wallet_pk");
-            eprintln!("wallet_pk encoded len={}", enc.len());
-        }
         let payload = encode_connect_control_payload(&ctrl).expect("encode control");
         let framed = norito::core::frame_bare_with_header_flags::<ConnectControlV1>(
             &payload,
@@ -1121,11 +1097,9 @@ mod tests {
         )
         .expect("frame control");
         let view = norito::core::from_bytes_view(&framed).expect("view");
-        let decoded = decode_connect_control_payload(view.as_bytes());
-        if let Err(err) = &decoded {
-            eprintln!("connect_control_roundtrip_header decode error: {err}");
-        }
-        let decoded = decoded.expect("decode control").0;
+        let decoded = decode_connect_control_payload(view.as_bytes())
+            .expect("decode control")
+            .0;
         assert_eq!(decoded, ctrl);
     }
 
@@ -1138,13 +1112,7 @@ mod tests {
             .expect("view")
             .as_bytes()
             .to_vec();
-        eprintln!(
-            "array payload len={} head={:02x?}",
-            payload.len(),
-            &payload[..payload.len().min(64)]
-        );
         let decoded_field = norito::core::decode_field_canonical::<[u8; 32]>(&payload);
-        eprintln!("array decode_field_canonical: {decoded_field:?}");
         let (decoded_field, used) = decoded_field.expect("field decode");
         assert_eq!(used, payload.len());
         assert_eq!(decoded_field, arr);

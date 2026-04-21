@@ -2,12 +2,11 @@
 import XCTest
 
 final class AccelerationSettingsTests: XCTestCase {
-    func testApplyDoesNotCrashWhenBridgeMissing() {
+    func testApplyUsesRequiredBridge() {
         let settings = AccelerationSettings(enableMetal: false,
                                             merkleMinLeavesMetal: 128,
                                             preferCpuSha2MaxLeavesAarch64: 64)
         settings.apply()
-        XCTAssertTrue(true)
     }
 
     func testNegativeValuesAreIgnored() {
@@ -47,7 +46,7 @@ final class AccelerationSettingsTests: XCTestCase {
                                             maxGPUs: 1,
                                             merkleMinLeavesCUDA: 512,
                                             preferCpuSha2MaxLeavesX86: 32)
-        settings.apply() // ensure no crash for coverage
+        settings.apply()
         let encoded = try JSONEncoder().encode(settings)
         let jsonObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
         XCTAssertEqual(jsonObject?["enable_metal"] as? Bool, false)

@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ToriiClient,
-  ToriiDataModelCompatibilityError,
+  ToriiDataModelMismatchError,
   ToriiHttpError,
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
@@ -4019,10 +4019,11 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
           baseUrl: "https://gateway-two.test/",
           streamTokenB64: Buffer.from("token-2").toString("base64"),
         },
-      ],
-      proofSummary: { sampleCount: 1 },
-      outputDir: tmpDir,
-    });
+	      ],
+	      chunkerHandle: gatewayResult.chunker_handle,
+	      proofSummary: { sampleCount: 1 },
+	      outputDir: tmpDir,
+	    });
     const label = ticketHex.slice(2).toLowerCase();
     const manifestPath = path.join(tmpDir, `manifest_${label}.norito`);
     const chunkPlanPath = path.join(tmpDir, `chunk_plan_${label}.json`);
@@ -5827,7 +5828,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
   ]);
 });
 
-test("submitTransaction tolerates missing node capabilities advert", async () => {
+test("submitTransaction rejects missing node capabilities advert", async () => {
   const payload = new Uint8Array([0xde, 0xad]);
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -5839,20 +5840,19 @@ test("submitTransaction tolerates missing node capabilities advert", async () =>
         headers: { "content-type": "application/json" },
       });
     }
-    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
-    assert.equal(init.method, "POST");
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
+    assert.fail(`unexpected transaction submission to ${url} with ${init?.method}`);
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
+  await assert.rejects(
+    () => client.submitTransaction(payload),
+    (error) => {
+      assert(error instanceof ToriiHttpError);
+      assert.equal(error.status, 404);
+      return true;
+    },
+  );
   assert.deepEqual(calls.map((call) => call.url), [
     `${BASE_URL}/v1/node/capabilities`,
-    `${BASE_URL}/v1/pipeline/transactions`,
   ]);
 });
 
@@ -5894,7 +5894,7 @@ test("submitTransaction rejects mismatched data model version", async () => {
   await assert.rejects(
     () => client.submitTransaction(payload),
     (error) => {
-      assert(error instanceof ToriiDataModelCompatibilityError);
+      assert(error instanceof ToriiDataModelMismatchError);
       assert.equal(error.expected, 1);
       assert.equal(error.actual, 9);
       return true;
@@ -6254,7 +6254,7 @@ test("getTransactionStatus surfaces errors-array messages", async () => {
   );
 });
 
-test("getTransactionStatus falls back to compact JSON for message-less errors", async () => {
+test("getTransactionStatus uses compact JSON for message-less errors", async () => {
   const hashHex = "ef".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -6500,7 +6500,7 @@ test("extractPipelineStatusKind returns nested status kind", () => {
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
-test("extractPipelineStatusKind falls back to direct status string", () => {
+test("extractPipelineStatusKind accepts direct status string", () => {
   const payload = { status: "Rejected" };
   assert.equal(extractPipelineStatusKind(payload), "Rejected");
 });

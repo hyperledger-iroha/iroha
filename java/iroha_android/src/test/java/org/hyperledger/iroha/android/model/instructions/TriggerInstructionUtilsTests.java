@@ -43,7 +43,7 @@ public final class TriggerInstructionUtilsTests {
     args.put("instruction.0.kind", InstructionKind.CUSTOM.displayName());
     args.put("instruction.0.arg.wire_name", "iroha.custom");
     args.put("instruction.0.arg.payload_base64", "AAECAw==");
-    args.put("instruction.0.arg.action", "LegacyAction");
+    args.put("instruction.0.arg.action", "UnsupportedAction");
     assertThrows(
         () -> TriggerInstructionUtils.parseInstructions(args),
         "Expected extra wire arguments to be rejected");

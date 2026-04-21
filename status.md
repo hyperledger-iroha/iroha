@@ -2,6 +2,41 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: first-release SDK strictness sweep
+- Brought the Swift, JavaScript, Python, Java, and Kotlin SDK surfaces in line
+  with the first-release contract: native bridge calls are required where the
+  binding surface exposes them, SDK codecs use the current canonical Norito
+  paths, account/domain identifiers follow the current data model, SCCP/Torii
+  transaction fields use the current schema, and Connect/key-export handling no
+  longer accepts older bundle shapes.
+- Tightened SDK node/schema validation names and behavior: clients now report
+  data-model and transaction-schema mismatches directly, JavaScript and Swift
+  transaction submission require a valid node-capabilities response before
+  posting the payload, and Swift metrics no longer guesses response formats.
+- Removed obsolete JavaScript public exports and tests for non-canonical SDK
+  behavior, rebuilt the JavaScript distribution output, and regenerated the
+  Swift parity fixtures against the Rust bridge.
+- Verified the SDK source/test surfaces under `IrohaSwift`, `javascript`,
+  `python`, `java/iroha_android`, `java/norito_java`, and `kotlin` no longer
+  contain the disallowed `fallback`, `legacy`, `shim`, or old node/schema
+  acceptance markers.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo run -p connect_norito_bridge --bin swift_parity_regen`
+  - `swift test` from `IrohaSwift`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/build/codex-js-target npm test` from `javascript/iroha_js`
+  - `python3 -m compileall -q python/iroha_python/src python/iroha_torii_client`
+  - `python3 -m pytest python/iroha_python/tests/testconnect_codec.py python/iroha_python/tests/test_address_format.py python/iroha_python/tests/test_governance_zk_ballot.py python/iroha_torii_client/tests/test_client.py`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from `java/iroha_android`
+  - `./gradlew :core-jvm:test --console=plain` from `kotlin`
+  - `ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :client-android:assembleRelease --console=plain` from `kotlin`
+  - `./gradlew :offline-wallet-android:assembleRelease --console=plain` from `kotlin`
+  - `./gradlew :norito_java:test --console=plain` from `java/iroha_android`
+  - `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml -- --nocapture`
+- Full workspace `cargo test` remains outside this validation window because
+  it is a multi-hour run on this repository.
+
 ## 2026-04-21 Follow-up: iroha_js_host signed-transaction decode and Kaigi fixture resync
 - Fixed the reported `iroha_js_host` reds in `crates/iroha_js_host/src/lib.rs`.
   `decode_signed_transaction(...)` now retries the three wire shapes that the

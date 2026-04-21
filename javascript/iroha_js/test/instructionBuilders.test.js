@@ -318,7 +318,7 @@ test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers",
   assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
-test("buildMintAssetInstruction produces Norito-compatible payload", () => {
+test("buildMintAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42 });
   assert.deepEqual(instruction, {
     Mint: { Asset: { object: "42", destination: ASSET_ID_CANONICAL } },
@@ -364,7 +364,7 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
   );
 });
 
-test("buildBurnAssetInstruction produces Norito-compatible payload", () => {
+test("buildBurnAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildBurnAssetInstruction({ assetId: ASSET_ID, quantity: "7" });
   assert.deepEqual(instruction, {
     Burn: { Asset: { object: "7", destination: ASSET_ID_CANONICAL } },

@@ -53,11 +53,11 @@ public final class CudaAccelerators {
       return new NativeBackend();
     } catch (UnsatisfiedLinkError | SecurityException error) {
       System.err.printf(
-          "[CudaAccelerators] Native CUDA bridge not available (%s). Falling back to no-op backend.%n",
+          "[CudaAccelerators] Native CUDA bridge not available (%s). CUDA backend disabled.%n",
           error.getMessage());
     } catch (Throwable throwable) {
       System.err.printf(
-          "[CudaAccelerators] Failed to initialise native CUDA bridge (%s). Falling back to no-op backend.%n",
+          "[CudaAccelerators] Failed to initialise native CUDA bridge (%s). CUDA backend disabled.%n",
           throwable.getMessage());
     }
     return new NoopBackend();
