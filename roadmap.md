@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii accounts portfolio fixture registration and route smoke refresh):
+The reported `accounts_portfolio_*` reds are fixed.
+`crates/iroha_torii/tests/accounts_portfolio.rs` now gives the registered
+fixture asset definitions explicit `cash`/`points` names, matching the current
+asset-definition registration invariant, and attaches loopback
+`ConnectInfo<SocketAddr>` to the direct portfolio `oneshot(...)` requests so
+the smoke reaches the mounted app-api handler. The portfolio snapshot fixture
+under `fixtures/nexus/uaid_portfolio/global_default_portfolio.json` is also
+updated to the current canonical response shape (`uaid:<hex>` plus scoped
+balance-bucket `asset_id` literals).
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/accounts_portfolio.rs`
+  - `/home/mtakemiya/dev/iroha/fixtures/nexus/uaid_portfolio/global_default_portfolio.json`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_portfolio --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported portfolio regression
+
 Latest sync (2026-04-21 Torii mock Sumeragi gossip seed sync):
 The reported `sumeragi_summary_commands_against_torii_mock` red is fixed.
 `python/iroha_torii_client/mock.py` now seeds `gossip_fallback_total = 1` in
