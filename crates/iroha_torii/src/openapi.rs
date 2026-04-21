@@ -2956,6 +2956,138 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/node/query/projection/checkpoint".to_owned(),
+        Value::Object(json_get_operation(
+            "Runtime",
+            "Fetch latest query projection checkpoint.",
+            "Return the latest persisted query projection checkpoint descriptor.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/node/query/projection/catalog/{resource}".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Enumerate the live query projection shard catalog.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Returns the canonical ordered non-empty shard entries for the requested live projection resource. `asset_definition_id` narrows `asset_holders`, while `offset` and `limit` paginate the stable entry set."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionShardCatalog".to_owned()),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    string_path_param(
+                        "resource",
+                        "Projection resource family (`accounts` or `asset_holders`).",
+                    ),
+                    string_query_param(
+                        "asset_definition_id",
+                        "Canonical or alias asset-definition selector used to narrow `asset_holders` entries.",
+                    ),
+                    integer_query_param(
+                        "offset",
+                        "Stable entry offset within the canonical ordered catalog.",
+                        Some("uint64"),
+                    ),
+                    integer_query_param(
+                        "limit",
+                        "Maximum number of catalog entries to return.",
+                        Some("uint32"),
+                    ),
+                ]),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Live query projection shard catalog.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("get".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/node/query/projection/shards/{resource}/{partition_id}".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Export a canonical query projection shard archive.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Builds a Norito-encoded `QueryProjectionShardArchive` for the requested resource partition directly from the node's live query snapshot. `asset_definition_id` is required when `resource=asset_holders`."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionShardExport".to_owned()),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    string_path_param(
+                        "resource",
+                        "Projection resource family (`accounts` or `asset_holders`).",
+                    ),
+                    integer_path_param(
+                        "partition_id",
+                        "Stable projection partition identifier.",
+                        Some("uint32"),
+                    ),
+                    string_query_param(
+                        "asset_definition_id",
+                        "Canonical or alias asset-definition selector required for `asset_holders`.",
+                    ),
+                ]),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        binary_response("Norito-encoded query projection shard archive payload."),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("get".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
         "/v1/runtime/abi/active".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
@@ -10716,6 +10848,9 @@ mod tests {
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
+        assert!(paths.contains_key("/v1/node/query/projection/catalog/{resource}"));
+        assert!(paths.contains_key("/v1/node/query/projection/shards/{resource}/{partition_id}"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/transactions/history"));
@@ -11495,7 +11630,7 @@ mod tests {
             PathCase {
                 label: "runtime",
                 builder: runtime_paths,
-                expected: "/v1/runtime/abi/active",
+                expected: "/v1/node/query/projection/checkpoint",
             },
             PathCase {
                 label: "accounts",
