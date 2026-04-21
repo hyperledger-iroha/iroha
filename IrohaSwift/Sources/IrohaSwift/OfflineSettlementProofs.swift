@@ -216,9 +216,8 @@ public struct ToriiOfflineFoldDecommitV1: Codable, Sendable, Equatable {
 }
 
 public struct ToriiOfflineMerklePath: Codable, Sendable, Equatable {
-    /// Direction bits encoded as base64 string.
-    /// The server may return either a base64 string or an array of integers —
-    /// the custom decoder handles both formats.
+    /// Direction bits stored in-memory as base64. The JSON wire format is the
+    /// canonical Torii `Vec<u8>` representation: an array of byte values.
     public let dirs: String
     public let siblings: [String]
 
@@ -230,20 +229,24 @@ public struct ToriiOfflineMerklePath: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         siblings = try container.decode([String].self, forKey: .siblings)
-        // dirs may arrive as a base64 string or as an array of integers
-        if let str = try? container.decode(String.self, forKey: .dirs) {
-            dirs = str
-        } else {
-            let arr = try container.decode([UInt8].self, forKey: .dirs)
-            dirs = Data(arr).base64EncodedString()
-        }
+        let arr = try container.decode([UInt8].self, forKey: .dirs)
+        dirs = Data(arr).base64EncodedString()
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(siblings, forKey: .siblings)
-        // Server expects dirs as an array of bytes (Vec<u8>), not base64.
-        let bytes: [UInt8] = Data(base64Encoded: dirs).map { [UInt8]($0) } ?? []
+        let trimmed = dirs.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let decoded = Data(base64Encoded: trimmed) else {
+            throw EncodingError.invalidValue(
+                dirs,
+                EncodingError.Context(
+                    codingPath: container.codingPath + [CodingKeys.dirs],
+                    debugDescription: "Merkle path direction bits must be valid base64."
+                )
+            )
+        }
+        let bytes = [UInt8](decoded)
         try container.encode(bytes, forKey: .dirs)
     }
 
@@ -809,12 +812,12 @@ public enum ToriiOfflineSettlementProofs {
 
     private static func normalizePlainHex(_ value: String, label: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let unprefixed = trimmed.hasPrefix("0x") ? String(trimmed.dropFirst(2)) : trimmed
-        guard !unprefixed.isEmpty,
-              unprefixed.allSatisfy({ $0.isHexDigit }) else {
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("0x"),
+              trimmed.allSatisfy({ $0.isHexDigit }) else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement \(label) is invalid.")
         }
-        return unprefixed
+        return trimmed
     }
 
     private static func normalizePrefixedHex(_ value: String, label: String) throws -> String {

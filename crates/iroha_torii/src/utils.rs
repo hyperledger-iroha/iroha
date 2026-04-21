@@ -446,7 +446,6 @@ pub mod extractors {
         S: Send + Sync,
         // Accept payloads encoded with Norito + iroha_version leading byte
         T: iroha_version::codec::DecodeVersioned,
-        for<'a> T: NoritoDeserialize<'a>,
         T: 'static,
     {
         type Rejection = Response;
@@ -488,19 +487,11 @@ pub mod extractors {
 
             match <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body) {
                 Ok(val) => Ok(NoritoVersioned(val)),
-                Err(versioned_err) => match norito::decode_from_bytes::<T>(body.as_ref()) {
-                    Ok(val) => Ok(NoritoVersioned(val)),
-                    Err(norito_err) => {
-                        record_payload_decode_failure::<T>(&norito_err);
-                        Err((
-                            axum::http::StatusCode::BAD_REQUEST,
-                            format!(
-                                "Could not decode request (versioned: {versioned_err}; norito: {norito_err})"
-                            ),
-                        )
-                            .into_response())
-                    }
-                },
+                Err(versioned_err) => Err((
+                    axum::http::StatusCode::BAD_REQUEST,
+                    format!("Could not decode versioned request: {versioned_err}"),
+                )
+                    .into_response()),
             }
         }
     }
@@ -892,19 +883,6 @@ pub mod extractors {
         }
 
         #[tokio::test]
-        async fn falls_back_to_bare_norito() {
-            let body = norito::to_bytes(&Dummy(7)).expect("encode bare dummy");
-            let req = Request::builder()
-                .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
-                .body(Body::from(body))
-                .unwrap();
-            let extracted = NoritoVersioned::<Dummy>::from_request(req, &())
-                .await
-                .expect("extract bare");
-            assert_eq!(extracted.0, Dummy(7));
-        }
-
-        #[tokio::test]
         async fn rejects_missing_content_type() {
             let body = norito::to_bytes(&Dummy(7)).expect("encode bare dummy");
             let req = Request::new(Body::from(body));
@@ -930,12 +908,12 @@ pub mod extractors {
                 .to_bytes();
             let body_text = String::from_utf8(body_bytes.to_vec()).expect("response text");
             assert!(
-                body_text.contains("Could not decode request"),
+                body_text.contains("Could not decode versioned request"),
                 "body should describe decode failure: {body_text}"
             );
             assert!(
-                body_text.contains("norito"),
-                "body should mention norito decode reason: {body_text}"
+                body_text.to_ascii_lowercase().contains("version"),
+                "body should mention versioned decode reason: {body_text}"
             );
         }
 
@@ -965,11 +943,18 @@ pub mod extractors {
                     Some("Content-Type"),
                 ),
                 (
-                    "norito decode fail",
+                    "versioned decode fail",
                     Some(super::super::NORITO_MIME_TYPE),
                     vec![2_u8],
                     Err(StatusCode::BAD_REQUEST),
-                    Some("decode"),
+                    Some("versioned"),
+                ),
+                (
+                    "bare norito is rejected",
+                    Some(super::super::NORITO_MIME_TYPE),
+                    bare_ok,
+                    Err(StatusCode::BAD_REQUEST),
+                    Some("versioned"),
                 ),
                 (
                     "norito with parameters succeeds",

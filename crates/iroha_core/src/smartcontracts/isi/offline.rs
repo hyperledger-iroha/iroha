@@ -1804,7 +1804,7 @@ pub mod isi {
 
     #[cfg(test)]
     mod register_tests {
-        use std::{str::FromStr, sync::Arc, time::Duration};
+        use std::{collections::BTreeSet, str::FromStr, sync::Arc, time::Duration};
 
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_crypto::Algorithm;
@@ -1819,6 +1819,7 @@ pub mod isi {
                 OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCertificateBalanceProof,
                 OfflineVerdictRevocationReason,
             },
+            permission::Permission,
             query::error::FindError,
         };
         use iroha_primitives::{json::Json, numeric::NumericSpec};
@@ -4492,6 +4493,104 @@ pub mod isi {
                     .is_some(),
                 "allowance record must remain when reclaim is rejected"
             );
+        }
+
+        #[test]
+        fn redeem_offline_escrow_manager_refunds_controller_not_authority() {
+            let certificate = sample_certificate();
+            let controller = certificate.controller.clone();
+            let manager = sample_account(0x09);
+            let escrow = sample_account(0x02);
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let amount = Numeric::new(50, 0);
+
+            let domain_id = offline_domain_id();
+            let domain = Domain::new(domain_id.clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let manager_account = Account::new(manager.clone()).build(&manager);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
+            let manager_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), manager.clone()),
+                Numeric::new(13, 0),
+            );
+            let escrow_asset_entry = Asset::new(
+                AssetId::new(definition_id.clone(), escrow.clone()),
+                amount.clone(),
+            );
+            let mut world = World::with_assets(
+                [domain],
+                [controller_account, manager_account, escrow_account],
+                [asset_definition],
+                [manager_asset_entry, escrow_asset_entry],
+                [],
+            );
+            world.account_permissions.insert(
+                manager.clone(),
+                BTreeSet::from([Permission::new(
+                    CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                    Json::new(()),
+                )]),
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_900_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            redeem_offline_escrow_balance(
+                RedeemOfflineEscrowBalance {
+                    asset: AssetId::new(definition_id.clone(), controller.clone()),
+                    amount: amount.clone(),
+                },
+                &manager,
+                &mut transaction,
+            )
+            .expect("offline escrow manager should be allowed to redeem on behalf of controller");
+
+            let controller_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), controller.clone()))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                controller_balance, amount,
+                "redeem must refund the controller asset, not the submitting authority"
+            );
+
+            let manager_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id.clone(), manager.clone()))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(
+                manager_balance,
+                Numeric::new(13, 0),
+                "manager balance must remain unchanged after redeeming on behalf of controller"
+            );
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(definition_id, escrow))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::zero());
         }
 
         #[test]

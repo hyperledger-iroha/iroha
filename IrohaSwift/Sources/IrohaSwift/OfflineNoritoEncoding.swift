@@ -38,6 +38,112 @@ public enum OfflineNoritoError: Error, LocalizedError {
     }
 }
 
+enum OfflineNumericParseError: Error {
+    case invalid
+    case scaleTooLarge
+    case overflow
+}
+
+struct OfflineNumericComponents {
+    let isNegative: Bool
+    let scale: UInt32
+    let mantissaDigits: String
+    private let mantissa: OfflineBigInt
+
+    init(parsing value: String, maxScale: UInt32, maxBigIntBytes: Int) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNumericParseError.invalid
+        }
+
+        var digits = trimmed[...]
+        let negative = digits.first == "-"
+        if digits.first == "-" || digits.first == "+" {
+            digits.removeFirst()
+        }
+
+        var seenDot = false
+        var scale: UInt32 = 0
+        var mantissaDigits = ""
+        for scalar in digits.unicodeScalars {
+            if scalar == "." {
+                if seenDot {
+                    throw OfflineNumericParseError.invalid
+                }
+                seenDot = true
+                continue
+            }
+            guard scalar.value >= 48 && scalar.value <= 57 else {
+                throw OfflineNumericParseError.invalid
+            }
+            mantissaDigits.append(Character(scalar))
+            if seenDot {
+                scale = scale &+ 1
+            }
+        }
+
+        guard !mantissaDigits.isEmpty else {
+            throw OfflineNumericParseError.invalid
+        }
+        guard scale <= maxScale else {
+            throw OfflineNumericParseError.scaleTooLarge
+        }
+
+        var mantissa: OfflineBigInt
+        do {
+            mantissa = try OfflineBigInt(decimalDigits: mantissaDigits)
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+        if mantissa.isZero {
+            mantissa.isNegative = false
+        } else {
+            mantissa.isNegative = negative
+        }
+
+        do {
+            _ = try mantissa.toTwosComplementBytes(maxBytes: maxBigIntBytes)
+        } catch OfflineNoritoError.numericOverflow {
+            throw OfflineNumericParseError.overflow
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+
+        self.isNegative = mantissa.isNegative
+        self.scale = scale
+        self.mantissaDigits = mantissaDigits
+        self.mantissa = mantissa
+    }
+
+    var canonicalString: String {
+        var digits = mantissaDigits
+        while digits.count > 1 && digits.first == "0" {
+            digits.removeFirst()
+        }
+        if scale == 0 {
+            return isNegative && digits != "0" ? "-" + digits : digits
+        }
+        while digits.count <= Int(scale) {
+            digits.insert("0", at: digits.startIndex)
+        }
+        let splitAt = digits.index(digits.endIndex, offsetBy: -Int(scale))
+        let intPart = String(digits[..<splitAt])
+        let fracPart = String(digits[splitAt...])
+        let body = "\(intPart).\(fracPart)"
+        return isNegative && digits.contains(where: { $0 != "0" }) ? "-" + body : body
+    }
+
+    func mantissaBytes(maxBytes: Int) throws -> Data {
+        do {
+            return try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
+        } catch OfflineNoritoError.numericOverflow {
+            throw OfflineNumericParseError.overflow
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+    }
+}
+
 struct OfflineNoritoWriter {
     private(set) var data = Data()
 
@@ -76,7 +182,7 @@ struct OfflineNoritoWriter {
 
 public enum OfflineNorito {
     static let maxNumericScale: UInt32 = 28
-    private static let maxBigIntBytes = 64
+    static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
     private static let defaultNetworkPrefix: UInt16 = 0x02F1
     private static let isRunningXCTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -197,47 +303,8 @@ public enum OfflineNorito {
     }
 
     static func encodeNumeric(_ value: String) throws -> Data {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidNumeric(value)
-        }
-        var digits = trimmed
-        let negative = digits.first == "-"
-        if digits.first == "-" || digits.first == "+" {
-            digits.removeFirst()
-        }
-        var seenDot = false
-        var scale: UInt32 = 0
-        var mantissaDigits = ""
-        for scalar in digits.unicodeScalars {
-            if scalar == "." {
-                if seenDot {
-                    throw OfflineNoritoError.invalidNumeric(value)
-                }
-                seenDot = true
-                continue
-            }
-            guard scalar.value >= 48 && scalar.value <= 57 else {
-                throw OfflineNoritoError.invalidNumeric(value)
-            }
-            mantissaDigits.append(Character(scalar))
-            if seenDot {
-                scale = scale &+ 1
-            }
-        }
-        guard !mantissaDigits.isEmpty else {
-            throw OfflineNoritoError.invalidNumeric(value)
-        }
-        guard scale <= maxNumericScale else {
-            throw OfflineNoritoError.numericScaleTooLarge
-        }
-        var bigInt = try OfflineBigInt(decimalDigits: mantissaDigits)
-        if bigInt.isZero {
-            bigInt.isNegative = false
-        } else {
-            bigInt.isNegative = negative
-        }
-        let mantissaBytes = try bigInt.toTwosComplementBytes(maxBytes: maxBigIntBytes)
+        let numeric = try parseNumeric(value)
+        let mantissaBytes = try numeric.mantissaBytes(maxBytes: maxBigIntBytes)
         var bigintWriter = OfflineNoritoWriter()
         bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
         bigintWriter.writeBytes(mantissaBytes)
@@ -245,8 +312,26 @@ public enum OfflineNorito {
 
         var writer = OfflineNoritoWriter()
         writer.writeField(bigintPayload)
-        writer.writeField(encodeUInt32(scale))
+        writer.writeField(encodeUInt32(numeric.scale))
         return writer.data
+    }
+
+    static func parseNumeric(_ value: String) throws -> OfflineNumericComponents {
+        do {
+            return try OfflineNumericComponents(
+                parsing: value,
+                maxScale: maxNumericScale,
+                maxBigIntBytes: maxBigIntBytes
+            )
+        } catch OfflineNumericParseError.invalid {
+            throw OfflineNoritoError.invalidNumeric(value)
+        } catch OfflineNumericParseError.scaleTooLarge {
+            throw OfflineNoritoError.numericScaleTooLarge
+        } catch OfflineNumericParseError.overflow {
+            throw OfflineNoritoError.numericOverflow
+        } catch {
+            throw OfflineNoritoError.invalidNumeric(value)
+        }
     }
 
     static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {

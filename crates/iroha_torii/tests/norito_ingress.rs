@@ -183,9 +183,72 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
         .to_bytes();
     let text = String::from_utf8(body.to_vec()).expect("response text");
     assert!(
-        text.contains("Could not decode request"),
+        text.contains("Could not decode versioned request"),
         "unexpected error body: {text}"
     );
+}
+
+#[tokio::test]
+async fn norito_query_accepts_versioned_signed_query_payload() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::QUERY)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .body(Body::from(norito_rpc_harness::sample_query_bytes()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn public_query_route_rejects_bare_signed_query_payload() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::QUERY)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .body(Body::from(norito_rpc_harness::sample_bare_query_bytes()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("response text");
+    assert!(text.contains("versioned"), "unexpected error body: {text}");
 }
 
 #[tokio::test]

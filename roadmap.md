@@ -1,6 +1,68 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-20
+Last updated: 2026-04-21
+
+Latest sync (2026-04-21 offline settlement proof canonicalization and redeem-manager regression coverage):
+The Swift offline-cash codec now enforces the same syntactic and 64-byte
+mantissa limits as Rust `Numeric`, and the offline settlement proof helpers now
+accept only the canonical Torii wire format: plain hex for proof fields and
+JSON byte arrays for Merkle `dirs`. Invalid in-memory Merkle path base64 now
+fails encoding instead of being silently rewritten. The same slice adds a Rust
+regression proving that redeeming escrow through a manager still credits the
+controller encoded in `asset.account()` rather than the submitting authority.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineSettlementProofs.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/OfflineSettlementProofsTests.swift`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/isi/offline.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cd IrohaSwift && swift test --filter OfflineSettlementProofsTests`
+    (`5 passed`)
+  - `cd IrohaSwift && swift test`
+    (the new offline-settlement coverage passed, but the package still has an
+    unrelated pre-existing failure in
+    `NoritoTests.testNoritoInstructionFixturesAreConsistent`, where the
+    numeric fixture encode-flag assertions currently report `2` vs `0`)
+  - `cargo test -p iroha_core redeem_offline_escrow_manager_refunds_controller_not_authority -- --nocapture`
+    (the matched regression passed:
+    `redeem_offline_escrow_manager_refunds_controller_not_authority ... ok`;
+    Cargo then continued enumerating zero-match `iroha_core` integration
+    binaries under the same name filter)
+- open work after this slice:
+  - rerun the full Swift package once the unrelated Norito fixture
+    encode-flag drift is resolved
+
+Latest sync (2026-04-21 CLI Norito versioned ingress decode regression):
+Versioned public Torii ingress now has explicit adaptive-slice decoders again
+for signed queries and transactions. `SignedQuery::decode_all_versioned(...)`
+was switched to `norito::codec::decode_exact_from_slice(...)` with a manual
+candidate-validating `DecodeFromSlice` implementation, and the transaction side
+restores explicit `DecodeFromSlice` implementations for `SignedTransaction`,
+`TransactionEntrypoint`, and `ExecutionStep` after the derive-based slice
+decoder swap started tripping public CLI `/query` and `/transaction` requests
+with `invalid magic header` during nested signature decode.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/query/mod.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/transaction/signed.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `git diff --check -- crates/iroha_data_model/src/query/mod.rs crates/iroha_data_model/src/transaction/signed.rs`
+  - `CARGO_TARGET_DIR=target/codex-norito-fix3 cargo test -p iroha_data_model versioned_roundtrip --lib -- --nocapture`
+    (rerun still compiling/linking under the full default test graph; the first
+    compile pass exposed only a test-only `SignedQuery` equality assertion and
+    that has been corrected)
+- open work after this slice:
+  - rerun the focused `iroha_data_model versioned_roundtrip` tests to
+    completion
+  - add or rerun a narrow Torii `/query` ingress regression once the current
+    build window is free
 
 Latest sync (2026-04-20 Torii bridge message submit SCCP test alignment):
 The Torii bridge-message-submit handler tests are aligned with the current SCCP

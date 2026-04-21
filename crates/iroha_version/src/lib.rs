@@ -190,7 +190,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
 
 /// Norito related versioned (de)serialization traits.
 pub mod codec {
-    use norito::codec::{DecodeAll, Encode};
+    use norito::{
+        NoritoDeserialize,
+        codec::{DecodeAll, Encode},
+        core::DecodeFromSlice,
+    };
 
     use super::{Version, error::Result};
 
@@ -209,6 +213,57 @@ pub mod codec {
     pub trait EncodeVersioned: Encode + Version {
         /// Use this function for versioned objects instead of `encode`.
         fn encode_versioned(&self) -> Vec<u8>;
+    }
+
+    /// Decode a leading-version Norito payload using exact-slice semantics.
+    ///
+    /// The input must contain the version byte followed by the exact Norito
+    /// payload for `T`. Unsupported versions preserve the original bytes in the
+    /// returned [`crate::UnsupportedVersion`] payload for diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::NotVersioned`] when the input is empty,
+    /// [`crate::error::Error::UnsupportedVersion`] when the leading byte is not
+    /// supported by `T`, or a wrapped Norito decode error when the payload body
+    /// is malformed.
+    pub fn decode_exact_versioned<T>(input: &[u8]) -> Result<T>
+    where
+        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+    {
+        decode_exact_versioned_with_raw(input, input)
+    }
+
+    /// Decode a versioned Norito payload while preserving custom raw bytes for
+    /// unsupported-version errors.
+    ///
+    /// This is used by callers that first deframe an outer transport envelope
+    /// but still want unsupported-version diagnostics to point at the original
+    /// raw bytes rather than the deframed bare versioned slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`decode_exact_versioned`].
+    pub fn decode_exact_versioned_with_raw<T>(
+        bare_versioned: &[u8],
+        raw_for_error: &[u8],
+    ) -> Result<T>
+    where
+        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+    {
+        use crate::{RawVersioned, UnsupportedVersion, error::Error};
+
+        let Some((&version, payload)) = bare_versioned.split_first() else {
+            return Err(Error::NotVersioned);
+        };
+
+        if !T::supported_versions().contains(&version) {
+            return Err(Error::UnsupportedVersion(Box::new(
+                UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
+            )));
+        }
+
+        norito::codec::decode_exact_from_slice(payload).map_err(Error::from)
     }
 }
 
@@ -300,6 +355,29 @@ pub mod prelude {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[norito(decode_from_slice)]
+    struct ExactPayload(u32);
+
+    impl Version for ExactPayload {
+        fn version(&self) -> u8 {
+            1
+        }
+
+        fn supported_versions() -> Range<u8> {
+            1..2
+        }
+    }
+
+    impl crate::codec::EncodeVersioned for ExactPayload {
+        fn encode_versioned(&self) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(1);
+            bytes.push(self.version());
+            bytes.extend(norito::codec::encode_adaptive(self));
+            bytes
+        }
+    }
+
     pub struct VersionedContainer(pub u8);
 
     impl Version for VersionedContainer {
@@ -337,5 +415,24 @@ mod tests {
         let decoded = UnsupportedVersion::decode_all(&mut &bytes[..]).expect("decode");
         assert_eq!(decoded.version, original.version);
         assert_eq!(decoded.encode(), bytes);
+    }
+
+    #[test]
+    fn decode_exact_versioned_roundtrip() {
+        let encoded = crate::codec::EncodeVersioned::encode_versioned(&ExactPayload(42));
+        let decoded =
+            crate::codec::decode_exact_versioned::<ExactPayload>(&encoded).expect("decode");
+        assert_eq!(decoded, ExactPayload(42));
+    }
+
+    #[test]
+    fn decode_exact_versioned_with_raw_preserves_custom_error_bytes() {
+        let err = crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(&[9, 0], b"raw")
+            .expect_err("unsupported version must fail");
+        let crate::error::Error::UnsupportedVersion(version) = err else {
+            panic!("unexpected error: {err}");
+        };
+        assert_eq!(version.version, 9);
+        assert_eq!(version.raw, RawVersioned::NoritoBytes(b"raw".to_vec()));
     }
 }

@@ -1192,11 +1192,6 @@ pub fn decode_framed_signed_block(
 
 type VersionError = iroha_version::error::Error;
 
-fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
-    norito::codec::decode_exact_from_slice::<SignedBlock>(bytes)
-        .map_err(|err| VersionError::NoritoCodec(err.to_string()))
-}
-
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
@@ -1206,23 +1201,7 @@ fn decode_versioned_signed_block_inner(
     bare_versioned: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
-    use iroha_version::error::Error as VersionError;
-
-    if bare_versioned.is_empty() {
-        return Err(VersionError::NotVersioned);
-    }
-
-    let version = bare_versioned[0];
-    let payload = &bare_versioned[1..];
-    match version {
-        1 => decode_signed_block_exact(payload),
-        other => Err(VersionError::UnsupportedVersion(Box::new(
-            UnsupportedVersion::new(
-                other,
-                iroha_version::RawVersioned::NoritoBytes(raw_for_error.to_vec()),
-            ),
-        ))),
-    }
+    iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
 }
 
 pub mod prelude {

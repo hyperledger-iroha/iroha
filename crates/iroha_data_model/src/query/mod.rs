@@ -122,30 +122,7 @@ impl iroha_version::codec::EncodeVersioned for SignedQuery {
 
 impl iroha_version::codec::DecodeVersioned for SignedQuery {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        use iroha_version::error::Error;
-        if let Some(version) = input.first() {
-            if Self::supported_versions().contains(version) {
-                let mut cursor = &input[1..];
-                let decoded = <Self as norito::codec::DecodeAll>::decode_all(&mut cursor)
-                    .map_err(Error::from)?;
-                if cursor.is_empty() {
-                    Ok(decoded)
-                } else {
-                    Err(Error::NoritoCodec(
-                        "SignedQuery payload contains trailing bytes".into(),
-                    ))
-                }
-            } else {
-                Err(Error::UnsupportedVersion(Box::new(
-                    iroha_version::UnsupportedVersion::new(
-                        *version,
-                        iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
-                    ),
-                )))
-            }
-        } else {
-            Err(Error::NotVersioned)
-        }
+        iroha_version::codec::decode_exact_versioned(input)
     }
 }
 
@@ -2159,6 +2136,21 @@ mod candidate {
         }
     }
 
+    impl<'a> norito::core::DecodeFromSlice<'a> for SignedQuery {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+            let mut cursor = std::io::Cursor::new(bytes);
+            let candidate: SignedQueryCandidate =
+                <SignedQueryCandidate as norito::codec::Decode>::decode(&mut cursor)?;
+            let used = usize::try_from(cursor.position())
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            let decoded = candidate
+                .validate()
+                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))?;
+            Ok((decoded, used))
+        }
+    }
+
     impl<'de> norito::core::NoritoDeserialize<'de> for SignedQuery {
         fn deserialize(archived: &'de norito::core::Archived<SignedQuery>) -> Self {
             let candidate = <SignedQueryCandidate as norito::core::NoritoDeserialize>::deserialize(
@@ -2307,6 +2299,7 @@ mod json_roundtrip_tests {
     use std::sync::LazyLock;
 
     use iroha_crypto::KeyPair;
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 
     use super::*;
     #[cfg(not(feature = "fast_dsl"))]
@@ -2343,6 +2336,24 @@ mod json_roundtrip_tests {
             QueryRequest::Singular(SingularQueryBox::FindParameters(_)) => {}
             _ => panic!("expected FindParameters singular query"),
         }
+    }
+
+    #[test]
+    fn signed_query_versioned_roundtrip() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+
+        let bytes = signed.encode_versioned();
+        let decoded =
+            SignedQuery::decode_all_versioned(&bytes).expect("versioned signed query must decode");
+
+        assert_eq!(decoded.authority(), signed.authority());
+        assert_eq!(decoded.request(), signed.request());
+        assert_eq!(
+            decoded.signature.0.payload().as_slice(),
+            signed.signature.0.payload().as_slice()
+        );
     }
 
     #[cfg(not(feature = "fast_dsl"))]
