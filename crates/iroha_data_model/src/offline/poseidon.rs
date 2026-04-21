@@ -804,11 +804,11 @@ mod tests {
 
         assert_eq!(
             hex::encode_upper(leaf_a.platform_proof_hash.as_ref()),
-            "A8AE2E5B21547ADA98E767615901C1B40B28EF7E4A1E26E53A978C45103F810F"
+            "E986719348C49BB84E55AC882B067E896E5E99CFB5ECC1FA1E63FF6C330DE069"
         );
         assert_eq!(
             hex::encode_upper(leaf_b.platform_proof_hash.as_ref()),
-            "6509B6E9E782793D4A84C76C011BCAF76E8AC967EAE60C780112F41A081D64D3"
+            "D2911D1967B0170FBF4F8CE96459D41A861D86DBA36B54E18CFEB6FEAC79F447"
         );
         let mut builder = OfflineReceiptMerkleBuilder::new();
         builder.push_receipt(&receipt_a).expect("leaf");
@@ -816,7 +816,7 @@ mod tests {
         let root = builder.finalize();
         assert_eq!(
             root.to_hex_upper(),
-            "000000000000000000000000000000000000000000000000D7D3448D90C802B1"
+            "000000000000000000000000000000000000000000000000C11A70DE110FFFEE"
         );
     }
 

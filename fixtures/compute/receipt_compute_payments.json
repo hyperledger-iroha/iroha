@@ -27,7 +27,7 @@
     "max_response_bytes": 65536,
     "namespace": "compute",
     "price_family": "default",
-    "request_hash": "hash:422C8FA780FCB77B2BD81F90C4A4B3B55508372A32A204AA7FA3CB491D19B51D#3845",
+    "request_hash": "hash:D570A087266F13717BAA72B7CEC5E164AC0B7C21D2B4F3BA9512A2748579D79D#F511",
     "resource_profile": "cpu-small",
     "route": {
       "method": "quote",
