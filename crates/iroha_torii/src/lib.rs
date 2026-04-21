@@ -1917,6 +1917,16 @@ impl AppState {
     }
 
     #[cfg(feature = "app_api")]
+    pub(crate) fn sorafs_cache(&self) -> Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> {
+        self.sorafs_cache.clone()
+    }
+
+    #[cfg(feature = "app_api")]
+    pub(crate) fn sorafs_node(&self) -> &sorafs_node::NodeHandle {
+        &self.sorafs_node
+    }
+
+    #[cfg(feature = "app_api")]
     pub(crate) fn stream_token_issuer(&self) -> Option<Arc<sorafs::StreamTokenIssuer>> {
         self.stream_token_issuer.clone()
     }
@@ -8660,9 +8670,12 @@ async fn handler_node_query_projection_checkpoint_publish(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let payload =
-        crate::runtime::handle_node_query_projection_checkpoint_publish(app.state.clone(), body.0)
-            .await?;
+    let payload = crate::runtime::handle_node_query_projection_checkpoint_publish_with_app(
+        Some(app.clone()),
+        app.state.clone(),
+        body.0,
+    )
+    .await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
@@ -16316,7 +16329,8 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_asset_holders_query(
+                routing::handle_v1_asset_holders_query_with_app(
+                    Some(app.clone()),
                     app.state.clone(),
                     AxPath(definition_id),
                     crate::utils::extractors::NoritoJson(env),
@@ -33092,6 +33106,13 @@ pub enum Error {
         /// Human-readable error message.
         message: String,
     },
+    /// Temporarily unavailable app-facing operation `{code}`: {message}
+    AppServiceUnavailable {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
     /// Proof endpoint `{endpoint}` throttled the request; retry after {retry_after_secs}s
     ProofRateLimited {
         /// Logical endpoint label.
@@ -33286,6 +33307,10 @@ impl IntoResponse for Error {
             Self::AppConflict { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
                 (StatusCode::CONFLICT, utils::NoritoBody(payload)).into_response()
+            }
+            Self::AppServiceUnavailable { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::SERVICE_UNAVAILABLE, utils::NoritoBody(payload)).into_response()
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -33501,6 +33526,19 @@ pub(crate) mod tests_runtime_handlers {
 
     pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
         mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
+    }
+
+    #[cfg(feature = "app_api")]
+    pub fn reconfigure_sorafs_runtime_for_tests(
+        app: SharedAppState,
+        sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
+        sorafs_node: sorafs_node::NodeHandle,
+    ) -> SharedAppState {
+        let mut inner =
+            Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state for reconfigure"));
+        inner.sorafs_cache = sorafs_cache;
+        inner.sorafs_node = sorafs_node;
+        Arc::new(inner)
     }
 
     pub(crate) fn app_auth_test_guard(
@@ -37502,6 +37540,65 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
+    async fn accounts_checkpoint_request_for_app_with_real_manifests(
+        app: &SharedAppState,
+        emitted_at_unix: u64,
+        archive_emitted_at_unix: u64,
+        ticket_seed: u8,
+    ) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
+        use std::collections::BTreeSet;
+
+        let world = app.state.world_view();
+        let partitions: Vec<u32> = crate::routing::collect_subject_accounts(&world)
+            .into_iter()
+            .map(|account| {
+                iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
+                    &iroha_data_model::Identifiable::id(&account).to_string(),
+                )
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        drop(world);
+
+        let mut shards = Vec::with_capacity(partitions.len());
+        for (index, partition_id) in partitions.into_iter().enumerate() {
+            let archive = crate::runtime::handle_node_query_projection_shard_export(
+                app.state.clone(),
+                "accounts".to_owned(),
+                partition_id,
+                crate::runtime::NodeProjectionShardExportQuery {
+                    asset_definition_id: None,
+                },
+            )
+            .await
+            .expect("export accounts projection shard");
+            let (_, _, manifest) =
+                crate::routing::query_projection_archive_storage_artifacts(&archive)
+                    .expect("build projection archive storage artifacts");
+            let manifest_digest_hex = hex::encode(
+                manifest
+                    .digest()
+                    .expect("digest projection archive manifest")
+                    .as_bytes(),
+            );
+            shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                resource: "accounts".to_owned(),
+                partition_id,
+                asset_definition_id: None,
+                archive_emitted_at_unix,
+                manifest_digest_hex,
+                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(index as u8); 32]),
+            });
+        }
+
+        crate::runtime::NodeProjectionCheckpointPublishRequest {
+            emitted_at_unix: Some(emitted_at_unix),
+            shards,
+        }
+    }
+
+    #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload() {
         use iroha_data_model::Registrable;
@@ -37603,6 +37700,75 @@ pub(crate) mod tests_runtime_handlers {
                 .emitted_at_unix,
             1_714_002_333
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection_store() {
+        use iroha_data_model::Registrable;
+        use iroha_data_model::prelude::{Account, Domain, DomainId};
+
+        let authority = iroha_crypto::KeyPair::random();
+        let alice = iroha_crypto::KeyPair::random();
+        let authority_id =
+            iroha_data_model::account::AccountId::new(authority.public_key().clone());
+        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let domain_id =
+            DomainId::try_new("projection-publish-durable", "universal").expect("domain");
+        let world = iroha_core::state::World::with(
+            [Domain::new(domain_id).build(&authority_id)],
+            [
+                Account::new(authority_id.clone()).build(&authority_id),
+                Account::new(alice_id.clone()).build(&authority_id),
+            ],
+            [],
+        );
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let storage_dir = tempfile::tempdir().expect("temp storage dir");
+        inner.sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(true)
+                .data_dir(storage_dir.path().join("storage"))
+                .build(),
+        );
+        let app = Arc::new(inner);
+        let request = accounts_checkpoint_request_for_app_with_real_manifests(
+            &app,
+            1_714_002_555,
+            1_714_002_444,
+            0x61,
+        )
+        .await;
+
+        let response = super::handler_node_query_projection_checkpoint_publish(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::utils::extractors::NoritoJson(request),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
+            norito::json::from_slice(&body).expect("decode json");
+
+        for shard in &checkpoint.shards {
+            let manifest_digest_bytes =
+                hex::decode(&shard.manifest_digest_hex).expect("decode manifest digest");
+            let manifest_digest = <[u8; 32]>::try_from(manifest_digest_bytes.as_slice())
+                .expect("manifest digest length");
+            assert!(
+                app.sorafs_node
+                    .manifest_metadata_by_digest(&manifest_digest)
+                    .is_ok(),
+                "published checkpoint shard should seed local SoraFS storage"
+            );
+        }
     }
 
     #[cfg(feature = "app_api")]
@@ -48300,6 +48466,7 @@ impl Error {
             Self::AppForbidden { code, message } => ErrorEnvelope::new(code, message),
             Self::AppNotFound { code, message } => ErrorEnvelope::new(code, message),
             Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
+            Self::AppServiceUnavailable { code, message } => ErrorEnvelope::new(code, message),
             Self::ProofRateLimited {
                 endpoint,
                 retry_after_secs,
@@ -48364,6 +48531,7 @@ impl Error {
             AppForbidden { .. } => StatusCode::FORBIDDEN,
             AppNotFound { .. } => StatusCode::NOT_FOUND,
             AppConflict { .. } => StatusCode::CONFLICT,
+            AppServiceUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,

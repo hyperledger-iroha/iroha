@@ -233,7 +233,11 @@ static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
 ));
 static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
     LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
-const OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
+// Live offline cash load/redeem flows routinely need more than a single
+// proposal window before the authoritative Approved event or committed state
+// becomes observable, so keep the maintained floor aligned with the
+// conservative fallback used when live Sumeragi timing is unavailable.
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR: Duration = Duration::from_secs(12);
 const OFFLINE_CASH_TX_COMMIT_TIMEOUT_EMERGENCY_FALLBACK: Duration = Duration::from_secs(12);
 const OFFLINE_SETTLEMENT_PROOF_BACKEND: &str = "stark/fri/sha256-goldilocks";
 const OFFLINE_SETTLEMENT_CIRCUIT_ID: &str = "offline-bearer-settlement-v1";
@@ -5517,7 +5521,7 @@ mod tests {
         assert_eq!(quorum_timeout, Duration::from_secs(4));
         assert_eq!(
             offline_cash_tx_commit_timeout_from_params(&params, quorum_timeout),
-            Duration::from_secs(6),
+            Duration::from_secs(12),
         );
     }
 

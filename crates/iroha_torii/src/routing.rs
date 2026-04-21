@@ -34,6 +34,12 @@ use iroha_config::{
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
 use iroha_core::kura::Kura;
 // Network Time Service endpoints are backed by `iroha_core::time`.
+#[cfg(feature = "app_api")]
+use iroha_core::query::{
+    projection_checkpoint::QueryProjectionResourceKind,
+    projection_rowset::{QueryProjectionAssetHolderRow, QueryProjectionShardRowSet},
+    projection_shard::QueryProjectionShardArchive,
+};
 use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config;
 #[cfg(feature = "app_api")]
 use iroha_core::smartcontracts::triggers::set::SetReadOnly;
@@ -68,12 +74,6 @@ use iroha_core::{
         AcceptTransactionFail, SIGNATURE_LIMIT_REASON_PREFIX, SignatureRejectionCode,
         SignatureVerificationFail,
     },
-};
-#[cfg(feature = "app_api")]
-use iroha_core::query::{
-    projection_checkpoint::QueryProjectionResourceKind,
-    projection_rowset::{QueryProjectionAssetHolderRow, QueryProjectionShardRowSet},
-    projection_shard::QueryProjectionShardArchive,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
@@ -880,14 +880,72 @@ struct QueryProjectionArchiveCacheKey {
 }
 
 #[cfg(feature = "app_api")]
-static QUERY_PROJECTION_ARCHIVE_CACHE: LazyLock<
-    RwLock<BTreeMap<QueryProjectionArchiveCacheKey, QueryProjectionShardArchive>>,
-> = LazyLock::new(|| RwLock::new(BTreeMap::new()));
+const QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_ENTRIES: usize = 32;
+#[cfg(feature = "app_api")]
+const QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 #[cfg(feature = "app_api")]
-fn query_projection_block_hash_hex(
-    hash: Option<HashOf<BlockHeader>>,
-) -> Option<String> {
+#[derive(Default)]
+struct QueryProjectionArchiveHotCache {
+    entries: BTreeMap<QueryProjectionArchiveCacheKey, QueryProjectionShardArchive>,
+    insertion_order: VecDeque<QueryProjectionArchiveCacheKey>,
+    total_payload_bytes: usize,
+}
+
+#[cfg(feature = "app_api")]
+impl QueryProjectionArchiveHotCache {
+    fn get(&self, key: &QueryProjectionArchiveCacheKey) -> Option<QueryProjectionShardArchive> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(
+        &mut self,
+        key: QueryProjectionArchiveCacheKey,
+        archive: QueryProjectionShardArchive,
+    ) {
+        let archive_weight = query_projection_archive_cache_weight(&archive);
+        if let Some(previous) = self.entries.insert(key.clone(), archive) {
+            self.total_payload_bytes = self
+                .total_payload_bytes
+                .saturating_sub(query_projection_archive_cache_weight(&previous));
+            self.insertion_order.retain(|existing| existing != &key);
+        }
+        self.total_payload_bytes = self.total_payload_bytes.saturating_add(archive_weight);
+        self.insertion_order.push_back(key);
+
+        while self.entries.len() > QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_ENTRIES
+            || self.total_payload_bytes > QUERY_PROJECTION_ARCHIVE_HOT_CACHE_MAX_BYTES
+        {
+            let Some(evicted_key) = self.insertion_order.pop_front() else {
+                break;
+            };
+            let Some(evicted) = self.entries.remove(&evicted_key) else {
+                continue;
+            };
+            self.total_payload_bytes = self
+                .total_payload_bytes
+                .saturating_sub(query_projection_archive_cache_weight(&evicted));
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.insertion_order.clear();
+        self.total_payload_bytes = 0;
+    }
+}
+
+#[cfg(feature = "app_api")]
+static QUERY_PROJECTION_ARCHIVE_CACHE: LazyLock<RwLock<QueryProjectionArchiveHotCache>> =
+    LazyLock::new(|| RwLock::new(QueryProjectionArchiveHotCache::default()));
+
+#[cfg(feature = "app_api")]
+static QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS: LazyLock<
+    tokio::sync::Mutex<BTreeMap<QueryProjectionArchiveCacheKey, Arc<tokio::sync::Mutex<()>>>>,
+> = LazyLock::new(|| tokio::sync::Mutex::new(BTreeMap::new()));
+
+#[cfg(feature = "app_api")]
+fn query_projection_block_hash_hex(hash: Option<HashOf<BlockHeader>>) -> Option<String> {
     hash.map(|hash| hex::encode(hash.as_ref().as_ref()))
 }
 
@@ -919,9 +977,30 @@ fn query_projection_checkpoint_cache_key(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) fn cache_query_projection_archive_for_query(
-    archive: QueryProjectionShardArchive,
-) {
+fn query_projection_archive_cache_weight(archive: &QueryProjectionShardArchive) -> usize {
+    archive
+        .payload
+        .len()
+        .saturating_add(core::mem::size_of::<QueryProjectionShardArchive>())
+}
+
+#[cfg(feature = "app_api")]
+fn query_projection_archive_from_hot_cache(
+    key: &QueryProjectionArchiveCacheKey,
+) -> Option<QueryProjectionShardArchive> {
+    match QUERY_PROJECTION_ARCHIVE_CACHE.read() {
+        Ok(cache) => cache.get(key),
+        Err(_) => {
+            iroha_logger::warn!(
+                "query projection archive cache lock poisoned; snapshot aggregate cache unavailable"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
         Ok(mut cache) => {
             cache.insert(query_projection_archive_cache_key(&archive), archive);
@@ -39213,70 +39292,10 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
 
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
-        let response = handle_v1_asset_holders_query(
-            state,
-            axum::extract::Path("pkr#sbp".to_owned()),
-            crate::utils::extractors::NoritoJson(QueryEnvelope {
-                query: None,
-                filter: Some(crate::filter::FilterExpr::And(vec![
-                    crate::filter::FilterExpr::In(
-                        crate::filter::FieldPath("primary_alias_domain".into()),
-                        vec![
-                            norito::json::Value::from("hbl.sbp"),
-                            norito::json::Value::from("ubl.sbp"),
-                        ],
-                    ),
-                    crate::filter::FilterExpr::Nin(
-                        crate::filter::FieldPath("primary_alias".into()),
-                        vec![
-                            norito::json::Value::from("cbdc@hbl.sbp"),
-                            norito::json::Value::from("cbdc@ubl.sbp"),
-                        ],
-                    ),
-                ])),
-                select: None,
-                aggregate: Some(crate::filter::AggregateSpec {
-                    group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
-                    metrics: vec![
-                        crate::filter::AggregateMetric {
-                            alias: "user_count".into(),
-                            r#fn: crate::filter::AggregateFn::DistinctCount,
-                            field: Some(crate::filter::FieldPath("account_id".into())),
-                        },
-                        crate::filter::AggregateMetric {
-                            alias: "pkr_total".into(),
-                            r#fn: crate::filter::AggregateFn::Sum,
-                            field: Some(crate::filter::FieldPath("quantity".into())),
-                        },
-                    ],
-                    having: None,
-                }),
-                sort: vec![crate::filter::SortKey {
-                    key: crate::filter::FieldPath("primary_alias_domain".into()),
-                    order: crate::filter::Order::Asc,
-                }],
-                pagination: crate::filter::Pagination {
-                    limit: Some(8),
-                    offset: 0,
-                },
-                fetch_size: None,
-            }),
-            MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let payload = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body bytes")
-            .to_bytes();
-        let parsed: norito::json::Value =
-            norito::json::from_slice(&payload).expect("json response");
+        let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
 
         assert_eq!(parsed["total"].as_u64(), Some(2));
+        assert_eq!(parsed["query_source"].as_str(), Some("live_debug"));
         assert!(parsed["indexed_height"].as_u64().is_some());
         assert!(parsed["indexed_block_hash"].is_string() || parsed["indexed_block_hash"].is_null());
 
@@ -39296,111 +39315,12 @@ mod app_api_integration_tests {
         clear_query_projection_archive_cache_for_tests();
 
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
-        let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
-            state.clone(),
-            "asset_holders".to_owned(),
-            crate::runtime::NodeProjectionShardCatalogQuery {
-                asset_definition_id: Some("pkr#sbp".to_owned()),
-                offset: None,
-                limit: None,
-            },
-        )
-        .await
-        .expect("projection catalog");
-        assert!(!catalog.entries.is_empty(), "fixture should produce holder shards");
-
-        let mut checkpoint_shards = Vec::new();
-        for entry in &catalog.entries {
-            let archive = crate::runtime::handle_node_query_projection_shard_export(
-                state.clone(),
-                "asset_holders".to_owned(),
-                entry.partition_id,
-                crate::runtime::NodeProjectionShardExportQuery {
-                    asset_definition_id: Some("pkr#sbp".to_owned()),
-                },
-            )
-            .await
-            .expect("projection shard export");
+        let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
+        for (archive, _) in &published {
             cache_query_projection_archive_for_query(archive.clone());
-            checkpoint_shards.push(
-                archive
-                    .into_checkpoint_shard(
-                        iroha_data_model::da::types::BlobDigest::new([
-                            entry.partition_id as u8;
-                            32
-                        ]),
-                        iroha_data_model::da::types::StorageTicketId::new([
-                            entry.partition_id.wrapping_add(1) as u8;
-                            32
-                        ]),
-                    )
-                    .expect("checkpoint shard"),
-            );
         }
-        state.publish_query_projection_checkpoint(1_714_111_000, checkpoint_shards);
 
-        let response = handle_v1_asset_holders_query(
-            state,
-            axum::extract::Path("pkr#sbp".to_owned()),
-            crate::utils::extractors::NoritoJson(QueryEnvelope {
-                query: None,
-                filter: Some(crate::filter::FilterExpr::And(vec![
-                    crate::filter::FilterExpr::In(
-                        crate::filter::FieldPath("primary_alias_domain".into()),
-                        vec![
-                            norito::json::Value::from("hbl.sbp"),
-                            norito::json::Value::from("ubl.sbp"),
-                        ],
-                    ),
-                    crate::filter::FilterExpr::Nin(
-                        crate::filter::FieldPath("primary_alias".into()),
-                        vec![
-                            norito::json::Value::from("cbdc@hbl.sbp"),
-                            norito::json::Value::from("cbdc@ubl.sbp"),
-                        ],
-                    ),
-                ])),
-                select: None,
-                aggregate: Some(crate::filter::AggregateSpec {
-                    group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
-                    metrics: vec![
-                        crate::filter::AggregateMetric {
-                            alias: "user_count".into(),
-                            r#fn: crate::filter::AggregateFn::DistinctCount,
-                            field: Some(crate::filter::FieldPath("account_id".into())),
-                        },
-                        crate::filter::AggregateMetric {
-                            alias: "pkr_total".into(),
-                            r#fn: crate::filter::AggregateFn::Sum,
-                            field: Some(crate::filter::FieldPath("quantity".into())),
-                        },
-                    ],
-                    having: None,
-                }),
-                sort: vec![crate::filter::SortKey {
-                    key: crate::filter::FieldPath("primary_alias_domain".into()),
-                    order: crate::filter::Order::Asc,
-                }],
-                pagination: crate::filter::Pagination {
-                    limit: Some(8),
-                    offset: 0,
-                },
-                fetch_size: None,
-            }),
-            MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let payload = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body bytes")
-            .to_bytes();
-        let parsed: norito::json::Value =
-            norito::json::from_slice(&payload).expect("json response");
+        let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
         assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
 
         let items = parsed["items"].as_array().expect("items array");
@@ -39411,6 +39331,211 @@ mod app_api_integration_tests {
         assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+        clear_query_projection_archive_cache_for_tests();
+    }
+
+    #[tokio::test]
+    async fn asset_holders_query_aggregate_uses_local_projection_store_when_hot_cache_cold() {
+        let _guard = app_query_limits_guard();
+        clear_query_projection_archive_cache_for_tests();
+
+        let (state, _, _) = build_asset_holder_aggregate_fixture_state();
+        let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
+        let (node, _storage_dir) = sorafs_node_with_temp_storage();
+        let app = crate::reconfigure_sorafs_runtime_for_tests(
+            crate::mk_app_state_for_tests(),
+            None,
+            node,
+        );
+
+        for (archive, manifest) in &published {
+            let manifest_digest = iroha_data_model::da::types::BlobDigest::new(
+                manifest
+                    .digest()
+                    .expect("digest projection archive manifest")
+                    .into(),
+            );
+            assert!(
+                persist_query_projection_archive_for_query(&app, archive, &manifest_digest)
+                    .expect("persist local projection archive"),
+                "test manifest digest should match reconstructed local manifest"
+            );
+        }
+
+        let parsed = run_asset_holder_alias_aggregate_query(Some(app), state).await;
+        assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
+        let items = parsed["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
+        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
+        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
+        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+        clear_query_projection_archive_cache_for_tests();
+    }
+
+    #[tokio::test]
+    async fn asset_holders_query_aggregate_hydrates_projection_store_from_remote_provider() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use axum::{
+            Router,
+            body::Bytes,
+            extract::Path as AxumPath,
+            routing::{get, post},
+        };
+
+        let _guard = app_query_limits_guard();
+        clear_query_projection_archive_cache_for_tests();
+
+        let (state, _, _) = build_asset_holder_aggregate_fixture_state();
+        let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let fixture = make_projection_provider_fixture(&remote_origin);
+        let provider_id_hex = hex::encode(fixture.provider_id());
+        let manifest_requests = Arc::new(AtomicUsize::new(0));
+        let fetch_requests = Arc::new(AtomicUsize::new(0));
+        let mut manifest_responses = std::collections::HashMap::new();
+        let mut fetch_responses = std::collections::HashMap::new();
+
+        for (index, (archive, manifest)) in published.iter().enumerate() {
+            let (payload, plan, manifest_for_storage) =
+                query_projection_archive_storage_artifacts(archive)
+                    .expect("projection archive storage artifacts");
+            let manifest_digest_hex = hex::encode(
+                manifest_for_storage
+                    .digest()
+                    .expect("digest projection archive manifest")
+                    .as_bytes(),
+            );
+            let manifest_response =
+                norito::json::to_value(&crate::sorafs::api::StorageManifestResponseDto {
+                    manifest_id_hex: manifest_digest_hex.clone(),
+                    manifest_b64: base64::engine::general_purpose::STANDARD
+                        .encode(norito::to_bytes(manifest).expect("encode manifest")),
+                    manifest_digest_hex: manifest_digest_hex.clone(),
+                    payload_digest_hex: hex::encode(blake3::hash(&payload).as_bytes()),
+                    content_length: plan.content_length,
+                    chunk_count: plan.chunks.len() as u64,
+                    chunk_profile_handle: format!(
+                        "{}.{}@{}",
+                        manifest.chunking.namespace,
+                        manifest.chunking.name,
+                        manifest.chunking.semver
+                    ),
+                    stored_at_unix_secs: 1_700_000_000,
+                    files: Vec::new(),
+                })
+                .expect("serialize manifest response");
+            let fetch_response =
+                norito::json::to_value(&crate::sorafs::api::StorageFetchResponseDto {
+                    manifest_id_hex: manifest_digest_hex.clone(),
+                    offset: 0,
+                    length: payload.len() as u64,
+                    data_b64: base64::engine::general_purpose::STANDARD.encode(payload),
+                })
+                .expect("serialize fetch response");
+            manifest_responses.insert(manifest_digest_hex.clone(), manifest_response);
+            fetch_responses.insert(manifest_digest_hex.clone(), fetch_response);
+            seed_projection_registry_manifest_for_test(
+                state.as_ref(),
+                manifest,
+                fixture.provider_id(),
+                index.wrapping_add(1) as u8,
+            );
+        }
+
+        let remote_router = Router::new()
+            .route(
+                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+                get({
+                    let manifest_requests = Arc::clone(&manifest_requests);
+                    let manifest_responses = manifest_responses.clone();
+                    move |AxumPath(manifest_id_hex): AxumPath<String>| {
+                        let manifest_requests = Arc::clone(&manifest_requests);
+                        let manifest_responses = manifest_responses.clone();
+                        async move {
+                            manifest_requests.fetch_add(1, Ordering::SeqCst);
+                            let Some(response) = manifest_responses.get(&manifest_id_hex) else {
+                                return axum::http::StatusCode::NOT_FOUND.into_response();
+                            };
+                            crate::JsonBody(response.clone()).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/sorafs/storage/fetch",
+                post({
+                    let fetch_requests = Arc::clone(&fetch_requests);
+                    let provider_id_hex = provider_id_hex.clone();
+                    let fetch_responses = fetch_responses.clone();
+                    move |body: Bytes| {
+                        let fetch_requests = Arc::clone(&fetch_requests);
+                        let provider_id_hex = provider_id_hex.clone();
+                        let fetch_responses = fetch_responses.clone();
+                        async move {
+                            fetch_requests.fetch_add(1, Ordering::SeqCst);
+                            let request = norito::json::from_slice::<
+                                crate::sorafs::api::StorageFetchRequestDto,
+                            >(&body)
+                            .expect("decode fetch request");
+                            assert_eq!(
+                                request.provider_id_hex.as_deref(),
+                                Some(provider_id_hex.as_str())
+                            );
+                            let Some(response) = fetch_responses.get(&request.manifest_id_hex)
+                            else {
+                                return axum::http::StatusCode::NOT_FOUND.into_response();
+                            };
+                            crate::JsonBody(response.clone()).into_response()
+                        }
+                    }
+                }),
+            );
+        let remote_server = tokio::spawn(async move {
+            axum::serve(listener, remote_router)
+                .await
+                .expect("serve remote storage routes");
+        });
+
+        let (app, _storage_dir) = app_state_with_projection_provider_fixture(&fixture);
+        let parsed = run_asset_holder_alias_aggregate_query(Some(app.clone()), state.clone()).await;
+        assert_eq!(
+            parsed["query_source"].as_str(),
+            Some("projection_da_hydrated")
+        );
+        assert_eq!(
+            manifest_requests.load(Ordering::SeqCst),
+            published.len(),
+            "first aggregate query should fetch every missing shard manifest once",
+        );
+        assert_eq!(
+            fetch_requests.load(Ordering::SeqCst),
+            published.len(),
+            "first aggregate query should fetch every missing shard payload once",
+        );
+
+        let cached = run_asset_holder_alias_aggregate_query(Some(app), state).await;
+        assert_eq!(cached["query_source"].as_str(), Some("projection_da_cache"));
+        assert_eq!(
+            manifest_requests.load(Ordering::SeqCst),
+            published.len(),
+            "second aggregate query should reuse the hydrated local cache",
+        );
+        assert_eq!(
+            fetch_requests.load(Ordering::SeqCst),
+            published.len(),
+            "second aggregate query should reuse the hydrated local cache",
+        );
+
+        remote_server.abort();
         clear_query_projection_archive_cache_for_tests();
     }
 
@@ -39557,6 +39682,410 @@ mod app_api_integration_tests {
         bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.sbp");
 
         (state, alice_id, bob_id)
+    }
+
+    fn asset_holder_alias_aggregate_query() -> QueryEnvelope {
+        QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::And(vec![
+                crate::filter::FilterExpr::In(
+                    crate::filter::FieldPath("primary_alias_domain".into()),
+                    vec![
+                        norito::json::Value::from("hbl.sbp"),
+                        norito::json::Value::from("ubl.sbp"),
+                    ],
+                ),
+                crate::filter::FilterExpr::Nin(
+                    crate::filter::FieldPath("primary_alias".into()),
+                    vec![
+                        norito::json::Value::from("cbdc@hbl.sbp"),
+                        norito::json::Value::from("cbdc@ubl.sbp"),
+                    ],
+                ),
+            ])),
+            select: None,
+            aggregate: Some(crate::filter::AggregateSpec {
+                group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
+                metrics: vec![
+                    crate::filter::AggregateMetric {
+                        alias: "user_count".into(),
+                        r#fn: crate::filter::AggregateFn::DistinctCount,
+                        field: Some(crate::filter::FieldPath("account_id".into())),
+                    },
+                    crate::filter::AggregateMetric {
+                        alias: "pkr_total".into(),
+                        r#fn: crate::filter::AggregateFn::Sum,
+                        field: Some(crate::filter::FieldPath("quantity".into())),
+                    },
+                ],
+                having: None,
+            }),
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("primary_alias_domain".into()),
+                order: crate::filter::Order::Asc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        }
+    }
+
+    async fn run_asset_holder_alias_aggregate_query(
+        app: Option<crate::SharedAppState>,
+        state: Arc<iroha_core::state::State>,
+    ) -> norito::json::Value {
+        let response = handle_v1_asset_holders_query_with_app(
+            app,
+            state,
+            axum::extract::Path("pkr#sbp".to_owned()),
+            crate::utils::extractors::NoritoJson(asset_holder_alias_aggregate_query()),
+            MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let payload = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
+        norito::json::from_slice(&payload).expect("json response")
+    }
+
+    fn default_projection_registry_block_header() -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+    }
+
+    fn default_projection_registry_chunker_handle()
+    -> iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+            profile_id: descriptor.id.0,
+            namespace: descriptor.namespace.to_owned(),
+            name: descriptor.name.to_owned(),
+            semver: descriptor.semver.to_owned(),
+            multihash_code: descriptor.multihash_code,
+        }
+    }
+
+    fn seed_projection_registry_manifest_for_test(
+        state: &iroha_core::state::State,
+        manifest: &sorafs_manifest::ManifestV1,
+        provider_id: [u8; 32],
+        order_seed: u8,
+    ) {
+        let mut block = state.block(default_projection_registry_block_header());
+        let mut tx = block.transaction();
+        let manifest_digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+            manifest
+                .digest()
+                .expect("compute manifest digest for registry seed")
+                .into(),
+        );
+        let issuer = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let mut manifest_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+            manifest_digest.clone(),
+            default_projection_registry_chunker_handle(),
+            [0xAB; 32],
+            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            issuer.clone(),
+            5,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        manifest_record.approve(7, None);
+        tx.world_mut_for_testing()
+            .pin_manifests_mut_for_testing()
+            .insert(manifest_digest.clone(), manifest_record);
+
+        let order_id =
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([order_seed; 32]);
+        let canonical_order =
+            norito::to_bytes(&sorafs_manifest::pin_registry::ReplicationOrderV1 {
+                order_id: *order_id.as_bytes(),
+                manifest_cid: manifest.root_cid.clone(),
+                providers: vec![provider_id],
+                redundancy: 1,
+                deadline: 24,
+                policy_hash: [0x51; 32],
+            })
+            .expect("encode replication order");
+        tx.world_mut_for_testing()
+            .replication_orders_mut_for_testing()
+            .insert(
+                order_id,
+                iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
+                    order_id,
+                    manifest_digest,
+                    issued_by: issuer,
+                    issued_epoch: 8,
+                    deadline_epoch: 24,
+                    canonical_order,
+                    status: iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(9),
+                },
+            );
+
+        tx.apply();
+        block
+            .commit()
+            .expect("commit projection registry seed block");
+    }
+
+    #[derive(Clone)]
+    struct ProjectionProviderFixture {
+        advert: sorafs_manifest::ProviderAdvertV1,
+        envelope: sorafs_manifest::ProviderAdmissionEnvelopeV1,
+    }
+
+    impl ProjectionProviderFixture {
+        fn provider_id(&self) -> [u8; 32] {
+            self.advert.body.provider_id
+        }
+
+        fn issued_at(&self) -> u64 {
+            self.advert.issued_at
+        }
+    }
+
+    fn make_projection_provider_fixture(host_pattern: &str) -> ProjectionProviderFixture {
+        use ed25519_dalek::{Signer as _, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        let provider_id = [0x11; 32];
+        let stake_pool_id = [0x21; 32];
+        let issued_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::ZERO)
+            .as_secs()
+            .saturating_sub(300);
+        let expires_at = issued_at + 3_600;
+        let body = sorafs_manifest::ProviderAdvertBodyV1 {
+            provider_id,
+            profile_id: "sorafs.sf1@1.0.0".to_owned(),
+            profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
+            stake: sorafs_manifest::StakePointer {
+                pool_id: stake_pool_id,
+                stake_amount: 1_000,
+            },
+            qos: sorafs_manifest::QosHints {
+                availability: sorafs_manifest::AvailabilityTier::Hot,
+                max_retrieval_latency_ms: 1_000,
+                max_concurrent_streams: 8,
+            },
+            capabilities: vec![
+                sorafs_manifest::CapabilityTlv {
+                    cap_type: sorafs_manifest::CapabilityType::ToriiGateway,
+                    payload: Vec::new(),
+                },
+                sorafs_manifest::CapabilityTlv {
+                    cap_type: sorafs_manifest::CapabilityType::ChunkRangeFetch,
+                    payload: sorafs_manifest::ProviderCapabilityRangeV1 {
+                        max_chunk_span: 32,
+                        min_granularity: 8,
+                        supports_sparse_offsets: true,
+                        requires_alignment: false,
+                        supports_merkle_proof: true,
+                    }
+                    .to_bytes()
+                    .expect("encode range capability"),
+                },
+            ],
+            endpoints: vec![sorafs_manifest::AdvertEndpoint {
+                kind: sorafs_manifest::EndpointKind::Torii,
+                host_pattern: host_pattern.to_owned(),
+                metadata: vec![sorafs_manifest::EndpointMetadata {
+                    key: sorafs_manifest::EndpointMetadataKey::Region,
+                    value: b"global".to_vec(),
+                }],
+            }],
+            rendezvous_topics: vec![sorafs_manifest::RendezvousTopic {
+                topic: "sorafs.sf1.primary".to_owned(),
+                region: "global".to_owned(),
+            }],
+            path_policy: sorafs_manifest::PathDiversityPolicy {
+                min_guard_weight: 5,
+                max_same_asn_per_path: 1,
+                max_same_pool_per_path: 1,
+            },
+            notes: None,
+            stream_budget: Some(sorafs_manifest::StreamBudgetV1 {
+                max_in_flight: 8,
+                max_bytes_per_sec: 8_388_608,
+                burst_bytes: Some(1_048_576),
+            }),
+            transport_hints: Some(vec![sorafs_manifest::TransportHintV1 {
+                protocol: sorafs_manifest::TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+        };
+        body.validate().expect("fixture body must validate");
+        let body_bytes = norito::to_bytes(&body).expect("serialize advert body");
+        let advert_signature = signing_key.sign(&body_bytes);
+        let advert = sorafs_manifest::ProviderAdvertV1 {
+            version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
+            issued_at,
+            expires_at,
+            body: body.clone(),
+            signature: sorafs_manifest::AdvertSignature {
+                algorithm: sorafs_manifest::SignatureAlgorithm::Ed25519,
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                signature: advert_signature.to_bytes().to_vec(),
+            },
+            signature_strict: true,
+            allow_unknown_capabilities: false,
+        };
+        let proposal = sorafs_manifest::ProviderAdmissionProposalV1 {
+            version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
+            provider_id,
+            profile_id: body.profile_id.clone(),
+            profile_aliases: body.profile_aliases.clone(),
+            stake: body.stake.clone(),
+            capabilities: body.capabilities.clone(),
+            endpoints: vec![sorafs_manifest::EndpointAdmissionV1 {
+                endpoint: body.endpoints.first().cloned().expect("advert endpoint"),
+                attestation: sorafs_manifest::EndpointAttestationV1 {
+                    version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
+                    kind: sorafs_manifest::EndpointAttestationKind::Mtls,
+                    attested_at: issued_at.saturating_sub(60),
+                    expires_at: expires_at + 60,
+                    leaf_certificate: vec![0xAA],
+                    intermediate_certificates: Vec::new(),
+                    alpn_ids: vec!["h2".to_owned()],
+                    report: Vec::new(),
+                },
+            }],
+            advert_key: signing_key.verifying_key().to_bytes(),
+            jurisdiction_code: "US".to_owned(),
+            contact_uri: Some("mailto:ops@example.test".to_owned()),
+            stream_budget: Some(sorafs_manifest::StreamBudgetV1 {
+                max_in_flight: 8,
+                max_bytes_per_sec: 8_388_608,
+                burst_bytes: Some(1_048_576),
+            }),
+            transport_hints: Some(vec![sorafs_manifest::TransportHintV1 {
+                protocol: sorafs_manifest::TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            }]),
+        };
+        let proposal_digest =
+            sorafs_manifest::compute_proposal_digest(&proposal).expect("proposal digest");
+        let advert_body_digest =
+            sorafs_manifest::compute_advert_body_digest(&body).expect("advert body digest");
+        let council_key = SigningKey::from_bytes(&[0x42; 32]);
+        let council_signature = council_key.sign(&proposal_digest);
+        let envelope = sorafs_manifest::ProviderAdmissionEnvelopeV1 {
+            version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            proposal,
+            proposal_digest,
+            advert_body: body,
+            advert_body_digest,
+            issued_at,
+            retention_epoch: expires_at + 600,
+            council_signatures: vec![sorafs_manifest::CouncilSignature {
+                signer: council_key.verifying_key().to_bytes(),
+                signature: council_signature.to_bytes().to_vec(),
+            }],
+            notes: None,
+        };
+
+        ProjectionProviderFixture { advert, envelope }
+    }
+
+    fn app_state_with_projection_provider_fixture(
+        fixture: &ProjectionProviderFixture,
+    ) -> (crate::SharedAppState, tempfile::TempDir) {
+        let admission =
+            crate::sorafs::AdmissionRegistry::from_envelopes([fixture.envelope.clone()])
+                .expect("fixture envelope must validate");
+        let mut cache = crate::sorafs::ProviderAdvertCache::new(
+            vec![
+                sorafs_manifest::CapabilityType::ToriiGateway,
+                sorafs_manifest::CapabilityType::ChunkRangeFetch,
+            ],
+            Arc::new(admission),
+        );
+        cache
+            .ingest(fixture.advert.clone(), fixture.issued_at())
+            .expect("ingest fixture advert");
+
+        let (node, dir) = sorafs_node_with_temp_storage();
+        (
+            crate::reconfigure_sorafs_runtime_for_tests(
+                crate::mk_app_state_for_tests(),
+                Some(Arc::new(tokio::sync::RwLock::new(cache))),
+                node,
+            ),
+            dir,
+        )
+    }
+
+    async fn publish_asset_holder_checkpoint_with_real_manifests(
+        state: &Arc<iroha_core::state::State>,
+    ) -> Vec<(QueryProjectionShardArchive, sorafs_manifest::ManifestV1)> {
+        let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
+            state.clone(),
+            "asset_holders".to_owned(),
+            crate::runtime::NodeProjectionShardCatalogQuery {
+                asset_definition_id: Some("pkr#sbp".to_owned()),
+                offset: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("projection catalog");
+        assert!(
+            !catalog.entries.is_empty(),
+            "fixture should produce holder shards"
+        );
+
+        let mut checkpoint_shards = Vec::new();
+        let mut published = Vec::new();
+        for (index, entry) in catalog.entries.iter().enumerate() {
+            let archive = crate::runtime::handle_node_query_projection_shard_export(
+                state.clone(),
+                "asset_holders".to_owned(),
+                entry.partition_id,
+                crate::runtime::NodeProjectionShardExportQuery {
+                    asset_definition_id: Some("pkr#sbp".to_owned()),
+                },
+            )
+            .await
+            .expect("projection shard export");
+            let (_, _, manifest) = query_projection_archive_storage_artifacts(&archive)
+                .expect("projection archive storage artifacts");
+            let manifest_digest = iroha_data_model::da::types::BlobDigest::new(
+                manifest
+                    .digest()
+                    .expect("digest projection archive manifest")
+                    .into(),
+            );
+            checkpoint_shards.push(
+                archive
+                    .clone()
+                    .into_checkpoint_shard(
+                        manifest_digest,
+                        iroha_data_model::da::types::StorageTicketId::new(
+                            [index.wrapping_add(1) as u8; 32],
+                        ),
+                    )
+                    .expect("checkpoint shard"),
+            );
+            published.push((archive, manifest));
+        }
+        state.publish_query_projection_checkpoint(1_714_111_000, checkpoint_shards);
+        published
     }
 
     fn i105_literal(account_id: &AccountId) -> String {
@@ -70730,17 +71259,38 @@ pub async fn handle_v1_asset_holders_query(
     axum::extract::Path(definition_id): axum::extract::Path<String>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
+) -> Result<Response> {
+    handle_v1_asset_holders_query_with_app(
+        None,
+        state,
+        axum::extract::Path(definition_id),
+        NoritoJson(envelope),
+        telemetry,
+    )
+    .await
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_v1_asset_holders_query_with_app(
+    app: Option<crate::SharedAppState>,
+    state: Arc<CoreState>,
+    axum::extract::Path(definition_id): axum::extract::Path<String>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+    telemetry: MaybeTelemetry,
+) -> Result<Response> {
     use std::collections::BTreeMap;
 
     let now_ms = asset_alias_observation_time_ms(&state);
-    let world = state.world_view();
-    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
-    let asset_alias = world
-        .asset_definition(&def_id)
-        .ok()
-        .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
-    drop(world);
+    let (def_id, asset_alias) = {
+        let world = state.world_view();
+        let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+        let asset_alias = world
+            .asset_definition(&def_id)
+            .ok()
+            .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
+        (def_id, asset_alias)
+    };
     record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY);
     let crate::filter::QueryEnvelope {
         filter,
@@ -70797,6 +71347,7 @@ pub async fn handle_v1_asset_holders_query(
             ));
         }
         return handle_v1_asset_holders_query_aggregate(
+            app.as_ref(),
             state,
             def_id,
             asset_alias,
@@ -70804,7 +71355,8 @@ pub async fn handle_v1_asset_holders_query(
             aggregate,
             sort,
             pagination,
-        );
+        )
+        .await;
     }
     let world = state.world_view();
     let mut map: BTreeMap<
@@ -71003,6 +71555,22 @@ fn aggregate_validation_error(message: impl Into<String>) -> Error {
         code: "unsupported_aggregate_shape",
         message: message.into(),
     }
+}
+
+#[cfg(feature = "app_api")]
+fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "projection_archive_unavailable",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_live_aggregate_enabled() -> bool {
+    cfg!(test)
+        || std::env::var("IROHA_TORII_ALLOW_LIVE_ASSET_HOLDER_AGGREGATE")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
 }
 
 #[cfg(feature = "app_api")]
@@ -71697,7 +72265,8 @@ fn handle_v1_accounts_query_aggregate(
 }
 
 #[cfg(feature = "app_api")]
-fn handle_v1_asset_holders_query_aggregate(
+async fn handle_v1_asset_holders_query_aggregate(
+    app: Option<&crate::SharedAppState>,
     state: Arc<CoreState>,
     def_id: AssetDefinitionId,
     asset_alias: Option<String>,
@@ -71709,12 +72278,15 @@ fn handle_v1_asset_holders_query_aggregate(
     let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
     validate_asset_holders_aggregate_request(&aggregate, &sort)?;
 
-    if let Some((rows, indexed_snapshot)) = asset_holder_projection_cached_query_rows(
+    if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
+        app,
         state.as_ref(),
         &def_id,
         asset_alias.as_ref(),
         filter.as_ref(),
-    )? {
+    )
+    .await?
+    {
         let aggregated = aggregate_rows(rows, &aggregate)?;
         return build_aggregate_response(
             state.as_ref(),
@@ -71723,9 +72295,19 @@ fn handle_v1_asset_holders_query_aggregate(
             pagination,
             aggregate.having.as_ref(),
             Some(indexed_snapshot),
-            "projection_da_cache",
+            query_source,
         );
     }
+
+    if !asset_holder_live_aggregate_enabled() {
+        return Err(projection_archive_unavailable_error(
+            "asset holder aggregate requires a complete published query projection archive; live holder scans are disabled",
+        ));
+    }
+    iroha_logger::warn!(
+        asset_definition_id = %def_id,
+        "serving asset holder aggregate from live state because projection archive cache is incomplete"
+    );
 
     let world = state.world_view();
     let mut map: BTreeMap<
@@ -71784,7 +72366,7 @@ fn handle_v1_asset_holders_query_aggregate(
         pagination,
         aggregate.having.as_ref(),
         None,
-        "live",
+        "live_debug",
     )
 }
 
@@ -71817,12 +72399,34 @@ fn asset_holder_projection_row_to_query_row(
 }
 
 #[cfg(feature = "app_api")]
-fn asset_holder_projection_cached_query_rows(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryProjectionArchiveResolutionSource {
+    HotCache,
+    LocalDurableStore,
+    RemoteHydrated,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct RemoteProjectionArchiveSource {
+    manifest_digest_hex: String,
+    provider_id_hex: String,
+    torii_base_url: reqwest::Url,
+}
+
+#[cfg(feature = "app_api")]
+fn query_projection_archive_validation_error(message: impl Into<String>) -> Error {
+    projection_archive_unavailable_error(message.into())
+}
+
+#[cfg(feature = "app_api")]
+async fn asset_holder_projection_query_rows(
+    app: Option<&crate::SharedAppState>,
     state: &CoreState,
     def_id: &AssetDefinitionId,
     endpoint_asset_alias: Option<&String>,
     filter: Option<&crate::filter::FilterExpr>,
-) -> Result<Option<(Vec<norito::json::Map>, (u64, Option<String>))>, Error> {
+) -> Result<Option<(Vec<norito::json::Map>, (u64, Option<String>), &'static str)>, Error> {
     let Some(checkpoint) = state.query_projection_checkpoint_snapshot() else {
         return Ok(None);
     };
@@ -71839,50 +72443,33 @@ fn asset_holder_projection_cached_query_rows(
         return Ok(None);
     }
 
-    let cache = match QUERY_PROJECTION_ARCHIVE_CACHE.read() {
-        Ok(cache) => cache,
-        Err(_) => {
-            iroha_logger::warn!(
-                "query projection archive cache lock poisoned; falling back to live aggregate"
-            );
-            return Ok(None);
-        }
-    };
+    let mut query_source = "projection_da_cache";
     let mut rows = Vec::new();
     for shard in shards {
-        let key = query_projection_checkpoint_cache_key(shard, &checkpoint);
-        let Some(archive) = cache.get(&key) else {
+        let Some((archive, source)) =
+            resolve_query_projection_archive_for_shard(app, state, &checkpoint, shard).await?
+        else {
             return Ok(None);
         };
-        let rowset: QueryProjectionShardRowSet =
-            norito::decode_from_bytes(&archive.payload).map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "failed to decode cached query projection rowset: {err}"
-                )))
-            })?;
-        let QueryProjectionShardRowSet::AssetHolders(rowset) = rowset else {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::InternalError(
-                    "cached query projection archive has non-holder rowset".into(),
-                ),
-            ));
-        };
-        if rowset.partition_id != shard.partition_id
-            || rowset.asset_definition_id != asset_definition_id
-        {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::InternalError(
-                    "cached query projection archive does not match checkpoint shard".into(),
-                ),
-            ));
+        if source == QueryProjectionArchiveResolutionSource::RemoteHydrated {
+            query_source = "projection_da_hydrated";
         }
+        let rowset = validate_query_projection_asset_holder_archive(
+            &archive,
+            &checkpoint,
+            shard,
+            &asset_definition_id,
+        )?;
         let row_asset_alias = rowset
             .asset_alias
             .as_deref()
             .or(endpoint_asset_alias.map(String::as_str));
         for row in rowset.rows {
-            let projected =
-                asset_holder_projection_row_to_query_row(&asset_definition_id, row_asset_alias, row);
+            let projected = asset_holder_projection_row_to_query_row(
+                &asset_definition_id,
+                row_asset_alias,
+                row,
+            );
             if filter.is_some_and(|expr| !evaluate_filter_on_aggregate_row(expr, &projected)) {
                 continue;
             }
@@ -71896,7 +72483,682 @@ fn asset_holder_projection_cached_query_rows(
             checkpoint.indexed_height,
             query_projection_block_hash_hex(checkpoint.indexed_block_hash),
         ),
+        query_source,
     )))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn query_projection_archive_storage_artifacts(
+    archive: &QueryProjectionShardArchive,
+) -> Result<
+    (
+        Vec<u8>,
+        sorafs_car::CarBuildPlan,
+        sorafs_manifest::ManifestV1,
+    ),
+    Error,
+> {
+    let archive_payload = archive.build_da_payload().map_err(|err| {
+        query_projection_archive_validation_error(format!(
+            "failed to encode query projection archive payload: {err}"
+        ))
+    })?;
+    let plan = sorafs_car::CarBuildPlan::single_file_with_profile(
+        archive_payload.payload.as_slice(),
+        sorafs_chunker::ChunkProfile::DEFAULT,
+    )
+    .map_err(|err| {
+        query_projection_archive_validation_error(format!(
+            "failed to derive SoraFS chunk plan for query projection archive: {err}"
+        ))
+    })?;
+    let stats = sorafs_car::CarWriter::new(&plan, archive_payload.payload.as_slice())
+        .and_then(|writer| writer.write_to(std::io::sink()))
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to derive SoraFS CAR metadata for query projection archive: {err}"
+            ))
+        })?;
+    let root_cid = stats.root_cids.first().cloned().ok_or_else(|| {
+        query_projection_archive_validation_error(
+            "failed to derive SoraFS root CID for query projection archive",
+        )
+    })?;
+    let mut car_digest = [0u8; 32];
+    car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
+    let manifest = sorafs_manifest::ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(sorafs_manifest::DagCodecId(stats.dag_codec))
+        .chunking_from_profile(
+            plan.chunk_profile,
+            sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+        )
+        .content_length(plan.content_length)
+        .car_digest(car_digest)
+        .car_size(stats.car_size)
+        .pin_policy(sorafs_manifest::PinPolicy::default())
+        .build()
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to build SoraFS manifest for query projection archive: {err}"
+            ))
+        })?;
+    Ok((archive_payload.payload, plan, manifest))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn persist_query_projection_archive_for_query(
+    app: &crate::SharedAppState,
+    archive: &QueryProjectionShardArchive,
+    expected_manifest_digest: &iroha_data_model::da::types::BlobDigest,
+) -> Result<bool, Error> {
+    use sorafs_node::{NodeStorageError, store::StorageError};
+
+    let (payload, plan, manifest) = query_projection_archive_storage_artifacts(archive)?;
+    let manifest_digest = iroha_data_model::da::types::BlobDigest::new(
+        manifest
+            .digest()
+            .map_err(|err| {
+                query_projection_archive_validation_error(format!(
+                    "failed to digest reconstructed query projection manifest: {err}"
+                ))
+            })?
+            .into(),
+    );
+    if &manifest_digest != expected_manifest_digest {
+        return Ok(false);
+    }
+
+    let mut reader = payload.as_slice();
+    match app
+        .sorafs_node()
+        .ingest_manifest(&manifest, &plan, &mut reader)
+    {
+        Ok(_) | Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => Ok(true),
+        Err(err) => Err(query_projection_archive_validation_error(format!(
+            "failed to seed local query projection archive store: {err}"
+        ))),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_query_projection_asset_holder_archive(
+    archive: &QueryProjectionShardArchive,
+    checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
+    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
+    asset_definition_id: &str,
+) -> Result<iroha_core::query::projection_rowset::QueryProjectionAssetHoldersShardRowSet, Error> {
+    use iroha_core::query::{
+        projection_checkpoint::QUERY_PROJECTION_SCHEMA_VERSION,
+        projection_rowset::QUERY_PROJECTION_ROWSET_VERSION,
+        projection_shard::{
+            QUERY_PROJECTION_SHARD_ARCHIVE_VERSION, QUERY_PROJECTION_SHARD_ROWSET_CODEC,
+        },
+    };
+
+    let archive_payload = archive.build_da_payload().map_err(|err| {
+        query_projection_archive_validation_error(format!(
+            "failed to verify query projection archive payload: {err}"
+        ))
+    })?;
+    if archive.version != QUERY_PROJECTION_SHARD_ARCHIVE_VERSION {
+        return Err(query_projection_archive_validation_error(format!(
+            "query projection archive version mismatch: expected {QUERY_PROJECTION_SHARD_ARCHIVE_VERSION}, found {}",
+            archive.version
+        )));
+    }
+    if archive.schema_version != QUERY_PROJECTION_SCHEMA_VERSION {
+        return Err(query_projection_archive_validation_error(format!(
+            "query projection archive schema version mismatch: expected {QUERY_PROJECTION_SCHEMA_VERSION}, found {}",
+            archive.schema_version
+        )));
+    }
+    if archive.payload_codec.0 != QUERY_PROJECTION_SHARD_ROWSET_CODEC {
+        return Err(query_projection_archive_validation_error(format!(
+            "query projection archive rowset codec mismatch: expected {QUERY_PROJECTION_SHARD_ROWSET_CODEC}, found {}",
+            archive.payload_codec.0
+        )));
+    }
+    if archive.resource != shard.resource
+        || archive.partition_id != shard.partition_id
+        || archive.asset_definition_id != shard.asset_definition_id
+        || archive.indexed_height != checkpoint.indexed_height
+        || archive.indexed_block_hash != checkpoint.indexed_block_hash
+        || archive_payload.payload_hash != shard.blob_hash
+    {
+        return Err(query_projection_archive_validation_error(
+            "query projection archive does not match checkpoint reference",
+        ));
+    }
+
+    let rowset: QueryProjectionShardRowSet =
+        norito::decode_from_bytes(&archive.payload).map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to decode query projection rowset: {err}"
+            ))
+        })?;
+    let QueryProjectionShardRowSet::AssetHolders(rowset) = rowset else {
+        return Err(query_projection_archive_validation_error(
+            "query projection archive has non-holder rowset",
+        ));
+    };
+    if rowset.version != QUERY_PROJECTION_ROWSET_VERSION {
+        return Err(query_projection_archive_validation_error(format!(
+            "query projection rowset version mismatch: expected {QUERY_PROJECTION_ROWSET_VERSION}, found {}",
+            rowset.version
+        )));
+    }
+    if rowset.partition_id != shard.partition_id
+        || rowset.asset_definition_id != asset_definition_id
+    {
+        return Err(query_projection_archive_validation_error(
+            "query projection archive does not match checkpoint shard",
+        ));
+    }
+
+    Ok(rowset)
+}
+
+#[cfg(feature = "app_api")]
+async fn resolve_query_projection_archive_for_shard(
+    app: Option<&crate::SharedAppState>,
+    state: &CoreState,
+    checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
+    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
+) -> Result<
+    Option<(
+        QueryProjectionShardArchive,
+        QueryProjectionArchiveResolutionSource,
+    )>,
+    Error,
+> {
+    let key = query_projection_checkpoint_cache_key(shard, checkpoint);
+    if let Some(archive) = query_projection_archive_from_hot_cache(&key) {
+        return Ok(Some((
+            archive,
+            QueryProjectionArchiveResolutionSource::HotCache,
+        )));
+    }
+
+    let Some(app) = app else {
+        return Ok(None);
+    };
+
+    if let Some(archive) = load_query_projection_archive_from_local_store(app, shard)? {
+        cache_query_projection_archive_for_query(archive.clone());
+        return Ok(Some((
+            archive,
+            QueryProjectionArchiveResolutionSource::LocalDurableStore,
+        )));
+    }
+
+    let hydration_lock = {
+        let mut locks = QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS.lock().await;
+        locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _guard = hydration_lock.lock().await;
+
+    if let Some(archive) = query_projection_archive_from_hot_cache(&key) {
+        return Ok(Some((
+            archive,
+            QueryProjectionArchiveResolutionSource::HotCache,
+        )));
+    }
+    if let Some(archive) = load_query_projection_archive_from_local_store(app, shard)? {
+        cache_query_projection_archive_for_query(archive.clone());
+        return Ok(Some((
+            archive,
+            QueryProjectionArchiveResolutionSource::LocalDurableStore,
+        )));
+    }
+
+    let hydrated = hydrate_query_projection_archive_from_remote(app, state, shard).await?;
+    {
+        let mut locks = QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS.lock().await;
+        if Arc::strong_count(&hydration_lock) <= 2 {
+            locks.remove(&key);
+        }
+    }
+
+    if let Some(archive) = hydrated {
+        cache_query_projection_archive_for_query(archive.clone());
+        return Ok(Some((
+            archive,
+            QueryProjectionArchiveResolutionSource::RemoteHydrated,
+        )));
+    }
+
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn load_query_projection_archive_from_local_store(
+    app: &crate::SharedAppState,
+    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
+) -> Result<Option<QueryProjectionShardArchive>, Error> {
+    use sorafs_node::{NodeStorageError, store::StorageError};
+
+    let manifest_digest = *shard.manifest_digest.as_bytes();
+    let stored = match app
+        .sorafs_node()
+        .manifest_metadata_by_digest(&manifest_digest)
+    {
+        Ok(stored) => stored,
+        Err(NodeStorageError::Storage(StorageError::ManifestNotFound { .. })) => return Ok(None),
+        Err(err) => {
+            return Err(query_projection_archive_validation_error(format!(
+                "failed to read locally stored query projection archive metadata: {err}"
+            )));
+        }
+    };
+
+    if stored.payload_digest() != shard.blob_hash.as_bytes() {
+        return Err(query_projection_archive_validation_error(
+            "locally stored query projection archive payload digest does not match checkpoint shard",
+        ));
+    }
+    let content_length = usize::try_from(stored.content_length()).map_err(|_| {
+        query_projection_archive_validation_error(
+            "stored query projection archive exceeds host payload limits",
+        )
+    })?;
+    let payload = app
+        .sorafs_node()
+        .read_payload_range(stored.manifest_id(), 0, content_length)
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to read locally stored query projection archive payload: {err}"
+            ))
+        })?;
+    decode_query_projection_archive_payload(&payload)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_query_projection_archive_payload(
+    payload: &[u8],
+) -> Result<Option<QueryProjectionShardArchive>, Error> {
+    let decompressed = zstd::stream::decode_all(std::io::Cursor::new(payload)).map_err(|err| {
+        query_projection_archive_validation_error(format!(
+            "failed to decompress query projection archive payload: {err}"
+        ))
+    })?;
+    let archive =
+        norito::decode_from_bytes::<QueryProjectionShardArchive>(&decompressed).map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to decode query projection archive payload: {err}"
+            ))
+        })?;
+    Ok(Some(archive))
+}
+
+#[cfg(feature = "app_api")]
+async fn hydrate_query_projection_archive_from_remote(
+    app: &crate::SharedAppState,
+    state: &CoreState,
+    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
+) -> Result<Option<QueryProjectionShardArchive>, Error> {
+    let manifest_digest_hex = hex::encode(shard.manifest_digest.as_bytes());
+    let Some(sources) =
+        resolve_remote_projection_archive_sources(app, state, manifest_digest_hex.as_str()).await?
+    else {
+        return Ok(None);
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to build query projection hydrate client: {err}"
+            ))
+        })?;
+
+    let mut last_error = None;
+    for source in &sources {
+        match fetch_remote_query_projection_archive_from_source(&client, source).await {
+            Ok((manifest, payload)) => {
+                let stored = ingest_remote_query_projection_archive(app, &manifest, &payload)?;
+                let stored_payload = app
+                    .sorafs_node()
+                    .read_payload_range(
+                        stored.manifest_id(),
+                        0,
+                        usize::try_from(stored.content_length()).map_err(|_| {
+                            query_projection_archive_validation_error(
+                                "hydrated query projection archive exceeds host payload limits",
+                            )
+                        })?,
+                    )
+                    .map_err(|err| {
+                        query_projection_archive_validation_error(format!(
+                            "failed to reread hydrated query projection archive payload: {err}"
+                        ))
+                    })?;
+                return decode_query_projection_archive_payload(&stored_payload);
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    provider_id_hex = %source.provider_id_hex,
+                    manifest_digest_hex = %source.manifest_digest_hex,
+                    %err,
+                    "failed to hydrate query projection archive from remote provider"
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(query_projection_archive_validation_error(format!(
+        "failed to hydrate query projection archive from remote providers{}",
+        last_error
+            .as_deref()
+            .map(|err| format!(": {err}"))
+            .unwrap_or_default()
+    )))
+}
+
+#[cfg(feature = "app_api")]
+async fn resolve_remote_projection_archive_sources(
+    app: &crate::SharedAppState,
+    state: &CoreState,
+    manifest_digest_hex: &str,
+) -> Result<Option<Vec<RemoteProjectionArchiveSource>>, Error> {
+    use crate::sorafs::{EndpointKind, registry::collect_pin_registry};
+
+    let snapshot = {
+        let world = state.world_view();
+        collect_pin_registry(&world).map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to collect pin registry for query projection hydration: {err}"
+            ))
+        })?
+    };
+
+    let mut provider_specs = Vec::<String>::new();
+    for prefer_completed in [true, false] {
+        for order in &snapshot.replication_orders {
+            if order.manifest_digest_hex() != manifest_digest_hex {
+                continue;
+            }
+            if order.is_expired() {
+                continue;
+            }
+            if prefer_completed != order.completion_epoch().is_some() {
+                continue;
+            }
+            let Some(manifest) = snapshot.manifest_by_digest(order.manifest_digest_hex()) else {
+                continue;
+            };
+            if manifest.status_label() != "approved" {
+                continue;
+            }
+            for provider_id_hex in order.providers() {
+                if !provider_specs
+                    .iter()
+                    .any(|existing| existing == provider_id_hex)
+                {
+                    provider_specs.push(provider_id_hex.clone());
+                }
+            }
+        }
+    }
+
+    if provider_specs.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(cache) = app.sorafs_cache() else {
+        return Err(query_projection_archive_validation_error(
+            "SoraFS discovery cache is not available for query projection hydration",
+        ));
+    };
+
+    let cache = cache.read().await;
+    let mut sources = Vec::new();
+    for provider_id_hex in provider_specs {
+        let Ok(provider_bytes) = hex::decode(provider_id_hex.as_str()) else {
+            continue;
+        };
+        let Ok(provider_id) = <[u8; 32]>::try_from(provider_bytes.as_slice()) else {
+            continue;
+        };
+        let Some(record) = cache.record_by_provider(&provider_id) else {
+            continue;
+        };
+        let Some(endpoint) = record
+            .advert()
+            .body
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::Torii)
+        else {
+            continue;
+        };
+        let torii_base_url =
+            normalize_query_projection_provider_torii_base_url(&endpoint.host_pattern)
+                .map_err(query_projection_archive_validation_error)?;
+        sources.push(RemoteProjectionArchiveSource {
+            manifest_digest_hex: manifest_digest_hex.to_owned(),
+            provider_id_hex,
+            torii_base_url,
+        });
+    }
+
+    if sources.is_empty() {
+        return Err(query_projection_archive_validation_error(
+            "no SoraFS Torii provider routes are available for the requested projection shard",
+        ));
+    }
+
+    Ok(Some(sources))
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_query_projection_provider_torii_base_url(
+    host_pattern: &str,
+) -> Result<reqwest::Url, String> {
+    let trimmed = host_pattern.trim();
+    if trimmed.is_empty() {
+        return Err("provider advert endpoint host pattern must not be empty".to_string());
+    }
+
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        let lower = trimmed.to_ascii_lowercase();
+        let scheme = if lower.starts_with("localhost")
+            || lower.starts_with("127.")
+            || lower.starts_with("[::1]")
+            || lower.starts_with("::1")
+        {
+            "http"
+        } else {
+            "https"
+        };
+        format!("{scheme}://{trimmed}")
+    };
+
+    let mut url = reqwest::Url::parse(&with_scheme)
+        .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
+    if !url.path().ends_with('/') {
+        let normalized = format!("{}/", url.path());
+        url.set_path(&normalized);
+    }
+    Ok(url)
+}
+
+#[cfg(feature = "app_api")]
+async fn fetch_remote_query_projection_archive_from_source(
+    client: &reqwest::Client,
+    source: &RemoteProjectionArchiveSource,
+) -> Result<(sorafs_manifest::ManifestV1, Vec<u8>), String> {
+    let manifest_url = source
+        .torii_base_url
+        .join(&format!(
+            "v1/sorafs/storage/manifest/{}",
+            source.manifest_digest_hex
+        ))
+        .map_err(|err| format!("failed to build remote manifest URL: {err}"))?;
+    let manifest_response = client
+        .get(manifest_url)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote manifest metadata: {err}"))?;
+    let manifest_status = manifest_response.status();
+    let manifest_body = manifest_response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read remote manifest metadata: {err}"))?;
+    if !manifest_status.is_success() {
+        let details = String::from_utf8_lossy(&manifest_body);
+        return Err(format!(
+            "remote manifest endpoint returned {manifest_status}: {}",
+            details.trim()
+        ));
+    }
+
+    let manifest_response =
+        norito::json::from_slice::<crate::sorafs::api::StorageManifestResponseDto>(&manifest_body)
+            .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
+    if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "remote manifest digest mismatch: expected {}, found {}",
+            source.manifest_digest_hex, manifest_response.manifest_digest_hex
+        ));
+    }
+
+    let manifest_bytes = base64::engine::general_purpose::STANDARD
+        .decode(manifest_response.manifest_b64.as_bytes())
+        .map_err(|err| format!("failed to decode remote manifest payload: {err}"))?;
+    let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+        .map_err(|err| format!("failed to decode remote manifest bytes: {err}"))?;
+    let manifest_digest_hex = hex::encode(
+        manifest
+            .digest()
+            .map_err(|err| format!("failed to digest remote manifest: {err}"))?
+            .as_bytes(),
+    );
+    if manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
+            source.manifest_digest_hex
+        ));
+    }
+    if manifest_response.content_length > usize::MAX as u64 {
+        return Err("remote payload exceeds host limits".to_string());
+    }
+
+    let fetch_body = norito::json::to_vec(&crate::sorafs::api::StorageFetchRequestDto {
+        manifest_id_hex: manifest_response.manifest_id_hex.clone(),
+        offset: 0,
+        length: manifest_response.content_length,
+        provider_id_hex: Some(source.provider_id_hex.clone()),
+    })
+    .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
+    let fetch_url = source
+        .torii_base_url
+        .join("v1/sorafs/storage/fetch")
+        .map_err(|err| format!("failed to build remote payload URL: {err}"))?;
+    let fetch_response = client
+        .post(fetch_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(fetch_body)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote projection archive payload: {err}"))?;
+    let fetch_status = fetch_response.status();
+    let fetch_body = fetch_response.bytes().await.map_err(|err| {
+        format!("failed to read remote projection archive payload response: {err}")
+    })?;
+    if !fetch_status.is_success() {
+        let details = String::from_utf8_lossy(&fetch_body);
+        return Err(format!(
+            "remote payload endpoint returned {fetch_status}: {}",
+            details.trim()
+        ));
+    }
+
+    let fetch_response =
+        norito::json::from_slice::<crate::sorafs::api::StorageFetchResponseDto>(&fetch_body)
+            .map_err(|err| {
+                format!("failed to decode remote projection archive payload response: {err}")
+            })?;
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(fetch_response.data_b64.as_bytes())
+        .map_err(|err| {
+            format!("failed to decode remote projection archive payload bytes: {err}")
+        })?;
+    if payload.len() as u64 != manifest_response.content_length {
+        return Err(format!(
+            "remote payload length mismatch: expected {}, found {}",
+            manifest_response.content_length,
+            payload.len()
+        ));
+    }
+    let payload_digest_hex = hex::encode(blake3::hash(&payload).as_bytes());
+    if payload_digest_hex != manifest_response.payload_digest_hex {
+        return Err(format!(
+            "remote payload digest mismatch: expected {}, found {payload_digest_hex}",
+            manifest_response.payload_digest_hex
+        ));
+    }
+
+    Ok((manifest, payload))
+}
+
+#[cfg(feature = "app_api")]
+fn ingest_remote_query_projection_archive(
+    app: &crate::SharedAppState,
+    manifest: &sorafs_manifest::ManifestV1,
+    payload: &[u8],
+) -> Result<sorafs_node::store::StoredManifest, Error> {
+    use sorafs_node::{NodeStorageError, store::StorageError};
+
+    let profile = crate::sorafs::api::chunk_profile_for_manifest(manifest).map_err(|response| {
+        query_projection_archive_validation_error(format!(
+            "failed to resolve chunk profile for hydrated projection archive (status {})",
+            response.into_response().status()
+        ))
+    })?;
+    let plan =
+        sorafs_car::CarBuildPlan::single_file_with_profile(payload, profile).map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to rebuild chunk plan for hydrated projection archive: {err}"
+            ))
+        })?;
+
+    let mut reader = payload;
+    match app
+        .sorafs_node()
+        .ingest_manifest(manifest, &plan, &mut reader)
+    {
+        Ok(_) => {}
+        Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {}
+        Err(err) => {
+            return Err(query_projection_archive_validation_error(format!(
+                "failed to cache hydrated query projection archive locally: {err}"
+            )));
+        }
+    }
+
+    let manifest_digest: [u8; 32] = manifest
+        .digest()
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to digest hydrated query projection manifest: {err}"
+            ))
+        })?
+        .into();
+    app.sorafs_node()
+        .manifest_metadata_by_digest(&manifest_digest)
+        .map_err(|err| {
+            query_projection_archive_validation_error(format!(
+                "failed to reload hydrated query projection archive metadata: {err}"
+            ))
+        })
 }
 
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.

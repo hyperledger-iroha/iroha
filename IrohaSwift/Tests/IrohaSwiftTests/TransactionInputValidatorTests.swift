@@ -109,8 +109,15 @@ final class TransactionInputValidatorTests: XCTestCase {
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.account("  \(authority)  "))
         XCTAssertEqual(target.objectId, authority)
 
-        let domainTarget = try TransactionInputValidator.sanitizeMetadataTarget(.domain("  wonderland  "))
-        XCTAssertEqual(domainTarget.objectId, "wonderland")
+        let domainTarget = try TransactionInputValidator.sanitizeMetadataTarget(.domain("  wonderland.universal  "))
+        XCTAssertEqual(domainTarget.objectId, "wonderland.universal")
+    }
+
+    func testSanitizeMetadataTargetRejectsBareDomainId() {
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.domain("wonderland"))) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedDomainId(field: "target", value: "wonderland"))
+        }
     }
 
     func testSanitizeAssetIdAcceptsCanonicalPublicLiteral() throws {
@@ -122,9 +129,9 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testSanitizeRwaIdAcceptsCanonicalPublicLiteral() throws {
         let literal =
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
         let uppercaseHashLiteral =
-            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities"
+            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities.universal"
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.rwa(uppercaseHashLiteral))
         XCTAssertEqual(target.objectId, literal)
     }

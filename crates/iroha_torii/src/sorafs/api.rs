@@ -8638,7 +8638,7 @@ fn car_verification_refusal(
     )
 }
 
-fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
+pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
     if let Some(descriptor) = chunker_registry::lookup(manifest.chunking.profile_id) {
         if descriptor.multihash_code != manifest.chunking.multihash_code {
             return Err(json_error(

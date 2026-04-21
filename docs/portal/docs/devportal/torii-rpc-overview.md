@@ -98,7 +98,11 @@ without middleware:
 Call `POST /v1/assets/{definition_id}/holders/query`, where
 `definition_id` may be the PKR asset id or alias. Responses include exact
 counts and totals plus `query_source`; `projection_da_cache` means Torii served
-the aggregate from published DA projection shards.
+the aggregate from already-local published DA projection shards, while
+`projection_da_hydrated` means Torii hydrated missing shards from approved
+SoraFS providers during the request. Incomplete production projections return
+`projection_archive_unavailable` instead of scanning live holders; `live_debug`
+is only for explicit debug opt-in environments.
 
 ## Troubleshooting
 

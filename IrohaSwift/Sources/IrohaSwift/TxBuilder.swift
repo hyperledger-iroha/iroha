@@ -548,8 +548,7 @@ public enum CouncilDerivation: UInt8, Sendable {
 public struct ProposeDeployContractRequest {
     public let chainId: String
     public let authority: String
-    public let namespace: String
-    public let contractId: String
+    public let contractAddress: String
     public let codeHashHex: String
     public let abiHashHex: String
     public let abiVersion: String
@@ -559,8 +558,7 @@ public struct ProposeDeployContractRequest {
 
     public init(chainId: String,
                 authority: String,
-                namespace: String,
-                contractId: String,
+                contractAddress: String,
                 codeHashHex: String,
                 abiHashHex: String,
                 abiVersion: String,
@@ -569,8 +567,7 @@ public struct ProposeDeployContractRequest {
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
-        self.namespace = namespace
-        self.contractId = contractId
+        self.contractAddress = contractAddress
         self.codeHashHex = codeHashHex
         self.abiHashHex = abiHashHex
         self.abiVersion = abiVersion

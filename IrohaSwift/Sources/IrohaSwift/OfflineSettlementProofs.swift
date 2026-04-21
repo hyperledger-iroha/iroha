@@ -395,6 +395,9 @@ public enum ToriiOfflineSettlementProofs {
     private static let starkDomainLog2: UInt8 = 4
     private static let starkBlowupLog2: UInt8 = 3
     private static let starkQueryCount: UInt16 = 8
+    private static let starkBindingConstant: UInt64 = 23
+    private static let starkBindingZCoefficient: UInt64 = 29
+    private static let goldilocksModulus: UInt64 = 18_446_744_069_414_584_321
     private static let zeroFieldElement = Data(repeating: 0, count: 8)
 
     public static func buildRedeemRequestProof(
@@ -444,22 +447,40 @@ public enum ToriiOfflineSettlementProofs {
         preStateHash: String,
         receipts: [ToriiOfflineTransferReceipt]
     ) throws {
-        let expected = try buildRedeemRequestProof(
+        let canonicalAmount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
+        let expectedCommitment = try redeemRequestCommitmentHex(
             operationId: operationId,
             accountId: accountId,
             lineageId: lineageId,
             assetDefinitionId: assetDefinitionId,
-            amount: amount,
+            amount: canonicalAmount,
             offlinePublicKey: offlinePublicKey,
             authorizationId: authorizationId,
             preStateHash: preStateHash,
-            receipts: receipts
+            receiptKeys: receiptKeys(receipts)
         )
         let normalizedActual = try normalizeProof(proof)
-        let normalizedExpected = try normalizeProof(expected)
-        guard normalizedActual == normalizedExpected else {
-            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof is invalid.")
+        guard normalizedActual.backend == settlementBackend else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof backend is invalid.")
         }
+        guard normalizedActual.circuitId == redeemRequestCircuitId else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof circuit id is invalid.")
+        }
+        guard normalizedActual.recursionDepth == 1 else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof recursion depth is invalid.")
+        }
+        guard normalizedActual.publicInputsHex == expectedCommitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof public inputs are invalid.")
+        }
+        guard normalizedActual.envelope.params.domainTag == expectedCommitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline redeem proof domain tag is invalid.")
+        }
+        try validateTransparentEnvelope(
+            normalizedActual.envelope,
+            expectedDomainTag: expectedCommitment,
+            transcriptLabel: redeemRequestCircuitId,
+            context: "redeem proof"
+        )
     }
 
     public static func buildSettlement(
@@ -588,14 +609,12 @@ public enum ToriiOfflineSettlementProofs {
         guard proof.envelope.params.domainTag == expectedCommitment else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement proof domain tag is invalid.")
         }
-        let expectedEnvelope = try synthesizeEnvelope(
-            domainTag: expectedCommitment,
-            transcriptLabel: settlementCircuitId
+        try validateTransparentEnvelope(
+            proof.envelope,
+            expectedDomainTag: expectedCommitment,
+            transcriptLabel: settlementCircuitId,
+            context: "settlement proof"
         )
-        let normalizedExpectedEnvelope = try normalizeEnvelope(expectedEnvelope)
-        guard proof.envelope == normalizedExpectedEnvelope else {
-            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline settlement proof envelope is invalid.")
-        }
     }
 
     private static func settlementCommitmentHex(
@@ -693,7 +712,10 @@ public enum ToriiOfflineSettlementProofs {
                 commits: try ToriiOfflineStarkCommitmentsV1(
                     version: starkVersion,
                     roots: roots,
-                    compRoot: nil
+                    compRoot: prefixedHex(offlineStarkBindingCompositionRoot(
+                        domainTag: domainTag,
+                        transcriptLabel: transcriptLabel
+                    ))
                 ),
                 queries: queries
             ),
@@ -740,6 +762,91 @@ public enum ToriiOfflineSettlementProofs {
             indexAtLayer = j
         }
         return chain
+    }
+
+    private static func validateTransparentEnvelope(
+        _ envelope: ToriiOfflineStarkVerifyEnvelopeV1,
+        expectedDomainTag: String,
+        transcriptLabel: String,
+        context: String
+    ) throws {
+        guard envelope.transcriptLabel == transcriptLabel else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) transcript label is invalid.")
+        }
+        guard envelope.params.version == starkVersion,
+              envelope.params.nLog2 == starkDomainLog2,
+              envelope.params.blowupLog2 == starkBlowupLog2,
+              envelope.params.foldArity == 2,
+              envelope.params.queries == starkQueryCount,
+              envelope.params.merkleArity == 2,
+              envelope.params.hashFn == starkHashSHA256V1,
+              envelope.params.domainTag == expectedDomainTag
+        else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) STARK parameters are invalid.")
+        }
+        guard envelope.proof.version == starkVersion else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) version is invalid.")
+        }
+
+        let levels = zeroMerkleLevelHashes(maxDepth: Int(starkDomainLog2))
+        let requiredLayers = Int(starkDomainLog2)
+        let expectedRoots = (0...requiredLayers).map { layer in
+            prefixedHex(levels[Int(starkDomainLog2) - layer])
+        }
+        let expectedCompositionRoot = prefixedHex(offlineStarkBindingCompositionRoot(
+            domainTag: expectedDomainTag,
+            transcriptLabel: transcriptLabel
+        ))
+        guard envelope.proof.commits.version == starkVersion,
+              envelope.proof.commits.roots == expectedRoots,
+              envelope.proof.commits.compRoot == expectedCompositionRoot
+        else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) commitments are invalid.")
+        }
+        guard envelope.proof.queries.count == Int(starkQueryCount) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query count is invalid.")
+        }
+        for chain in envelope.proof.queries {
+            try validateTransparentQueryChain(chain, levels: levels, context: context)
+        }
+    }
+
+    private static func validateTransparentQueryChain(
+        _ chain: [ToriiOfflineFoldDecommitV1],
+        levels: [Data],
+        context: String
+    ) throws {
+        let requiredLayers = Int(starkDomainLog2)
+        guard chain.count == requiredLayers else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query depth is invalid.")
+        }
+        var previousJ: UInt32?
+        for (layer, decommit) in chain.enumerated() {
+            let depthCurrent = Int(starkDomainLog2) - layer
+            let depthNext = depthCurrent - 1
+            let maxJ = 1 << (depthCurrent - 1)
+            guard Int(decommit.j) < maxJ else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query index is invalid.")
+            }
+            if let previousJ, decommit.j != previousJ / 2 {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) fold chain is invalid.")
+            }
+            guard decommit.y0 == 0, decommit.y1 == 0, decommit.z == 0 else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) fold values are invalid.")
+            }
+            let y0Index = Int(decommit.j) * 2
+            let y1Index = y0Index + 1
+            guard decommit.pathY0 == (try zeroMerklePath(index: y0Index, depth: depthCurrent, levelHashes: levels)),
+                  decommit.pathY1 == (try zeroMerklePath(index: y1Index, depth: depthCurrent, levelHashes: levels)),
+                  decommit.pathZ == (try zeroMerklePath(index: Int(decommit.j), depth: depthNext, levelHashes: levels))
+            else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) Merkle paths are invalid.")
+            }
+            previousJ = decommit.j
+        }
+        guard previousJ == 0 else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) final fold is invalid.")
+        }
     }
 
     private static func deriveQueryIndex(
@@ -887,12 +994,87 @@ public enum ToriiOfflineSettlementProofs {
         return Data(digest.finalize())
     }
 
-    private static func canonicalJSONData<T: Encodable>(_ value: T) throws -> Data {
-        let encoder = JSONEncoder()
-        if #available(iOS 11.0, macOS 10.13, *) {
-            encoder.outputFormatting = [.sortedKeys]
+    private static func offlineStarkBindingCompositionRoot(
+        domainTag: String,
+        transcriptLabel: String
+    ) -> Data {
+        var preimage = Data("iroha:offline:stark-binding-air:v1".utf8)
+        preimage.append(littleEndianData(UInt64(domainTag.utf8.count)))
+        preimage.append(Data(domainTag.utf8))
+        preimage.append(littleEndianData(UInt64(transcriptLabel.utf8.count)))
+        preimage.append(Data(transcriptLabel.utf8))
+
+        let digest = Data(SHA256.hash(data: preimage))
+        var expected = starkBindingConstant
+        for index in 0..<4 {
+            let offset = index * 8
+            var word: UInt64 = 0
+            for byteOffset in 0..<8 {
+                word |= UInt64(digest[offset + byteOffset]) << (byteOffset * 8)
+            }
+            let value = word >= goldilocksModulus ? word &- goldilocksModulus : word
+            let term = multiplyGoldilocks(UInt64(index + 31), value)
+            expected = addGoldilocks(expected, term)
         }
-        return try encoder.encode(value)
+        expected = addGoldilocks(expected, multiplyGoldilocks(starkBindingZCoefficient, 0))
+        return fieldLeafHash(expected)
+    }
+
+    private static func fieldLeafHash(_ value: UInt64) -> Data {
+        var digest = SHA256()
+        digest.update(data: Data("LEAF".utf8))
+        digest.update(data: littleEndianData(value))
+        return Data(digest.finalize())
+    }
+
+    private static func addGoldilocks(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return mod128(high: overflow ? 1 : 0, low: sum, modulus: goldilocksModulus)
+    }
+
+    private static func multiplyGoldilocks(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let fullWidth = lhs.multipliedFullWidth(by: rhs)
+        return mod128(high: fullWidth.high, low: fullWidth.low, modulus: goldilocksModulus)
+    }
+
+    private static func mod128(high: UInt64, low: UInt64, modulus: UInt64) -> UInt64 {
+        precondition(modulus > 0)
+        var remainder: UInt64 = 0
+        for bit in stride(from: 63, through: 0, by: -1) {
+            remainder = stepMod(
+                remainder: remainder,
+                bit: (high >> UInt64(bit)) & 1,
+                modulus: modulus
+            )
+        }
+        for bit in stride(from: 63, through: 0, by: -1) {
+            remainder = stepMod(
+                remainder: remainder,
+                bit: (low >> UInt64(bit)) & 1,
+                modulus: modulus
+            )
+        }
+        return remainder
+    }
+
+    private static func stepMod(remainder: UInt64, bit: UInt64, modulus: UInt64) -> UInt64 {
+        let doubled: UInt64
+        if remainder >= modulus &- remainder {
+            doubled = remainder &- (modulus &- remainder)
+        } else {
+            doubled = remainder &+ remainder
+        }
+        if bit == 0 {
+            return doubled
+        }
+        if doubled == modulus &- 1 {
+            return 0
+        }
+        return doubled &+ 1
+    }
+
+    private static func canonicalJSONData<T: Encodable>(_ value: T) throws -> Data {
+        try ToriiOfflineCashCodec.canonicalData(value)
     }
 
     private static func sha256Hex(_ data: Data) -> String {

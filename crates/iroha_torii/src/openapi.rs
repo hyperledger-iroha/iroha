@@ -3622,7 +3622,7 @@ fn asset_paths() -> Map {
         Value::Object(json_post_operation(
             "Assets",
             "Query asset holders.",
-            "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Aggregate mode supports exact SBP-style PKR directory queries such as grouping by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`; when a matching projection checkpoint is published, Torii can serve the aggregate from cached DA projection shards and reports `query_source=projection_da_cache`.",
+            "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Aggregate mode supports exact SBP-style PKR directory queries such as grouping by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. In production aggregate mode Torii serves published DA projection shards from local cache/storage (`query_source=projection_da_cache`) and hydrates missing shards from approved SoraFS providers on demand (`query_source=projection_da_hydrated`). Incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
