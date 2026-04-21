@@ -294,10 +294,10 @@ mod tests {
                 retryable: false,
             }),
         );
-        let bytes = crate::connect::encode_connect_frame_bare(&frame)
-            .expect("sealed frame must encode");
-        let decoded = crate::connect::decode_connect_frame_bare(&bytes)
-            .expect("sealed frame must decode");
+        let bytes =
+            crate::connect::encode_connect_frame_bare(&frame).expect("sealed frame must encode");
+        let decoded =
+            crate::connect::decode_connect_frame_bare(&bytes).expect("sealed frame must decode");
         assert_eq!(decoded, frame);
     }
 }

@@ -113,8 +113,9 @@ use iroha_data_model::{
     ministry::AgendaProposalV1,
     name::Name,
     nexus::{
-        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
-        TouchManifest, compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId,
+        LaneRelayEnvelope, TouchManifest, compute_descriptor_binding, compute_settlement_hash,
+        validate_descriptor,
     },
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,
@@ -8304,18 +8305,85 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     json::Value::Object(outer)
 }
 
+fn try_decode_signed_transaction_adaptive_with_flags(
+    payload: &[u8],
+    flags: u8,
+) -> Result<SignedTransaction, String> {
+    let attempt = catch_unwind(AssertUnwindSafe(|| {
+        let _guard = core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::codec::decode_adaptive::<SignedTransaction>(payload)
+    }));
+    match attempt {
+        Ok(Ok(tx)) => Ok(tx),
+        Ok(Err(err)) => Err(err.to_string()),
+        Err(_) => Err("panic".to_owned()),
+    }
+}
+
+fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
+    let Some((&version, payload)) = bytes.split_first() else {
+        return Err("empty payload".to_owned());
+    };
+    if version != 1 {
+        return Err(format!("unsupported version byte {version}"));
+    }
+    let (decoded, used) =
+        SignedTransaction::decode_from_slice(payload).map_err(|err| err.to_string())?;
+    if used != payload.len() {
+        return Err(format!("trailing bytes ({used} of {} used)", payload.len()));
+    }
+    Ok(decoded)
+}
+
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
+    let mut attempts = Vec::new();
+
+    match try_decode_signed_transaction_versioned(bytes) {
+        Ok(decoded) => return Ok(decoded),
+        Err(err) => attempts.push(format!("versioned: {err}")),
+    }
+
+    match SignedTransaction::decode_from_slice(bytes) {
+        Ok((decoded, used)) if used == bytes.len() => return Ok(decoded),
+        Ok((_, used)) => attempts.push(format!(
+            "bare adaptive: trailing bytes ({used} of {} used)",
+            bytes.len()
+        )),
+        Err(err) => attempts.push(format!("bare adaptive: {err}")),
+    }
+
     match norito::decode_from_bytes::<SignedTransaction>(bytes) {
-        Ok(decoded) => Ok(decoded),
-        Err(norito::core::Error::InvalidMagic) => {
-            let (decoded, used) =
-                SignedTransaction::decode_from_slice(bytes).map_err(norito_to_napi)?;
-            if used != bytes.len() {
-                return Err(norito_to_napi(norito::core::Error::LengthMismatch));
+        Ok(decoded) => return Ok(decoded),
+        Err(err) => attempts.push(format!("framed norito: {err}")),
+    }
+
+    if let Ok(view) = core::from_bytes_view(bytes) {
+        let payload = view.as_bytes();
+        let packed = core::header_flags::PACKED_STRUCT;
+        for (label, flags) in [
+            ("framed payload flags", view.flags() | view.flags_hint()),
+            ("framed payload no flags", 0),
+            ("framed payload packed-struct", packed),
+        ] {
+            match try_decode_signed_transaction_adaptive_with_flags(payload, flags) {
+                Ok(decoded) => return Ok(decoded),
+                Err(err) => attempts.push(format!("{label}: {err}")),
             }
-            Ok(decoded)
         }
-        Err(err) => Err(norito_to_napi(err)),
+    }
+
+    match try_decode_signed_transaction_adaptive_with_flags(bytes, 0) {
+        Ok(decoded) => Ok(decoded),
+        Err(err) => {
+            attempts.push(format!("headerless adaptive fallback: {err}"));
+            Err(napi::Error::new(
+                napi::Status::GenericFailure,
+                format!(
+                    "failed to decode signed transaction; attempts: {}",
+                    attempts.join("; ")
+                ),
+            ))
+        }
     }
 }
 
@@ -10842,7 +10910,7 @@ mod tests {
     fn kaigi_join_instruction_json_roundtrip() {
         disable_packed_struct_once();
         let mut call_id = json::Map::new();
-        call_id.insert("domain_id".into(), Value::String("wonderland".into()));
+        call_id.insert("domain_id".into(), Value::String("wonderland.sora".into()));
         call_id.insert("call_name".into(), Value::String("weekly-sync".into()));
 
         let mut commitment = json::Map::new();
@@ -11113,7 +11181,7 @@ mod tests {
             "Kaigi": {
                 "JoinKaigi": {
                     "call_id": {
-                        "domain_id": "wonderland",
+                        "domain_id": "wonderland.sora",
                         "call_name": "weekly-sync"
                     },
                     "participant": "__PARTICIPANT__",
@@ -11859,6 +11927,23 @@ mod tests {
     }
 
     #[test]
+    fn decode_signed_transaction_accepts_versioned_bytes() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(1));
+        let signed = builder.sign(keypair.private_key());
+        let mut versioned = vec![1];
+        versioned.extend(norito::codec::encode_adaptive(&signed));
+
+        let decoded = decode_signed_transaction(&versioned)
+            .expect("versioned signed transaction must decode");
+
+        assert_eq!(decoded, signed);
+    }
+
+    #[test]
     fn smart_contract_bytes_instruction_json_roundtrip() {
         let code_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let instruction: InstructionBox = Box::new(RegisterSmartContractBytes {
@@ -11929,7 +12014,7 @@ mod tests {
                 "CreateKaigi": norito_json!({
                     "call": norito_json!({
                         "id": norito_json!({
-                            "domain_id": "wonderland",
+                            "domain_id": "wonderland.sora",
                             "call_name": "weekly-sync"
                         }),
                         "host": host,
