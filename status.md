@@ -16,6 +16,33 @@ Last updated: 2026-04-21
 - Validation is in progress: `cargo check -p iroha_torii --features app_api --no-default-features`
   is currently waiting behind an existing workspace Cargo build lock.
 
+## 2026-04-21 Follow-up: iroha_data_model signed-query roundtrip compile unblock
+- `crates/iroha_data_model/src/query/mod.rs` no longer asks `assert_eq!` to
+  compare `QueryRequest` directly inside
+  `json_roundtrip_tests::signed_query_versioned_roundtrip`. That regression
+  test now compares the existing `QueryRequestJson` wrapper instead, which
+  avoids forcing `QueryRequest`/`QueryWithParams` to grow blanket
+  `PartialEq`/`Debug` impls for erased iterable-query payloads.
+- The same test now compares signature payload slices directly and no longer
+  calls `.as_slice()` on values that are already `&[u8]`.
+- Focused validation for this slice:
+  - `cargo test -p iroha_data_model signed_query_versioned_roundtrip --lib`
+
+## 2026-04-21 Follow-up: Torii account-query smoke uses loopback ConnectInfo
+- `crates/iroha_torii/tests/account_query_subrouter_smoke.rs` now attaches a
+  loopback `ConnectInfo<SocketAddr>` extension to each in-process
+  `oneshot(...)` request. The account query app-api handlers extract remote
+  socket metadata, so the smoke was previously testing Axum's missing-request-
+  extension path instead of the mounted `/v1/accounts/{account_id}/...`
+  endpoints.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test account_query_subrouter_smoke account_query_subrouter_exposes_endpoints -- --nocapture`
+- Broader `cargo test -p iroha_torii ...` package-target validation remains
+  blocked by unrelated pre-existing `cfg(test)` compile errors in
+  `crates/iroha_torii/src/routing.rs` (`sorafs_node_with_temp_storage` and
+  `reconfigure_sorafs_runtime_for_tests` not found from other test modules).
+
 ## 2026-04-21 Follow-up: iroha_data_model compute/oracle/offline fixture resync
 - Refreshed the stale `iroha_data_model` goldens and JSON fixtures behind the
   reported failures in `compute`, `governance`, `offline::poseidon`, and

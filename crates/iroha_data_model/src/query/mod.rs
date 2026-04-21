@@ -2349,11 +2349,11 @@ mod json_roundtrip_tests {
             SignedQuery::decode_all_versioned(&bytes).expect("versioned signed query must decode");
 
         assert_eq!(decoded.authority(), signed.authority());
-        assert_eq!(decoded.request(), signed.request());
         assert_eq!(
-            decoded.signature.0.payload().as_slice(),
-            signed.signature.0.payload().as_slice()
+            query_request_to_json(decoded.request()),
+            query_request_to_json(signed.request())
         );
+        assert_eq!(decoded.signature.0.payload(), signed.signature.0.payload());
     }
 
     #[cfg(not(feature = "fast_dsl"))]

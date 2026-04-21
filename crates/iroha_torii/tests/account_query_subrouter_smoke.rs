@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -113,6 +114,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .oneshot(
             Request::builder()
                 .uri(format!("/v1/accounts/{account_segment}/assets"))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -131,6 +133,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .method("POST")
                 .uri(format!("/v1/accounts/{account_segment}/assets/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -149,6 +152,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .method("POST")
                 .uri(format!("/v1/accounts/{account_segment}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -167,6 +171,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .uri(format!(
                     "/v1/accounts/{account_segment}/permissions?limit=10"
                 ))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

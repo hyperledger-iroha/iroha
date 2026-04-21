@@ -583,7 +583,7 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
         let block_header = valid_block.as_ref().header().clone();
-        let mut state_block = state.block(&block_header);
+        let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
 
         let settlement_commitment = LaneBlockCommitment {
