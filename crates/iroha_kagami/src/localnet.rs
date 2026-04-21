@@ -440,7 +440,7 @@ const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_FAUCET_AUTHORITY_BALANCE: u64 = 1_000_000;
-const LOCALNET_FAUCET_AMOUNT: &str = "1000";
+const LOCALNET_FAUCET_AMOUNT: &str = "25000";
 const LOCALNET_FAUCET_POW_DIFFICULTY_BITS: i64 = 8;
 const LOCALNET_FAUCET_POW_SCRYPT_LOG_N: i64 = 13;
 const LOCALNET_FAUCET_POW_SCRYPT_R: i64 = 8;

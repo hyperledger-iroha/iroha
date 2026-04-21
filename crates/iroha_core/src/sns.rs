@@ -45,6 +45,7 @@ pub use iroha_data_model::sns::{
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_YEAR: u64 = MS_PER_DAY * 365;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
+const LEGACY_ACCOUNT_ALIAS_LABEL_REGEX: &str = r"^[a-z0-9@.-]{3,255}$";
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
@@ -110,7 +111,7 @@ impl SnsNamespace {
 
     fn label_regex(self) -> &'static str {
         match self {
-            Self::AccountAlias => r"^[a-z0-9@.-]{3,255}$",
+            Self::AccountAlias => r"^[a-z0-9_@.-]{3,255}$",
             Self::Domain => r"^[a-z0-9-]{1,63}\.[a-z0-9-]{1,63}$",
             Self::Dataspace => r"^[a-z0-9-]{1,63}$",
         }
@@ -470,6 +471,27 @@ fn default_namespace_policy(namespace: SnsNamespace, steward: &AccountId) -> Suf
     }
 }
 
+fn upgrade_legacy_default_namespace_policy(
+    namespace: SnsNamespace,
+    policy: &mut SuffixPolicyV1,
+) -> bool {
+    if namespace != SnsNamespace::AccountAlias || policy.suffix_id != namespace.suffix_id() {
+        return false;
+    }
+
+    let mut changed = false;
+    for tier in &mut policy.pricing {
+        if tier.label_regex == LEGACY_ACCOUNT_ALIAS_LABEL_REGEX {
+            tier.label_regex = namespace.label_regex().to_owned();
+            changed = true;
+        }
+    }
+    if changed {
+        policy.policy_version = policy.policy_version.saturating_add(1);
+    }
+    changed
+}
+
 /// Seed the fixed namespace policies required by the on-chain SNS model.
 pub fn seed_default_namespace_policies(world: &mut World) {
     let steward = bootstrap_steward_for_world(world);
@@ -480,8 +502,21 @@ pub fn seed_default_namespace_policies(world: &mut World) {
     ] {
         let policy = default_namespace_policy(namespace, &steward);
         let key = policy_storage_key(policy.suffix_id);
-        if world.smart_contract_state.view().get(&key).is_none() {
-            world.smart_contract_state.insert(key, policy.encode());
+        let existing_policy = world
+            .smart_contract_state
+            .view()
+            .get(&key)
+            .and_then(|bytes| SuffixPolicyV1::decode(&mut bytes.as_slice()).ok());
+        match existing_policy {
+            Some(mut existing_policy)
+                if upgrade_legacy_default_namespace_policy(namespace, &mut existing_policy) =>
+            {
+                world.smart_contract_state.insert(key, existing_policy.encode());
+            }
+            Some(_) => {}
+            None => {
+                world.smart_contract_state.insert(key, policy.encode());
+            }
         }
     }
 }
@@ -1355,6 +1390,23 @@ mod tests {
     }
 
     #[test]
+    fn seed_default_namespace_policies_upgrades_legacy_account_alias_regex() {
+        let steward = owner();
+        let mut policy = default_namespace_policy(SnsNamespace::AccountAlias, &steward);
+        policy.pricing[0].label_regex = LEGACY_ACCOUNT_ALIAS_LABEL_REGEX.to_owned();
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(policy_storage_key(ACCOUNT_ALIAS_SUFFIX_ID), policy.encode());
+
+        seed_default_namespace_policies(&mut world);
+
+        let updated = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
+        assert_eq!(updated.pricing[0].label_regex, r"^[a-z0-9_@.-]{3,255}$");
+        assert_eq!(updated.policy_version, 2);
+    }
+
+    #[test]
     fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
         let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
         let genesis_key = KeyPair::random();
@@ -1486,6 +1538,41 @@ mod tests {
 
         assert_eq!(fetched.owner, owner);
         assert_eq!(fetched.selector.label, "treasury@banking");
+    }
+
+    #[test]
+    fn register_name_accepts_underscore_account_alias_labels() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        let record = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+                        label: "pk_gov_pharmacy@sbp".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register underscore account alias name");
+
+        assert_eq!(record.selector.label, "pk_gov_pharmacy@sbp");
+        assert_eq!(record.pricing_class, 0);
     }
 
     #[test]

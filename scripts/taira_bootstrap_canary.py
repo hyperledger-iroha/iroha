@@ -696,15 +696,6 @@ def attempt_faucet(
             "response": claim,
         }
 
-    rendered = claim if isinstance(claim, str) else json.dumps(claim, sort_keys=True)
-    if claim_status == 400 and "positive faucet asset balance" in rendered:
-        return {
-            "status": "already-funded",
-            "response_status": claim_status,
-            "request": claim_body,
-            "response": claim,
-        }
-
     return {
         "status": "failed",
         "response_status": claim_status,

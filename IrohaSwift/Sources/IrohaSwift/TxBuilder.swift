@@ -542,7 +542,7 @@ public enum BallotDirection: UInt8, Sendable {
 
 public enum CouncilDerivation: UInt8, Sendable {
     case vrf = 0
-    case fallback = 1
+    case backup = 1
 }
 
 public struct ProposeDeployContractRequest {
@@ -828,9 +828,9 @@ public enum PipelineStatusError: Error, LocalizedError {
             return explicit
         }
         if payload.content.status.kind == "Rejected",
-           let fallback = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !fallback.isEmpty {
-            return fallback
+           let contentMessage = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contentMessage.isEmpty {
+            return contentMessage
         }
         return nil
     }
@@ -955,9 +955,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 algorithm: .ed25519,
                 seed: seed
             ) else {
-                // Keep legacy seed-derived Ed25519 flows working even when the
-                // native bridge omits that helper on the current host.
-                return try SigningKey.ed25519(privateKey: seed, metadata: metadata)
+                throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
             }
             return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
         case .mlDsa:
@@ -2200,7 +2198,7 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public func decodeSignedTransaction(envelope: SignedTransactionEnvelope) -> String? {
-        NoritoNativeBridge.shared.decodeSignedTransaction(envelope.signedTransaction)
+        NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
     }
 
     public func getAssets(accountId: String,

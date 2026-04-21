@@ -10,6 +10,9 @@ import {
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
+  buildRegisterAssetDefinitionInstruction,
+  buildGrantAccountPermissionInstruction,
+  buildSetAssetDefinitionAliasInstruction,
   buildTransferAssetInstruction,
   buildTransferDomainInstruction,
   buildTransferAssetDefinitionInstruction,
@@ -728,6 +731,75 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
         metadata: ["invalid"],
       }),
     /plain object/i,
+  );
+});
+
+test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
+  const instruction = buildRegisterAssetDefinitionInstruction({
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    name: "shekel",
+    description: "Bank of Israel PoC asset",
+    alias: "shekel#boi.main",
+    scale: 2,
+    metadata: { purpose: "poc" },
+  });
+  assert.deepEqual(instruction, {
+    Register: {
+      AssetDefinition: {
+        id: ASSET_DEFINITION_ID,
+        name: "shekel",
+        description: "Bank of Israel PoC asset",
+        alias: "shekel#boi.main",
+        spec: { scale: 2 },
+        mintable: "Infinitely",
+        logo: null,
+        metadata: { purpose: "poc" },
+        balance_scope_policy: "Global",
+        confidential_policy: {
+          mode: "TransparentOnly",
+          vk_set_hash: null,
+          poseidon_params_id: null,
+          pedersen_params_id: null,
+          pending_transition: null,
+        },
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+test("buildGrantAccountPermissionInstruction defaults payload", () => {
+  const instruction = buildGrantAccountPermissionInstruction({
+    accountId: ACCOUNT_ID,
+    permission: { name: "register_zk_asset" },
+  });
+  assert.deepEqual(instruction, {
+    Grant: {
+      Permission: {
+        object: {
+          name: "register_zk_asset",
+          payload: null,
+        },
+        destination: ACCOUNT_ID_CANONICAL,
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+test("buildSetAssetDefinitionAliasInstruction supports clearing aliases", () => {
+  assert.deepEqual(
+    buildSetAssetDefinitionAliasInstruction({
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      alias: null,
+    }),
+    {
+      SetAssetDefinitionAlias: {
+        asset_definition_id: ASSET_DEFINITION_ID,
+        alias: null,
+        lease_expiry_ms: null,
+      },
+    },
   );
 });
 

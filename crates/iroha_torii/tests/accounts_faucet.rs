@@ -497,10 +497,14 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
 }
 
 #[tokio::test]
-async fn accounts_faucet_rejects_prefunded_accounts() {
+async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
     let FaucetTestContext {
         app,
         state,
+        queue,
+        chain_id,
+        asset_definition_id,
+        authority_id,
         user_id,
         pow_difficulty_bits,
         pow_scrypt_log_n,
@@ -523,7 +527,95 @@ async fn accounts_faucet_rejects_prefunded_accounts() {
         .oneshot(faucet_post_request(body))
         .await
         .expect("faucet response");
-    let _resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
+    let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
+
+    let expected_height = u64::try_from(state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
+        &state,
+        &queue,
+        &chain_id,
+        expected_height,
+    );
+    assert!(applied > 0);
+
+    let view = state.view();
+    let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
+    let user_asset = view
+        .world()
+        .asset(&user_asset_id)
+        .expect("user faucet asset");
+    assert_eq!(user_asset.value().as_ref().to_string(), "25001");
+    let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
+    let authority_asset = view
+        .world()
+        .asset(&authority_asset_id)
+        .expect("authority faucet asset");
+    assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
+}
+
+#[tokio::test]
+async fn accounts_faucet_allows_repeated_claims_for_same_account() {
+    let FaucetTestContext {
+        app,
+        state,
+        queue,
+        chain_id,
+        asset_definition_id,
+        authority_id,
+        user_id,
+        pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
+        ..
+    } = build_faucet_test_context(false);
+
+    let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
+    for expected_extra_bits in [0_u8, 1] {
+        let difficulty_bits = pow_difficulty_bits.saturating_add(expected_extra_bits);
+        let (pow_anchor_height, pow_nonce_hex) =
+            solve_faucet_pow(&state, &user_id, difficulty_bits, &scrypt_params);
+        let body = json_object(vec![
+            json_entry("account_id", user_id.to_string()),
+            json_entry("pow_anchor_height", pow_anchor_height),
+            json_entry("pow_nonce_hex", pow_nonce_hex),
+        ]);
+        let body = norito::json::to_json(&body).expect("serialize faucet request");
+        let resp = app
+            .clone()
+            .oneshot(faucet_post_request(body))
+            .await
+            .expect("faucet response");
+        let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
+
+        let expected_height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let applied = iroha_torii::test_utils::apply_queued_in_one_block(
+            &state,
+            &queue,
+            &chain_id,
+            expected_height,
+        );
+        assert!(applied > 0);
+    }
+
+    let view = state.view();
+    let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
+    let user_asset = view
+        .world()
+        .asset(&user_asset_id)
+        .expect("user faucet asset");
+    assert_eq!(user_asset.value().as_ref().to_string(), "50000");
+    let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
+    let authority_balance = view
+        .world()
+        .asset(&authority_asset_id)
+        .map(|asset| asset.value().as_ref().to_string())
+        .unwrap_or_else(|_| "0".to_owned());
+    assert_eq!(authority_balance, "0");
 }
 
 #[tokio::test]

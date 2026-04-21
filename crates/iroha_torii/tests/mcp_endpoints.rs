@@ -296,6 +296,20 @@ fn tool_is_error(response: &Value) -> bool {
         .expect("tool isError flag")
 }
 
+fn assert_tool_error(response: &Value, context: &str) {
+    let result = response
+        .get("result")
+        .unwrap_or_else(|| panic!("{context}: expected MCP result, got {response:?}"));
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| panic!("{context}: expected MCP isError flag, got {response:?}"));
+    assert!(
+        is_error,
+        "{context}: expected MCP tool error, got {response:?}"
+    );
+}
+
 fn assert_openai_compatible_top_level_input_schema(tool_name: &str, schema: &norito::json::Map) {
     assert_eq!(
         schema.get("type").and_then(Value::as_str),
@@ -2981,7 +2995,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.offline.revocations.register"),
         "expected agent-friendly offline revocations register MCP tool"
     );
-    for legacy_name in [
+    for retired_name in [
         "iroha.offline.allowances.get",
         "iroha.offline.allowances.issue",
         "iroha.offline.allowances.list",
@@ -3007,8 +3021,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "iroha.offline.transfers.proof",
     ] {
         assert!(
-            !names.iter().any(|name| name == legacy_name),
-            "legacy offline MCP alias should be absent: {legacy_name}"
+            !names.iter().any(|name| name == retired_name),
+            "retired offline MCP alias should be absent: {retired_name}"
         );
     }
     assert!(
@@ -5396,6 +5410,7 @@ async fn mcp_jsonrpc_tools_call_post_transaction_dispatches_binary_payload() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     for (id, tool_name) in [
@@ -5435,10 +5450,11 @@ async fn mcp_jsonrpc_tools_call_post_transaction_dispatches_binary_payload() {
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_post_transaction_accepts_hex_shortcut() {
+async fn mcp_jsonrpc_tools_call_agent_alias_post_transaction_rejects_unknown_payload_field() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5450,7 +5466,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_post_transaction_accepts_hex_shortcu
             "params": {
                 "name": "iroha.transactions.submit",
                 "arguments": {
-                    "signed_tx_hex": "01020304"
+                    "wire_hex": "01020304"
                 }
             }
         }),
@@ -5458,25 +5474,25 @@ async fn mcp_jsonrpc_tools_call_agent_alias_post_transaction_accepts_hex_shortcu
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid signed transaction bytes from hex shortcut should be marked as MCP tool error"
+    assert_tool_error(
+        &call,
+        "unknown signed transaction payload field should be marked as MCP tool error",
     );
     let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid Norito bytes via hex shortcut to be rejected"
-    );
+    let message = structured
+        .get("message")
+        .and_then(Value::as_str)
+        .expect("tool error message");
+    assert!(message.contains("wire_hex"));
+    assert!(message.contains("body_base64"));
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_base64_shortcut() {
+async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_dispatches_binary_payload() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5488,7 +5504,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_base64_shortcut
             "params": {
                 "name": "iroha.queries.submit",
                 "arguments": {
-                    "query_base64": "AQIDBA=="
+                    "body_base64": "AQIDBA=="
                 }
             }
         }),
@@ -5496,9 +5512,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_base64_shortcut
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid signed query bytes should be marked as MCP tool error"
+    assert_tool_error(
+        &call,
+        "invalid signed query bytes should be marked as MCP tool error",
     );
     let structured = structured_content(&call);
     assert!(
@@ -5511,10 +5527,11 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_base64_shortcut
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_hex_shortcut() {
+async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_rejects_unknown_payload_field() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5526,7 +5543,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_hex_shortcut() 
             "params": {
                 "name": "iroha.queries.submit",
                 "arguments": {
-                    "signed_query_hex": "01020304"
+                    "wire_hex": "01020304"
                 }
             }
         }),
@@ -5534,18 +5551,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_accepts_hex_shortcut() 
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid signed query bytes from hex shortcut should be marked as MCP tool error"
+    assert_tool_error(
+        &call,
+        "unknown signed query payload field should be marked as MCP tool error",
     );
     let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid Norito query bytes via hex shortcut to be rejected"
-    );
+    let message = structured
+        .get("message")
+        .and_then(Value::as_str)
+        .expect("tool error message");
+    assert!(message.contains("wire_hex"));
+    assert!(message.contains("body_base64"));
 }
 
 #[tokio::test]
@@ -5667,6 +5683,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_erro
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5678,7 +5695,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_erro
             "params": {
                 "name": "iroha.transactions.submit_and_wait",
                 "arguments": {
-                    "signed_tx_hex": "01020304",
+                    "wire_hex": "01020304",
                     "timeout_ms": 1000,
                     "poll_interval_ms": 100
                 }
@@ -5688,18 +5705,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_erro
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid signed transaction bytes should be surfaced as MCP tool error"
+    assert_tool_error(
+        &call,
+        "unknown signed transaction payload field should be surfaced as MCP tool error",
     );
     let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected submit+wait alias to surface submit HTTP error status"
-    );
+    let message = structured
+        .get("message")
+        .and_then(Value::as_str)
+        .expect("tool error message");
+    assert!(message.contains("wire_hex"));
+    assert!(message.contains("body_base64"));
 }
 
 #[tokio::test]

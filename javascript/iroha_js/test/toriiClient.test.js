@@ -16669,6 +16669,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     entrypoint: "increment",
     payload,
     gasAssetId: FIXTURE_ASSET_ID_D,
+    feeSponsor: FIXTURE_BOB_ID,
     gasLimit: 42n,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
@@ -16680,6 +16681,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     entrypoint: "increment",
     payload,
     gas_asset_id: FIXTURE_ASSET_ID_D,
+    fee_sponsor: FIXTURE_BOB_ID,
     gas_limit: 42,
   });
   assert.deepEqual(result, {

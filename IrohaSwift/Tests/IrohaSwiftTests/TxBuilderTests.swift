@@ -286,13 +286,8 @@ final class TxBuilderTests: XCTestCase {
     private func normalizeNativeSignedTransaction(
         _ native: NativeSignedTransaction
     ) -> (signed: Data, norito: Data) {
-        if let framed = noritoDecodeFrame(native.signedBytes) {
-            return (signed: framed.payload, norito: native.signedBytes)
-        }
-        let norito = noritoEncode(typeName: "iroha_data_model::transaction::signed::SignedTransaction",
-                                  payload: native.signedBytes,
-                                  flags: 0x04)
-        return (signed: native.signedBytes, norito: norito)
+        XCTAssertEqual(native.signedBytes.first, 1)
+        return (signed: Data(native.signedBytes.dropFirst()), norito: native.signedBytes)
     }
 
     private func makeRegisterZkAssetRequest(authority: String,
@@ -371,7 +366,8 @@ final class TxBuilderTests: XCTestCase {
                                        description: nil,
                                        ttlMs: 90)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
-        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertNil(envelope.payload, "Swift encoder does not embed payload bytes yet")
         XCTAssertEqual(envelope.transactionHash.count, 32)
         if let payload = envelope.payload {
@@ -889,7 +885,8 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeRegisterZkAssetRequest(authority: authority, ttlMs: 60)
         let envelope = try sdk.buildRegisterZkAsset(request: request, keypair: keypair)
-        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertEqual(envelope.transactionHash.count, 32)
     }
 
@@ -899,7 +896,8 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
         let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
-        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertEqual(envelope.transactionHash.count, 32)
     }
 
@@ -1047,7 +1045,7 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(Set(stub.submittedModes), [.pipeline])
     }
 
-    func testFallbackTransferMatchesNativeBridge() throws {
+    func testSwiftTransferMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -1060,9 +1058,9 @@ final class TxBuilderTests: XCTestCase {
                                       description: nil,
                                       ttlMs: 90)
 
-        let fallback = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
-                                                                  keypair: keypair,
-                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
+                                                               keypair: keypair,
+                                                               creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeTransfer(chainId: request.chainId,
                                                                          authority: request.authority,
@@ -1077,9 +1075,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testSigningKeyTransferMatchesKeypairEncoding() throws {
@@ -1104,7 +1102,7 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(withKeypair.transactionHash, withSigningKey.transactionHash)
     }
 
-    func testFallbackMintMatchesNativeBridge() throws {
+    func testSwiftMintMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -1116,9 +1114,9 @@ final class TxBuilderTests: XCTestCase {
                                   destination: authority,
                                   ttlMs: 45)
 
-        let fallback = try SwiftTransactionEncoder.encodeMint(request: request,
-                                                              keypair: keypair,
-                                                              creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeMint(request: request,
+                                                           keypair: keypair,
+                                                           creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeMint(chainId: request.chainId,
                                                                      authority: request.authority,
@@ -1133,12 +1131,12 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
-    func testFallbackBurnMatchesNativeBridge() throws {
+    func testSwiftBurnMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -1150,9 +1148,9 @@ final class TxBuilderTests: XCTestCase {
                                   destination: authority,
                                   ttlMs: 120)
 
-        let fallback = try SwiftTransactionEncoder.encodeBurn(request: request,
-                                                              keypair: keypair,
-                                                              creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeBurn(request: request,
+                                                           keypair: keypair,
+                                                           creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeBurn(chainId: request.chainId,
                                                                      authority: request.authority,
@@ -1167,9 +1165,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testSetMetadataMatchesNativeBridge() throws {
@@ -1186,9 +1184,9 @@ final class TxBuilderTests: XCTestCase {
                                          value: value,
                                          ttlMs: 30)
 
-        let fallback = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
-                                                                     keypair: keypair,
-                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
+                                                                  keypair: keypair,
+                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeSetKeyValue(
             chainId: request.chainId,
@@ -1206,9 +1204,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testClaimIdentifierMatchesNativeBridge() throws {
@@ -1219,9 +1217,9 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 75)
 
-        let fallback = try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
-                                                                         keypair: keypair,
-                                                                         creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                      keypair: keypair,
+                                                                      creationTimeMs: Self.fixtureCreationTimeMs)
 
         let receiptJSON = try JSONEncoder().encode(request.receipt)
         guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
@@ -1239,9 +1237,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
@@ -1264,9 +1262,9 @@ final class TxBuilderTests: XCTestCase {
                                                    mode: .plain,
                                                    ttlMs: 20)
 
-        let fallback = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
-                                                                       keypair: keypair,
-                                                                       creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
+                                                                    keypair: keypair,
+                                                                    creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernanceProposeDeploy(
             chainId: request.chainId,
@@ -1287,9 +1285,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testPersistCouncilMatchesNativeBridge() throws {
@@ -1306,9 +1304,9 @@ final class TxBuilderTests: XCTestCase {
                                             derivedBy: .vrf,
                                             ttlMs: 15)
 
-        let fallback = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                        keypair: keypair,
-                                                                        creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
+                                                                     keypair: keypair,
+                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
         let membersJson = try NoritoJSON(request.members).data
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
@@ -1327,9 +1325,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testNativeBridgeTransferWhenAvailable() throws {
@@ -1573,9 +1571,9 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeShieldRequest(authority: authority)
-        let fallback = try SwiftTransactionEncoder.encodeShield(request: request,
-                                                                keypair: keypair,
-                                                                creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeShield(request: request,
+                                                             keypair: keypair,
+                                                             creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeShield(chainId: request.chainId,
                                                                        authority: request.authority,
@@ -1594,9 +1592,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testUnshieldRequestRequiresInputs() throws {
@@ -1665,9 +1663,9 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeUnshieldRequest(authority: authority)
-        let fallback = try SwiftTransactionEncoder.encodeUnshield(request: request,
-                                                                  keypair: keypair,
-                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeUnshield(request: request,
+                                                               keypair: keypair,
+                                                               creationTimeMs: Self.fixtureCreationTimeMs)
         guard let native = try? NoritoNativeBridge.shared.encodeUnshield(chainId: request.chainId,
                                                                          authority: request.authority,
                                                                          creationTimeMs: Self.fixtureCreationTimeMs,
@@ -1683,9 +1681,9 @@ final class TxBuilderTests: XCTestCase {
             return
         }
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
