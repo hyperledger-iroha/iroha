@@ -253,7 +253,7 @@ public final class HttpClientTransportStatusTests {
           : "Expected TransactionStatusHttpException";
       final TransactionStatusHttpException statusError = (TransactionStatusHttpException) cause;
       assert "{\"code\":\"E123\",\"status\":\"invalid\"}".equals(statusError.responseBody().orElse(null))
-          : "Expected compact sorted JSON fallback";
+          : "Expected compact sorted JSON error body";
       assert cause.getMessage().contains("{\"code\":\"E123\",\"status\":\"invalid\"}")
           : "Expected compact sorted JSON in exception text";
     }

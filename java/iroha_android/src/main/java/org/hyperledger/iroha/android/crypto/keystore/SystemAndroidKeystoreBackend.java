@@ -22,14 +22,11 @@ import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
  *
  * <p>The implementation avoids compile-time dependencies on {@code android.*} packages so the
  * desktop JVM build remains compilable. When the runtime does not expose the Android Keystore
- * classes (for example, on desktop tests), the factory returns {@link Optional#empty()} and callers
- * fall back to the stub/software providers.
+ * classes (for example, on desktop tests), the factory returns {@link Optional#empty()}.
  */
 final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
 
   private static final String ANDROID_KEYSTORE = "AndroidKeyStore";
-  private static final String STRONGBOX_UNAVAILABLE_CLASS =
-      "android.security.keystore.StrongBoxUnavailableException";
   private static final String KEY_GEN_SPEC_BUILDER_CLASS =
       "android.security.keystore.KeyGenParameterSpec$Builder";
   private static final String KEY_PROPERTIES_CLASS =
@@ -135,11 +132,6 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     try {
       spec = buildKeyGenParameterSpec(alias, parameters, strongBoxRequested);
     } catch (final GeneralSecurityException ex) {
-      if (strongBoxRequested
-          && parameters.allowStrongBoxFallback()
-          && isStrongBoxUnavailable(ex)) {
-        return generateInternal(generator, alias, parameters, /*strongBoxRequested=*/ false);
-      }
       throw new KeyManagementException("Failed to prepare Android Keystore parameters", ex);
     }
 
@@ -148,17 +140,8 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       final KeyPair pair = generator.generateKeyPair();
       return new KeyGenerationResult(pair, strongBoxRequested);
     } catch (final ProviderException ex) {
-      if (strongBoxRequested && parameters.allowStrongBoxFallback() && isStrongBoxUnavailable(ex)) {
-        // Retry without StrongBox backing.
-        return generateInternal(generator, alias, parameters, /*strongBoxRequested=*/ false);
-      }
       throw new KeyManagementException("Android Keystore generation failed", ex);
     } catch (final GeneralSecurityException ex) {
-      if (strongBoxRequested
-          && parameters.allowStrongBoxFallback()
-          && isStrongBoxUnavailable(ex)) {
-        return generateInternal(generator, alias, parameters, /*strongBoxRequested=*/ false);
-      }
       throw new KeyManagementException("Android Keystore generation failed", ex);
     }
   }
@@ -271,7 +254,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       }
 
       if (strongBox) {
-        // This throws when StrongBox is unsupported; propagate so the caller can decide on fallback.
+        // This throws when StrongBox is unsupported; propagate so the caller can decide on downgrade.
         invoke(builder, "setIsStrongBoxBacked", new Class<?>[] {boolean.class}, true);
       } else {
         invokeIfPresent(builder, "setIsStrongBoxBacked", new Class<?>[] {boolean.class}, false);
@@ -322,20 +305,6 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     }
   }
 
-  private static boolean isStrongBoxUnavailable(final Throwable throwable) {
-    Throwable current = throwable;
-    while (current != null) {
-      final String className = current.getClass().getName();
-      if (STRONGBOX_UNAVAILABLE_CLASS.equals(className)
-          || current instanceof NoSuchMethodException
-          || current instanceof ClassNotFoundException) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
-  }
-
   private static boolean detectStrongBoxSupport(final KeyStore keyStore) {
     try {
       final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519", ANDROID_KEYSTORE);
@@ -349,9 +318,6 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     } catch (final ProviderException ex) {
       return false;
     } catch (final GeneralSecurityException ex) {
-      if (isStrongBoxUnavailable(ex)) {
-        return false;
-      }
       return false;
     }
   }

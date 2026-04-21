@@ -145,16 +145,15 @@ available.
 ### December 2026
 
 - Rust Norito restricted debug-only environment toggles (`NORITO_TRACE`,
-  `NORITO_DISABLE_PACKED_STRUCT`, GPU/parallel stage1 cutover shims) to
+  `NORITO_DISABLE_PACKED_STRUCT`, GPU/parallel stage1 transition hooks) to
   debug/test builds and now uses fixed defaults in release mode. The Java
-  binding exposes no environment shims, so behaviour remains aligned; this
+  binding exposes no environment overrides, so behaviour remains aligned; this
   note records the parity check for the release-mode change.
 
 ### December 2027
 
-- Revalidated parity after the Rust Norito bare decode fallback for exact-length
-  drift; Java bindings required no code changes beyond rerunning the parity
-  suite.
+- Revalidated parity after the Rust Norito exact-length bare decode check;
+  Java bindings required no code changes beyond rerunning the parity suite.
 
 ## Installation (JDK 21 on macOS)
 Homebrew’s Temurin cask ships the current GA JDK 21 release:

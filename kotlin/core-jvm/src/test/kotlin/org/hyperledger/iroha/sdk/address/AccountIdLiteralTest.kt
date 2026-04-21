@@ -34,7 +34,7 @@ class AccountIdLiteralTest {
     @Test
     fun rejectsMalformedAndHexLiterals() {
         val address = AccountAddress.fromAccount(ByteArray(32) { 0x44.toByte() }, "ed25519")
-        val malformed = "legacy-i105"
+        val malformed = "malformed-i105"
         val malformedError = assertFailsWith<IllegalArgumentException> {
             requireCanonicalI105Address(malformed, "accountId")
         }
@@ -61,12 +61,12 @@ class AccountIdLiteralTest {
     }
 
     @Test
-    fun parseEncodedRejectsFullwidthSentinelLiteral() {
+    fun parseAnyRejectsFullwidthSentinelLiteral() {
         val canonical = sampleI105(0x55)
         val noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ")
 
         val parseError = assertFailsWith<AccountAddressException> {
-            AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            AccountAddress.parseAny(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
         assertEquals(AccountAddressErrorCode.MISSING_I105_SENTINEL, parseError.code)
 

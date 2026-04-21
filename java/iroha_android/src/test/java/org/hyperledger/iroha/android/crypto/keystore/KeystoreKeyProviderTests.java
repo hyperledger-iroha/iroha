@@ -81,7 +81,7 @@ public final class KeystoreKeyProviderTests {
     challengeUnsupportedBackendFails();
     strongBoxRequiredRejectsNonStrongBoxBackend();
     strongBoxPreferredChoosesStrongBoxWhenAvailable();
-    strongBoxPreferredFallbackEmitsTelemetry();
+    strongBoxPreferredDowngradeEmitsTelemetry();
     System.out.println("[IrohaAndroid] Keystore provider scaffolding tests passed.");
   }
 
@@ -266,7 +266,7 @@ public final class KeystoreKeyProviderTests {
     assert threw : "Verification must fail when cached attestation does not match the challenge";
     assert backend.attestationGenerations() == 1
         : "Verification should generate fresh attestation for the supplied challenge";
-    assert backend.attestationReads() == 1 : "Fallback attestation should be fetched when present";
+    assert backend.attestationReads() == 1 : "Cached attestation should be fetched when present";
 
     backend.setAttestation(
         "alias",
@@ -460,8 +460,7 @@ public final class KeystoreKeyProviderTests {
     final KeyGenParameters params = backend.lastParameters();
     assert params != null : "Backend should receive parameters";
     assert params.preferStrongBox() : "Preference should signal StrongBox preference";
-    assert params.allowStrongBoxFallback()
-        : "Preferred should allow fallback when StrongBox unavailable";
+    assert !params.requireStrongBox() : "Preferred request must not require StrongBox";
   }
 
   private static void strongBoxRequiredRejectsNonStrongBoxBackend() throws Exception {
@@ -509,7 +508,7 @@ public final class KeystoreKeyProviderTests {
         : "TEE backend should not be used when StrongBox is available";
   }
 
-  private static void strongBoxPreferredFallbackEmitsTelemetry() throws Exception {
+  private static void strongBoxPreferredDowngradeEmitsTelemetry() throws Exception {
     final FakeBackend teeBackend =
         new FakeBackend(KeyProviderMetadata.trustedEnvironment("fake-tee-backend"));
     final KeystoreKeyProvider provider =
@@ -529,14 +528,14 @@ public final class KeystoreKeyProviderTests {
     final IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider), emitter);
 
     manager.generateOrLoad(
-        "sb-fallback", IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
+        "sb-downgrade", IrohaKeyManager.KeySecurityPreference.STRONGBOX_PREFERRED);
 
     assert "android.keystore.keygen".equals(sink.lastSignalId())
         : "Key generation telemetry should be emitted";
     final Map<String, Object> fields = sink.lastFields();
     assert fields != null : "Telemetry fields must be recorded";
-    assert Boolean.TRUE.equals(fields.get("fallback"))
-        : "Fallback flag should be true when StrongBox preference falls back to TEE";
+    assert Boolean.TRUE.equals(fields.get("route_downgraded"))
+        : "Route downgrade flag should be true when StrongBox preference uses TEE";
     assert "hardware".equals(fields.get("route"))
         : "Route should reflect hardware (TEE) when StrongBox is unavailable";
     assert "strongbox_preferred".equals(fields.get("preference"))

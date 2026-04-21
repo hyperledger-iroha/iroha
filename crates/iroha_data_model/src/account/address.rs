@@ -488,8 +488,8 @@ impl AccountAddress {
     /// # Errors
     ///
     /// Returns [`AccountAddressError::UnsupportedAddressFormat`] for unsupported
-    /// non-i105 literals (including canonical-hex parser input) and malformed
-    /// i105 lexical forms.
+    /// non-i105 literals (including canonical-hex parser input). Once an i105
+    /// sentinel is present, semantic i105 decode errors are preserved.
     ///
     /// Preserves semantic decode failures such as checksum and discriminant
     /// mismatches.
@@ -507,10 +507,7 @@ impl AccountAddress {
         let address =
             Self::from_i105_for_discriminant(trimmed, expected_discriminant).map_err(|err| {
                 match err {
-                    AccountAddressError::MissingI105Sentinel
-                    | AccountAddressError::I105TooShort
-                    | AccountAddressError::InvalidI105Char(_)
-                    | AccountAddressError::InvalidI105Digit(_) => {
+                    AccountAddressError::MissingI105Sentinel => {
                         AccountAddressError::UnsupportedAddressFormat
                     }
                     other => other,
@@ -2275,6 +2272,30 @@ mod tests {
         let err = AccountAddress::parse_encoded("invalid-address", None)
             .expect_err("garbage literal rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
+    }
+
+    #[test]
+    fn parse_encoded_preserves_malformed_i105_errors() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let mut chars = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+            .expect("i105")
+            .chars()
+            .collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = '0';
+        let invalid = chars.into_iter().collect::<String>();
+
+        let err = AccountAddress::parse_encoded(&invalid, Some(CHAIN_DISCRIMINANT_SORA))
+            .expect_err("i105 invalid char must preserve semantic error");
+        assert!(matches!(err, AccountAddressError::InvalidI105Char('0')));
+
+        let short = i105_sentinel_for_discriminant(CHAIN_DISCRIMINANT_SORA);
+        let err = AccountAddress::parse_encoded(&short, Some(CHAIN_DISCRIMINANT_SORA))
+            .expect_err("i105 sentinel-only literal must preserve semantic error");
+        assert!(matches!(err, AccountAddressError::I105TooShort));
     }
 
     #[test]

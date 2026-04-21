@@ -29,7 +29,7 @@ public final class ConnectErrors {
 
   public static ConnectError from(
       final Throwable throwable, final ConnectErrorOptions options) {
-    final ConnectError base = classifyOrFallback(throwable);
+    final ConnectError base = classifyOrUnknown(throwable);
     if (options == null) {
       return base;
     }
@@ -62,7 +62,7 @@ public final class ConnectErrors {
     return builder.build();
   }
 
-  private static ConnectError classifyOrFallback(final Throwable input) {
+  private static ConnectError classifyOrUnknown(final Throwable input) {
     if (input == null) {
       return unknown(null);
     }
@@ -198,8 +198,8 @@ public final class ConnectErrors {
       final ConnectErrorCategory category,
       final String code,
       final Throwable cause,
-      final String fallback) {
-    final String message = messageOrDefault(cause, fallback);
+      final String defaultMessage) {
+    final String message = messageOrDefault(cause, defaultMessage);
     final ConnectError.Builder builder =
         ConnectError.builder()
             .category(category)
@@ -224,13 +224,13 @@ public final class ConnectErrors {
         "Unknown Connect error");
   }
 
-  private static String messageOrDefault(final Throwable cause, final String fallback) {
+  private static String messageOrDefault(final Throwable cause, final String defaultMessage) {
     if (cause == null) {
-      return fallback;
+      return defaultMessage;
     }
     final String message = cause.getMessage();
     if (message == null || message.isEmpty()) {
-      return fallback;
+      return defaultMessage;
     }
     return message;
   }

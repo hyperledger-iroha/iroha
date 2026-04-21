@@ -57,7 +57,7 @@
     "build:dist": "node ./scripts/build-dist.mjs",
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
     "test": "npm run build:native && node --test",
-    "test:js": "IROHA_JS_DISABLE_NATIVE=1 node --test",
+    "test:dist": "npm run build:dist && node --test",
     "example:offline": "node ./recipes/offline_queue.mjs",
     "example:offline:connect": "node ./recipes/offline_queue.mjs",
     "example:offline:pipeline": "node ./recipes/offline_pipeline.mjs",

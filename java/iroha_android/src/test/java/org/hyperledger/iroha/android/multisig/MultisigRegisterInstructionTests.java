@@ -69,7 +69,7 @@ public final class MultisigRegisterInstructionTests {
     } catch (final IllegalArgumentException expected) {
       threw = expected.getMessage().contains("@domain");
     }
-    assert threw : "expected legacy controller literal to be rejected";
+    assert threw : "expected non-canonical controller literal to be rejected";
   }
 
   private static void testDerivedControllerIsRejected() {

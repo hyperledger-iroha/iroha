@@ -15,9 +15,7 @@ import java.util.ArrayDeque
 import java.util.LinkedHashSet
 import javax.crypto.Cipher
 import javax.crypto.Mac
-import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 import org.hyperledger.iroha.sdk.crypto.MlDsaKeyMaterial
 import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
@@ -28,11 +26,9 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 private const val HMAC_ALGORITHM = "HmacSHA256"
 private const val DIGEST_ALGORITHM = "SHA-256"
 private const val KEY_ALGORITHM = "Ed25519"
-private const val PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256"
 private const val AES_TRANSFORMATION = "AES/GCM/NoPadding"
 private const val GCM_TAG_BITS = 128
 private const val ED25519_SPKI_SIZE = 44
-private const val DEFAULT_PBKDF2_ITERATIONS = 350_000
 private const val DEFAULT_ARGON2_MEMORY_KIB = 64 * 1024
 private const val DEFAULT_ARGON2_ITERATIONS = 3
 private const val DEFAULT_ARGON2_PARALLELISM = 2
@@ -51,14 +47,12 @@ private val ED25519_OID = byteArrayOf(0x2b, 0x65, 0x70)
  * Exports and recovers software-generated signing keys using salted HKDF + AES-GCM.
  *
  * Each export uses a fresh random salt and nonce bound to the alias, derives a key with a
- * memory-hard KDF (Argon2id preferred, PBKDF2 fallback), and records the KDF kind/work factor in
- * the bundle. The exported bundle contains the public key, nonce, salt, and ciphertext so the
+ * memory-hard Argon2id KDF and records the KDF kind/work factor in the bundle. The exported bundle
+ * contains the public key, nonce, salt, and ciphertext so the
  * receiver can validate and recover the key pair deterministically across JVMs.
  */
 object DeterministicKeyExporter {
 
-    @JvmField
-    internal val KDF_KIND_PBKDF2_HMAC_SHA256 = 1
     @JvmField
     internal val KDF_KIND_ARGON2ID = 2
 
@@ -89,7 +83,7 @@ object DeterministicKeyExporter {
         val nonce = ByteArray(NONCE_LENGTH_BYTES)
         fillRandomNonZero(nonce)
         guardSaltNonceReuse(salt, nonce)
-        val kdf = derivePreferredKey(alias, passphrase, salt)
+        val kdf = deriveExportKey(alias, passphrase, salt)
         try {
             val cipher = Cipher.getInstance(AES_TRANSFORMATION)
             val spec = GCMParameterSpec(GCM_TAG_BITS, nonce)
@@ -119,8 +113,7 @@ object DeterministicKeyExporter {
     @JvmStatic
     @Throws(KeyExportException::class)
     fun importKeyPair(bundle: KeyExportBundle, passphrase: CharArray): KeyPairData {
-        if (bundle.version != KeyExportBundle.VERSION_V3
-            && bundle.version != KeyExportBundle.VERSION_V4) {
+        if (bundle.version != KeyExportBundle.VERSION_V4) {
             throw KeyExportException("Unsupported key export version: ${bundle.version}")
         }
         ensurePassphraseStrength(passphrase)
@@ -287,31 +280,18 @@ object DeterministicKeyExporter {
             throw KeyExportException("Invalid KDF work factor: $workFactor")
         }
         return when (kdfKind) {
-            KDF_KIND_PBKDF2_HMAC_SHA256 -> derivePbkdf2Key(alias, passphrase, salt, workFactor)
             KDF_KIND_ARGON2ID -> deriveArgon2Key(alias, passphrase, salt, workFactor)
             else -> throw KeyExportException("Unsupported KDF kind: $kdfKind")
         }
     }
 
-    private fun derivePreferredKey(
+    private fun deriveExportKey(
         alias: String,
         passphrase: CharArray,
         salt: ByteArray,
     ): KdfResult {
-        if (argon2Available()) {
-            try {
-                val argonKey = deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS)
-                return KdfResult(argonKey, KDF_KIND_ARGON2ID, DEFAULT_ARGON2_ITERATIONS)
-            } catch (_: KeyExportException) {
-                // fall through to PBKDF2 fallback
-            } catch (_: RuntimeException) {
-                // fall through to PBKDF2 fallback
-            } catch (_: LinkageError) {
-                // fall through to PBKDF2 fallback
-            }
-        }
-        val pbkdfKey = derivePbkdf2Key(alias, passphrase, salt, DEFAULT_PBKDF2_ITERATIONS)
-        return KdfResult(pbkdfKey, KDF_KIND_PBKDF2_HMAC_SHA256, DEFAULT_PBKDF2_ITERATIONS)
+        val argonKey = deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS)
+        return KdfResult(argonKey, KDF_KIND_ARGON2ID, DEFAULT_ARGON2_ITERATIONS)
     }
 
     private fun deriveArgon2Key(
@@ -320,9 +300,6 @@ object DeterministicKeyExporter {
         salt: ByteArray,
         iterations: Int,
     ): ByteArray {
-        if (!argon2Available()) {
-            throw KeyExportException("Argon2id derivation unavailable")
-        }
         val aliasBytes = alias.toByteArray(Charsets.UTF_8)
         val kdfSalt = ByteBuffer.allocate(salt.size + aliasBytes.size)
             .put(salt)
@@ -361,44 +338,12 @@ object DeterministicKeyExporter {
             return derived
         } catch (ex: ReflectiveOperationException) {
             throw KeyExportException("Argon2id derivation unavailable", ex)
+        } catch (ex: LinkageError) {
+            throw KeyExportException("Argon2id derivation unavailable", ex)
         } finally {
             kdfSalt.fill(0)
             passphraseBytes.fill(0)
             kdfOutput.fill(0)
-        }
-    }
-
-    private fun derivePbkdf2Key(
-        alias: String,
-        passphrase: CharArray,
-        salt: ByteArray,
-        iterations: Int,
-    ): ByteArray {
-        val aliasBytes = alias.toByteArray(Charsets.UTF_8)
-        val kdfSalt = ByteBuffer.allocate(salt.size + aliasBytes.size)
-            .put(salt)
-            .put(aliasBytes)
-            .array()
-        var spec: PBEKeySpec? = null
-        var kdfOutput: ByteArray? = null
-        try {
-            spec = PBEKeySpec(passphrase, kdfSalt, iterations, AES_KEY_LENGTH_BYTES * 8)
-            val factory = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM)
-            kdfOutput = factory.generateSecret(spec).encoded
-            val derived = hkdf(
-                kdfOutput,
-                sha256(hkdfSaltDomain(), aliasBytes),
-                hkdfInfoDomain().toByteArray(Charsets.UTF_8),
-                AES_KEY_LENGTH_BYTES,
-            )
-            kdfOutput.fill(0)
-            return derived
-        } catch (ex: GeneralSecurityException) {
-            throw KeyExportException("PBKDF2 derivation failed", ex)
-        } finally {
-            spec?.clearPassword()
-            kdfOutput?.fill(0)
-            kdfSalt.fill(0)
         }
     }
 
@@ -456,17 +401,6 @@ object DeterministicKeyExporter {
             return digest.digest()
         } catch (ex: GeneralSecurityException) {
             throw KeyExportException("SHA-256 digest failed", ex)
-        }
-    }
-
-    private fun argon2Available(): Boolean {
-        return try {
-            Class.forName("org.bouncycastle.crypto.generators.Argon2BytesGenerator")
-            true
-        } catch (_: ClassNotFoundException) {
-            false
-        } catch (_: LinkageError) {
-            false
         }
     }
 

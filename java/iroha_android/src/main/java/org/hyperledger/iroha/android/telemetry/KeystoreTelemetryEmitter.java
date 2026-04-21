@@ -81,7 +81,7 @@ public final class KeystoreTelemetryEmitter {
       final IrohaKeyManager.KeySecurityPreference preference,
       final KeyProviderMetadata metadata,
       final KeyGenerationOutcome.Route route,
-      final boolean fallback) {
+      final boolean routeDowngraded) {
     if (sink == null || redaction == null) {
       return;
     }
@@ -98,7 +98,7 @@ public final class KeystoreTelemetryEmitter {
             "alias_label", aliasLabel.get(),
             "preference", preferenceLabel,
             "route", routeLabel,
-            "fallback", fallback,
+            "route_downgraded", routeDowngraded,
             "provider", metadata == null ? "unknown" : metadata.name(),
             "device_brand_bucket", deviceBrandBucket()));
   }

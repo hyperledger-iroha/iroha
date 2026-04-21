@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -78,7 +79,7 @@ public final class TransactionFixtureManifestTests {
       MULTISIG_MEMBER_LIST_ADAPTER = NoritoAdapters.sequence(MULTISIG_MEMBER_ADAPTER);
   private static final TypeAdapter<AccountAddress.MultisigPolicyPayload> MULTISIG_POLICY_ADAPTER =
       new MultisigPolicyPayloadAdapter();
-  private static int compatChecked = 0;
+  private static int canonicalChecked = 0;
 
   @Test
   public void validateManifest() throws Exception {
@@ -97,7 +98,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static void runValidation() throws Exception {
-    compatChecked = 0;
+    canonicalChecked = 0;
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
     assertSchemaMatches(manifest);
@@ -118,11 +119,11 @@ public final class TransactionFixtureManifestTests {
     }
 
     assertEquals(
-        "All fixtures must be validated for SDK compatibility",
+        "All fixtures must be validated against the canonical SDK codec",
         fixtures.size(),
-        compatChecked);
+        canonicalChecked);
     System.out.println("[IrohaAndroid] Transaction fixture manifest tests passed.");
-    System.out.println("[IrohaAndroid] Compatibility checks: " + compatChecked + " checked.");
+    System.out.println("[IrohaAndroid] Canonical checks: " + canonicalChecked + " checked.");
   }
 
   private static void validateFixture(
@@ -219,7 +220,7 @@ public final class TransactionFixtureManifestTests {
       }
     }
 
-    validateCompatibility(
+    validateCanonicalCodec(
         name,
         payloadBytes,
         signedBytes,
@@ -364,7 +365,7 @@ public final class TransactionFixtureManifestTests {
     }
   }
 
-  private static void validateCompatibility(
+  private static void validateCanonicalCodec(
       final String name,
       final byte[] payloadBytes,
       final byte[] signedBytes,
@@ -476,11 +477,11 @@ public final class TransactionFixtureManifestTests {
         signedBytes,
         Arrays.copyOfRange(versioned, 1, versioned.length));
 
-    compatChecked++;
+    canonicalChecked++;
   }
 
   private static SignedParts decodeSignedParts(final String name, final byte[] signedBytes) {
-    final NoritoDecoder decoder = new NoritoDecoder(signedBytes, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(signedBytes);
     final byte[] signatureField = readField(decoder, name + ".signed.signature");
     final byte[] payloadField = readField(decoder, name + ".signed.payload");
     final byte[] attachmentsField = readField(decoder, name + ".signed.attachments");
@@ -495,12 +496,12 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static byte[] decodeSignature(final String name, final byte[] signatureField) {
-    final NoritoDecoder fieldDecoder = new NoritoDecoder(signatureField, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder fieldDecoder = canonicalDecoder(signatureField);
     final byte[] inner = readField(fieldDecoder, name + ".signed.signature.inner");
     if (fieldDecoder.remaining() != 0) {
       throw new IllegalStateException(name + ": signature field has trailing bytes");
     }
-    final NoritoDecoder decoder = new NoritoDecoder(inner, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(inner);
     final byte[] signature = BYTE_VECTOR_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": signature payload has trailing bytes");
@@ -509,7 +510,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static Optional<byte[]> decodeOptionField(final String name, final byte[] fieldBytes) {
-    final NoritoDecoder decoder = new NoritoDecoder(fieldBytes, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(fieldBytes);
     final int tag = decoder.readByte();
     if (tag == 0) {
       if (decoder.remaining() != 0) {
@@ -556,8 +557,12 @@ public final class TransactionFixtureManifestTests {
     return decodeFieldPayload(payload, adapter, field);
   }
 
+  private static NoritoDecoder canonicalDecoder(final byte[] payload) {
+    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+  }
+
   private static byte[] decodeIvmBytecode(final String name, final byte[] payload) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final byte[] inner =
         readField(decoder, name + ".payload.executable.ivm.bytes");
     if (decoder.remaining() != 0) {
@@ -567,7 +572,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static RawPayload decodePayloadRaw(final String name, final byte[] payloadBytes) {
-    final NoritoDecoder decoder = new NoritoDecoder(payloadBytes, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payloadBytes);
     final byte[] chainField = readField(decoder, name + ".payload.chain_id");
     final byte[] authorityField = readField(decoder, name + ".payload.authority");
     final byte[] creationField = readField(decoder, name + ".payload.creation_time_ms");
@@ -595,9 +600,9 @@ public final class TransactionFixtureManifestTests {
   private static ExecutableEnvelope decodeExecutableEnvelope(
       final String name,
       final byte[] executableField) {
-    final NoritoDecoder decoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(executableField);
     final long tag = UINT32_ADAPTER.decode(decoder);
-    if (tag == 1L) {
+    if (tag == 2L) {
       final byte[] bytecodeField =
           readField(decoder, name + ".payload.executable.ivm");
       final byte[] ivmBytes = decodeIvmBytecode(name, bytecodeField);
@@ -624,7 +629,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static String decodeAccountIdPayload(final byte[] payload, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final long controllerTag = UINT32_ADAPTER.decode(decoder);
     if (controllerTag == 0L) {
       final byte[] publicKeyField = readField(decoder, field + ".controller.public_key");
@@ -785,7 +790,7 @@ public final class TransactionFixtureManifestTests {
   private static List<InstructionEnvelope> decodeInstructionEnvelopes(
       final byte[] payload,
       final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final List<InstructionEnvelope> instructions = INSTRUCTION_LIST_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(field + ": instruction list has trailing bytes");
@@ -807,7 +812,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static void validateMetadataField(final byte[] payload, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final List<MetadataEntry> entries = METADATA_ENTRY_LIST_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(field + ": metadata has trailing bytes");
@@ -839,7 +844,7 @@ public final class TransactionFixtureManifestTests {
       final byte[] payload,
       final TypeAdapter<T> adapter,
       final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final T value = adapter.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(field + ": trailing bytes after field payload");

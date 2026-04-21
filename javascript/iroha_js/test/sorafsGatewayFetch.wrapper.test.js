@@ -90,7 +90,6 @@ function createStubResult() {
       gateway_manifest_cid: MANIFEST_HEX,
       write_mode: "read-only",
       write_mode_enforces_pq: false,
-      allow_single_source_fallback: false,
       allow_implicit_metadata: false,
     },
   };
@@ -205,7 +204,6 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
   assert.equal(result.metadata.writeModeEnforcesPq, false);
   assert.equal(result.metadata.telemetrySourceLabel, "ci-fixture");
   assert.equal(result.metadata.telemetryRegion, "iad-prod");
-  assert.equal(result.metadata.allowSingleSourceFallback, false);
 
   assert.equal(calls.length, 1);
   const [manifestArg, handleArg, planArg, providerArgs, optionArg] = calls[0];
@@ -264,7 +262,7 @@ test("sorafsGatewayFetch rejects non-hex provider ids", () => {
         "sorafs.sf1@1.0.0",
         "[]",
         providers,
-        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+        { __nativeBinding: stubBinding },
       ),
     /provider\.providerIdHex must be a 32-byte hex string/,
   );
@@ -294,7 +292,7 @@ test("sorafsGatewayFetch rejects invalid manifest ids", () => {
         "sorafs.sf1@1.0.0",
         "[]",
         providers,
-        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+        { __nativeBinding: stubBinding },
       ),
     /manifestIdHex must be a 32-byte hex string/,
   );
@@ -396,7 +394,7 @@ test("sorafsGatewayFetch rejects invalid stream tokens", () => {
         "sorafs.sf1@1.0.0",
         "[]",
         providers,
-        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+        { __nativeBinding: stubBinding },
       ),
     /streamTokenB64 must be a valid base64/i,
   );
@@ -633,34 +631,7 @@ test("sorafsGatewayFetch rejects single-provider sessions without override", () 
   );
 });
 
-test("sorafsGatewayFetch forwards allowSingleSourceFallback override", () => {
-  const calls = [];
-  const stubBinding = {
-    sorafsGatewayFetch: (...args) => {
-      calls.push(args);
-      return createStubResult();
-    },
-  };
-  sorafsGatewayFetch(
-    MANIFEST_HEX,
-    "sorafs.sf1@1.0.0",
-    "[]",
-    [
-      {
-        name: "alpha",
-        providerIdHex: PROVIDER_ID_HEX,
-        baseUrl: "https://gateway.test/",
-        streamTokenB64: "dG9rZW4=",
-      },
-    ],
-    { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
-  );
-  assert.equal(calls.length, 1);
-  const opts = calls[0][4];
-  assert.equal(opts.allow_single_source_fallback, true);
-});
-
-test("sorafsGatewayFetch validates option and allowSingleSourceFallback types", () => {
+test("sorafsGatewayFetch validates option types", () => {
   const providers = [
     {
       name: "alpha",
@@ -685,19 +656,5 @@ test("sorafsGatewayFetch validates option and allowSingleSourceFallback types", 
         "not-an-object",
       ),
     /options must be a plain object/i,
-  );
-  const stubBinding = {
-    sorafsGatewayFetch: () => createStubResult(),
-  };
-  assert.throws(
-    () =>
-      sorafsGatewayFetch(
-        MANIFEST_HEX,
-        "sorafs.sf1@1.0.0",
-        "[]",
-        providers,
-        { allowSingleSourceFallback: "yes", __nativeBinding: stubBinding },
-      ),
-    /allowSingleSourceFallback must be a boolean/i,
   );
 });

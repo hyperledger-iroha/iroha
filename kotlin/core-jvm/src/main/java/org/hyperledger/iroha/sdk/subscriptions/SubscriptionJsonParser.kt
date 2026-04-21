@@ -116,8 +116,8 @@ object SubscriptionJsonParser {
         return value.toLong()
     }
 
-    private fun asLongOrDefault(value: Any?, path: String, fallback: Long): Long =
-        if (value == null) fallback else asLong(value, path)
+    private fun asLongOrDefault(value: Any?, path: String, defaultValue: Long): Long =
+        if (value == null) defaultValue else asLong(value, path)
 
     private fun parseSubscriptionRecord(value: Any?, path: String): SubscriptionListResponse.SubscriptionRecord {
         val entry = expectObject(value, path)

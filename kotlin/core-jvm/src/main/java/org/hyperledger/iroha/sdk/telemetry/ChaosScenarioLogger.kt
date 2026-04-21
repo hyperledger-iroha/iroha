@@ -52,10 +52,10 @@ class ChaosScenarioLogger private constructor(
             return ChaosScenarioLogger(sink, safeProvider)
         }
 
-        private fun normalise(value: String?, fallback: String): String {
-            if (value == null) return fallback
+        private fun normalise(value: String?, defaultValue: String): String {
+            if (value == null) return defaultValue
             val trimmed = value.trim()
-            return if (trimmed.isEmpty()) fallback else trimmed.lowercase()
+            return if (trimmed.isEmpty()) defaultValue else trimmed.lowercase()
         }
     }
 }

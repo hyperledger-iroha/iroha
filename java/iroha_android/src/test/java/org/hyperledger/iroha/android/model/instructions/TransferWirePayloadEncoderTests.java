@@ -91,7 +91,7 @@ public final class TransferWirePayloadEncoderTests {
               && ex.getMessage().contains("<base58-asset-definition-id>#<i105-account-id>");
     }
 
-    assert threw : "legacy name/domain asset ids must be rejected";
+    assert threw : "name/domain asset ids must be rejected";
   }
 
   private static void encodeAssetTransferRejectsMalformedScopeSuffix() {

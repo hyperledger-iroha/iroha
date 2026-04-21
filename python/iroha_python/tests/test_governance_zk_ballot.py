@@ -22,7 +22,7 @@ def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
     return address.canonical_hex()
 
 
-def test_governance_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
+def test_governance_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 

@@ -29,7 +29,7 @@
 - Type adapters: generic interface `TypeAdapter<T>` with concrete adapters for
   unsigned/signed integers (8–64 bit), booleans, UTF-8 strings, byte arrays
   (variable and fixed-length), optional values, result values, sequences
-  (packed/compat layouts), maps (sequence of key-value tuples), and packed
+  (packed/delimited layouts), maps (sequence of key-value tuples), and packed
   structs using the hybrid bitset layout.
 - Struct support: `StructAdapter` supports dataclass-style factories (record
   builder) and Map-backed values; size calculations follow the Python
@@ -66,8 +66,8 @@
 - `java/norito_java/BUILDING.md` (alias README build section) if needed.
 
 ## Testing Strategy
-- Provide `run_tests.sh` that uses `javac --release 21` (fallback to default if
-  unavailable) to compile both main and test sources into `build/classes`, then
+- Provide `run_tests.sh` that uses `javac --release 21` to compile both main and test sources into
+  `build/classes`, then
   runs `java -ea org.hyperledger.iroha.norito.NoritoTests`.
 - Tests assert roundtrips for signed/unsigned ints, strings, sequences (packed
   offsets are fixed u64 in v1), options, results, and struct adapter behaviours; verify
@@ -99,11 +99,11 @@
      libraries and keep debug symbols for `libzstd-jni.so` when useful for
      crash triage.
   3. Gate optional compression paths with `NoritoCompression.hasZstd()` so
-     environments without the native dependency fall back gracefully.
+     environments without the native dependency skip compression explicitly.
 
 ## Panama Acceleration Notes
 - norito-java currently avoids the Foreign Function & Memory API to keep the
-  artifact compatible with Android and Java 21 toolchains; buffer paths operate
+  artifact usable with Android and Java 21 toolchains; buffer paths operate
   on `ByteBuffer` without preview or Panama dependencies.
 - Additional vectorized CRC/varint paths can build on these entrypoints later,
   but the pure-Java implementation remains the source of truth.

@@ -1839,7 +1839,6 @@ fn build_gateway_metadata_dict(
     manifest_id: &str,
     manifest_cid_hex: Option<&str>,
     manifest_envelope_present: bool,
-    allow_single_source_fallback: bool,
     allow_implicit_metadata: bool,
 ) -> PyResult<Py<PyDict>> {
     let metadata = PyDict::new(py);
@@ -1922,7 +1921,6 @@ fn build_gateway_metadata_dict(
     } else {
         metadata.set_item("gateway_manifest_cid", py.None())?;
     }
-    metadata.set_item("allow_single_source_fallback", allow_single_source_fallback)?;
     metadata.set_item("allow_implicit_metadata", allow_implicit_metadata)?;
 
     Ok(metadata.unbind())
@@ -2890,6 +2888,16 @@ fn sorafs_gateway_fetch_py(
             })
         })
         .collect::<PyResult<_>>()?;
+    let unique_gateway_providers = provider_inputs
+        .iter()
+        .map(|provider| provider.provider_id_hex.as_str())
+        .collect::<HashSet<_>>()
+        .len();
+    if unique_gateway_providers < 2 {
+        return Err(PyValueError::new_err(
+            "sorafs_gateway_fetch requires at least two unique gateway providers",
+        ));
+    }
 
     let mut orchestrator_config = OrchestratorConfig::default();
     if let Some(region) = telemetry_region.as_ref() {
@@ -3086,7 +3094,6 @@ fn sorafs_gateway_fetch_py(
         manifest_id.as_str(),
         manifest_cid_metadata.as_deref(),
         manifest_envelope_present,
-        false,
         false,
     )?;
 
@@ -4131,6 +4138,43 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_gateway_fetch_py_rejects_single_gateway_provider() {
+        ensure_python();
+        let payload = vec![0x41; 128];
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let plan_json =
+            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
+                .expect("serialise plan");
+        let providers = vec![PyGatewayProviderSpec {
+            name: "alpha".to_string(),
+            provider_id_hex: "55".repeat(32),
+            base_url: "https://gateway.test".to_string(),
+            stream_token_b64: "dG9rZW4=".to_string(),
+            privacy_events_url: None,
+        }];
+
+        Python::attach(|py| {
+            let result = sorafs_gateway_fetch_py(
+                py,
+                &"aa".repeat(32),
+                "sorafs.sf1@1.0.0",
+                &plan_json,
+                providers,
+                None,
+            );
+            match result {
+                Ok(_) => panic!("single gateway provider must be rejected"),
+                Err(err) => assert!(
+                    err.to_string()
+                        .contains("at least two unique gateway providers"),
+                    "{err}"
+                ),
+            }
+        });
+    }
+
+    #[test]
     fn sorafs_gateway_fetch_py_streams_payload() {
         ensure_python();
         let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(11)).collect();
@@ -4175,6 +4219,8 @@ mod tests {
         );
         let provider_id_bytes = [0x55u8; 32];
         let provider_id_hex = hex::encode(provider_id_bytes);
+        let second_provider_id_bytes = [0x56u8; 32];
+        let second_provider_id_hex = hex::encode(second_provider_id_bytes);
 
         let chunk_specs = plan.chunk_fetch_specs();
         let server = MockServer::start();
@@ -4230,36 +4276,49 @@ mod tests {
         }
 
         let signing = SigningKey::from_bytes(&[0x7Bu8; 32]);
-        let token_body = StreamTokenBodyV1 {
-            token_id: "py-gateway-test".to_string(),
-            manifest_cid: root_cid,
-            provider_id: provider_id_bytes,
-            profile_handle: chunk_profile_handle.clone(),
-            max_streams: 4,
-            ttl_epoch: 1_900_000_000,
-            rate_limit_bytes: 32 * 1024 * 1024,
-            issued_at: 1_800_000_000,
-            requests_per_minute: 180,
-            token_pk_version: 1,
+        let make_stream_token = |token_id: &str, provider_id: [u8; 32]| {
+            let token_body = StreamTokenBodyV1 {
+                token_id: token_id.to_string(),
+                manifest_cid: root_cid.clone(),
+                provider_id,
+                profile_handle: chunk_profile_handle.clone(),
+                max_streams: 4,
+                ttl_epoch: 1_900_000_000,
+                rate_limit_bytes: 32 * 1024 * 1024,
+                issued_at: 1_800_000_000,
+                requests_per_minute: 180,
+                token_pk_version: 1,
+            };
+            let stream_token =
+                StreamTokenV1::sign(token_body, &signing).expect("sign gateway stream token");
+            BASE64_STANDARD.encode(to_bytes(&stream_token).expect("token bytes"))
         };
-        let stream_token =
-            StreamTokenV1::sign(token_body, &signing).expect("sign gateway stream token");
-        let stream_token_b64 =
-            BASE64_STANDARD.encode(to_bytes(&stream_token).expect("token bytes"));
+        let stream_token_b64 = make_stream_token("py-gateway-test-alpha", provider_id_bytes);
+        let second_stream_token_b64 =
+            make_stream_token("py-gateway-test-beta", second_provider_id_bytes);
 
-        let providers = vec![PyGatewayProviderSpec {
-            name: "alpha".to_string(),
-            provider_id_hex: provider_id_hex.clone(),
-            base_url: server.base_url(),
-            stream_token_b64,
-            privacy_events_url: None,
-        }];
+        let providers = vec![
+            PyGatewayProviderSpec {
+                name: "alpha".to_string(),
+                provider_id_hex: provider_id_hex.clone(),
+                base_url: server.base_url(),
+                stream_token_b64,
+                privacy_events_url: None,
+            },
+            PyGatewayProviderSpec {
+                name: "beta".to_string(),
+                provider_id_hex: second_provider_id_hex,
+                base_url: server.base_url(),
+                stream_token_b64: second_stream_token_b64,
+                privacy_events_url: None,
+            },
+        ];
 
         Python::attach(|py| {
             let options = PyGatewayFetchOptions {
                 telemetry_region: Some("test-region".to_string()),
                 scoreboard_telemetry_label: Some("ci-sdk-python".to_string()),
-                max_peers: Some(1),
+                max_peers: Some(2),
                 retry_budget: Some(2),
                 local_proxy: Some(PyLocalProxyOptions {
                     proxy_mode: Some("bridge".to_string()),
@@ -4386,7 +4445,7 @@ mod tests {
                     .expect("gateway_provider_count")
                     .extract::<u64>()
                     .expect("gateway count"),
-                1
+                2
             );
             assert_eq!(
                 metadata
@@ -4944,11 +5003,11 @@ mod tests {
         }
     }
 
-    fn expect_bn254<F>(a: [u64; 4], b: [u64; 4], gpu: Option<[u64; 4]>, fallback: F)
+    fn expect_bn254<F>(a: [u64; 4], b: [u64; 4], gpu: Option<[u64; 4]>, reference_impl: F)
     where
         F: Fn(FieldElem, FieldElem) -> FieldElem,
     {
-        let expected = fallback(FieldElem(a), FieldElem(b)).0;
+        let expected = reference_impl(FieldElem(a), FieldElem(b)).0;
         match gpu {
             Some(value) => assert_eq!(value, expected),
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
@@ -4959,7 +5018,7 @@ mod tests {
         lhs: &[[u64; 4]],
         rhs: &[[u64; 4]],
         gpu: Option<Vec<[u64; 4]>>,
-        fallback: F,
+        reference_impl: F,
     ) where
         F: Fn(FieldElem, FieldElem) -> FieldElem,
     {
@@ -4967,7 +5026,7 @@ mod tests {
             .iter()
             .copied()
             .zip(rhs.iter().copied())
-            .map(|(a, b)| fallback(FieldElem(a), FieldElem(b)).0)
+            .map(|(a, b)| reference_impl(FieldElem(a), FieldElem(b)).0)
             .collect();
         match gpu {
             Some(value) => assert_eq!(value, expected),

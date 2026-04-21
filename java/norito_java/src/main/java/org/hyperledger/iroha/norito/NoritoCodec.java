@@ -13,7 +13,7 @@ import java.util.Objects;
 /** High-level helpers for Norito encoding/decoding. */
 public final class NoritoCodec {
   private static final int DYNAMIC_FLAGS_MASK = 0;
-  public static final int DEFAULT_FLAGS = NoritoHeader.MINOR_VERSION;
+  public static final int DEFAULT_FLAGS = NoritoHeader.COMPACT_LEN;
 
   private static final ThreadLocal<Deque<Integer>> DECODE_FLAGS_STACK =
       ThreadLocal.withInitial(ArrayDeque::new);

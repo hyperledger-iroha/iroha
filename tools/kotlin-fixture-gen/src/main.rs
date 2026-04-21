@@ -133,4 +133,6 @@ fn emit_claim_identifier() {
     println!("{}", account_id);
     // Line 3: signature bytes hex
     println!("{}", hex::encode(signature_bytes));
+    // Line 4: canonical hash hex used by receipt fields
+    println!("{}", hex::encode(&dummy_hash.as_ref()[..]));
 }

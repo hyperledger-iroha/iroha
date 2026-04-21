@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -13,7 +12,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
 from urllib.parse import ParseResult, parse_qs, urlencode, urlparse
 
 from ._native import load_crypto_extension
-from .connect_stub import ConnectCodecStub
 
 __all__ = [
     "ConnectUri",
@@ -150,54 +148,22 @@ def _require(value: Optional[str], name: str) -> str:
 _BytesLike = Union[bytes, bytearray, memoryview]
 _CodecModule = Optional[Any]
 _CODEC_MODULE: _CodecModule = None
-_STUB_NOTICE_EMITTED = False
-
-
-def _connect_codec_mode() -> Optional[str]:
-    value = os.environ.get("IROHA_PYTHON_CONNECT_CODEC")
-    if value is None:
-        value = os.environ.get("IROHA_PYTHON_CONNECT_STUB")
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    return normalized or None
-
-
-def _should_force_stub() -> bool:
-    mode = _connect_codec_mode()
-    return mode in {"1", "true", "yes", "on", "stub", "test"}
-
-
-def _load_stub(reason: str) -> Any:
-    global _CODEC_MODULE, _STUB_NOTICE_EMITTED
-    if not _STUB_NOTICE_EMITTED:
-        warnings.warn(
-            f"Using Connect codec stub ({reason}); do not rely on it in production.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-        _STUB_NOTICE_EMITTED = True
-    _CODEC_MODULE = ConnectCodecStub()
-    return _CODEC_MODULE
 
 
 def _require_codec_module() -> Any:
     global _CODEC_MODULE
     if _CODEC_MODULE is not None:
         return _CODEC_MODULE
-    if _should_force_stub():
-        return _load_stub("IROHA_PYTHON_CONNECT_CODEC=stub")
     try:
         _CODEC_MODULE = load_crypto_extension()
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(
-            "native Connect codec unavailable; install the extension or set "
-            "IROHA_PYTHON_CONNECT_CODEC=stub explicitly for tests"
+            "native Connect codec unavailable; install the extension before using Connect"
         ) from exc
     return _CODEC_MODULE
 
 
-def _register_stub_session_sequence(
+def _register_session_sequence(
     sid: bytes,
     direction: ConnectDirection,
     sequence: int,
@@ -1169,7 +1135,7 @@ class ConnectSession:
         payload: ConnectCiphertextPayload,
     ) -> ConnectFrame:
         seq = self._next_sequence[direction]
-        _register_stub_session_sequence(self._sid, direction, seq)
+        _register_session_sequence(self._sid, direction, seq)
         frame = seal_connect_payload(
             self._key_for(direction),
             self._sid,

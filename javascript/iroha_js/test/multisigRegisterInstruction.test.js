@@ -54,7 +54,7 @@ test("multisig register builder accepts encoded-only controller/signatory ids", 
   });
 });
 
-test("multisig register builder rejects legacy @domain account literals", () => {
+test("multisig register builder rejects domain-qualified account literals", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(1)
     .setTransactionTtlMs(10_000)

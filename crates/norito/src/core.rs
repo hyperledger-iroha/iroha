@@ -1269,12 +1269,12 @@ fn combine_flags(flags: u8, _hint: u8) -> u8 {
 }
 
 fn current_decode_flags_effective() -> Option<u8> {
-    if let Some((ctx_flags, ctx_hint)) = payload_ctx_flags() {
-        Some(combine_flags(ctx_flags, ctx_hint))
-    } else if decode_flags_active() {
+    if decode_flags_active() {
         let flags = get_decode_flags();
         let hint = DECODE_FLAGS_HINT.with(|c| c.get());
         Some(combine_flags(flags, hint))
+    } else if let Some((ctx_flags, ctx_hint)) = payload_ctx_flags() {
+        Some(combine_flags(ctx_flags, ctx_hint))
     } else {
         None
     }
@@ -7623,6 +7623,23 @@ mod tests {
             assert!(!use_compact_len());
         }
 
+        reset_decode_state();
+    }
+
+    #[test]
+    fn decode_flags_guard_overrides_active_payload_context() {
+        reset_decode_state();
+        let payload = [0_u8; 8];
+        let _ctx = PayloadCtxGuard::enter_with_flags(&payload, header_flags::COMPACT_LEN);
+        assert_eq!(
+            current_decode_flags_effective(),
+            Some(header_flags::COMPACT_LEN)
+        );
+        {
+            let _neutral = DecodeFlagsGuard::enter(0);
+            assert_eq!(current_decode_flags_effective(), Some(0));
+            assert!(!use_compact_len());
+        }
         reset_decode_state();
     }
 

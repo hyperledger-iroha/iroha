@@ -8,8 +8,8 @@ import okhttp3.OkHttpClient;
  * Provides a shared {@link OkHttpClient} instance so Android transports reuse the same connection
  * pool by default.
  *
- * <p>Factories fall back to a lazily initialised singleton; tests may swap/reset the shared client
- * to inject instrumented instances.
+ * <p>Factories use a lazily initialised singleton; tests may swap/reset the shared client to inject
+ * instrumented instances.
  */
 public final class OkHttpClientProvider {
 

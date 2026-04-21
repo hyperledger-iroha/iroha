@@ -31,7 +31,7 @@ class FakeHttpTransportExecutor : HttpTransportExecutor {
             .add(response)
     }
 
-    /** Sets the fallback response used when no queued response is available. */
+    /** Sets the default response used when no queued response is available. */
     fun setDefaultResponse(response: TransportResponse) {
         this.defaultResponse = response
     }

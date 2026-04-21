@@ -31,7 +31,7 @@ export class ConnectQueueJournal {
       retentionMs: normalizePositive(options.retentionMs ?? DEFAULT_RETENTION_MS, "retentionMs"),
       indexedDbName: options.indexedDbName ?? DEFAULT_DB_NAME,
       indexedDbVersion: options.indexedDbVersion ?? DEFAULT_DB_VERSION,
-      storage: options.storage ?? "auto",
+      storage: normalizeStorage(options.storage ?? "indexeddb"),
       indexedDbFactory: options.indexedDbFactory ?? globalThis.indexedDB,
     };
     this.#mutex = Promise.resolve();
@@ -74,15 +74,9 @@ export class ConnectQueueJournal {
     return this.#sessionKey;
   }
 
-  get fallbackError() {
-    return this.#fallbackError;
-  }
-
   async #initialize() {
     this.#sessionKey = await hashSessionId(this.#sessionId);
-    const { store, fallbackError } = await selectStore(this.#sessionKey, this.#config);
-    this.#store = store;
-    this.#fallbackError = fallbackError;
+    this.#store = await selectStore(this.#sessionKey, this.#config);
   }
 
   #runLocked(callback) {
@@ -97,7 +91,6 @@ export class ConnectQueueJournal {
   #sessionKey;
   #config;
   #store;
-  #fallbackError;
   #ready;
   #mutex;
 }
@@ -285,15 +278,20 @@ class IndexedDbJournalStore {
 }
 
 async function selectStore(sessionKey, config) {
-  if (config.storage !== "memory" && hasIndexedDbSupport(config.indexedDbFactory)) {
-    try {
-      const store = await IndexedDbJournalStore.open(sessionKey, config);
-      return { store, fallbackError: undefined };
-    } catch (error) {
-      return { store: new MemoryJournalStore(config), fallbackError: error };
-    }
+  if (config.storage === "memory") {
+    return new MemoryJournalStore(config);
   }
-  return { store: new MemoryJournalStore(config), fallbackError: undefined };
+  if (!hasIndexedDbSupport(config.indexedDbFactory)) {
+    throw new ConnectJournalError("IndexedDB storage is unavailable");
+  }
+  return IndexedDbJournalStore.open(sessionKey, config);
+}
+
+function normalizeStorage(value) {
+  if (value === "indexeddb" || value === "memory") {
+    return value;
+  }
+  throw new ConnectJournalError("storage must be \"indexeddb\" or \"memory\"");
 }
 
 function normalizeSessionId(input) {

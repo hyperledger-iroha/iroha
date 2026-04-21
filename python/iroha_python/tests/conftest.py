@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-
-os.environ.setdefault("IROHA_PYTHON_CONNECT_CODEC", "stub")
 
 
 def _add_path(path: Path) -> None:

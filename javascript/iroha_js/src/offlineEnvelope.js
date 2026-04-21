@@ -42,13 +42,13 @@ function normalizeMetadata(metadata) {
   return normalized;
 }
 
-function normalizeHashHex(hashHex, fallback, context) {
+function normalizeHashHex(hashHex, defaultValue, context) {
   const candidate =
     hashHex !== undefined && hashHex !== null
       ? hashHex
-      : typeof fallback === "function"
-        ? fallback()
-        : fallback;
+      : typeof defaultValue === "function"
+        ? defaultValue()
+        : defaultValue;
   if (typeof candidate !== "string") {
     throw new TypeError(`${context} must be a hex string`);
   }

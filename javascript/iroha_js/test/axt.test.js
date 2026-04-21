@@ -92,17 +92,17 @@ test("computeAxtBinding matches fixture binding", () => {
   assert.equal(binding.toString("hex"), DESCRIPTOR_FIXTURE.binding_hex);
 });
 
-test("buildAxtDescriptor canonicalises inputs without native binding", () => {
+test("buildAxtDescriptor canonicalises inputs through native binding", () => {
   const result = buildAxtDescriptor({
     dsids: [7, 1, 7],
     touches: [
       { dsid: 7, read: ["reports/"], write: ["audits/", "aggregates/", "audits/"] },
       { dsid: 1, read: ["orders/", "payments/"], write: ["ledger/"] },
     ],
-    descriptorBytes: Buffer.from(DESCRIPTOR_FIXTURE.descriptor_hex, "hex"),
   });
   assert.deepEqual(result.descriptor.dsids, [1, 7]);
   assert.equal(result.bindingHex, DESCRIPTOR_FIXTURE.binding_hex);
+  assert.equal(result.native, true);
 });
 
 test("buildAxtDescriptor rejects non-integer dsids", () => {

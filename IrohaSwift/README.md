@@ -7,7 +7,7 @@ Features:
 - Device-bound offline cash request/response models for `/v1/offline/cash/*`, plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
-- Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
+- Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
 - Ed25519 and ML-DSA signing, with Ed25519 CryptoKit helpers plus native-bridge ML-DSA support
@@ -51,9 +51,9 @@ instead of the Git URL so Xcode consumes the local sources.
 
 #### NoritoBridge policy (SwiftPM)
 
-`Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root. If present, the native bridge is linked; if missing, the package builds with Swift-only fallback and emits a warning with the expected path. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint.
+`Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
 
-CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and fallback build coverage.
+CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging.
 
 ### CocoaPods
 
@@ -121,7 +121,7 @@ sdk.submitAndWait(envelope: envelope) { result in
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
-`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs remain available as Ed25519-only compatibility helpers.
+`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only.
 
 ### Subscriptions
 
@@ -973,7 +973,7 @@ if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "
 
 Setting values to `nil` keeps the engine defaults; negative numbers are ignored. The
 bridge automatically applies the default configuration on startup so projects that do
-not call `apply()` retain the deterministic fallback behaviour.
+not call `apply()` use the same deterministic defaults.
 
 To surface telemetry and parity evidence in dashboards, read the runtime state before
 publishing metrics:
@@ -1084,8 +1084,7 @@ will decrypt ciphertext frames into `ConnectEnvelope` instances automatically (u
 Persist Connect X25519 keys via `ConnectKeyStore` so wallet approvals can include the
 attestation bundle (SHA-256 digest + device label + created-at). The default store writes
 to Application Support; inject a custom directory if you need sandboxed storage. Integrity
-checks use a canonical JSON ordering, while legacy orderings remain accepted for backward
-compatibility.
+checks use a canonical JSON ordering; noncanonical HMAC orderings are rejected.
 > After deriving direction keys (e.g., via `ConnectCrypto.deriveDirectionKeys`), call
 > `ConnectSession.setDirectionKeys(_:)` to unlock automatic decryption of encrypted
 > control frames. Use `ConnectEnvelope.decrypt(frame:symmetricKey:)` for direct access
@@ -1180,16 +1179,12 @@ as the `norito` Rust crate.
 bridge version plus per-platform SHA-256 hashes.
 
 ### NoritoBridge policy and troubleshooting
-- Builds link `dist/NoritoBridge.xcframework` when it is present. When it is missing, the
-  package falls back to Swift-only paths and prints a warning with the expected location.
-- When the bridge is disabled or missing, SDK surfaces return
-  `bridgeUnavailable`/`nativeBridgeUnavailable` errors that include the expected
-  xcframework location.
-- Running without the bridge will skip native Norito encoding and Connect crypto helpers;
-  use the Swift-only encoder paths and expect Connect codec calls to throw
-  `ConnectCodecError.bridgeUnavailable`.
-- Example: `swift test --package-path IrohaSwift` will automatically use fallback on
-  machines where the xcframework is not present.
+- Builds require `dist/NoritoBridge.xcframework`; package resolution fails when the
+  artifact is missing or malformed.
+- Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
+  that include the expected xcframework location.
+- Example: `swift test --package-path IrohaSwift` requires the bridge artifact to be
+  materialized first.
 
 ## SwiftUI demo and CI
 

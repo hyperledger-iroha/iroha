@@ -28,7 +28,7 @@ const UINT128_MASK = (1n << 128n) - 1n;
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
 const DEFAULT_SM2_DISTINGUISHED_ID = new Uint8Array(16);
-const SUPPORTED_JS_FALLBACK_INSTRUCTIONS = [
+const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Mint.Asset",
   "Mint.TriggerRepetitions",
   "Burn.Asset",
@@ -325,8 +325,8 @@ function normalizeInstructionJsonValue(value) {
 
 function resolveNative(method) {
   const native = getNativeBinding();
-  if (!native || typeof native[method] !== "function") {
-    return null;
+  if (typeof native[method] !== "function") {
+    throw new Error(`Native binding does not expose ${method}`);
   }
   return native;
 }
@@ -376,21 +376,6 @@ function canonicalizeInstructionForCache(instruction) {
   }
 }
 
-function encodeWithPureJsFallback(normalized, originalError = null) {
-  try {
-    const encoded = encodePureJsInstruction(normalized);
-    cacheInstructionRoundTrip(encoded, normalized);
-    return encoded;
-  } catch {
-    if (originalError) {
-      throw originalError;
-    }
-    throw new Error(
-      `Pure JS Norito encoding supports ${SUPPORTED_JS_FALLBACK_INSTRUCTIONS.join(", ")}. Received ${describeInstructionShape(normalized)}.`,
-    );
-  }
-}
-
 /**
  * Encode an instruction JSON payload to canonical Norito bytes.
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
@@ -398,20 +383,19 @@ function encodeWithPureJsFallback(normalized, originalError = null) {
  */
 export function noritoEncodeInstruction(instruction) {
   const native = resolveNative("noritoEncodeInstruction");
-  if (native) {
-    if (typeof instruction === "string") {
-      try {
-        const parsed = JSON.parse(instruction);
-        const normalized = normalizeInstructionJsonValue(parsed);
-        try {
-          const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
-          cacheInstructionRoundTrip(encoded, normalized);
-          return encoded;
-        } catch (error) {
-          return encodeWithPureJsFallback(normalized, error);
-        }
-      } catch {
-        const trimmed = instruction.trim();
+  if (isBinaryLike(instruction)) {
+    return toBuffer(instruction);
+  }
+  if (typeof instruction === "string") {
+    const trimmed = instruction.trim();
+    try {
+      const parsed = JSON.parse(trimmed);
+      const normalized = normalizeInstructionJsonValue(parsed);
+      const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+      cacheInstructionRoundTrip(encoded, normalized);
+      return encoded;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
         const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
         if (decoded) {
           return decoded;
@@ -424,36 +408,11 @@ export function noritoEncodeInstruction(instruction) {
         }
         return encoded;
       }
-    }
-    if (isBinaryLike(instruction)) {
-      return toBuffer(instruction);
-    }
-    const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-    try {
-      const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
-      cacheInstructionRoundTrip(encoded, normalized);
-      return encoded;
-    } catch (error) {
-      return encodeWithPureJsFallback(normalized, error);
+      throw error;
     }
   }
-
-  if (isBinaryLike(instruction)) {
-    return toBuffer(instruction);
-  }
-  if (typeof instruction === "string") {
-    const trimmed = instruction.trim();
-    const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
-    if (decoded) {
-      return decoded;
-    }
-    const parsed = JSON.parse(trimmed);
-    const encoded = encodePureJsInstruction(parsed);
-    cacheInstructionRoundTrip(encoded, parsed);
-    return encoded;
-  }
-  const normalized = cloneJson(instruction);
-  const encoded = encodePureJsInstruction(normalized);
+  const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
+  const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
 }
@@ -471,49 +430,25 @@ export function noritoEncodeInstruction(instruction) {
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction");
-  if (native) {
-    let json;
-    try {
-      json = native.noritoDecodeInstruction(buffer);
-    } catch (error) {
-      if (!isAlignmentError(error)) {
-        throw error;
-      }
-      const decoded =
-        tryDecodeWithAlignedBuffer(native, buffer) ??
-        tryDecodeWithRelocatedStorage(native, buffer);
-      if (decoded === null) {
-        throw error;
-      }
-      json = decoded;
-    }
-    if (options.parseJson === false) {
-      return json;
-    }
-    return JSON.parse(json);
-  }
-
-  if (looksLikeNoritoFrame(buffer)) {
-    const cached = getCachedInstruction(buffer);
-    if (cached !== null) {
-      return options.parseJson === false ? canonicalJsonStringify(cached) : cached;
-    }
-    const decoded = decodePureJsInstruction(buffer);
-    if (options.parseJson === false) {
-      return canonicalJsonStringify(decoded);
-    }
-    return decoded;
-  }
-
-  const json = buffer.toString("utf8");
+  let json;
   try {
-    const parsed = JSON.parse(json);
-    return options.parseJson === false ? json : parsed;
-  } catch {
-    throw new Error(
-      `Norito decode in JS-only mode supports ${SUPPORTED_JS_FALLBACK_INSTRUCTIONS.join(", ")}. Run \`npm run build:native\` for full instruction coverage.`,
-    );
+    json = native.noritoDecodeInstruction(buffer);
+  } catch (error) {
+    if (!isAlignmentError(error)) {
+      throw error;
+    }
+    const decoded =
+      tryDecodeWithAlignedBuffer(native, buffer) ??
+      tryDecodeWithRelocatedStorage(native, buffer);
+    if (decoded === null) {
+      throw error;
+    }
+    json = decoded;
   }
+  if (options.parseJson === false) {
+    return json;
+  }
+  return JSON.parse(json);
 }
 
 function isBinaryLike(value) {
@@ -717,7 +652,7 @@ function encodePureJsInstruction(instruction) {
     return encodeSmartContractInstruction(instruction);
   }
   throw new Error(
-    `Pure JS Norito encoding supports ${SUPPORTED_JS_FALLBACK_INSTRUCTIONS.join(", ")}. Received ${describeInstructionShape(instruction)}.`,
+    `Internal Norito canonicalization supports ${SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS.join(", ")}. Received ${describeInstructionShape(instruction)}.`,
   );
 }
 
@@ -779,7 +714,7 @@ function decodePureJsInstruction(buffer) {
         return cached;
       }
       throw new Error(
-        `Pure JS Norito decode does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
+        `Internal Norito decoder does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
       );
   }
 }
@@ -807,7 +742,7 @@ function decodeInstructionEnvelope(bytes) {
 function encodeInstructionEnvelope(wireId, innerPayload) {
   const innerSchemaHash = INNER_SCHEMA_HASH_BY_WIRE_ID[wireId];
   if (!innerSchemaHash) {
-    throw new Error(`Pure JS Norito encoding does not know the schema hash for ${wireId}`);
+    throw new Error(`Internal Norito canonicalization does not know the schema hash for ${wireId}`);
   }
   const innerFrame = frameNoritoPayload(
     innerPayload,
@@ -843,7 +778,7 @@ function decodeMintPayload(payload) {
         TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Mint.TriggerRepetitions"),
       };
     default:
-      throw new Error(`Pure JS Norito decode does not support Mint variant ${variantIndex}`);
+      throw new Error(`Internal Norito decoder does not support Mint variant ${variantIndex}`);
   }
 }
 
@@ -860,7 +795,7 @@ function decodeBurnPayload(payload) {
         TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Burn.TriggerRepetitions"),
       };
     default:
-      throw new Error(`Pure JS Norito decode does not support Burn variant ${variantIndex}`);
+      throw new Error(`Internal Norito decoder does not support Burn variant ${variantIndex}`);
   }
 }
 
@@ -905,7 +840,7 @@ function decodeTransferPayload(payload) {
       };
     default:
       throw new Error(
-        `Pure JS Norito decode does not support Transfer variant ${variantIndex}.`,
+        `Internal Norito decoder does not support Transfer variant ${variantIndex}.`,
       );
   }
 }
@@ -932,7 +867,7 @@ function decodeRegisterPayload(payload) {
       };
     default:
       throw new Error(
-        `Pure JS Norito decode does not support Register variant ${variantIndex}.`,
+        `Internal Norito decoder does not support Register variant ${variantIndex}.`,
       );
   }
 }
@@ -1836,7 +1771,7 @@ function decodeRwaInstructionPayload(payload) {
       };
     }
     default:
-      throw new Error(`Pure JS Norito decode does not support RWA variant ${variantIndex}`);
+      throw new Error(`Internal Norito decoder does not support RWA variant ${variantIndex}`);
   }
 }
 
@@ -2300,7 +2235,7 @@ function encodeGovernanceInstruction(instruction) {
     );
   }
   throw new Error(
-    `Pure JS Norito encoding does not support governance instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -2337,7 +2272,7 @@ function encodeSocialInstruction(instruction) {
     );
   }
   throw new Error(
-    `Pure JS Norito encoding does not support social instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support social instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -2420,7 +2355,7 @@ function encodeSmartContractInstruction(instruction) {
     );
   }
   throw new Error(
-    `Pure JS Norito encoding does not support smart-contract instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support smart-contract instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -2545,7 +2480,7 @@ function encodeKaigiInstruction(instruction) {
     );
   }
   throw new Error(
-    `Pure JS Norito encoding does not support Kaigi instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support Kaigi instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -2622,7 +2557,7 @@ function encodeZkInstruction(instruction) {
     }
   }
   throw new Error(
-    `Pure JS Norito encoding does not support zk instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support zk instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -2760,7 +2695,7 @@ function encodeRwaInstruction(instruction) {
     }
   }
   throw new Error(
-    `Pure JS Norito encoding does not support RWA instruction ${describeInstructionShape(instruction)}`,
+    `Internal Norito canonicalization does not support RWA instruction ${describeInstructionShape(instruction)}`,
   );
 }
 
@@ -3532,10 +3467,7 @@ function encodeCouncilDerivationKindValue(value, context) {
   if (normalized === "vrf") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "fallback") {
-    return encodeEnumTagValue(1);
-  }
-  throw new Error(`${context} must be Vrf or Fallback`);
+  throw new Error(`${context} must be Vrf`);
 }
 
 function decodeCouncilDerivationKindValue(payload, context) {
@@ -3546,7 +3478,7 @@ function decodeCouncilDerivationKindValue(payload, context) {
     case 0:
       return "Vrf";
     case 1:
-      return "Fallback";
+      throw new Error(`${context} uses unsupported derivation kind 1`);
     default:
       throw new Error(`${context} uses unsupported derivation kind ${tag}`);
   }
@@ -4137,7 +4069,7 @@ function encodeEntrypointDescriptorValue(value, context) {
     throw new TypeError(`${context}.triggers must be an array`);
   }
   if (triggers.length > 0) {
-    throw new Error(`${context}.triggers are not yet supported by the pure JS manifest codec`);
+    throw new Error(`${context}.triggers are not yet supported by the manifest codec`);
   }
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
@@ -4410,11 +4342,11 @@ function decodeManifestProvenanceValue(payload, context) {
 }
 
 function encodeUnsupportedManifestTriggerValue(_value, context) {
-  throw new Error(`${context} is not yet supported by the pure JS manifest codec`);
+  throw new Error(`${context} is not yet supported by the manifest codec`);
 }
 
 function decodeUnsupportedManifestTriggerValue(_payload, context) {
-  throw new Error(`${context} is not yet supported by the pure JS manifest codec`);
+  throw new Error(`${context} is not yet supported by the manifest codec`);
 }
 
 function encodeNumericValue(value, context) {

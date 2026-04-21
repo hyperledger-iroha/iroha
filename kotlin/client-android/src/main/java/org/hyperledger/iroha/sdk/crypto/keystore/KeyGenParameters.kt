@@ -13,7 +13,6 @@ import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 class KeyGenParameters(
     @JvmField val requireStrongBox: Boolean = false,
     @JvmField val preferStrongBox: Boolean = false,
-    @JvmField val allowStrongBoxFallback: Boolean = true,
     @JvmField val userAuthenticationRequired: Boolean = false,
     @JvmField val userAuthenticationTimeout: Duration = Duration.ZERO,
     @JvmField val algorithm: String = "Ed25519",
@@ -30,14 +29,10 @@ class KeyGenParameters(
         fun builder(): Builder = Builder()
     }
 
-    /**
-     * Mutable builder retained for Java interop and the imperative validation
-     * logic that couples `requireStrongBox` / `preferStrongBox` / `allowStrongBoxFallback`.
-     */
+    /** Mutable builder retained for Java interop and imperative validation. */
     class Builder {
         private var requireStrongBox = false
         private var preferStrongBox = false
-        private var allowStrongBoxFallback = true
         private var userAuthenticationRequired = false
         private var userAuthenticationTimeout: Duration = Duration.ZERO
         private var algorithm = "Ed25519"
@@ -45,23 +40,10 @@ class KeyGenParameters(
 
         fun setRequireStrongBox(requireStrongBox: Boolean): Builder = apply {
             this.requireStrongBox = requireStrongBox
-            if (requireStrongBox) {
-                this.allowStrongBoxFallback = false
-            }
         }
 
         fun setPreferStrongBox(preferStrongBox: Boolean): Builder = apply {
             this.preferStrongBox = preferStrongBox
-            if (preferStrongBox && !requireStrongBox) {
-                this.allowStrongBoxFallback = true
-            }
-        }
-
-        fun setAllowStrongBoxFallback(allowStrongBoxFallback: Boolean): Builder = apply {
-            this.allowStrongBoxFallback = allowStrongBoxFallback
-            if (!allowStrongBoxFallback) {
-                this.requireStrongBox = true
-            }
         }
 
         fun setUserAuthenticationRequired(userAuthenticationRequired: Boolean): Builder = apply {
@@ -95,7 +77,6 @@ class KeyGenParameters(
         fun build(): KeyGenParameters = KeyGenParameters(
             requireStrongBox = requireStrongBox,
             preferStrongBox = preferStrongBox,
-            allowStrongBoxFallback = allowStrongBoxFallback,
             userAuthenticationRequired = userAuthenticationRequired,
             userAuthenticationTimeout = userAuthenticationTimeout,
             algorithm = algorithm,
@@ -106,7 +87,6 @@ class KeyGenParameters(
     fun toBuilder(): Builder = Builder()
         .setRequireStrongBox(requireStrongBox)
         .setPreferStrongBox(preferStrongBox)
-        .setAllowStrongBoxFallback(allowStrongBoxFallback)
         .setUserAuthenticationRequired(userAuthenticationRequired)
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
         .setSigningAlgorithm(signingAlgorithm())

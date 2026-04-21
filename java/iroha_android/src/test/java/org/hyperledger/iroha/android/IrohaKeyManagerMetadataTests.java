@@ -8,13 +8,13 @@ public final class IrohaKeyManagerMetadataTests {
   private IrohaKeyManagerMetadataTests() {}
 
   public static void main(final String[] args) throws Exception {
-    providerMetadataReflectsSoftwareFallback();
+    providerMetadataReflectsSoftwareProvider();
     providerMetadataIsUnmodifiable();
     System.out.println("[IrohaAndroid] Key manager metadata tests passed.");
   }
 
   private static void providerMetadataIsUnmodifiable() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final List<KeyProviderMetadata> metadata = manager.providerMetadata();
     boolean threw = false;
     try {
@@ -25,8 +25,8 @@ public final class IrohaKeyManagerMetadataTests {
     assert threw : "provider metadata list must be unmodifiable";
   }
 
-  private static void providerMetadataReflectsSoftwareFallback() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+  private static void providerMetadataReflectsSoftwareProvider() throws Exception {
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final List<KeyProviderMetadata> metadata = manager.providerMetadata();
     assert metadata.size() == 1 : "Expected only software provider";
     final KeyProviderMetadata entry = metadata.get(0);

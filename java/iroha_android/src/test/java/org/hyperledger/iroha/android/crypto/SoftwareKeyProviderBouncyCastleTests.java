@@ -5,21 +5,21 @@ import java.security.Provider;
 import java.security.Security;
 import java.util.Optional;
 
-public final class SoftwareKeyProviderFallbackTests {
+public final class SoftwareKeyProviderBouncyCastleTests {
 
-  private SoftwareKeyProviderFallbackTests() {}
+  private SoftwareKeyProviderBouncyCastleTests() {}
 
   public static void main(final String[] args) {
-    fallbackLoadsBouncyCastle();
+    helperLoadsBouncyCastle();
     removeUnknownProviderIsSafe();
-    System.out.println("[IrohaAndroid] Software key provider fallback tests passed.");
+    System.out.println("[IrohaAndroid] Software key provider BouncyCastle tests passed.");
   }
 
-  private static void fallbackLoadsBouncyCastle() {
+  private static void helperLoadsBouncyCastle() {
     final String providerName = "BC";
     Security.removeProvider(providerName);
     final Optional<KeyPairGenerator> generator = SoftwareKeyProvider.tryBouncyCastleGenerator();
-    assert generator.isPresent() : "Expected BouncyCastle fallback to be present";
+    assert generator.isPresent() : "Expected BouncyCastle provider to be present";
     final Provider provider = generator.get().getProvider();
     assert provider.getName().equals(providerName) : "Unexpected provider name";
     Security.removeProvider(provider.getName());
@@ -28,10 +28,10 @@ public final class SoftwareKeyProviderFallbackTests {
   private static void removeUnknownProviderIsSafe() {
     Security.removeProvider("BC");
     final Optional<KeyPairGenerator> generator = SoftwareKeyProvider.tryBouncyCastleGenerator();
-    assert generator.isPresent() : "Fallback provider should be available";
+    assert generator.isPresent() : "BouncyCastle provider should be available";
     Security.removeProvider(generator.get().getProvider().getName());
     final Optional<KeyPairGenerator> secondAttempt = SoftwareKeyProvider.tryBouncyCastleGenerator();
-    assert secondAttempt.isPresent() : "Fallback should remain available on subsequent attempts";
+    assert secondAttempt.isPresent() : "BouncyCastle provider should remain available on subsequent attempts";
     Security.removeProvider(secondAttempt.get().getProvider().getName());
   }
 }

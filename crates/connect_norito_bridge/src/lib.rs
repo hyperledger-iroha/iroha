@@ -2890,13 +2890,11 @@ fn decode_connect_frame(bytes: &[u8]) -> Result<proto::ConnectFrameV1, norito::c
 }
 
 fn decode_envelope(bytes: &[u8]) -> Result<proto::EnvelopeV1, norito::core::Error> {
-    let view = norito::core::from_bytes_view(bytes)?;
-    view.decode::<proto::EnvelopeV1>()
+    proto::decode_connect_envelope_framed(bytes)
 }
 
 fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::core::Error> {
-    let (payload, flags) = norito::codec::encode_with_header_flags(env);
-    norito::core::frame_bare_with_header_flags::<proto::EnvelopeV1>(&payload, flags)
+    proto::encode_connect_envelope_framed(env)
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
@@ -13033,6 +13031,10 @@ mod tests {
         "ab".repeat(64)
     }
 
+    fn hex_hash(hash: Hash) -> String {
+        hex::encode(&hash.as_ref()[..])
+    }
+
     fn sample_rwa_id_literal() -> String {
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
             .to_owned()
@@ -13052,19 +13054,17 @@ mod tests {
                             ("program_id", JsonValue::from("identifier_lookup_retail")),
                             (
                                 "program_digest",
-                                JsonValue::from(hex::encode(payload.execution.program_digest)),
+                                JsonValue::from(hex_hash(payload.execution.program_digest)),
                             ),
                             ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
                             ("verification_mode", JsonValue::from("signed")),
                             (
                                 "output_hash",
-                                JsonValue::from(hex::encode(payload.execution.output_hash)),
+                                JsonValue::from(hex_hash(payload.execution.output_hash)),
                             ),
                             (
                                 "associated_data_hash",
-                                JsonValue::from(hex::encode(
-                                    payload.execution.associated_data_hash,
-                                )),
+                                JsonValue::from(hex_hash(payload.execution.associated_data_hash)),
                             ),
                             (
                                 "executed_at_ms",
@@ -13081,7 +13081,7 @@ mod tests {
                     ("opaque_id", JsonValue::from(payload.opaque_id.to_string())),
                     (
                         "receipt_hash",
-                        JsonValue::from(hex::encode(payload.receipt_hash)),
+                        JsonValue::from(hex_hash(payload.receipt_hash)),
                     ),
                     ("uaid", JsonValue::from(payload.uaid.to_string())),
                     (
@@ -13409,12 +13409,21 @@ mod tests {
                 retryable: false,
             }),
         };
-        let env_bytes = norito::core::to_bytes(&env).expect("encode envelope");
-        let view = norito::core::from_bytes_view(&env_bytes).expect("envelope view");
-        assert_eq!(view.flags(), proto::CONNECT_LAYOUT_FLAGS);
+        let env_bytes = encode_envelope_framed(&env).expect("encode envelope");
         let decoded_env = decode_envelope(&env_bytes).expect("decode envelope");
         assert_eq!(decoded_env.seq, env.seq);
         assert_eq!(decoded_env.payload, env.payload);
+        let direct_frame = connect_sdk::seal_envelope(
+            &key,
+            &session_id,
+            proto::Dir::AppToWallet,
+            env.seq,
+            env.payload.clone(),
+        );
+        let direct_frame_bytes = encode_connect_frame(&direct_frame).expect("encode sealed frame");
+        let decoded_direct_frame =
+            decode_connect_frame(&direct_frame_bytes).expect("decode sealed frame");
+        assert_eq!(decoded_direct_frame, direct_frame);
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
         let status = unsafe {
@@ -13563,6 +13572,48 @@ mod tests {
             Some("ERR_UNSUPPORTED_ADDRESS_FORMAT")
         );
         connect_norito_free(canonical_err_ptr);
+
+        let mut invalid_chars = i105.chars().collect::<Vec<_>>();
+        let last = invalid_chars.len().saturating_sub(1);
+        invalid_chars[last] = '0';
+        let invalid_i105 = invalid_chars.into_iter().collect::<String>();
+        let invalid_literal = CString::new(invalid_i105).expect("cstring");
+        let mut invalid_err_ptr: *mut c_uchar = ptr::null_mut();
+        let mut invalid_err_len: c_ulong = 0;
+        let mut invalid_out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut invalid_out_len: c_ulong = 0;
+        let invalid_rc = unsafe {
+            connect_norito_account_address_parse(
+                invalid_literal.as_ptr(),
+                invalid_literal.as_bytes().len() as c_ulong,
+                42,
+                1,
+                &mut invalid_out_ptr,
+                &mut invalid_out_len,
+                &mut prefix,
+                &mut invalid_err_ptr,
+                &mut invalid_err_len,
+            )
+        };
+        assert_eq!(invalid_rc, ERR_ACCOUNT_ADDRESS);
+        assert!(invalid_out_ptr.is_null());
+        let invalid_err_value: JsonValue = unsafe {
+            let bytes = slice::from_raw_parts(invalid_err_ptr, invalid_err_len as usize);
+            norito::json::from_slice(bytes).expect("json")
+        };
+        assert_eq!(
+            invalid_err_value.get("code").and_then(JsonValue::as_str),
+            Some("ERR_INVALID_I105_CHAR")
+        );
+        assert_eq!(
+            invalid_err_value
+                .get("fields")
+                .and_then(JsonValue::as_object)
+                .and_then(|fields| fields.get("char"))
+                .and_then(JsonValue::as_str),
+            Some("0")
+        );
+        connect_norito_free(invalid_err_ptr);
 
         let invalid = CString::new("").expect("empty literal");
         let mut err_out_ptr: *mut c_uchar = ptr::null_mut();

@@ -2653,8 +2653,8 @@ export function buildRegisterDomainInstruction({ domainId, logo = null, metadata
 
 /**
  * Build a `Register::Account` instruction payload.
- * @param {{ accountId: string, domainId?: string, domain?: string, metadata?: object | null }} options
- * @returns {{Register: {Account: {id: string, domain: string, metadata: object}}}}
+ * @param {{ accountId: string, metadata?: object | null }} options
+ * @returns {{Register: {Account: {id: string, label: null, uaid: null, opaque_ids: [], metadata: object}}}}
  */
 export function buildRegisterAccountInstruction({
   accountId,
@@ -2662,14 +2662,18 @@ export function buildRegisterAccountInstruction({
   domain,
   metadata,
 }) {
+  if (domainId !== undefined || domain !== undefined) {
+    throw new TypeError("account registration is domainless; bind account aliases separately");
+  }
   const id = normalizeAccountId(accountId, "accountId");
-  const resolvedDomainId = assertString(domainId ?? domain, "domainId");
   const normalizedMetadata = normalizeMetadata(metadata);
   return {
     Register: {
       Account: {
         id,
-        domain: resolvedDomainId,
+        label: null,
+        uaid: null,
+        opaque_ids: [],
         metadata: normalizedMetadata,
       },
     },
@@ -3528,8 +3532,10 @@ export function buildCancelTwitterEscrowInstruction(options) {
 export function buildPersistCouncilForEpochInstruction(options) {
   const source = assertPlainObject(options, "persistCouncilForEpoch");
   const derivedBy = source.derivedBy ?? source.derived_by ?? "Vrf";
-  const normalizedDerived =
-    String(derivedBy).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
+  const normalizedDerived = String(derivedBy).trim();
+  if (normalizedDerived.toLowerCase() !== "vrf") {
+    throw new TypeError("persistCouncilForEpoch.derivedBy must be Vrf");
+  }
   return {
     PersistCouncilForEpoch: {
       epoch: asNonNegativeInteger(source.epoch, "epoch"),
@@ -3550,7 +3556,7 @@ export function buildPersistCouncilForEpochInstruction(options) {
         source.candidatesCount ?? source.candidates_count,
         "candidatesCount",
       ),
-      derived_by: normalizedDerived,
+      derived_by: "Vrf",
     },
   };
 }

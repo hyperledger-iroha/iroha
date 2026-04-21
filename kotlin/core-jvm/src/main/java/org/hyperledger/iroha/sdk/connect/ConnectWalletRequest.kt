@@ -171,8 +171,8 @@ class ConnectWalletRequest private constructor(
         }
 
         @Throws(ConnectProtocolException::class)
-        private fun resolveBaseUri(nodeValue: String?, fallback: URI): URI {
-            if (nodeValue.isNullOrEmpty()) return fallback
+        private fun resolveBaseUri(nodeValue: String?, defaultUri: URI): URI {
+            if (nodeValue.isNullOrEmpty()) return defaultUri
             var parsed = tryParse(nodeValue)
             if (parsed != null && parsed.scheme != null && parsed.host != null) {
                 val normalizedScheme = normalize(parsed.scheme)

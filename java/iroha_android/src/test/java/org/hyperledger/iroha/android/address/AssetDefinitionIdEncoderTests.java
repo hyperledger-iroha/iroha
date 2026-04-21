@@ -36,7 +36,7 @@ public final class AssetDefinitionIdEncoderTests {
     final String result =
         AssetDefinitionIdEncoder.encodeFromBytes(
             AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.TERTIARY));
-    assert !result.contains(":") : "encoded result must not contain a legacy prefix";
+    assert !result.contains(":") : "encoded result must not contain a name/domain prefix";
     assert result.length() >= 20 : "encoded result should be a compact Base58 address";
   }
 

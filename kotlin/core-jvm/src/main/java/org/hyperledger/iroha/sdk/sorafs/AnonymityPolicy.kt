@@ -11,7 +11,7 @@ enum class AnonymityPolicy(val label: String) {
     ANON_GUARD_PQ("anon-guard-pq"),
     /** Require PQ coverage on the majority of SoraNet hops. */
     ANON_MAJORIY_PQ("anon-majority-pq"),
-    /** Enforce PQ-only SoraNet paths; fall back to direct transports when unavailable. */
+    /** Enforce PQ-only SoraNet paths and reject direct transport substitution. */
     ANON_STRICT_PQ("anon-strict-pq");
 
     companion object {

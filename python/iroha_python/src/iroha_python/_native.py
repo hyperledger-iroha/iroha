@@ -1,4 +1,4 @@
-"""Helpers for loading optional native extension modules."""
+"""Helpers for loading required native extension modules."""
 
 from __future__ import annotations
 
@@ -33,11 +33,6 @@ def _resolve_extension_candidate(original_exc: ModuleNotFoundError | None = None
         for suffix in suffixes:
             candidate = root / f"{_EXTENSION_BASENAME}{suffix}"
             if candidate.exists():
-                return candidate
-        # As a fallback, look for any file that ends with a supported suffix.
-        for candidate in root.glob(f"{_EXTENSION_BASENAME}*"):
-            name = candidate.name
-            if any(name.endswith(suffix) for suffix in suffixes):
                 return candidate
 
     raise RuntimeError(_BUILD_ERROR_MESSAGE)

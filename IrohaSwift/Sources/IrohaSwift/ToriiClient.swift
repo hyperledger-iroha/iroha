@@ -2164,7 +2164,6 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         case createdAt = "created_at"
         case kind
         case box = "r#box"
-        case legacyBox = "box"
         case transactionHash = "transaction_hash"
         case transactionStatus = "transaction_status"
         case block
@@ -2176,19 +2175,16 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         authority = try container.decode(String.self, forKey: .authority)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         kind = try container.decode(String.self, forKey: .kind)
-        if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .box) {
-            box = decodedBox
-        } else if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .legacyBox) {
-            box = decodedBox
-        } else {
+        guard let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .box) else {
             throw DecodingError.keyNotFound(
                 CodingKeys.box,
                 DecodingError.Context(
                     codingPath: container.codingPath,
-                    debugDescription: "Expected key \"r#box\" or \"box\"."
+                    debugDescription: "Expected key \"r#box\"."
                 )
             )
         }
+        box = decodedBox
         transactionHash = try container.decode(String.self, forKey: .transactionHash)
         transactionStatus = try container.decode(String.self, forKey: .transactionStatus)
         block = try container.decode(UInt64.self, forKey: .block)
@@ -2623,22 +2619,19 @@ public extension ToriiExplorerTransferRecord {
         let relativeAccount = (relative?.isEmpty ?? true) ? nil : relative
         switch details {
         case .asset(let asset):
-            let fallbackSender = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
-            let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? asset.senderAccountId!
-                : fallbackSender
-            guard !sender.isEmpty else {
+            guard let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sender.isEmpty else {
                 return []
             }
             guard let assetDefinition = asset.assetDefinitionId else {
                 return []
             }
             let normalizedKind = instruction.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let fallbackReceiver = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedReceiver = asset.destinationAccountId.trimmingCharacters(in: .whitespacesAndNewlines)
-            let receiver = trimmedReceiver.isEmpty && normalizedKind == "mint"
-                ? fallbackReceiver
-                : asset.destinationAccountId
+            guard !trimmedReceiver.isEmpty else {
+                return []
+            }
+            let receiver = trimmedReceiver
             let direction: ToriiExplorerTransferDirection
             switch normalizedKind {
             case "mint":
@@ -9964,7 +9957,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
     public let dataspaceCommitments: [ToriiDataspaceCommitmentSnapshot]
     /// Governance manifest coverage per lane.
     public let laneGovernance: [ToriiLaneGovernanceSnapshot]
-    /// Original payload keyed by field name for forward compatibility.
+    /// Original payload keyed by field name for diagnostics.
     public let fields: [String: ToriiJSONValue]
 
     public init(from decoder: Decoder) throws {
@@ -10285,7 +10278,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     /// Returns a creation timestamp that tracks observed server time when available and
-    /// otherwise falls back to the local wall clock. A small safety margin keeps locally
+    /// otherwise uses the local wall clock. A small safety margin keeps locally
     /// built transactions from being rejected when the device clock is slightly ahead.
     public func recommendedCreationTimeMs(safetyMarginMs: UInt64 = 10_000,
                                           maxObservedLagMs: UInt64 = 20_000) -> UInt64 {
@@ -14299,8 +14292,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     private static func httpStatusMessage(response: HTTPURLResponse, responseBody: Data?) -> String {
-        let fallback = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
-        guard let responseBody, !responseBody.isEmpty else { return fallback }
+        let defaultMessage = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+        guard let responseBody, !responseBody.isEmpty else { return defaultMessage }
         if let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: []) {
             if let detail = extractErrorMessage(from: jsonObject), !detail.isEmpty {
                 return detail
@@ -14325,7 +14318,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if !hex.isEmpty {
             return responseBody.count > byteLimit ? "body_hex=\(hex)..." : "body_hex=\(hex)"
         }
-        return fallback
+        return defaultMessage
     }
 
     private func ensureStatus(_ response: HTTPURLResponse,

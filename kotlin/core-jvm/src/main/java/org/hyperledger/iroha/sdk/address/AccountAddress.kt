@@ -266,11 +266,6 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
         @JvmStatic
         @Throws(AccountAddressException::class)
-        fun parseEncoded(input: String, expectedPrefix: Int?): ParseResult =
-            parseAny(input, expectedPrefix)
-
-        @JvmStatic
-        @Throws(AccountAddressException::class)
         fun parseEncodedIgnoringCurveSupport(input: String, expectedPrefix: Int?): ParseResult {
             val trimmed = input.trim()
             if (trimmed.isEmpty()) {

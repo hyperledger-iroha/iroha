@@ -57,7 +57,7 @@ class TransactionFixtureParityTest {
     }
 
     @Test
-    fun `transaction fixture manifest remains compatible with kotlin codec`() {
+    fun `transaction fixture manifest remains canonical for kotlin codec`() {
         val payloadFixturesByName = AndroidFixtureSupport.loadPayloadFixtures().associateBy { it.name }
 
         for (fixture in AndroidFixtureSupport.loadManifestFixtures()) {
@@ -269,7 +269,7 @@ class TransactionFixtureParityTest {
     }
 
     private fun decodeSignedParts(name: String, signedBytes: ByteArray): SignedParts {
-        val decoder = NoritoDecoder(signedBytes, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(signedBytes)
         val signatureField = readField(decoder, "$name.signed.signature")
         val payloadField = readField(decoder, "$name.signed.payload")
         val attachmentsField = readField(decoder, "$name.signed.attachments")
@@ -283,17 +283,17 @@ class TransactionFixtureParityTest {
     }
 
     private fun decodeSignature(name: String, signatureField: ByteArray): ByteArray {
-        val fieldDecoder = NoritoDecoder(signatureField, NoritoHeader.MINOR_VERSION)
+        val fieldDecoder = canonicalDecoder(signatureField)
         val inner = readField(fieldDecoder, "$name.signed.signature.inner")
         require(fieldDecoder.remaining() == 0) { "$name: signature field has trailing bytes" }
-        val decoder = NoritoDecoder(inner, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(inner)
         val signature = BYTE_VECTOR_ADAPTER.decode(decoder)
         require(decoder.remaining() == 0) { "$name: signature payload has trailing bytes" }
         return signature
     }
 
     private fun decodeOptionField(name: String, fieldBytes: ByteArray): ByteArray? {
-        val decoder = NoritoDecoder(fieldBytes, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(fieldBytes)
         val tag = decoder.readByte()
         return when (tag) {
             0 -> {
@@ -318,6 +318,9 @@ class TransactionFixtureParityTest {
         require(length <= Int.MAX_VALUE) { "$field length too large: $length" }
         return decoder.readBytes(length.toInt())
     }
+
+    private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
 
     private fun normalizeAuthority(authority: String?): String? {
         val trimmed = authority?.trim() ?: return null

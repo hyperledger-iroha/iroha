@@ -41,7 +41,7 @@ class KeystoreTelemetryEmitter private constructor(
         preferenceLabel: String?,
         metadata: KeyProviderMetadata?,
         route: KeyGenerationOutcome.Route?,
-        fallback: Boolean,
+        routeDowngraded: Boolean,
     ) {
         if (sink == null || redaction == null) return
         val aliasLabel = aliasLabel(alias) ?: return
@@ -52,7 +52,7 @@ class KeystoreTelemetryEmitter private constructor(
                 "alias_label" to aliasLabel,
                 "preference" to (preferenceLabel?.lowercase(Locale.ROOT) ?: "unknown"),
                 "route" to routeLabel,
-                "fallback" to fallback,
+                "route_downgraded" to routeDowngraded,
                 "provider" to (metadata?.name ?: "unknown"),
                 "device_brand_bucket" to deviceBrandBucket(),
             ),

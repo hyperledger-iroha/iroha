@@ -49,7 +49,13 @@ public final class IrohaKeyManagerKeyValidationTelemetryTests {
             List.of(invalidProvider, new SoftwareKeyProvider()), emitter);
 
     final String alias = "telemetry-invalid";
-    manager.generateOrLoad(alias, IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
+    boolean threw = false;
+    try {
+      manager.generateOrLoad(alias, IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+    assert threw : "invalid key material must be rejected";
 
     final RecordingTelemetrySink.SignalEvent event =
         sink.lastEvent("android.keystore.key_validation.failure");

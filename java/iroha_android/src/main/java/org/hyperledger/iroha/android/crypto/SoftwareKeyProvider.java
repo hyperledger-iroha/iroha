@@ -33,10 +33,8 @@ public final class SoftwareKeyProvider implements KeyProvider {
 
   /** Controls which JCA provider is used for Ed25519 key generation. */
   public enum ProviderPolicy {
-    /** Use the default JCA provider order, falling back to BouncyCastle when needed. */
+    /** Use the default JCA provider order. */
     DEFAULT,
-    /** Prefer BouncyCastle when available to keep keys exportable. */
-    BOUNCY_CASTLE_PREFERRED,
     /** Require BouncyCastle; fail if the provider is unavailable. */
     BOUNCY_CASTLE_REQUIRED
   }
@@ -77,7 +75,7 @@ public final class SoftwareKeyProvider implements KeyProvider {
       final KeyExportStore exportStore,
       final KeyPassphraseProvider passphraseProvider,
       final SigningAlgorithm signingAlgorithm) {
-    this(ProviderPolicy.BOUNCY_CASTLE_PREFERRED, exportStore, passphraseProvider, signingAlgorithm);
+    this(ProviderPolicy.BOUNCY_CASTLE_REQUIRED, exportStore, passphraseProvider, signingAlgorithm);
   }
 
   public SoftwareKeyProvider(
@@ -196,20 +194,9 @@ public final class SoftwareKeyProvider implements KeyProvider {
       }
     }
     final KeyPairGenerator generator = newKeyPairGenerator();
-    final boolean usedBouncyCastle =
-        generator.getProvider() != null && "BC".equals(generator.getProvider().getName());
     final KeyPair keyPair = generateWithGenerator(generator);
     if (isExportable(keyPair)) {
       return keyPair;
-    }
-    if (!usedBouncyCastle && providerPolicy != ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
-      final Optional<KeyPairGenerator> fallback = tryBouncyCastleGenerator();
-      if (fallback.isPresent()) {
-        final KeyPair fallbackPair = generateWithGenerator(fallback.get());
-        if (isExportable(fallbackPair)) {
-          return fallbackPair;
-        }
-      }
     }
     throw new KeyManagementException(
         "Ed25519 key material is not exportable; use BouncyCastle provider");
@@ -219,24 +206,10 @@ public final class SoftwareKeyProvider implements KeyProvider {
     if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
       return bouncyCastleGeneratorOrThrow();
     }
-    if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_PREFERRED) {
-      final Optional<KeyPairGenerator> preferred = tryBouncyCastleGenerator();
-      if (preferred.isPresent()) {
-        return preferred.get();
-      }
-    }
     try {
       return KeyPairGenerator.getInstance("Ed25519");
-    } catch (final NoSuchAlgorithmException ignored) {
-      final Optional<KeyPairGenerator> fallback = tryBouncyCastleGenerator();
-      if (fallback.isPresent()) {
-        return fallback.get();
-      }
-      try {
-        return KeyPairGenerator.getInstance("EdDSA");
-      } catch (final NoSuchAlgorithmException ex) {
-        throw new KeyManagementException("Ed25519 key generation is not supported on this JVM", ex);
-      }
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new KeyManagementException("Ed25519 key generation is not supported on this JVM", ex);
     }
   }
 
@@ -351,16 +324,12 @@ public final class SoftwareKeyProvider implements KeyProvider {
       if (Security.getProvider(providerName) == null) {
         Security.addProvider(provider);
       }
-      try {
-        return Optional.of(KeyPairGenerator.getInstance("EdDSA", providerName));
-      } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
-        return Optional.of(KeyPairGenerator.getInstance("EdDSA"));
-      }
+      return Optional.of(KeyPairGenerator.getInstance("EdDSA", providerName));
     } catch (final ClassNotFoundException e) {
       return Optional.empty();
     } catch (final ReflectiveOperationException | ClassCastException e) {
       return Optional.empty();
-    } catch (final NoSuchAlgorithmException ex) {
+    } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
       return Optional.empty();
     }
   }

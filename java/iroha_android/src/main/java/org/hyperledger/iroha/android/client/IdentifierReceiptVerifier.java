@@ -1,9 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.security.KeyFactory;
-import java.security.PublicKey;
-import java.security.Signature;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Objects;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
@@ -12,11 +8,6 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 
 /** Client-side verification helper for identifier-resolution receipts. */
 public final class IdentifierReceiptVerifier {
-  private static final byte[] ED25519_SPKI_PREFIX =
-      new byte[] {
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
-      };
-
   private IdentifierReceiptVerifier() {}
 
   public static boolean verify(
@@ -59,34 +50,12 @@ public final class IdentifierReceiptVerifier {
   private static boolean verifyEd25519(
       final byte[] publicKey, final byte[] message, final byte[] signature) {
     try {
-      final byte[] spki = new byte[ED25519_SPKI_PREFIX.length + publicKey.length];
-      System.arraycopy(ED25519_SPKI_PREFIX, 0, spki, 0, ED25519_SPKI_PREFIX.length);
-      System.arraycopy(publicKey, 0, spki, ED25519_SPKI_PREFIX.length, publicKey.length);
-      final KeyFactory keyFactory = KeyFactory.getInstance("Ed25519");
-      final PublicKey key = keyFactory.generatePublic(new X509EncodedKeySpec(spki));
-      final Signature verifier = Signature.getInstance("Ed25519");
-      verifier.initVerify(key);
-      verifier.update(message);
-      return verifier.verify(signature);
-    } catch (final Exception ex) {
-      return verifyEd25519WithBouncyCastle(publicKey, message, signature, ex);
-    }
-  }
-
-  private static boolean verifyEd25519WithBouncyCastle(
-      final byte[] publicKey,
-      final byte[] message,
-      final byte[] signature,
-      final Exception jcaFailure) {
-    try {
       final Ed25519Signer verifier = new Ed25519Signer();
       verifier.init(false, new Ed25519PublicKeyParameters(publicKey, 0));
       verifier.update(message, 0, message.length);
       return verifier.verifySignature(signature);
-    } catch (final Exception fallbackFailure) {
-      fallbackFailure.addSuppressed(jcaFailure);
-      throw new IllegalArgumentException(
-          "failed to verify Ed25519 identifier receipt", fallbackFailure);
+    } catch (final Exception ex) {
+      throw new IllegalArgumentException("failed to verify Ed25519 identifier receipt", ex);
     }
   }
 

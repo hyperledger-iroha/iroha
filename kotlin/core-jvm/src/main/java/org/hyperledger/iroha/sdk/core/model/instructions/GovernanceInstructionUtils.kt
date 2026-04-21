@@ -34,8 +34,7 @@ object GovernanceInstructionUtils {
 
     /** Derivation kind recorded for persisted councils. */
     enum class CouncilDerivationKind(@JvmField val wireValue: String) {
-        VRF("Vrf"),
-        FALLBACK("Fallback");
+        VRF("Vrf");
 
         companion object {
             @JvmStatic
@@ -43,7 +42,6 @@ object GovernanceInstructionUtils {
                 require(raw.isNotBlank()) { "derived_by must not be blank" }
                 return when (raw.trim().lowercase()) {
                     "vrf" -> VRF
-                    "fallback" -> FALLBACK
                     else -> throw IllegalArgumentException("Unknown council derivation: $raw")
                 }
             }

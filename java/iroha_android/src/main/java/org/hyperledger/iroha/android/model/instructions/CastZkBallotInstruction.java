@@ -10,7 +10,7 @@ import org.hyperledger.iroha.android.client.JsonParser;
 /**
  * Typed builder for {@code CastZkBallot} instructions.
  *
- * <p>Public inputs must be provided as a JSON object. The builder rejects deprecated alias keys
+ * <p>Public inputs must be provided as a JSON object. The builder rejects unsupported alias keys
  * and emits canonical JSON ordering so ballot fingerprints remain stable.
  * When any lock hint is supplied, all of {@code owner}, {@code amount}, and {@code duration_blocks}
  * are required.

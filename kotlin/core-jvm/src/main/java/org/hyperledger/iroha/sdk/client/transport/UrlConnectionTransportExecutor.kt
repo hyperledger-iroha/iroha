@@ -11,9 +11,8 @@ import java.util.concurrent.CompletableFuture
 /**
  * `HttpTransportExecutor` implementation backed by `HttpURLConnection`.
  *
- * This executor avoids `java.net.http` so it can serve as a portable fallback across JVM
- * and Android targets. Callers should prefer platform-optimised executors (OkHttp on Android, JDK
- * HTTP client on JVM) when available.
+ * This executor avoids `java.net.http` so it can serve JVM and Android targets with the same
+ * canonical implementation.
  */
 class UrlConnectionTransportExecutor(
     private val connectTimeout: Duration? = null,
@@ -127,8 +126,8 @@ class UrlConnectionTransportExecutor(
             return out
         }
 
-        private fun toMillis(timeout: Duration?, fallback: Int): Int {
-            if (timeout == null) return fallback
+        private fun toMillis(timeout: Duration?, defaultValue: Int): Int {
+            if (timeout == null) return defaultValue
             val millis = timeout.toMillis()
             if (millis > Int.MAX_VALUE) return Int.MAX_VALUE
             return maxOf(0, millis.toInt())

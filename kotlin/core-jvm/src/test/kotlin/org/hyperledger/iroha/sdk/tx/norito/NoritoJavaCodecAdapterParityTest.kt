@@ -75,25 +75,19 @@ class NoritoJavaCodecAdapterParityTest {
         val decoded = adapter.decodeTransaction(encoded)
         assertEquals(authority, decoded.authority)
 
-        val decoder = NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(encoded)
         readField(decoder, "payload.chain_id")
         val authorityField = readField(decoder, "payload.authority")
         val expectedStringPayloadLen = 8 + authority.toByteArray(StandardCharsets.UTF_8).size
-        assertFalse(authorityField.size == expectedStringPayloadLen, "authority must not use legacy string layout")
+        assertFalse(authorityField.size == expectedStringPayloadLen, "authority must not use string layout")
 
-        val controllerTag = readU32(authorityField, 0, "authority.controller.tag")
+        val authorityDecoder = canonicalDecoder(authorityField)
+        val controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder)
         assertEquals(0L, controllerTag)
-        val publicKeyFieldLen = readU64(authorityField, 4, "authority.controller.public_key")
-        val publicKeyStringLen = readU64(authorityField, 12, "authority.controller.public_key.string")
-        val publicKeyLiteral = String(
-            authorityField,
-            20,
-            publicKeyStringLen.toInt(),
-            StandardCharsets.UTF_8,
-        )
-        assertEquals(8 + publicKeyStringLen, publicKeyFieldLen)
+        val publicKeyField = readField(authorityDecoder, "authority.controller.public_key")
+        val publicKeyLiteral = decodeFieldPayload(publicKeyField, NoritoAdapters.stringAdapter(), "authority.controller.public_key")
         assertEquals(encodePublicKeyMultihash(0x01, publicKey), publicKeyLiteral)
-        assertEquals(4 + 8 + publicKeyFieldLen, authorityField.size.toLong())
+        assertEquals(0, authorityDecoder.remaining())
     }
 
     @Test
@@ -126,44 +120,39 @@ class NoritoJavaCodecAdapterParityTest {
         val decodedAuthorityPayload = adapter.decodeTransaction(encodedAuthorityPayload)
         assertEquals(authority, decodedAuthorityPayload.authority)
 
-        val authorityDecoder = NoritoDecoder(encodedAuthorityPayload, NoritoHeader.MINOR_VERSION)
+        val authorityDecoder = canonicalDecoder(encodedAuthorityPayload)
         readField(authorityDecoder, "payload.chain_id")
         val authorityField = readField(authorityDecoder, "payload.authority")
-        val controllerTag = readU32(authorityField, 0, "authority.controller.tag")
+        val controllerDecoder = canonicalDecoder(authorityField)
+        val controllerTag = NoritoAdapters.uint(32).decode(controllerDecoder)
         assertEquals(1L, controllerTag)
-        val policyLen = readU64(authorityField, 4, "authority.controller.policy")
-        val policyOffset = 12
-        assertTrue(authorityField.size >= policyOffset + policyLen)
+        val policyField = readField(controllerDecoder, "authority.controller.policy")
+        assertEquals(0, controllerDecoder.remaining())
 
-        var cursor = policyOffset
-        val version = authorityField[cursor].toInt() and 0xFF
-        cursor += 1
-        val threshold = readU16(authorityField, cursor, "authority.controller.policy.threshold")
-        cursor += 2
-        val memberCount = readU64(authorityField, cursor, "authority.controller.policy.members")
-        cursor += 8
+        val policyDecoder = canonicalDecoder(policyField)
+        val version = NoritoAdapters.uint(8).decode(policyDecoder).toInt()
+        val threshold = NoritoAdapters.uint(16).decode(policyDecoder).toInt()
+        val memberCount = policyDecoder.readLength(false)
         assertEquals(1, version)
         assertEquals(2, threshold)
         assertEquals(2L, memberCount)
 
-        cursor = assertMultisigMember(
-            authorityField,
-            cursor,
+        assertMultisigMember(
+            policyDecoder,
             encodePublicKeyMultihash(0x01, memberKeyA),
             1,
             "member[0]",
         )
         assertMultisigMember(
-            authorityField,
-            cursor,
+            policyDecoder,
             encodePublicKeyMultihash(0x01, memberKeyB),
             2,
             "member[1]",
         )
-        assertEquals(4 + 8 + policyLen, authorityField.size.toLong())
+        assertEquals(0, policyDecoder.remaining())
 
         val encodedSigned = SignedTransactionEncoder.encode(signed)
-        val signedDecoder = NoritoDecoder(encodedSigned, NoritoHeader.MINOR_VERSION)
+        val signedDecoder = canonicalDecoder(encodedSigned)
         readField(signedDecoder, "signed.signature")
         readField(signedDecoder, "signed.payload")
         val attachmentsField = readField(signedDecoder, "signed.attachments")
@@ -172,17 +161,17 @@ class NoritoJavaCodecAdapterParityTest {
         val multisigPayload = assertNotNull(decodeOptionPayload(multisigField, "signed.multisig_signatures"))
         assertEquals(0, signedDecoder.remaining())
 
-        val multisigDecoder = NoritoDecoder(multisigPayload, NoritoHeader.MINOR_VERSION)
+        val multisigDecoder = canonicalDecoder(multisigPayload)
         val count = multisigDecoder.readLength(false)
         assertEquals(2L, count)
         val compact = multisigDecoder.compactLenActive()
         assertMultisigSignaturePayload(
-            NoritoDecoder(readSequenceElement(multisigDecoder, compact, "multisig[0]"), NoritoHeader.MINOR_VERSION),
+            canonicalDecoder(readSequenceElement(multisigDecoder, compact, "multisig[0]")),
             sigA,
             "multisig[0]",
         )
         assertMultisigSignaturePayload(
-            NoritoDecoder(readSequenceElement(multisigDecoder, compact, "multisig[1]"), NoritoHeader.MINOR_VERSION),
+            canonicalDecoder(readSequenceElement(multisigDecoder, compact, "multisig[1]")),
             sigB,
             "multisig[1]",
         )
@@ -237,13 +226,12 @@ class NoritoJavaCodecAdapterParityTest {
             executable = Executable.ivm(byteArrayOf(0x01)),
         )
         val chainEncoded = adapter.encodeTransaction(chainPayload)
-        val chainDecoder = NoritoDecoder(chainEncoded, NoritoHeader.MINOR_VERSION)
+        val chainDecoder = canonicalDecoder(chainEncoded)
         val chainField = readField(chainDecoder, "payload.chain_id")
-        val chainInnerLen = readU64(chainField, 0, "payload.chain_id")
-        assertEquals(8 + chainInnerLen, chainField.size.toLong())
-        val stringLen = readU64(chainField, 8, "payload.chain_id.string")
-        assertEquals(chainInnerLen, 8 + stringLen)
-        val decodedChain = String(chainField, 16, stringLen.toInt(), StandardCharsets.UTF_8)
+        val chainPayloadDecoder = canonicalDecoder(chainField)
+        val stringField = readField(chainPayloadDecoder, "payload.chain_id.string")
+        assertEquals(0, chainPayloadDecoder.remaining())
+        val decodedChain = decodeFieldPayload(stringField, NoritoAdapters.stringAdapter(), "payload.chain_id.string")
         assertEquals(chainId, decodedChain)
 
         val ivmBytes = byteArrayOf(0x01, 0x02, 0x03, 0x04)
@@ -254,7 +242,7 @@ class NoritoJavaCodecAdapterParityTest {
             executable = Executable.ivm(ivmBytes),
         )
         val ivmEncoded = adapter.encodeTransaction(ivmPayload)
-        val ivmDecoder = NoritoDecoder(ivmEncoded, NoritoHeader.MINOR_VERSION)
+        val ivmDecoder = canonicalDecoder(ivmEncoded)
         readField(ivmDecoder, "payload.chain_id")
         readField(ivmDecoder, "payload.authority")
         readField(ivmDecoder, "payload.creation_time_ms")
@@ -264,13 +252,13 @@ class NoritoJavaCodecAdapterParityTest {
         readField(ivmDecoder, "payload.metadata")
         assertEquals(0, ivmDecoder.remaining())
 
-        val executableDecoder = NoritoDecoder(ivmExecutableField, NoritoHeader.MINOR_VERSION)
-        assertEquals(1L, NoritoAdapters.uint(32).decode(executableDecoder))
+        val executableDecoder = canonicalDecoder(ivmExecutableField)
+        assertEquals(2L, NoritoAdapters.uint(32).decode(executableDecoder))
         val ivmField = readField(executableDecoder, "payload.executable.ivm")
         assertEquals(0, executableDecoder.remaining())
-        val ivmInnerLen = readU64(ivmField, 0, "payload.executable.ivm")
-        assertEquals(8 + ivmInnerLen, ivmField.size.toLong())
-        val ivmPayloadBytes = ivmField.copyOfRange(8, (8 + ivmInnerLen).toInt())
+        val ivmFieldDecoder = canonicalDecoder(ivmField)
+        val ivmPayloadBytes = readField(ivmFieldDecoder, "payload.executable.ivm.bytes")
+        assertEquals(0, ivmFieldDecoder.remaining())
         val decodedIvm = decodeFieldPayload(
             ivmPayloadBytes,
             RAW_BYTE_VECTOR_ADAPTER,
@@ -292,7 +280,7 @@ class NoritoJavaCodecAdapterParityTest {
             ),
         )
         val instructionEncoded = adapter.encodeTransaction(instructionPayload)
-        val instructionDecoder = NoritoDecoder(instructionEncoded, NoritoHeader.MINOR_VERSION)
+        val instructionDecoder = canonicalDecoder(instructionEncoded)
         readField(instructionDecoder, "payload.chain_id")
         readField(instructionDecoder, "payload.authority")
         readField(instructionDecoder, "payload.creation_time_ms")
@@ -302,18 +290,18 @@ class NoritoJavaCodecAdapterParityTest {
         readField(instructionDecoder, "payload.metadata")
         assertEquals(0, instructionDecoder.remaining())
 
-        val listFieldDecoder = NoritoDecoder(instructionExecutableField, NoritoHeader.MINOR_VERSION)
+        val listFieldDecoder = canonicalDecoder(instructionExecutableField)
         assertEquals(0L, NoritoAdapters.uint(32).decode(listFieldDecoder))
         val instructionsField = readField(listFieldDecoder, "payload.executable.instructions")
         assertEquals(0, listFieldDecoder.remaining())
 
-        val elementDecoder = NoritoDecoder(instructionsField, NoritoHeader.MINOR_VERSION)
+        val elementDecoder = canonicalDecoder(instructionsField)
         assertEquals(1L, elementDecoder.readLength(false))
         val elementLength = elementDecoder.readLength(elementDecoder.compactLenActive())
         val elementPayload = elementDecoder.readBytes(elementLength.toInt())
         assertEquals(0, elementDecoder.remaining())
 
-        val payloadDecoder = NoritoDecoder(elementPayload, NoritoHeader.MINOR_VERSION)
+        val payloadDecoder = canonicalDecoder(elementPayload)
         val nameField = readField(payloadDecoder, "instruction.name")
         val payloadField = readField(payloadDecoder, "instruction.payload")
         assertEquals(0, payloadDecoder.remaining())
@@ -334,6 +322,9 @@ class NoritoJavaCodecAdapterParityTest {
         require(length <= Int.MAX_VALUE) { "$field length too large: $length" }
         return decoder.readBytes(length.toInt())
     }
+
+    private fun canonicalDecoder(payload: ByteArray): NoritoDecoder =
+        NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
 
     private fun readU64(payload: ByteArray, offset: Int, field: String): Long {
         require(offset >= 0 && payload.size - offset >= 8) { "$field missing u64 payload" }
@@ -359,27 +350,22 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     private fun assertMultisigMember(
-        payload: ByteArray,
-        offset: Int,
+        decoder: NoritoDecoder,
         expectedPublicKey: String,
         expectedWeight: Int,
         label: String,
-    ): Int {
-        val memberLen = readU64(payload, offset, "authority.controller.policy.$label")
-        val memberOffset = offset + 8
-        val publicKeyLen = readU64(payload, memberOffset, "authority.controller.policy.$label.public_key")
-        val publicKeyOffset = memberOffset + 8
-        val publicKey = String(payload, publicKeyOffset, publicKeyLen.toInt(), StandardCharsets.UTF_8)
-        val weightOffset = publicKeyOffset + publicKeyLen.toInt()
-        val weight = readU16(payload, weightOffset, "authority.controller.policy.$label.weight")
+    ) {
+        val memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label)
+        val memberDecoder = canonicalDecoder(memberPayload)
+        val publicKey = NoritoAdapters.stringAdapter().decode(memberDecoder)
+        val weight = NoritoAdapters.uint(16).decode(memberDecoder).toInt()
+        assertEquals(0, memberDecoder.remaining(), "$label payload should not have trailing bytes")
         assertEquals(expectedPublicKey, publicKey)
         assertEquals(expectedWeight, weight)
-        assertEquals(8 + publicKeyLen + 2, memberLen)
-        return memberOffset + memberLen.toInt()
     }
 
     private fun <T> decodeFieldPayload(payload: ByteArray, adapter: TypeAdapter<T>, field: String): T {
-        val decoder = NoritoDecoder(payload, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(payload)
         val value = adapter.decode(decoder)
         require(decoder.remaining() == 0) { "$field has trailing bytes" }
         return value
@@ -395,7 +381,7 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     private fun decodeOptionPayload(payload: ByteArray, field: String): ByteArray? {
-        val decoder = NoritoDecoder(payload, NoritoHeader.MINOR_VERSION)
+        val decoder = canonicalDecoder(payload)
         val tag = decoder.readByte()
         return when (tag) {
             0 -> {

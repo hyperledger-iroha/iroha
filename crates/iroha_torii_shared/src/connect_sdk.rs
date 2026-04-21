@@ -14,7 +14,8 @@ use sha2::Sha256;
 
 use crate::connect::{
     ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, Dir, EnvelopeV1, FrameKind,
-    PermissionsV1, Role, SignInProofV1,
+    PermissionsV1, Role, SignInProofV1, decode_connect_envelope_framed,
+    encode_connect_envelope_framed,
 };
 
 /// Derive per-direction keys from a `SessionKey` using HKDF-SHA256 with a BLAKE2b(sid) salt.
@@ -88,9 +89,7 @@ pub fn seal_envelope_current(
     payload: ConnectPayloadV1,
 ) -> ConnectFrameV1 {
     let env = EnvelopeV1 { seq, payload };
-    let (payload, flags) = norito::codec::encode_with_header_flags(&env);
-    let pt = norito::core::frame_bare_with_header_flags::<EnvelopeV1>(&payload, flags)
-        .expect("encode envelope");
+    let pt = encode_connect_envelope_framed(&env).expect("encode envelope");
     let aad = aad_current(sid, dir, seq);
     let nonce = nonce_from_seq(seq);
     let encryptor =
@@ -141,8 +140,7 @@ pub fn open_envelope_current(
     let pt = encryptor
         .decrypt(&nonce[..], aad.as_slice(), ct.aead.as_slice())
         .map_err(|_| "decrypt")?;
-    let view = norito::core::from_bytes_view(&pt).map_err(|_| "decode")?;
-    let env = view.decode::<EnvelopeV1>().map_err(|_| "decode")?;
+    let env = decode_connect_envelope_framed(&pt).map_err(|_| "decode")?;
     if env.seq != frame.seq {
         return Err("seq_mismatch");
     }
@@ -278,6 +276,29 @@ mod tests {
             open_envelope_current(&key, &tampered).err(),
             Some("decrypt")
         );
+    }
+
+    #[test]
+    fn sealed_envelope_frame_encodes() {
+        let key = [0x11_u8; 32];
+        let sid = [0x22_u8; 32];
+        let frame = seal_envelope_current(
+            &key,
+            &sid,
+            Dir::AppToWallet,
+            7,
+            ConnectPayloadV1::Control(crate::connect::ControlAfterKeyV1::Close {
+                who: Role::App,
+                code: 1,
+                reason: "bye".to_owned(),
+                retryable: false,
+            }),
+        );
+        let bytes = crate::connect::encode_connect_frame_bare(&frame)
+            .expect("sealed frame must encode");
+        let decoded = crate::connect::decode_connect_frame_bare(&bytes)
+            .expect("sealed frame must decode");
+        assert_eq!(decoded, frame);
     }
 }
 

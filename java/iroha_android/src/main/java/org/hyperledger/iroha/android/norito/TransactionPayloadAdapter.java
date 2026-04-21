@@ -40,6 +40,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionAdapter());
   private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
+  private static final long EXECUTABLE_INSTRUCTIONS_TAG = 0L;
+  private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
+  private static final long EXECUTABLE_IVM_TAG = 2L;
+  private static final long EXECUTABLE_IVM_PROVED_TAG = 3L;
   private static final TypeAdapter<Optional<Long>> TTL_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(64));
   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
@@ -83,23 +87,26 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   private static void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {
     if (executable.isIvm()) {
-      ENUM_TAG_ADAPTER.encode(encoder, 1L);
+      ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_IVM_TAG);
       encodeSizedField(encoder, IVM_BYTECODE_ADAPTER, executable.ivmBytes());
       return;
     }
-    ENUM_TAG_ADAPTER.encode(encoder, 0L);
+    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG);
     encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions());
   }
 
   private static Executable decodeExecutable(final NoritoDecoder decoder) {
     final long tag = ENUM_TAG_ADAPTER.decode(decoder);
-    if (tag == 1L) {
+    if (tag == EXECUTABLE_IVM_TAG) {
       final byte[] bytes = decodeSizedField(decoder, IVM_BYTECODE_ADAPTER);
       return Executable.ivm(bytes);
     }
-    if (tag == 0L) {
+    if (tag == EXECUTABLE_INSTRUCTIONS_TAG) {
       final List<InstructionBox> instructions = decodeSizedField(decoder, INSTRUCTION_LIST_ADAPTER);
       return Executable.instructions(instructions);
+    }
+    if (tag == EXECUTABLE_CONTRACT_CALL_TAG || tag == EXECUTABLE_IVM_PROVED_TAG) {
+      throw new IllegalArgumentException("Unsupported Executable discriminant: " + tag);
     }
     throw new IllegalArgumentException("Unknown Executable discriminant: " + tag);
   }

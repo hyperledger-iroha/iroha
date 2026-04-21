@@ -15,37 +15,37 @@ public final class AccountLiteralHardCutTests {
   @Test
   public void accountBuildersRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x11);
-    final String legacy = account + "@banka.dataspace";
+    final String nonCanonical = account + "@banka.dataspace";
 
-    expectIllegalArgument(() -> GrantRoleInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> RevokeRoleInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> RegisterRoleInstruction.builder().setOwnerAccountId(legacy));
-    expectIllegalArgument(() -> CastPlainBallotInstruction.builder().setOwnerAccountId(legacy));
-    expectIllegalArgument(() -> TransferDomainInstruction.builder().setSourceAccountId(legacy));
-    expectIllegalArgument(() -> TransferDomainInstruction.builder().setDestinationAccountId(legacy));
+    expectIllegalArgument(() -> GrantRoleInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> RevokeRoleInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> RegisterRoleInstruction.builder().setOwnerAccountId(nonCanonical));
+    expectIllegalArgument(() -> CastPlainBallotInstruction.builder().setOwnerAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferDomainInstruction.builder().setSourceAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferDomainInstruction.builder().setDestinationAccountId(nonCanonical));
     expectIllegalArgument(
-        () -> TransferAssetDefinitionInstruction.builder().setSourceAccountId(legacy));
+        () -> TransferAssetDefinitionInstruction.builder().setSourceAccountId(nonCanonical));
     expectIllegalArgument(
-        () -> TransferAssetDefinitionInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> TransferNftInstruction.builder().setSourceAccountId(legacy));
-    expectIllegalArgument(() -> TransferNftInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> TransferRwaInstruction.builder().setSourceAccountId(legacy));
-    expectIllegalArgument(() -> TransferRwaInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> ForceTransferRwaInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> TransferAssetInstruction.builder().setDestinationAccountId(legacy));
-    expectIllegalArgument(() -> RegisterAccountInstruction.builder().setAccountId(legacy));
-    expectIllegalArgument(() -> MultisigRegisterInstruction.builder().setAccountId(legacy));
-    expectIllegalArgument(() -> MultisigSpec.builder().addSignatory(legacy, 1));
+        () -> TransferAssetDefinitionInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferNftInstruction.builder().setSourceAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferNftInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setSourceAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> ForceTransferRwaInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> TransferAssetInstruction.builder().setDestinationAccountId(nonCanonical));
+    expectIllegalArgument(() -> RegisterAccountInstruction.builder().setAccountId(nonCanonical));
+    expectIllegalArgument(() -> MultisigRegisterInstruction.builder().setAccountId(nonCanonical));
+    expectIllegalArgument(() -> MultisigSpec.builder().addSignatory(nonCanonical, 1));
   }
 
   @Test
   public void accountTargetInstructionsRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x22);
-    final String legacy = account + "@banka.dataspace";
+    final String nonCanonical = account + "@banka.dataspace";
 
-    expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(legacy));
-    expectIllegalArgument(() -> RemoveKeyValueInstruction.builder().setAccountId(legacy));
-    expectIllegalArgument(() -> UnregisterInstruction.builder().setAccountId(legacy));
+    expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(nonCanonical));
+    expectIllegalArgument(() -> RemoveKeyValueInstruction.builder().setAccountId(nonCanonical));
+    expectIllegalArgument(() -> UnregisterInstruction.builder().setAccountId(nonCanonical));
   }
 
   @Test

@@ -138,8 +138,8 @@ import org.hyperledger.iroha.sdk.IrohaKeyManager
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.crypto.keystore.KeyGenParameters
 
-val ed25519Manager = IrohaKeyManager.withSoftwareFallback()
-val mlDsaManager = IrohaKeyManager.withSoftwareFallback(SigningAlgorithm.ML_DSA)
+val ed25519Manager = IrohaKeyManager.withSoftwareProvider()
+val mlDsaManager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA)
 
 val tunedManager = IrohaKeyManager.withDefaultProviders(
     KeyGenParameters.Builder()
@@ -191,7 +191,7 @@ Android libraries must target Java 8 bytecode. Java 11+ API calls (`String.isBla
 
 ### Reflection-free
 
-The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). This Kotlin rewrite eliminates reflection from `client-android` entirely and isolates the remaining optional-dependency probing in `core-jvm` behind try/catch fallbacks. 
+The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). This Kotlin rewrite eliminates reflection from `client-android` entirely and keeps optional-dependency probing isolated in `core-jvm`. 
 
 ### Modular architecture
 
@@ -215,5 +215,5 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 
 | Dependency | Version | Used By | Risk |
 |-----------|---------|---------|------|
-| `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` (3 files: MultisigSeedHelper, ConnectCrypto, IdentifierReceiptVerifier) | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that bundle a different BC version may hit `NoSuchMethodError` at runtime. The SDK loads BC via reflection with try/catch fallback; core crypto (Blake2b/2s/3, Ed25519, IrohaHash) uses only JCA and does not require BC. |
-| `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression is optional; the codec falls back gracefully if zstd is unavailable. |
+| `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` (3 files: MultisigSeedHelper, ConnectCrypto, IdentifierReceiptVerifier) | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that bundle a different BC version may hit `NoSuchMethodError` at runtime. The SDK loads BC via reflection only when explicitly required; core crypto (Blake2b/2s/3, Ed25519, IrohaHash) uses only JCA and does not require BC. |
+| `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |

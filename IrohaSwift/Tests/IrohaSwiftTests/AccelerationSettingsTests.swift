@@ -123,7 +123,7 @@ final class AccelerationSettingsTests: XCTestCase {
         XCTAssertNil(settings.preferCpuSha2MaxLeavesAarch64)
     }
 
-    func testIrohaConfigFallbacksToDefaultsWhenSectionMissing() throws {
+    func testIrohaConfigUsesDefaultsWhenSectionMissing() throws {
         let config = """
         {
             "chain": "00000000-0000-0000-0000-000000000000",

@@ -285,7 +285,7 @@ test("parseEncoded rejects fullwidth-sentinel i105 literals", () => {
   );
 });
 
-test("i105 format rejects legacy fullwidth kana payloads", () => {
+test("i105 format rejects noncanonical fullwidth kana payloads", () => {
   const noncanonical = DEFAULT_PUBLIC_KEY_I105.replace("ﾛ", "ロ");
   assert.throws(
     () => AccountAddress.fromI105(noncanonical, 753),
@@ -388,14 +388,14 @@ test("displayFormats exposes immutable i105 UI hints", () => {
   );
 });
 
-test("fromAccount rejects legacy domain and registryId options", () => {
-  for (const legacyOptions of [
+test("fromAccount rejects unsupported domain and registryId options", () => {
+  for (const unsupportedOptions of [
     { domain: "default", publicKey: DEFAULT_PUBLIC_KEY },
     { domain: "wonderland", publicKey: DEFAULT_PUBLIC_KEY },
     { registryId: 1, publicKey: DEFAULT_PUBLIC_KEY },
   ]) {
     assert.throws(
-      () => AccountAddress.fromAccount(legacyOptions),
+      () => AccountAddress.fromAccount(unsupportedOptions),
       (error) =>
         error instanceof TypeError &&
         /unsupported fields/.test(error.message),

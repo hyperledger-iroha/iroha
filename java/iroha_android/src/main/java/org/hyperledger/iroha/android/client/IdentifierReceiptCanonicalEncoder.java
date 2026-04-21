@@ -27,7 +27,7 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
-        encodePrefixedHash(payload.opaqueId(), "opaque:", "payload.opaque_id"));
+        encodeOpaqueHash(payload.opaqueId(), "opaque:", "payload.opaque_id"));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -35,7 +35,7 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
-        encodePrefixedHash(payload.uaid(), "uaid:", "payload.uaid"));
+        encodeOpaqueHash(payload.uaid(), "uaid:", "payload.uaid"));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -138,6 +138,16 @@ public final class IdentifierReceiptCanonicalEncoder {
     final String normalized = raw.trim().toLowerCase(Locale.ROOT);
     return decodeHash(
         normalized.startsWith(prefix) ? normalized.substring(prefix.length()) : normalized, field);
+  }
+
+  private static byte[] encodeOpaqueHash(
+      final String raw, final String prefix, final String field) {
+    final byte[] hash = encodePrefixedHash(raw, prefix, field);
+    final NoritoEncoder writer = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    final boolean compact = (writer.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    writer.writeLength(hash.length, compact);
+    writer.writeBytes(hash);
+    return writer.toByteArray();
   }
 
   private static byte[] decodeHash(final String raw, final String field) {

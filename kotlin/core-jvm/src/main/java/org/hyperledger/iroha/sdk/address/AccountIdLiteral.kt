@@ -15,7 +15,7 @@ fun requireCanonicalI105Address(accountId: String, field: String): String {
         "$field must use canonical I105 encoded account without @domain"
     }
     val parsed = try {
-        AccountAddress.parseEncoded(value, null)
+        AccountAddress.parseAny(value, null)
     } catch (ex: AccountAddressException) {
         throw IllegalArgumentException(
             "$field must use a canonical I105 encoded account literal",

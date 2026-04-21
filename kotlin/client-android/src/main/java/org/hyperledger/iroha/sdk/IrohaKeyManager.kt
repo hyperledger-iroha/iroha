@@ -36,9 +36,8 @@ private const val ED25519_SPKI_SIZE = 44
  * Coordinates key generation and lookup for Iroha Android clients.
  *
  * The manager accepts one or more `KeyProvider` implementations and routes requests according
- * to the supplied `KeySecurityPreference`. When a hardware-backed provider is unavailable, the
- * manager falls back to software providers so developers can continue testing on emulators and
- * desktop JVMs.
+ * to the supplied `KeySecurityPreference`. Callers choose the provider set explicitly, including
+ * software-only providers for emulators and desktop JVMs.
  */
 class IrohaKeyManager private constructor(
     providers: List<KeyProvider>,
@@ -62,34 +61,23 @@ class IrohaKeyManager private constructor(
         enforceAlgorithmPreference(preference)
 
         val ordered = orderedProviders(preference)
-        var lastError: KeyManagementException? = null
+        if (ordered.isEmpty()) {
+            throw KeyManagementException("No key providers available for alias=$alias")
+        }
         for (provider in ordered) {
-            try {
-                val existing = provider.load(alias)
-                if (existing != null) {
-                    ensureExpectedKeyPair(alias, preference, existing, provider.metadata(), "load")
-                    return existing
-                }
-            } catch (e: KeyManagementException) {
-                lastError = e
+            val existing = provider.load(alias)
+            if (existing != null) {
+                ensureExpectedKeyPair(alias, preference, existing, provider.metadata(), "load")
+                return existing
             }
         }
 
-        for (provider in ordered) {
-            try {
-                val keyPair = provider.generate(alias)
-                val route = routeFromMetadata(provider.metadata())
-                val outcome = KeyGenerationOutcome(keyPair, route)
-                ensureExpectedKeyPair(alias, preference, outcome.keyPair, provider.metadata(), "generate")
-                enforcePreference(preference, provider.metadata(), outcome)
-                recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome)
-                return outcome.keyPair
-            } catch (e: KeyManagementException) {
-                lastError = e
-            }
-        }
-        if (lastError != null) throw lastError
-        throw KeyManagementException("No key providers available for alias=$alias")
+        val provider = ordered.first()
+        val outcome = generateWithOutcome(provider, alias, preference)
+        ensureExpectedKeyPair(alias, preference, outcome.keyPair, provider.metadata(), "generate")
+        enforcePreference(preference, provider.metadata(), outcome)
+        recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome)
+        return outcome.keyPair
     }
 
     private fun enforcePreference(
@@ -124,10 +112,10 @@ class IrohaKeyManager private constructor(
         metadata: KeyProviderMetadata,
         outcome: KeyGenerationOutcome,
     ) {
-        val fallback = (preference == KeySecurityPreference.STRONGBOX_REQUIRED
+        val routeDowngraded = (preference == KeySecurityPreference.STRONGBOX_REQUIRED
             || preference == KeySecurityPreference.STRONGBOX_PREFERRED)
             && outcome.route != KeyGenerationOutcome.Route.STRONGBOX
-        keystoreTelemetry.recordKeyGeneration(alias, preference?.name, metadata, outcome.route, fallback)
+        keystoreTelemetry.recordKeyGeneration(alias, preference.name, metadata, outcome.route, routeDowngraded)
     }
 
     private fun ensureExpectedKeyPair(
@@ -167,18 +155,10 @@ class IrohaKeyManager private constructor(
      */
     @Throws(KeyManagementException::class)
     fun generateEphemeral(): KeyPair {
-        var lastError: KeyManagementException? = null
-        for (provider in providers) {
-            try {
-                val keyPair = provider.generateEphemeral()
-                ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral")
-                return keyPair
-            } catch (e: KeyManagementException) {
-                lastError = e
-            }
-        }
-        if (lastError != null) throw lastError
-        throw KeyManagementException("No key providers available for ephemeral keys")
+        val provider = providers.first()
+        val keyPair = provider.generateEphemeral()
+        ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral")
+        return keyPair
     }
 
     /**
@@ -271,8 +251,7 @@ class IrohaKeyManager private constructor(
     }
 
     /**
-     * Requests fresh attestation material for `alias`. Providers that do not support
-     * attestation generation return null.
+     * Requests fresh attestation material for `alias` from the selected provider.
      *
      * @param alias alias to attest
      * @param challenge attestation challenge (may be null if provider does not require it)
@@ -285,19 +264,13 @@ class IrohaKeyManager private constructor(
 
         val ordered = providers.sortedByDescending { it.metadata().supportsAttestationCertificates }
 
-        var lastError: KeyManagementException? = null
-        for (provider in ordered) {
-            try {
-                val clonedChallenge = challenge?.clone()
-                val attestation = provider.generateAttestation(alias, clonedChallenge)
-                if (attestation != null) return attestation
-            } catch (e: KeyManagementException) {
-                keystoreTelemetry.recordFailure(alias, provider.metadata(), e.message)
-                lastError = e
-            }
+        val provider = ordered.first()
+        try {
+            return provider.generateAttestation(alias, challenge?.clone())
+        } catch (e: KeyManagementException) {
+            keystoreTelemetry.recordFailure(alias, provider.metadata(), e.message)
+            throw e
         }
-        if (lastError != null) throw lastError
-        return null
     }
 
     /** Returns a copy of this manager that emits keystore telemetry through `telemetry`. */
@@ -357,9 +330,9 @@ class IrohaKeyManager private constructor(
             signingAlgorithm: SigningAlgorithm,
         ): IrohaKeyManager = IrohaKeyManager(providers, telemetry, signingAlgorithm)
 
-        /** Creates a manager with a software fallback provider only (desktop/emulator friendly). */
+        /** Creates a manager with a software provider only (desktop/emulator friendly). */
         @JvmStatic
-        fun withSoftwareFallback(signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519): IrohaKeyManager =
+        fun withSoftwareProvider(signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519): IrohaKeyManager =
             IrohaKeyManager(
                 listOf(SoftwareKeyProvider(signingAlgorithm)),
                 KeystoreTelemetryEmitter.noop(),
@@ -388,10 +361,7 @@ class IrohaKeyManager private constructor(
             signingAlgorithm,
         )
 
-        /**
-         * Creates a manager that attempts to use hardware-backed keystore providers (when available) and
-         * falls back to the software provider for emulators/desktop JVMs.
-         */
+        /** Creates a manager with the detected hardware-backed keystore provider. */
         @JvmStatic
         fun withDefaultProviders(): IrohaKeyManager =
             withDefaultProviders(KeyGenParameters.builder().build())
@@ -405,10 +375,7 @@ class IrohaKeyManager private constructor(
                     .build()
             )
 
-        /**
-         * Creates a manager that attempts to use hardware-backed keystore providers with the supplied
-         * generation parameters and falls back to a software provider.
-         */
+        /** Creates a manager with the detected hardware-backed keystore provider. */
         @JvmStatic
         fun withDefaultProviders(keyGenParameters: KeyGenParameters): IrohaKeyManager {
             val signingAlgorithm = keyGenParameters.signingAlgorithm()
@@ -416,14 +383,10 @@ class IrohaKeyManager private constructor(
             if (signingAlgorithm.supportsHardwareBackedKeys()) {
                 KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
             }
-            providers.add(SoftwareKeyProvider(signingAlgorithm))
             return IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm)
         }
 
-        /**
-         * Creates a manager that attempts to use hardware-backed keystore providers with telemetry and
-         * falls back to a software provider.
-         */
+        /** Creates a manager with the detected hardware-backed keystore provider and telemetry. */
         @JvmStatic
         fun withDefaultProviders(
             keyGenParameters: KeyGenParameters,
@@ -434,7 +397,6 @@ class IrohaKeyManager private constructor(
             if (signingAlgorithm.supportsHardwareBackedKeys()) {
                 KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
             }
-            providers.add(SoftwareKeyProvider(signingAlgorithm))
             return IrohaKeyManager(providers, telemetry, signingAlgorithm)
         }
 
@@ -443,6 +405,17 @@ class IrohaKeyManager private constructor(
             if (metadata.strongBoxBacked) return KeyGenerationOutcome.Route.STRONGBOX
             if (metadata.hardwareBacked) return KeyGenerationOutcome.Route.HARDWARE
             return KeyGenerationOutcome.Route.SOFTWARE
+        }
+
+        private fun generateWithOutcome(
+            provider: KeyProvider,
+            alias: String,
+            preference: KeySecurityPreference,
+        ): KeyGenerationOutcome {
+            if (provider is KeystoreKeyProvider) {
+                return provider.generateWithOutcome(alias, preference)
+            }
+            return KeyGenerationOutcome(provider.generate(alias), routeFromMetadata(provider.metadata()))
         }
 
         private fun validateKeyPair(

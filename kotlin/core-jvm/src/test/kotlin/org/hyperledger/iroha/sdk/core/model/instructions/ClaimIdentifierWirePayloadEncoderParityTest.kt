@@ -18,6 +18,7 @@ import kotlin.test.assertIs
  * - Line 1: full wire payload hex
  * - Line 2: account I105
  * - Line 3: signature bytes hex
+ * - Line 4: canonical receipt hash hex
  */
 class ClaimIdentifierWirePayloadEncoderParityTest {
 
@@ -27,7 +28,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         val rustHex = lines[0]
         val accountId = lines[1]
         val signatureHex = lines[2]
-        val fixtureHash = "ab".repeat(32)
+        val fixtureHash = lines[3]
 
         val payload = IdentifierResolutionPayload(
             policyId = "phone#e164",

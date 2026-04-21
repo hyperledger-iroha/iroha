@@ -75,11 +75,11 @@ final class ConnectErrorTests: XCTestCase {
         XCTAssertTrue(error.message.contains("boom"))
     }
 
-    func testDefaultFallbackMapping() {
+    func testDefaultUnknownErrorMapping() {
         struct SampleError: Error {}
-        let fallback = SampleError().asConnectError()
-        XCTAssertEqual(fallback.category, .internalError)
-        XCTAssertEqual(fallback.code, "unknown_error")
+        let mapped = SampleError().asConnectError()
+        XCTAssertEqual(mapped.category, .internalError)
+        XCTAssertEqual(mapped.code, "unknown_error")
     }
 
     func testTelemetryAttributesIncludeCategoryAndCode() {

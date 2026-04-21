@@ -28,7 +28,7 @@ public final class OfflineToriiClientTests {
     propagatesRejectCodeFromNon2xxResponses();
     propagatesNestedJsonMessageFromNon2xxResponses();
     propagatesCaseInsensitiveNestedJsonMessageFromNon2xxResponses();
-    propagatesCompactJsonFallbackFromNon2xxResponses();
+    propagatesCompactJsonFromNon2xxResponses();
     listTransfersRejectsInsecureAuthorizationHeader();
     queryTransfersUsesPostBody();
     queryEnvelopeFromParamsParsesJson();
@@ -188,7 +188,7 @@ public final class OfflineToriiClientTests {
     throw new AssertionError("Expected CompletionException for nested JSON message");
   }
 
-  private static void propagatesCompactJsonFallbackFromNon2xxResponses() {
+  private static void propagatesCompactJsonFromNon2xxResponses() {
     final StubExecutor executor = new StubExecutor(503, "{\"error\":\"temporary_outage\"}");
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
@@ -200,10 +200,10 @@ public final class OfflineToriiClientTests {
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
       assert ex.getCause().getMessage().contains("temporary_outage")
-          : "compact JSON fallback missing";
+          : "compact JSON error text missing";
       return;
     }
-    throw new AssertionError("Expected CompletionException for compact JSON fallback");
+    throw new AssertionError("Expected CompletionException for compact JSON error text");
   }
 
   private static void listTransfersRejectsInsecureAuthorizationHeader() {

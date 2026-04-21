@@ -52,7 +52,7 @@ test("decodeReplicationOrder returns structured replication order", () => {
   });
 });
 
-test("decodeReplicationOrder accepts header padding", () => {
+test("decodeReplicationOrder rejects non-canonical header padding", () => {
   const bytes = readFileSync(ORDER_FIXTURE);
   const headerLen = 40;
   const padding = Buffer.alloc(8);
@@ -61,9 +61,10 @@ test("decodeReplicationOrder accepts header padding", () => {
     padding,
     bytes.subarray(headerLen),
   ]);
-  const order = decodeReplicationOrder(padded);
-  assert.equal(order.schemaVersion, 1);
-  assert.equal(order.orderIdHex.length, 64);
+  assert.throws(
+    () => decodeReplicationOrder(padded),
+    /length|checksum|decode/i,
+  );
 });
 
 test("decodeReplicationOrder rejects payloads without a Norito header", () => {
@@ -89,6 +90,6 @@ test("decodeReplicationOrder rejects invalid lane discriminants", () => {
   mutated[discriminantOffset] = 2;
   assert.throws(
     () => decodeReplicationOrder(mutated),
-    /lane.*discriminant/i,
+    /checksum/i,
   );
 });

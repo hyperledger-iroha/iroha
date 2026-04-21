@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.sdk.sorafs
 
 /**
- * Transport fallback ordering used by the SoraFS orchestrator.
+ * Transport selection ordering used by the SoraFS orchestrator.
  *
  * The enum mirrors the Rust `sorafs_orchestrator::TransportPolicy` so Android callers can
  * deterministically map between labels and policy variants when building fetch requests.
@@ -9,7 +9,7 @@ package org.hyperledger.iroha.sdk.sorafs
 enum class TransportPolicy(val label: String) {
     /** Prefer SoraNet relays, then QUIC, then Torii/HTTP, finally any vendor transport. */
     SORANET_FIRST("soranet-first"),
-    /** Require SoraNet relays and fail rather than falling back to direct transports. */
+    /** Require SoraNet relays and fail rather than selecting direct transports. */
     SORANET_STRICT("soranet-strict"),
     /** Restrict selection to direct transports (Torii/QUIC). */
     DIRECT_ONLY("direct-only");

@@ -18,13 +18,13 @@ class AccountAddressTest {
     }
 
     @Test
-    fun rejectsLegacyFullwidthKanaPayload() {
+    fun rejectsNonCanonicalFullwidthKanaPayload() {
         val literal =
             "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
-        val legacy = literal.replaceFirst("ﾛ", "ロ")
+        val nonCanonical = literal.replaceFirst("ﾛ", "ロ")
 
         val error = assertFailsWith<AccountAddressException> {
-            AccountAddress.fromI105(legacy, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            AccountAddress.fromI105(nonCanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
         assertEquals(AccountAddressErrorCode.INVALID_I105_CHAR, error.code)
     }

@@ -26,7 +26,7 @@ public final class AccountIdLiteral {
     }
     final AccountAddress.ParseResult parsed;
     try {
-      parsed = AccountAddress.parseEncoded(value, null);
+      parsed = AccountAddress.parseAny(value, null);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(
           field + " must use a canonical I105 encoded account literal", ex);

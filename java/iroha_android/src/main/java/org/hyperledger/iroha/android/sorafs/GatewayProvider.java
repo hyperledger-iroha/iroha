@@ -39,7 +39,7 @@ public final class GatewayProvider {
     return streamTokenBase64;
   }
 
-  /** Serialise the provider descriptor to a JSON-compatible map. */
+  /** Serialise the provider descriptor to a JSON-ready map. */
   public Map<String, Object> toJson() {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("name", name);

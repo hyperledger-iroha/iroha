@@ -66,7 +66,7 @@ public final class AccountAddressTests {
     final AccountAddress canonical = AccountAddress.fromCanonicalHex(canonicalHex);
     final byte[] canonicalBytes = canonical.canonicalBytes();
 
-    final AccountAddress.ParseResult i105Parsed = AccountAddress.parseEncoded(i105String, prefix);
+    final AccountAddress.ParseResult i105Parsed = AccountAddress.parseAny(i105String, prefix);
     assert Arrays.equals(i105Parsed.address.canonicalBytes(), canonicalBytes)
         : caseId + ": i105 parse canonical mismatch";
 
@@ -105,11 +105,11 @@ public final class AccountAddressTests {
 
     switch (format) {
       case "i105":
-        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, expectedPrefix));
+        expectError(caseId, expected, () -> AccountAddress.parseAny(input, expectedPrefix));
         break;
       case "canonical_hex":
         expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
-        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
+        expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
         break;
       default:
         throw new IllegalStateException(caseId + ": unsupported negative format " + format);
@@ -129,7 +129,7 @@ public final class AccountAddressTests {
         : "i105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
-        AccountAddress.parseEncoded(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        AccountAddress.parseAny(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert i105Parsed.format == AccountAddress.Format.I105 : "expected i105 format";
     assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
         : "i105 round-trip mismatch";
@@ -154,7 +154,7 @@ public final class AccountAddressTests {
     final String i105 = address.toI105(5);
     boolean threw = false;
     try {
-      AccountAddress.parseEncoded(i105, 9);
+      AccountAddress.parseAny(i105, 9);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX;
     }
@@ -170,7 +170,7 @@ public final class AccountAddressTests {
 
     boolean parseThrew = false;
     try {
-      AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      AccountAddress.parseAny(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       parseThrew = ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_I105_SENTINEL;
     }
@@ -189,14 +189,14 @@ public final class AccountAddressTests {
   private static void i105RejectsLegacyFullwidthKana() throws Exception {
     final String canonical =
         "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7";
-    final String legacy = canonical.replaceFirst("ﾛ", "ロ");
+    final String nonCanonical = canonical.replaceFirst("ﾛ", "ロ");
     boolean threw = false;
     try {
-      AccountAddress.fromI105(legacy, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      AccountAddress.fromI105(nonCanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
     }
-    assert threw : "legacy fullwidth kana literal must be rejected";
+    assert threw : "non-canonical fullwidth kana literal must be rejected";
   }
 
   private static void singleKeyPayloadExtraction() throws Exception {

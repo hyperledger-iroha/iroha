@@ -52,7 +52,7 @@ final class HttpErrorMessageExtractor {
         return truncate(compact);
       }
     } catch (final RuntimeException ignored) {
-      // Fall through to plain-text fallback.
+      // Use the response body as plain text when it is not structured JSON.
     }
 
     return truncate(text);

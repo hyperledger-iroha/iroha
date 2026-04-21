@@ -14,7 +14,7 @@ import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVeri
 import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
 
 /**
- * {@link IrohaKeyManager.KeyProvider} backed by an Android Keystore-compatible backend.
+ * {@link IrohaKeyManager.KeyProvider} backed by an Android Keystore backend.
  *
  * <p>The backend is supplied through {@link KeystoreBackend}; desktop JVM builds can rely on fake
  * implementations for tests while Android builds will provide a real backend that bridges to
@@ -216,13 +216,13 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     final KeyGenParameters.Builder builder = this.parameters.toBuilder();
     switch (preference) {
       case STRONGBOX_REQUIRED:
-        builder.setRequireStrongBox(true).setPreferStrongBox(true).setAllowStrongBoxFallback(false);
+        builder.setRequireStrongBox(true).setPreferStrongBox(true);
         break;
       case STRONGBOX_PREFERRED:
-        builder.setRequireStrongBox(false).setPreferStrongBox(true).setAllowStrongBoxFallback(true);
+        builder.setRequireStrongBox(false).setPreferStrongBox(true);
         break;
       case HARDWARE_REQUIRED:
-        builder.setRequireStrongBox(false).setPreferStrongBox(false).setAllowStrongBoxFallback(true);
+        builder.setRequireStrongBox(false).setPreferStrongBox(false);
         break;
       case HARDWARE_PREFERRED:
       case SOFTWARE_ONLY:

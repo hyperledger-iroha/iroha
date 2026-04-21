@@ -32,9 +32,8 @@ import org.hyperledger.iroha.android.telemetry.KeystoreTelemetryEmitter;
  * Coordinates key generation and lookup for Iroha Android clients.
  *
  * <p>The manager accepts one or more {@link KeyProvider} implementations and
- * routes requests according to the supplied {@link KeySecurityPreference}. When
- * a hardware-backed provider is unavailable, the manager falls back to software
- * providers so developers can continue testing on emulators and desktop JVMs.
+ * routes requests according to the supplied {@link KeySecurityPreference}. Callers choose the
+ * provider set explicitly, including software-only providers for emulators and desktop JVMs.
  *
  * <p>Future revisions will supply Android Keystore/StrongBox backed providers.
  */
@@ -93,13 +92,13 @@ public final class IrohaKeyManager {
     return new IrohaKeyManager(providers, telemetry, signingAlgorithm);
   }
 
-  /** Creates a manager with a software fallback provider only (desktop/emulator friendly). */
-  public static IrohaKeyManager withSoftwareFallback() {
-    return withSoftwareFallback(SigningAlgorithm.ED25519);
+  /** Creates a manager with a software provider only (desktop/emulator friendly). */
+  public static IrohaKeyManager withSoftwareProvider() {
+    return withSoftwareProvider(SigningAlgorithm.ED25519);
   }
 
-  /** Creates a manager with a software fallback provider only (desktop/emulator friendly). */
-  public static IrohaKeyManager withSoftwareFallback(final SigningAlgorithm signingAlgorithm) {
+  /** Creates a manager with a software provider only (desktop/emulator friendly). */
+  public static IrohaKeyManager withSoftwareProvider(final SigningAlgorithm signingAlgorithm) {
     return new IrohaKeyManager(
         List.of(new SoftwareKeyProvider(signingAlgorithm)),
         KeystoreTelemetryEmitter.noop(),
@@ -138,8 +137,7 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Creates a manager that attempts to use hardware-backed keystore providers (when available) and
-   * falls back to the software provider for emulators/desktop JVMs.
+   * Creates a manager with the detected hardware-backed keystore provider.
    */
   public static IrohaKeyManager withDefaultProviders() {
     return withDefaultProviders(KeyGenParameters.builder().build());
@@ -152,8 +150,7 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Creates a manager that attempts to use hardware-backed keystore providers with the supplied
-   * generation parameters and falls back to a software provider.
+   * Creates a manager with the detected hardware-backed keystore provider.
    */
   public static IrohaKeyManager withDefaultProviders(final KeyGenParameters keyGenParameters) {
     final SigningAlgorithm signingAlgorithm = keyGenParameters.signingAlgorithm();
@@ -161,13 +158,11 @@ public final class IrohaKeyManager {
     if (signingAlgorithm.supportsHardwareBackedKeys()) {
       KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
     }
-    providers.add(new SoftwareKeyProvider(signingAlgorithm));
     return new IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm);
   }
 
   /**
-   * Creates a manager that attempts to use hardware-backed keystore providers with telemetry and
-   * falls back to a software provider.
+   * Creates a manager with the detected hardware-backed keystore provider and telemetry.
    */
   public static IrohaKeyManager withDefaultProviders(
       final KeyGenParameters keyGenParameters, final KeystoreTelemetryEmitter telemetry) {
@@ -176,7 +171,6 @@ public final class IrohaKeyManager {
     if (signingAlgorithm.supportsHardwareBackedKeys()) {
       KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
     }
-    providers.add(new SoftwareKeyProvider(signingAlgorithm));
     return new IrohaKeyManager(providers, telemetry, signingAlgorithm);
   }
 
@@ -201,37 +195,26 @@ public final class IrohaKeyManager {
     enforceAlgorithmPreference(preference);
 
     final List<KeyProvider> ordered = orderedProviders(preference);
-    KeyManagementException lastError = null;
+    if (ordered.isEmpty()) {
+      throw new KeyManagementException("No key providers available for alias=" + alias);
+    }
     for (final KeyProvider provider : ordered) {
-      try {
-        final Optional<KeyPair> existing = provider.load(alias);
-        if (existing.isPresent()) {
-          ensureExpectedKeyPair(
-              alias, preference, existing.get(), provider.metadata(), "load");
-          return existing.get();
-        }
-      } catch (final KeyManagementException e) {
-        lastError = e;
+      final Optional<KeyPair> existing = provider.load(alias);
+      if (existing.isPresent()) {
+        ensureExpectedKeyPair(
+            alias, preference, existing.get(), provider.metadata(), "load");
+        return existing.get();
       }
     }
 
-    for (final KeyProvider provider : ordered) {
-      try {
-        final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
-            provider.generateWithOutcome(alias, preference);
-        ensureExpectedKeyPair(
-            alias, preference, outcome.keyPair(), provider.metadata(), "generate");
-        enforcePreference(preference, provider.metadata(), outcome);
-        recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
-        return outcome.keyPair();
-      } catch (final KeyManagementException e) {
-        lastError = e;
-      }
-    }
-    if (lastError != null) {
-      throw lastError;
-    }
-    throw new KeyManagementException("No key providers available for alias=" + alias);
+    final KeyProvider provider = ordered.get(0);
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+        provider.generateWithOutcome(alias, preference);
+    ensureExpectedKeyPair(
+        alias, preference, outcome.keyPair(), provider.metadata(), "generate");
+    enforcePreference(preference, provider.metadata(), outcome);
+    recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
+    return outcome.keyPair();
   }
 
   private void enforcePreference(
@@ -272,12 +255,13 @@ public final class IrohaKeyManager {
       final KeySecurityPreference preference,
       final KeyProviderMetadata metadata,
       final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome) {
-    final boolean fallback =
+    final boolean routeDowngraded =
         (preference == KeySecurityPreference.STRONGBOX_REQUIRED
                 || preference == KeySecurityPreference.STRONGBOX_PREFERRED)
             && outcome.route()
                 != org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX;
-    keystoreTelemetry.recordKeyGeneration(alias, preference, metadata, outcome.route(), fallback);
+    keystoreTelemetry.recordKeyGeneration(
+        alias, preference, metadata, outcome.route(), routeDowngraded);
   }
 
   private void ensureExpectedKeyPair(
@@ -448,20 +432,10 @@ public final class IrohaKeyManager {
    * when hardware-backed providers are present to avoid exhausting secure hardware key slots.
    */
   public KeyPair generateEphemeral() throws KeyManagementException {
-    KeyManagementException lastError = null;
-    for (final KeyProvider provider : providers) {
-      try {
-        final KeyPair keyPair = provider.generateEphemeral();
-        ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral");
-        return keyPair;
-      } catch (final KeyManagementException e) {
-        lastError = e;
-      }
-    }
-    if (lastError != null) {
-      throw lastError;
-    }
-    throw new KeyManagementException("No key providers available for ephemeral keys");
+    final KeyProvider provider = providers.get(0);
+    final KeyPair keyPair = provider.generateEphemeral();
+    ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral");
+    return keyPair;
   }
 
   /**
@@ -590,8 +564,7 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Requests fresh attestation material for {@code alias}. Providers that do not support
-   * attestation generation return {@link Optional#empty()}.
+   * Requests fresh attestation material for {@code alias} from the selected provider.
    *
    * @param alias alias to attest
    * @param challenge attestation challenge (may be {@code null} if provider does not require it)
@@ -612,24 +585,14 @@ public final class IrohaKeyManager {
                 right.metadata().supportsAttestationCertificates(),
                 left.metadata().supportsAttestationCertificates()));
 
-    KeyManagementException lastError = null;
-    for (final KeyProvider provider : ordered) {
-      try {
-        final byte[] clonedChallenge = challenge == null ? null : challenge.clone();
-        final Optional<KeyAttestation> attestation =
-            provider.generateAttestation(alias, clonedChallenge);
-        if (attestation.isPresent()) {
-          return attestation;
-        }
-      } catch (final KeyManagementException e) {
-        keystoreTelemetry.recordFailure(alias, provider.metadata(), e.getMessage());
-        lastError = e;
-      }
+    final KeyProvider provider = ordered.get(0);
+    try {
+      final byte[] clonedChallenge = challenge == null ? null : challenge.clone();
+      return provider.generateAttestation(alias, clonedChallenge);
+    } catch (final KeyManagementException e) {
+      keystoreTelemetry.recordFailure(alias, provider.metadata(), e.getMessage());
+      throw e;
     }
-    if (lastError != null) {
-      throw lastError;
-    }
-    return Optional.empty();
   }
 
   private List<KeyProvider> orderedProviders(final KeySecurityPreference preference) {
@@ -694,7 +657,7 @@ public final class IrohaKeyManager {
   /**
    * Implemented by actors that can generate, store, and retrieve signing keys.
    *
-   * <p>Providers may wrap the Android Keystore, StrongBox secure elements, or software fallbacks. A
+   * <p>Providers may wrap the Android Keystore, StrongBox secure elements, or software storage. A
    * provider can choose to ignore {@code alias} when generating ephemeral keys.
    */
   public interface KeyProvider {
@@ -715,7 +678,7 @@ public final class IrohaKeyManager {
     /**
      * Generates and stores a key pair honouring the requested security preference when possible.
      *
-     * <p>The default implementation falls back to {@link #generate(String)}. Providers that can
+     * <p>The default implementation delegates to {@link #generate(String)}. Providers that can
      * route generation to specific hardware classes (StrongBox vs TEE) should override this method.
      *
      * @throws KeyManagementException if generation fails
@@ -729,7 +692,7 @@ public final class IrohaKeyManager {
      * Generates a key pair and reports the hardware route used.
      *
      * <p>The default implementation derives the route from provider metadata; providers that can
-     * detect StrongBox fallback should override this method to surface the actual path used.
+     * detect the selected StrongBox/TEE/software route should override this method.
      *
      * @throws KeyManagementException if generation fails
      */

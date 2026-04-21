@@ -75,12 +75,12 @@ public final class IrohaKeyManagerTests {
   public static void main(final String[] args) throws Exception {
     shouldGenerateDistinctEphemeralKeys();
     shouldReuseAliasAcrossInvocations();
-    shouldBuildDefaultManagerWithFallback();
+    shouldBuildSoftwareManagerExplicitly();
     shouldErrorWhenHardwareIsRequiredButUnavailable();
     shouldPreferStrongBoxWhenAvailable();
     shouldRequireStrongBoxWhenRequested();
     shouldFailWhenStrongBoxUnavailable();
-    shouldFallbackWhenProviderReturnsNonEd25519Key();
+    shouldRejectProviderReturnsNonEd25519Key();
     shouldVerifyAttestationViaManager();
     shouldGenerateAttestationViaManager();
     shouldSignPayloadViaAlias();
@@ -90,7 +90,7 @@ public final class IrohaKeyManagerTests {
   }
 
   private static void shouldGenerateDistinctEphemeralKeys() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final KeyPair first = manager.generateEphemeral();
     final KeyPair second = manager.generateEphemeral();
     assert first.getPrivate() != null;
@@ -100,7 +100,7 @@ public final class IrohaKeyManagerTests {
   }
 
   private static void shouldReuseAliasAcrossInvocations() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final KeyPair generated =
         manager.generateOrLoad("android-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
     final KeyPair loaded =
@@ -109,16 +109,16 @@ public final class IrohaKeyManagerTests {
     assert Arrays.equals(generated.getPrivate().getEncoded(), loaded.getPrivate().getEncoded())
         : "Alias regeneration must return the same key material";
     assert !manager.hasHardwareBackedProvider()
-        : "Software fallback manager must report no hardware providers";
+        : "Software provider manager must report no hardware providers";
   }
 
-  private static void shouldBuildDefaultManagerWithFallback() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withDefaultProviders();
+  private static void shouldBuildSoftwareManagerExplicitly() throws Exception {
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final KeyPair generated =
         manager.generateOrLoad("default-alias", IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
-    assert generated.getPrivate() != null : "Default manager must generate keys";
+    assert generated.getPrivate() != null : "Software manager must generate keys";
     assert !manager.hasHardwareBackedProvider()
-        : "Emulator/desktop runtime should report no hardware providers by default";
+        : "Software provider manager should report no hardware providers";
     boolean threw = false;
     try {
       manager.generateOrLoad("default-hw", IrohaKeyManager.KeySecurityPreference.HARDWARE_REQUIRED);
@@ -129,7 +129,7 @@ public final class IrohaKeyManagerTests {
   }
 
   private static void shouldErrorWhenHardwareIsRequiredButUnavailable() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     boolean threw = false;
     try {
       manager.generateOrLoad("hardware-only", IrohaKeyManager.KeySecurityPreference.HARDWARE_REQUIRED);
@@ -144,11 +144,11 @@ public final class IrohaKeyManagerTests {
         RecordingProviderStub.strongBox("strongbox-provider");
     final RecordingProviderStub trustedEnvironment =
         RecordingProviderStub.trustedEnvironment("tee-provider");
-    final SoftwareKeyProvider softwareFallback = new SoftwareKeyProvider();
+    final SoftwareKeyProvider softwareProvider = new SoftwareKeyProvider();
 
     final IrohaKeyManager manager =
         IrohaKeyManager.fromProviders(
-            List.of(strongBox, trustedEnvironment, softwareFallback));
+            List.of(strongBox, trustedEnvironment, softwareProvider));
 
     assert manager.hasStrongBoxProvider()
         : "Manager should report StrongBox availability when a StrongBox provider is registered";
@@ -167,10 +167,10 @@ public final class IrohaKeyManagerTests {
   private static void shouldRequireStrongBoxWhenRequested() throws Exception {
     final RecordingProviderStub strongBox =
         RecordingProviderStub.strongBox("strongbox-required-provider");
-    final SoftwareKeyProvider softwareFallback = new SoftwareKeyProvider();
+    final SoftwareKeyProvider softwareProvider = new SoftwareKeyProvider();
 
     final IrohaKeyManager manager =
-        IrohaKeyManager.fromProviders(List.of(strongBox, softwareFallback));
+        IrohaKeyManager.fromProviders(List.of(strongBox, softwareProvider));
 
     assert manager.hasStrongBoxProvider()
         : "Manager should report StrongBox availability when required provider is present";
@@ -187,10 +187,10 @@ public final class IrohaKeyManagerTests {
   private static void shouldFailWhenStrongBoxUnavailable() throws Exception {
     final RecordingProviderStub trustedEnvironment =
         RecordingProviderStub.trustedEnvironment("tee-only-provider");
-    final SoftwareKeyProvider softwareFallback = new SoftwareKeyProvider();
+    final SoftwareKeyProvider softwareProvider = new SoftwareKeyProvider();
 
     final IrohaKeyManager manager =
-        IrohaKeyManager.fromProviders(List.of(trustedEnvironment, softwareFallback));
+        IrohaKeyManager.fromProviders(List.of(trustedEnvironment, softwareProvider));
 
     assert !manager.hasStrongBoxProvider()
         : "Manager must report StrongBox absence when only TEE providers are registered";
@@ -207,21 +207,24 @@ public final class IrohaKeyManagerTests {
         : "TEE provider must not service StrongBox-required aliases";
   }
 
-  private static void shouldFallbackWhenProviderReturnsNonEd25519Key() throws Exception {
+  private static void shouldRejectProviderReturnsNonEd25519Key() throws Exception {
     final InvalidAlgorithmProviderStub invalidProvider =
         new InvalidAlgorithmProviderStub(KeyProviderMetadata.trustedEnvironment("invalid-provider"));
-    final SoftwareKeyProvider softwareFallback = new SoftwareKeyProvider();
+    final SoftwareKeyProvider softwareProvider = new SoftwareKeyProvider();
     final IrohaKeyManager manager =
-        IrohaKeyManager.fromProviders(List.of(invalidProvider, softwareFallback));
+        IrohaKeyManager.fromProviders(List.of(invalidProvider, softwareProvider));
 
-    final KeyPair generated =
+    boolean threw = false;
+    try {
         manager.generateOrLoad(
             "invalid-alias", IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
 
-    assert isEd25519Spki(generated.getPublic().getEncoded())
-        : "Manager must fall back to an Ed25519-capable provider";
+    assert threw : "Manager must reject invalid provider key material";
     assert invalidProvider.wasQueried()
-        : "Invalid provider should have been queried before fallback";
+        : "Invalid provider should have been queried before rejection";
   }
 
   private static void shouldVerifyAttestationViaManager() throws Exception {
@@ -294,7 +297,7 @@ public final class IrohaKeyManagerTests {
   }
 
   private static void shouldSignPayloadViaAlias() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final Signer signer =
         manager.signerForAlias("signing-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -315,7 +318,7 @@ public final class IrohaKeyManagerTests {
           "[IrohaAndroid] Skipping ML-DSA key manager test (native bridge unavailable).");
       return;
     }
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback(SigningAlgorithm.ML_DSA);
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
     final KeyPair keyPair =
         manager.generateOrLoad("ml-dsa-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
     assert manager.signingAlgorithm() == SigningAlgorithm.ML_DSA
@@ -344,7 +347,7 @@ public final class IrohaKeyManagerTests {
           "[IrohaAndroid] Skipping ML-DSA hardware preference test (native bridge unavailable).");
       return;
     }
-    final IrohaKeyManager manager = IrohaKeyManager.withDefaultProviders(SigningAlgorithm.ML_DSA);
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
     boolean threw = false;
     try {
       manager.generateOrLoad(

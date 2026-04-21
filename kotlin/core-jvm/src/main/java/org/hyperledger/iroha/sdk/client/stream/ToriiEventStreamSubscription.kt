@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Convenience helper that keeps a Torii SSE stream alive by reconnecting when the underlying
- * connection drops. Reconnection delays honour `retry:` hints emitted by the server and fall back to
+ * connection drops. Reconnection delays honour `retry:` hints emitted by the server and use
  * exponential backoff.
  */
 class ToriiEventStreamSubscription private constructor(builder: Builder) : AutoCloseable {

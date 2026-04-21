@@ -616,7 +616,7 @@ manifest = client.get_connect_admission_manifest()
 client.set_connect_admission_manifest(manifest)
 ```
 
-- A step-by-step automation walk-through lives at `python/iroha_python/notebooks/connect_automation.ipynb`; the accompanying notebook runs against stubbed endpoints and is executed in CI to ensure the flow stays up to date.
+- A step-by-step automation walk-through lives at `python/iroha_python/notebooks/connect_automation.ipynb`; the accompanying notebook runs against mocked Torii endpoints and is executed in CI to ensure the flow stays up to date.
 
 ### Transaction manifests
 For details on choosing bundles vs. images, see `docs/source/release_artifact_selection.md`.
@@ -1112,10 +1112,9 @@ if telemetry.vrf.found:
     print("Active VRF epoch:", telemetry.vrf.epoch, "seed:", telemetry.vrf.seed_hex)
 ```
 
-> Developer tip: set `IROHA_PYTHON_CONNECT_CODEC=stub` when running the unit-test
-> suite locally to bypass the native Connect codec. The stub keeps the helpers
-> testable without compiling the `iroha_python._crypto` extension; production
-> binaries must run without this flag.
+Connect frame encoding and crypto helpers require the compiled
+`iroha_python._crypto` extension. Run `maturin develop --release` from this
+directory before running tests that exercise Connect payloads.
 
 ## Integration tests
 

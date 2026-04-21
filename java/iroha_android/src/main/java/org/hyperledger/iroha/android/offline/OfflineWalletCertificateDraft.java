@@ -85,42 +85,6 @@ public final class OfflineWalletCertificateDraft {
         null);
   }
 
-  /**
-   * @deprecated Operator is derived by Torii from its configured keypair and ignored in draft
-   *     payloads.
-   */
-  @Deprecated(since = "2.0.0", forRemoval = false)
-  public OfflineWalletCertificateDraft(
-      final String controller,
-      final String operator,
-      final OfflineAllowanceCommitment allowance,
-      final String spendPublicKey,
-      final byte[] attestationReport,
-      final long issuedAtMs,
-      final long expiresAtMs,
-      final OfflineWalletPolicy policy,
-      final Map<String, Object> metadata,
-      final String verdictIdHex,
-      final String attestationNonceHex,
-      final Long refreshAtMs) {
-    this(
-        controller,
-        allowance,
-        spendPublicKey,
-        attestationReport,
-        issuedAtMs,
-        expiresAtMs,
-        policy,
-        metadata,
-        verdictIdHex,
-        attestationNonceHex,
-        refreshAtMs,
-        null,
-        null,
-        null,
-        null);
-  }
-
   public String controller() {
     return controller;
   }
