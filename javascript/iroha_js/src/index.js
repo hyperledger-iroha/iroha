@@ -91,7 +91,6 @@ export {
 export {
   hashSignedTransaction,
   resignSignedTransaction,
-  encodeSignedTransactionNorito,
   buildRegisterDomainTransaction,
   buildTransaction,
   buildMintAssetTransaction,
@@ -143,7 +142,6 @@ export {
   buildEnactReferendumTransaction,
   buildFinalizeReferendumTransaction,
   buildPersistCouncilForEpochTransaction,
-  finalizeSignedTransaction,
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,

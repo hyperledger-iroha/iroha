@@ -28,6 +28,29 @@ non-native hardware-acceleration path required by repository policy.
   - full diff whitespace check still needs unrelated `kotlin/README.md`
     trailing whitespace cleaned or excluded
 
+Latest sync (2026-04-21 Torii node capability and projection checkpoint test resync):
+The reported `iroha_torii` lib-test reds from the generic-query/projection
+expansion are cleared. The node-capability assertions now derive aggregate and
+projection-export resource lists from the registered `generic_query` surface,
+and the projection-checkpoint request helpers used by the Torii runtime/handler
+tests now publish the full canonical five-family shard set. The durable publish
+helper also computes manifest digests from shard archives rebuilt with the same
+`archive_emitted_at_unix` used by checkpoint publish, so local SoraFS seeding
+checks no longer fail on emitted-at drift.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/runtime.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib node_capabilities -- --nocapture`
+  - `cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii --lib` window when there is
+    enough validation budget beyond the reported failing shard
+
 Latest sync (2026-04-21 Torii generic QueryEnvelope executor expansion):
 Torii now has one internal executor for row-mode and aggregate-mode
 QueryEnvelope routes. Public query routes preserve their legacy default

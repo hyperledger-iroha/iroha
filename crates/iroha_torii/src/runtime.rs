@@ -2012,25 +2012,49 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "app_api")]
-    fn accounts_checkpoint_request_for_state(
+    fn projection_checkpoint_request_for_state(
         state: &std::sync::Arc<State>,
         emitted_at_unix: u64,
         archive_emitted_at_unix: u64,
         manifest_seed: u8,
         ticket_seed: u8,
     ) -> NodeProjectionCheckpointPublishRequest {
-        let shards = build_accounts_projection_shard_catalog_entries(state.as_ref())
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| NodeProjectionCheckpointPublishShardRef {
-                resource: "accounts".to_string(),
-                partition_id: entry.partition_id,
-                asset_definition_id: None,
-                archive_emitted_at_unix,
-                manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(index as u8); 32]),
-                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(index as u8); 32]),
-            })
-            .collect();
+        let mut shards = Vec::new();
+        let mut next_seed = 0u8;
+        let mut push_entries = |resource: &str, entries: Vec<NodeProjectionShardCatalogEntry>| {
+            for entry in entries {
+                shards.push(NodeProjectionCheckpointPublishShardRef {
+                    resource: resource.to_owned(),
+                    partition_id: entry.partition_id,
+                    asset_definition_id: entry.asset_definition_id,
+                    archive_emitted_at_unix,
+                    manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(next_seed); 32]),
+                    storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
+                });
+                next_seed = next_seed.wrapping_add(1);
+            }
+        };
+        push_entries(
+            "accounts",
+            build_accounts_projection_shard_catalog_entries(state.as_ref()),
+        );
+        push_entries(
+            "account_assets",
+            build_account_assets_projection_shard_catalog_entries(state.as_ref()),
+        );
+        push_entries(
+            "asset_holders",
+            build_asset_holders_projection_shard_catalog_entries(state.as_ref(), None)
+                .expect("asset_holders catalog"),
+        );
+        push_entries(
+            "asset_definitions",
+            build_asset_definitions_projection_shard_catalog_entries(state.as_ref()),
+        );
+        push_entries(
+            "domains",
+            build_domains_projection_shard_catalog_entries(state.as_ref()),
+        );
         NodeProjectionCheckpointPublishRequest {
             emitted_at_unix: Some(emitted_at_unix),
             shards,
@@ -2080,7 +2104,14 @@ mod tests {
         assert!(resp.query.aggregate.exact_results);
         assert_eq!(
             resp.query.aggregate.supported_resources,
-            vec!["accounts".to_string(), "asset_holders".to_string()]
+            if cfg!(feature = "app_api") {
+                crate::generic_query::aggregate_supported_resources()
+                    .iter()
+                    .map(|resource| (*resource).to_owned())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
         );
         assert!(resp.query.indexed_snapshot_marker);
         assert_eq!(
@@ -2132,7 +2163,10 @@ mod tests {
         if cfg!(feature = "app_api") {
             assert_eq!(
                 resp.query.projection.export_supported_resources,
-                vec!["accounts".to_string(), "asset_holders".to_string()]
+                crate::generic_query::projection_export_supported_resources()
+                    .iter()
+                    .map(|resource| (*resource).to_owned())
+                    .collect::<Vec<_>>()
             );
         } else {
             assert!(resp.query.projection.export_supported_resources.is_empty());
@@ -2328,25 +2362,33 @@ mod tests {
         ));
         let archive_emitted_at_unix = 1_714_001_111;
         let checkpoint_emitted_at_unix = 1_714_001_222;
-        let request = accounts_checkpoint_request_for_state(
+        let request = projection_checkpoint_request_for_state(
             &state,
             checkpoint_emitted_at_unix,
             archive_emitted_at_unix,
             0x11,
             0x21,
         );
-        let first_partition_id = request.shards.first().expect("accounts shard").partition_id;
+        let expected_total_shards = request.shards.len();
+        let accounts_shard = request
+            .shards
+            .iter()
+            .find(|shard| shard.resource == "accounts")
+            .cloned()
+            .expect("accounts shard");
         let archive = build_accounts_projection_shard_archive(
             state.as_ref(),
-            first_partition_id,
+            accounts_shard.partition_id,
             archive_emitted_at_unix,
         )
         .expect("archive");
         let expected_shard = archive
             .clone()
             .into_checkpoint_shard(
-                BlobDigest::new([0x11; 32]),
-                StorageTicketId::new([0x21; 32]),
+                parse_blob_digest_hex(&accounts_shard.manifest_digest_hex, "manifest_digest_hex")
+                    .expect("parse manifest digest"),
+                parse_storage_ticket_hex(&accounts_shard.storage_ticket_hex, "storage_ticket_hex")
+                    .expect("parse storage ticket"),
             )
             .expect("checkpoint shard");
 
@@ -2356,22 +2398,31 @@ mod tests {
 
         assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
         assert_eq!(response.indexed_height, 0);
+        assert_eq!(response.shards.len(), expected_total_shards);
+        let response_accounts_shard = response
+            .shards
+            .iter()
+            .find(|shard| {
+                shard.resource == "accounts"
+                    && shard.partition_id == accounts_shard.partition_id
+                    && shard.asset_definition_id.is_none()
+            })
+            .expect("response accounts shard");
+        assert_eq!(response_accounts_shard.resource, "accounts");
         assert_eq!(
-            response.shards.len(),
-            build_accounts_projection_shard_catalog_entries(state.as_ref()).len()
+            response_accounts_shard.partition_id,
+            accounts_shard.partition_id
         );
-        assert_eq!(response.shards[0].resource, "accounts");
-        assert_eq!(response.shards[0].partition_id, first_partition_id);
         assert_eq!(
-            response.shards[0].manifest_digest_hex,
-            hex::encode([0x11; 32])
+            response_accounts_shard.manifest_digest_hex,
+            accounts_shard.manifest_digest_hex
         );
         assert_eq!(
-            response.shards[0].storage_ticket_hex,
-            hex::encode([0x21; 32])
+            response_accounts_shard.storage_ticket_hex,
+            accounts_shard.storage_ticket_hex
         );
         assert_eq!(
-            response.shards[0].blob_hash_hex,
+            response_accounts_shard.blob_hash_hex,
             hex::encode(expected_shard.blob_hash.as_bytes())
         );
         assert!(state.query_projection_checkpoint_snapshot().is_none());
@@ -2405,11 +2456,16 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        let mut request =
-            accounts_checkpoint_request_for_state(&state, 1_714_001_260, 1_714_001_250, 0x51, 0x61);
+        let mut request = projection_checkpoint_request_for_state(
+            &state,
+            1_714_001_260,
+            1_714_001_250,
+            0x51,
+            0x61,
+        );
         assert!(
             request.shards.len() >= 2,
-            "expected more than one live account shard for completeness validation"
+            "expected more than one live checkpoint shard for completeness validation"
         );
         request.shards.pop();
 
@@ -2454,13 +2510,14 @@ mod tests {
             LiveQueryStore::start_test(),
         ));
         let checkpoint_emitted_at_unix = 1_714_001_333;
-        let request = accounts_checkpoint_request_for_state(
+        let request = projection_checkpoint_request_for_state(
             &state,
             checkpoint_emitted_at_unix,
             1_714_001_300,
             0x31,
             0x41,
         );
+        let expected_total_shards = request.shards.len();
 
         let response = handle_node_query_projection_checkpoint_publish(state.clone(), request)
             .await
@@ -2471,14 +2528,14 @@ mod tests {
             .query_projection_checkpoint_snapshot()
             .expect("persisted checkpoint");
         assert_eq!(persisted.emitted_at_unix, checkpoint_emitted_at_unix);
-        assert_eq!(
-            persisted.shards.len(),
-            build_accounts_projection_shard_catalog_entries(state.as_ref()).len()
-        );
-        assert_eq!(
-            response.shards[0].blob_hash_hex,
-            hex::encode(persisted.shards[0].blob_hash.as_bytes())
-        );
+        assert_eq!(persisted.shards.len(), expected_total_shards);
+        assert_eq!(response.shards.len(), persisted.shards.len());
+        for (response_shard, persisted_shard) in response.shards.iter().zip(&persisted.shards) {
+            assert_eq!(
+                response_shard.blob_hash_hex,
+                hex::encode(persisted_shard.blob_hash.as_bytes())
+            );
+        }
     }
 
     #[cfg(feature = "app_api")]

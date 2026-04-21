@@ -8508,15 +8508,6 @@ export function resignSignedTransaction(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
-export function encodeSignedTransactionNorito(
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
-): Buffer;
-
-export function finalizeSignedTransaction(
-  unsignedTxBytes: ArrayBufferView | ArrayBuffer | Buffer,
-  detachedSignature: ArrayBufferView | ArrayBuffer | Buffer,
-): Buffer;
-
 export interface OfflineEnvelope {
   version: number;
   signedTransaction: Buffer;
