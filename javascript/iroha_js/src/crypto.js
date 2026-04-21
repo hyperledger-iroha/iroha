@@ -1,13 +1,8 @@
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   createPrivateKey,
   createPublicKey,
   createHash,
-  hkdfSync,
-  randomBytes,
   sign as signRaw,
   verify as verifyRaw,
 } from "node:crypto";
@@ -21,13 +16,7 @@ export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_SM2_FIXTURE_PATH = resolvePath(
-  MODULE_DIR,
-  "../../../fixtures/sm/sm2_fixture.json",
-);
-
-const SM2_FIXTURE_FALLBACK = Object.freeze({
+const SM2_FIXTURE_REFERENCE = Object.freeze({
   distid: "1234567812345678",
   seedHex: "1111111111111111111111111111111111111111111111111111111111111111",
   messageHex: "69726F686120736D2073646B2066697874757265",
@@ -45,27 +34,6 @@ const SM2_FIXTURE_FALLBACK = Object.freeze({
   s: "F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268",
 });
 
-let SM2_FIXTURE_REFERENCE = SM2_FIXTURE_FALLBACK;
-try {
-  const rawFixture = readFileSync(WORKSPACE_SM2_FIXTURE_PATH, "utf8");
-  const parsed = JSON.parse(rawFixture);
-  SM2_FIXTURE_REFERENCE = Object.freeze({
-    distid: String(parsed.distid),
-    seedHex: String(parsed.seed_hex).toUpperCase(),
-    messageHex: String(parsed.message_hex).toUpperCase(),
-    privateKeyHex: String(parsed.private_key_hex).toUpperCase(),
-    publicKeySec1Hex: String(parsed.public_key_sec1_hex).toUpperCase(),
-    publicKeyMultihash: String(parsed.public_key_multihash),
-    publicKeyPrefixed: String(parsed.public_key_prefixed),
-    za: String(parsed.za).toUpperCase(),
-    signature: String(parsed.signature).toUpperCase(),
-    r: String(parsed.r).toUpperCase(),
-    s: String(parsed.s).toUpperCase(),
-  });
-} catch {
-  SM2_FIXTURE_REFERENCE = SM2_FIXTURE_FALLBACK;
-}
-
 const SM2_FIXTURE_SEED = Buffer.from(SM2_FIXTURE_REFERENCE.seedHex, "hex");
 const SM2_FIXTURE_MESSAGE = Buffer.from(SM2_FIXTURE_REFERENCE.messageHex, "hex");
 export const SM2_DEFAULT_DISTINGUISHED_ID = SM2_FIXTURE_REFERENCE.distid;
@@ -76,12 +44,6 @@ const ED25519_PKCS8_PREFIX = Buffer.from([
 const ED25519_SPKI_PREFIX = Buffer.from([
   0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ]);
-
-const CONFIDENTIAL_KEY_SALT = Buffer.from("iroha:confidential:key-derivation:v1");
-const CONFIDENTIAL_INFO_NK = Buffer.from("iroha:confidential:nk");
-const CONFIDENTIAL_INFO_IVK = Buffer.from("iroha:confidential:ivk");
-const CONFIDENTIAL_INFO_OVK = Buffer.from("iroha:confidential:ovk");
-const CONFIDENTIAL_INFO_FVK = Buffer.from("iroha:confidential:fvk");
 
 function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
@@ -95,20 +57,15 @@ function resolveNativeBinding() {
 export function generateKeyPair(options = {}) {
   const seed = options.seed ? normalizeSeed(options.seed) : undefined;
   const native = resolveNativeBinding();
-  if (native?.ed25519Keypair) {
-    const result = native.ed25519Keypair(seed);
-    return {
-      algorithm: result.algorithm,
-      publicKey: Buffer.from(result.publicKey),
-      privateKey: Buffer.from(result.privateKey),
-    };
+  if (typeof native.ed25519Keypair !== "function") {
+    throw new Error("Native binding does not expose ed25519Keypair");
   }
-
-  const effectiveSeed = seed ?? randomBytes(ED25519_SEED_LENGTH);
-  const privateKeyObject = privateKeyFromSeed(effectiveSeed);
-  const publicKey = exportPublicKey(privateKeyObject);
-  const privateKey = Buffer.from(effectiveSeed);
-  return { algorithm: "ed25519", publicKey, privateKey };
+  const result = native.ed25519Keypair(seed);
+  return {
+    algorithm: result.algorithm,
+    publicKey: Buffer.from(result.publicKey),
+    privateKey: Buffer.from(result.privateKey),
+  };
 }
 
 /**
@@ -119,12 +76,10 @@ export function generateKeyPair(options = {}) {
 export function publicKeyFromPrivate(privateKey) {
   const buffer = toBuffer(privateKey, "privateKey");
   const native = resolveNativeBinding();
-  if (native?.ed25519PublicKeyFromPrivate) {
-    return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
+  if (typeof native.ed25519PublicKeyFromPrivate !== "function") {
+    throw new Error("Native binding does not expose ed25519PublicKeyFromPrivate");
   }
-  const seed = extractSeed(buffer);
-  const privateKeyObject = privateKeyFromSeed(seed);
-  return exportPublicKey(privateKeyObject);
+  return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
 }
 
 /**
@@ -363,9 +318,10 @@ export function deriveConfidentialKeyset(spendKey) {
   }
 
   const native = resolveNativeBinding();
-  const raw =
-    native?.deriveConfidentialKeyset?.(seed) ??
-    deriveConfidentialKeysetFallback(seed);
+  if (typeof native.deriveConfidentialKeyset !== "function") {
+    throw new Error("Native binding does not expose deriveConfidentialKeyset");
+  }
+  const raw = native.deriveConfidentialKeyset(seed);
 
   const keyset = {
     skSpend: toBufferField(raw, "sk_spend", "skSpend"),
@@ -732,15 +688,4 @@ function wrapConfidentialKeyset(keys) {
   });
 
   return result;
-}
-
-function deriveConfidentialKeysetFallback(seed) {
-  const derive = (info) => hkdfSync("sha3-512", seed, CONFIDENTIAL_KEY_SALT, info, 32);
-  return {
-    sk_spend: Buffer.from(seed),
-    nk: derive(CONFIDENTIAL_INFO_NK),
-    ivk: derive(CONFIDENTIAL_INFO_IVK),
-    ovk: derive(CONFIDENTIAL_INFO_OVK),
-    fvk: derive(CONFIDENTIAL_INFO_FVK),
-  };
 }

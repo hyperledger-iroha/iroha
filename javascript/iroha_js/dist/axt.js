@@ -1,5 +1,4 @@
 import { getNativeBinding } from "./native.js";
-import { computeAxtBindingFromNorito } from "./poseidon2.js";
 
 function assertOptionalUnsigned(value, context) {
   if (value === null || value === undefined) {
@@ -31,14 +30,6 @@ function ensureObject(value, context) {
     throw new TypeError(`${context} must be an object`);
   }
   return value;
-}
-
-function parseEnvFlag(value) {
-  if (value === null || value === undefined) {
-    return false;
-  }
-  const normalized = String(value).trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function assertUnsigned(value, context) {
@@ -140,15 +131,9 @@ function canonicalizeTouchFragments(input) {
 }
 
 function resolveAxtNative() {
-  if (parseEnvFlag(process.env.IROHA_JS_DISABLE_NATIVE)) {
-    return null;
-  }
   const native = getNativeBinding();
-  if (!native) {
-    return null;
-  }
   if (typeof native.axtBuildDescriptor !== "function") {
-    return null;
+    throw new Error("Native binding required; missing axtBuildDescriptor.");
   }
   return native;
 }
@@ -278,8 +263,7 @@ export function buildHandleRefreshRequest(rejectContext, overrides = {}) {
  * Build a canonical AXT descriptor and binding from unordered dataspace/touch
  * declarations. Dataspace ids and touch specs are deduplicated and sorted, and
  * the native binding computes the Norito-encoded descriptor bytes plus the
- * Poseidon binding. When the native binding is unavailable the descriptor and
- * manifest fragments are still canonicalised but binding fields are `null`.
+ * Poseidon binding.
  * @param {object} options Descriptor construction options.
  * @param {Iterable<number> | ArrayLike<number>} options.dsids Dataspaces touched by the descriptor.
  * @param {Iterable<{ dsid: number, read?: Iterable<string> | ArrayLike<string>, write?: Iterable<string> | ArrayLike<string> }>} [options.touches]
@@ -288,9 +272,9 @@ export function buildHandleRefreshRequest(rejectContext, overrides = {}) {
  * Optional runtime touch manifest fragments to canonicalise alongside the descriptor.
  * @returns {{
  *  descriptor: { dsids: number[], touches: Array<{ dsid: number, read: string[], write: string[] }> },
- *  descriptorBytes: Buffer | null,
+ *  descriptorBytes: Buffer,
  *  bindingHex: string | null,
- *  binding: Buffer | null,
+ *  binding: Buffer,
  *  touchManifest: Array<{ dsid: number, manifest: { read: string[], write: string[] } }>,
  *  native: boolean
  * }}
@@ -318,44 +302,28 @@ export function buildAxtDescriptor(options = {}) {
   }
 
   const native = resolveAxtNative();
-  if (native) {
-    const artifacts = native.axtBuildDescriptor(
-      dsids,
-      touches.map((touch) => ({
-        dsid: touch.dsid,
-        read: touch.read,
-        write: touch.write,
-      })),
-    );
-    const descriptorJson = artifacts.descriptor_json ?? artifacts.descriptorJson;
-    const manifestJson = artifacts.touch_manifest_json ?? artifacts.touchManifestJson;
-    const descriptor = JSON.parse(descriptorJson);
-    const manifest = touchManifest.length > 0 ? touchManifest : JSON.parse(manifestJson);
-    const bindingHex = artifacts.binding_hex ?? artifacts.bindingHex ?? null;
-    return {
-      descriptor,
-      descriptorBytes: Buffer.from(artifacts.descriptor_bytes ?? artifacts.descriptorBytes),
-      bindingHex: typeof bindingHex === "string"
-        ? bindingHex.toLowerCase()
-        : null,
-      binding: Buffer.from(artifacts.binding),
-      touchManifest: manifest,
-      native: true,
-    };
-  }
-
-  const descriptorBytes = record.descriptorBytes ?? record.descriptor_bytes ?? null;
-  const bindingBuffer = descriptorBytes
-    ? computeAxtBindingFromNorito(descriptorBytes)
-    : null;
-
+  const artifacts = native.axtBuildDescriptor(
+    dsids,
+    touches.map((touch) => ({
+      dsid: touch.dsid,
+      read: touch.read,
+      write: touch.write,
+    })),
+  );
+  const descriptorJson = artifacts.descriptor_json ?? artifacts.descriptorJson;
+  const manifestJson = artifacts.touch_manifest_json ?? artifacts.touchManifestJson;
+  const descriptor = JSON.parse(descriptorJson);
+  const manifest = touchManifest.length > 0 ? touchManifest : JSON.parse(manifestJson);
+  const bindingHex = artifacts.binding_hex ?? artifacts.bindingHex ?? null;
   return {
-    descriptor: { dsids, touches },
-    descriptorBytes: descriptorBytes ? Buffer.from(descriptorBytes) : null,
-    bindingHex: bindingBuffer ? bindingBuffer.toString("hex") : null,
-    binding: bindingBuffer,
-    touchManifest,
-    native: false,
+    descriptor,
+    descriptorBytes: Buffer.from(artifacts.descriptor_bytes ?? artifacts.descriptorBytes),
+    bindingHex: typeof bindingHex === "string"
+      ? bindingHex.toLowerCase()
+      : null,
+    binding: Buffer.from(artifacts.binding),
+    touchManifest: manifest,
+    native: true,
   };
 }
 
@@ -365,5 +333,9 @@ export function buildAxtDescriptor(options = {}) {
  * @returns {Buffer}
  */
 export function computeAxtBinding(descriptorBytes) {
-  return computeAxtBindingFromNorito(descriptorBytes);
+  const native = getNativeBinding();
+  if (typeof native.axtComputeBinding !== "function") {
+    throw new Error("Native binding required; missing axtComputeBinding.");
+  }
+  return Buffer.from(native.axtComputeBinding(descriptorBytes));
 }

@@ -1761,135 +1761,6 @@ export interface SnsRegisterNameResponse {
   nameRecord: SnsNameRecord;
 }
 
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsCaseExportOptions {
-  since?: string | null;
-  status?: string | null;
-  limit?: number | null;
-  signal?: AbortSignal;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseDisputeType = "ownership" | "policy_violation" | "abuse" | "billing" | "other";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCasePriority = "urgent" | "high" | "standard" | "info";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseStatus =
-  | "open"
-  | "triage"
-  | "hearing"
-  | "decision"
-  | "remediation"
-  | "closed"
-  | "suspended";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseReporterRole = "registrar" | "steward" | "guardian" | "public" | "support";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseRespondentRole = "registrant" | "controller" | "registrar" | "steward" | "other";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseEvidenceKind = "document" | "screenshot" | "log" | "governance" | "other";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCaseDecisionFinding = "upheld" | "rejected" | "partial" | "withdrawn";
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export type SnsGovernanceCasePublicationState = "public" | "redacted" | "sealed";
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseSelector {
-  suffixId: number;
-  label: string;
-  globalForm: string;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseReporter {
-  role: SnsGovernanceCaseReporterRole;
-  contact: string;
-  referenceTicket: string | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseRespondent {
-  role: SnsGovernanceCaseRespondentRole;
-  accountId: string;
-  contact: string | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseAllegation {
-  code: string;
-  summary: string | null;
-  policyReference: string | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseEvidence {
-  id: string;
-  kind: SnsGovernanceCaseEvidenceKind;
-  uri: string | null;
-  hashHex: string;
-  description: string | null;
-  sealed: boolean;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseSlaExtension {
-  approvedBy: string;
-  reason: string;
-  newResolutionBy: string;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseSla {
-  acknowledgeBy: string;
-  resolutionBy: string;
-  extensions: ReadonlyArray<SnsGovernanceCaseSlaExtension>;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseAction {
-  timestamp: string;
-  actor: string;
-  action: string;
-  notes: string | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseDecision {
-  finding: SnsGovernanceCaseDecisionFinding | null;
-  remedies: ReadonlyArray<string>;
-  effectiveAt: string | null;
-  publicationState: SnsGovernanceCasePublicationState | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCase {
-  caseId: string;
-  selector: SnsGovernanceCaseSelector;
-  disputeType: SnsGovernanceCaseDisputeType;
-  priority: SnsGovernanceCasePriority;
-  reportedAt: string;
-  acknowledgedAt: string | null;
-  triageStartedAt: string | null;
-  hearingScheduledAt: string | null;
-  resolutionIssuedAt: string | null;
-  status: SnsGovernanceCaseStatus;
-  reporter: SnsGovernanceCaseReporter;
-  respondents: ReadonlyArray<SnsGovernanceCaseRespondent>;
-  allegations: ReadonlyArray<SnsGovernanceCaseAllegation>;
-  evidence: ReadonlyArray<SnsGovernanceCaseEvidence>;
-  sla: SnsGovernanceCaseSla;
-  actions: ReadonlyArray<SnsGovernanceCaseAction>;
-  decision: SnsGovernanceCaseDecision | null;
-}
-
-/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
-export interface SnsGovernanceCaseExportResult {
-  cases: ReadonlyArray<SnsGovernanceCase>;
-  nextSince: string | null;
-  nextCursor: string | null;
-  totalCount: number | null;
-}
-
 export interface ToriiPipelineTransactionEvent {
   category: "Pipeline";
   event: "Transaction";
@@ -2123,7 +1994,7 @@ export interface ConnectQueueJournalOptions {
   retentionMs?: number;
   indexedDbName?: string;
   indexedDbVersion?: number;
-  storage?: "auto" | "memory";
+  storage?: "indexeddb" | "memory";
   indexedDbFactory?: IDBFactory;
 }
 
@@ -2143,7 +2014,6 @@ export class ConnectQueueJournal {
     options?: ConnectQueueJournalOptions,
   );
   readonly sessionKey: string;
-  readonly fallbackError?: unknown;
   append(
     direction: ConnectDirection | string,
     sequence: number | bigint | string,
@@ -2464,7 +2334,6 @@ export interface SorafsGatewayFetchOptions {
   scoreboardNowUnixSecs?: number | bigint;
   scoreboardTelemetryLabel?: string;
   scoreboardAllowImplicitMetadata?: boolean;
-  allowSingleSourceFallback?: boolean;
 }
 
 export interface SorafsGatewayPolicyOverride {
@@ -2558,7 +2427,6 @@ export interface SorafsGatewayScoreboardMetadata {
   gatewayManifestProvided: boolean;
   gatewayManifestId: string | null;
   gatewayManifestCid: string | null;
-  allowSingleSourceFallback: boolean;
   allowImplicitMetadata: boolean;
 }
 
@@ -4301,8 +4169,8 @@ export interface ToriiSccpCapabilities {
   messageJobPath: string;
   recentMessagesPath: string;
   proofManifestPath: string;
-  legacyBurnRegistryBackend: string;
-  legacyGovernanceRegistryBackend: string;
+  burnRegistryBackend: string;
+  governanceRegistryBackend: string;
   proofSubmitPath: string | null;
   messageSubmitPath: string | null;
   messagePayloadKinds: ReadonlyArray<string>;
@@ -5592,7 +5460,6 @@ interface RegisterAccountAndTransferInputBase {
   authority: string;
   account: {
     accountId: string;
-    domainId: string;
     metadata?: object;
   };
   metadata?: MetadataLike;
@@ -5822,7 +5689,7 @@ export interface PersistCouncilForEpochInstructionInput {
   alternates?: ReadonlyArray<string>;
   verified?: NumericLike;
   candidatesCount: NumericLike;
-  derivedBy?: "Vrf" | "Fallback" | string;
+  derivedBy?: "Vrf" | string;
 }
 
 export interface RegisterZkAssetInstructionInput {
@@ -7873,19 +7740,6 @@ export declare class ToriiClient {
     request: SnsGovernanceHook,
     options?: { signal?: AbortSignal },
   ): Promise<SnsNameRecord>;
-  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
-  createSnsGovernanceCase(
-    payload: Record<string, unknown>,
-    options?: { signal?: AbortSignal },
-  ): Promise<never>;
-  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
-  exportSnsGovernanceCases(
-    options?: SnsCaseExportOptions,
-  ): Promise<never>;
-  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
-  iterateSnsGovernanceCases(
-    options?: SnsCaseExportOptions,
-  ): AsyncGenerator<never, void, unknown>;
   getGovernanceProposal(
     proposalId: string,
     options?: { signal?: AbortSignal },
@@ -8583,11 +8437,11 @@ export interface AxtDescriptorShape {
 
 export interface AxtDescriptorBuild {
   descriptor: AxtDescriptorShape;
-  descriptorBytes: Buffer | null;
-  bindingHex: string | null;
-  binding: Buffer | null;
+  descriptorBytes: Buffer;
+  bindingHex: string;
+  binding: Buffer;
   touchManifest: ReadonlyArray<AxtTouchFragment>;
-  native: boolean;
+  native: true;
 }
 
 export function buildTouchManifest(
@@ -9364,11 +9218,9 @@ export function buildRegisterDomainInstruction({
 
 export function buildRegisterAccountInstruction({
   accountId,
-  domainId,
   metadata,
 }: {
   accountId: string;
-  domainId: string;
   metadata?: object | null;
 }): object;
 

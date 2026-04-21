@@ -23,7 +23,7 @@ public final class GovernanceInstructionBuilderTests {
     proposeDeployContractFromArgumentsRoundTrip();
     proposeDeployContractRejectsAmbiguousTarget();
     castZkBallotRoundTrip();
-    castZkBallotRejectsDeprecatedPublicInputs();
+    castZkBallotRejectsUnsupportedPublicInputs();
     castZkBallotNormalizesPublicInputs();
     castZkBallotFromArgumentsNormalizesPublicInputs();
     castZkBallotRejectsIncompleteLockHints();
@@ -33,6 +33,7 @@ public final class GovernanceInstructionBuilderTests {
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
     persistCouncilRoundTrip();
+    persistCouncilRejectsNonVrfDerivation();
     System.out.println("[IrohaAndroid] GovernanceInstructionBuilderTests passed.");
   }
 
@@ -103,7 +104,7 @@ public final class GovernanceInstructionBuilderTests {
     assert "AQID".equals(instruction.proofBase64()) : "proof mismatch";
   }
 
-  private static void castZkBallotRejectsDeprecatedPublicInputs() {
+  private static void castZkBallotRejectsUnsupportedPublicInputs() {
     final String rootHint = "0x" + "Aa".repeat(32);
     final String nullifier = "blake2b32:" + "BB".repeat(32);
     boolean failed = false;
@@ -122,7 +123,7 @@ public final class GovernanceInstructionBuilderTests {
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("durationBlocks");
     }
-    assert failed : "expected deprecated alias rejection";
+    assert failed : "expected unsupported alias rejection";
   }
 
   private static void castZkBallotNormalizesPublicInputs() {
@@ -269,6 +270,16 @@ public final class GovernanceInstructionBuilderTests {
     assert instruction.verified() == 2 : "verified mismatch";
     assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
         : "derived_by mismatch";
+  }
+
+  private static void persistCouncilRejectsNonVrfDerivation() {
+    boolean failed = false;
+    try {
+      GovernanceInstructionUtils.CouncilDerivationKind.parse("manual");
+    } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : "non-VRF council derivation must be rejected";
   }
 
   private static String sampleI105(final int fill) {

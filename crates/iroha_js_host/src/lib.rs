@@ -113,7 +113,7 @@ use iroha_data_model::{
     ministry::AgendaProposalV1,
     name::Name,
     nexus::{
-        AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
         TouchManifest, compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
     },
     nft::{NewNft, Nft, NftId},
@@ -1195,6 +1195,17 @@ pub fn axt_build_descriptor(
         binding_hex: hex::encode(binding_bytes),
         binding: Buffer::from(binding_bytes.to_vec()),
     })
+}
+
+/// Compute an AXT binding from canonical Norito descriptor bytes.
+#[napi]
+pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    let descriptor: AxtDescriptor = decode_from_bytes(descriptor_bytes.as_ref())
+        .map_err(|err| norito_to_napi(format!("{err}")))?;
+    validate_descriptor(&descriptor).map_err(|err| norito_to_napi(format!("{err}")))?;
+    let binding_bytes = compute_descriptor_binding(&descriptor).map_err(norito_to_napi)?;
+    Ok(Buffer::from(binding_bytes.to_vec()))
 }
 
 #[allow(unsafe_code)]

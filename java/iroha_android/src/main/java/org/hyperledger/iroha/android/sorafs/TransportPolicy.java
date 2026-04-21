@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.sorafs;
 import java.util.Locale;
 
 /**
- * Transport fallback ordering used by the SoraFS orchestrator.
+ * Transport selection ordering used by the SoraFS orchestrator.
  *
  * <p>The enum mirrors the Rust {@code sorafs_orchestrator::TransportPolicy} so Android callers can
  * deterministically map between labels and policy variants when building fetch requests.
@@ -11,7 +11,7 @@ import java.util.Locale;
 public enum TransportPolicy {
   /** Prefer SoraNet relays, then QUIC, then Torii/HTTP, finally any vendor transport. */
   SORANET_FIRST("soranet-first"),
-  /** Require SoraNet relays and fail rather than falling back to direct transports. */
+  /** Require SoraNet relays and fail rather than selecting direct transports. */
   SORANET_STRICT("soranet-strict"),
   /** Restrict selection to direct transports (Torii/QUIC). */
   DIRECT_ONLY("direct-only");

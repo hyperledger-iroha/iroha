@@ -1,8 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-process.env.IROHA_JS_DISABLE_NATIVE = "1";
-
 const { AccountAddress } = await import("../src/address.js");
 const {
   buildRegisterRwaInstruction,
@@ -41,7 +39,7 @@ const RWA_ID =
 const RWA_ID_HASH_UPPER =
   "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities";
 
-test("RWA instruction builders normalize canonical payloads in JS-only mode", () => {
+test("RWA instruction builders normalize canonical payloads", () => {
   const register = buildRegisterRwaInstruction({
     rwa: {
       domain: "commodities",

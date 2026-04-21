@@ -59,7 +59,7 @@ const SECOND_CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${RELAY_ACCOUNT_
 const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const RWA_ID =
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
 const test = makeNativeTest(baseTest);
 
 function i105FromEd25519PublicKeyHex(publicKeyHex) {
@@ -117,7 +117,7 @@ function buildSampleRegisterDomain(additionalOptions = {}) {
   return buildRegisterDomainTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
-    domainId: "garden_of_live_flowers",
+    domainId: "garden_of_live_flowers.sora",
     metadata: { key: "value" },
     creationTimeMs: 1_700_000_000_000,
     ttlMs: 5_000,
@@ -287,7 +287,7 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         rwa: {
-          domain: "commodities",
+          domain: "commodities.sora",
           quantity: "10.5",
           spec: { scale: 1 },
           primaryReference: "vault-cert-001",
@@ -300,7 +300,7 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
   assert.deepEqual(captures[0].instructions[0], {
     RegisterRwa: {
       rwa: {
-        domain: "commodities",
+        domain: "commodities.sora",
         quantity: "10.5",
         spec: { scale: 1 },
         primary_reference: "vault-cert-001",
@@ -426,7 +426,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        domain: { domainId: "wonderland" },
+        domain: { domainId: "wonderland.sora" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "4" },
           { assetId: CANONICAL_LILY_ASSET_ID_INPUT, quantity: "1" },
@@ -439,7 +439,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.equal(instructions.length, 3);
   assert.deepEqual(
     instructions[0],
-    buildRegisterDomainInstruction({ domainId: "wonderland" }),
+    buildRegisterDomainInstruction({ domainId: "wonderland.sora" }),
   );
   assert.deepEqual(instructions[1], {
     Mint: { Asset: { destination: ASSET_ID, object: "4" } },
@@ -626,7 +626,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         call: {
-          id: { domainId: "wonderland", callName: "weekly-sync" },
+          id: { domainId: "wonderland.sora", callName: "weekly-sync" },
           host: AUTHORITY_ID_INPUT,
           gasRatePerMinute: 120,
           relayManifest: {
@@ -648,7 +648,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
   assert.equal(instructions.length, 1);
   const created = instructions[0];
   assert.deepEqual(created.Kaigi.CreateKaigi.call.id, {
-    domain_id: "wonderland",
+    domain_id: "wonderland.sora",
     call_name: "weekly-sync",
   });
   assert.equal(created.Kaigi.CreateKaigi.call.gas_rate_per_minute, 120);
@@ -680,7 +680,7 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         call: {
-          id: "wonderland:private-room",
+          id: "wonderland.sora:private-room",
           host: AUTHORITY_ID_INPUT,
           privacyMode: "ZkRosterV1",
           commitment: { commitment, aliasTag: "host" },
@@ -718,7 +718,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         join: {
-          callId: "wonderland:weekly-sync",
+          callId: "wonderland.sora:weekly-sync",
           participant: AUTHORITY_ID_INPUT,
           commitment: { commitment, aliasTag: "alice" },
           nullifier: { digest: nullifier, issuedAtMs: 42 },
@@ -945,7 +945,7 @@ test("buildPersistCouncilForEpochTransaction wraps council", () => {
           epoch: 1,
           members: [AUTHORITY_ID_INPUT],
           candidatesCount: 5,
-          derivedBy: "fallback",
+          derivedBy: "Vrf",
         },
         privateKey: PRIVATE_KEY,
       }),

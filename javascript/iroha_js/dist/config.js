@@ -824,9 +824,9 @@ function requireString(value, _name) {
   return trimmed;
 }
 
-function coerceNumberWithDefault(value, name, fallback) {
+function coerceNumberWithDefault(value, name, defaultValue) {
   if (value === null || value === undefined || value === "") {
-    return fallback;
+    return defaultValue;
   }
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {

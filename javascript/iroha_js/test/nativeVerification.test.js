@@ -46,13 +46,9 @@ test("verifyNativeBinding succeeds when checksum matches manifest entry", async 
   });
 });
 
-test("getNativeBinding falls back to JS when checksum mismatches", async () => {
+test("getNativeBinding rejects checksum mismatches", async () => {
   __resetNativeStateForTests();
-  const originalWarn = console.warn;
-  const warnings = [];
-  console.warn = (...args) => warnings.push(args.join(" "));
   const previousOverride = process.env.IROHA_JS_NATIVE_DIR;
-  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
 
   try {
     await withTempDir(async (dir) => {
@@ -69,19 +65,10 @@ test("getNativeBinding falls back to JS when checksum mismatches", async () => {
         )}\n`,
       );
       process.env.IROHA_JS_NATIVE_DIR = dir;
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
-      const binding = getNativeBinding();
-      assert.equal(binding, null);
-      assert(warnings.some((line) => line.includes("checksum mismatch")));
+      assert.throws(() => getNativeBinding(), /checksum mismatch/);
     });
   } finally {
     process.env.IROHA_JS_NATIVE_DIR = previousOverride;
-    if (previousDisable === undefined) {
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
-    } else {
-      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
-    }
-    console.warn = originalWarn;
     __resetNativeStateForTests();
   }
 });
@@ -103,92 +90,20 @@ test("verifyNativeBinding can allow missing manifests when requested", async () 
   });
 });
 
-test("getNativeBinding honours IROHA_JS_DISABLE_NATIVE opt-out", async () => {
+test("getNativeBinding throws when binding is missing", async () => {
   __resetNativeStateForTests();
-  const originalWarn = console.warn;
-  const warnings = [];
-  console.warn = (...args) => warnings.push(args.join(" "));
-  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
-  const previousOverride = process.env.IROHA_JS_NATIVE_DIR;
-
-  try {
-    process.env.IROHA_JS_DISABLE_NATIVE = "1";
-    delete process.env.IROHA_JS_NATIVE_DIR;
-    const binding = getNativeBinding();
-    assert.equal(binding, null);
-    assert(
-      warnings.some((line) =>
-        line.includes("native binding disabled via IROHA_JS_DISABLE_NATIVE"),
-      ),
-    );
-  } finally {
-    if (previousDisable === undefined) {
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
-    } else {
-      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
-    }
-    if (previousOverride === undefined) {
-      delete process.env.IROHA_JS_NATIVE_DIR;
-    } else {
-      process.env.IROHA_JS_NATIVE_DIR = previousOverride;
-    }
-    console.warn = originalWarn;
-    __resetNativeStateForTests();
-  }
-});
-
-test("getNativeBinding throws when IROHA_JS_FORCE_NATIVE is set and binding missing", async () => {
-  __resetNativeStateForTests();
-  const previousForce = process.env.IROHA_JS_FORCE_NATIVE;
-  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
   const previousOverride = process.env.IROHA_JS_NATIVE_DIR;
 
   try {
     await withTempDir(async (dir) => {
-      process.env.IROHA_JS_FORCE_NATIVE = "1";
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
       process.env.IROHA_JS_NATIVE_DIR = dir;
-      assert.throws(() => getNativeBinding(), /IROHA_JS_FORCE_NATIVE/);
+      assert.throws(() => getNativeBinding(), /binding missing/);
     });
   } finally {
-    if (previousForce === undefined) {
-      delete process.env.IROHA_JS_FORCE_NATIVE;
-    } else {
-      process.env.IROHA_JS_FORCE_NATIVE = previousForce;
-    }
-    if (previousDisable === undefined) {
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
-    } else {
-      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
-    }
     if (previousOverride === undefined) {
       delete process.env.IROHA_JS_NATIVE_DIR;
     } else {
       process.env.IROHA_JS_NATIVE_DIR = previousOverride;
-    }
-    __resetNativeStateForTests();
-  }
-});
-
-test("getNativeBinding rejects conflicting force/disable flags", () => {
-  __resetNativeStateForTests();
-  const previousForce = process.env.IROHA_JS_FORCE_NATIVE;
-  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
-
-  try {
-    process.env.IROHA_JS_FORCE_NATIVE = "1";
-    process.env.IROHA_JS_DISABLE_NATIVE = "1";
-    assert.throws(() => getNativeBinding(), /cannot be combined/);
-  } finally {
-    if (previousForce === undefined) {
-      delete process.env.IROHA_JS_FORCE_NATIVE;
-    } else {
-      process.env.IROHA_JS_FORCE_NATIVE = previousForce;
-    }
-    if (previousDisable === undefined) {
-      delete process.env.IROHA_JS_DISABLE_NATIVE;
-    } else {
-      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
     }
     __resetNativeStateForTests();
   }

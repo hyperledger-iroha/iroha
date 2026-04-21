@@ -5,6 +5,7 @@ public enum ConfidentialEncryptedPayloadError: Error, Sendable, Equatable {
     case invalidEphemeralKeyLength(Int)
     case invalidNonceLength(Int)
     case ciphertextTooLarge
+    case bridgeUnavailable
     case truncatedPayload
     case varintOverflow
     case trailingBytes(Int)
@@ -21,6 +22,10 @@ extension ConfidentialEncryptedPayloadError: LocalizedError {
             return "Nonce must be 24 bytes; got \(length)."
         case .ciphertextTooLarge:
             return "Ciphertext length exceeds supported range."
+        case .bridgeUnavailable:
+            return NoritoNativeBridge.bridgeUnavailableMessage(
+                "NoritoBridge confidential payload encoder is unavailable."
+            )
         case .truncatedPayload:
             return "Encrypted payload bytes ended unexpectedly."
         case .varintOverflow:
@@ -68,42 +73,12 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
                                                                              ciphertext: ciphertext) {
             return native
         }
-        return ConfidentialEncryptedPayload.encodeFallback(version: version,
-                                                           ephemeralPublicKey: ephemeralPublicKey,
-                                                           nonce: nonce,
-                                                           ciphertext: ciphertext)
+        throw ConfidentialEncryptedPayloadError.bridgeUnavailable
     }
 
     public func noritoEnvelope(flags: UInt8 = 0x04) throws -> Data {
         let payload = try serializedPayload()
         return noritoEncode(typeName: Self.typeName, payload: payload, flags: flags)
-    }
-
-    private static func encodeFallback(version: UInt8,
-                                       ephemeralPublicKey: Data,
-                                       nonce: Data,
-                                       ciphertext: Data) -> Data {
-        var out = Data(capacity: 1 + ephemeralPublicKey.count + nonce.count + ciphertext.count + 10)
-        out.append(version)
-        out.append(ephemeralPublicKey)
-        out.append(nonce)
-        out.append(encodeVarint(UInt64(ciphertext.count)))
-        out.append(ciphertext)
-        return out
-    }
-
-    private static func encodeVarint(_ value: UInt64) -> Data {
-        var remaining = value
-        var encoded = Data()
-        repeat {
-            var byte = UInt8(remaining & 0x7F)
-            remaining >>= 7
-            if remaining != 0 {
-                byte |= 0x80
-            }
-            encoded.append(byte)
-        } while remaining != 0
-        return encoded
     }
 
     public func asHexDictionary() -> [String: String] {

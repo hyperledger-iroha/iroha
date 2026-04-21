@@ -20,9 +20,7 @@ import java.util.Set;
 import java.security.SecureRandom;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
-import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
@@ -33,8 +31,8 @@ import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
  * Exports and recovers software-generated signing keys using salted HKDF + AES-GCM.
  *
  * <p>Each export uses a fresh random salt and nonce bound to the alias, derives a key with a
- * memory-hard KDF (Argon2id preferred, PBKDF2 fallback), and records the KDF kind/work factor in
- * the bundle. The exported bundle contains the public key, nonce, salt, and ciphertext so the
+ * memory-hard Argon2id KDF and records the KDF kind/work factor in the bundle. The exported bundle
+ * contains the public key, nonce, salt, and ciphertext so the
  * receiver can validate and recover the key pair deterministically across JVMs.
  */
 public final class DeterministicKeyExporter {
@@ -42,7 +40,6 @@ public final class DeterministicKeyExporter {
   private static final String HMAC_ALGORITHM = "HmacSHA256";
   private static final String DIGEST_ALGORITHM = "SHA-256";
   private static final String KEY_ALGORITHM = "Ed25519";
-  private static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256";
   private static final String AES_TRANSFORMATION = "AES/GCM/NoPadding";
   private static final int GCM_TAG_BITS = 128;
   private static final byte[] ED25519_SPKI_PREFIX =
@@ -51,9 +48,7 @@ public final class DeterministicKeyExporter {
       };
   private static final int ED25519_SPKI_SIZE = 44;
   private static final byte[] ED25519_OID = new byte[] {0x2b, 0x65, 0x70};
-  static final int KDF_KIND_PBKDF2_HMAC_SHA256 = 1;
   static final int KDF_KIND_ARGON2ID = 2;
-  private static final int DEFAULT_PBKDF2_ITERATIONS = 350_000;
   private static final int DEFAULT_ARGON2_MEMORY_KIB = 64 * 1024;
   private static final int DEFAULT_ARGON2_ITERATIONS = 3;
   private static final int DEFAULT_ARGON2_PARALLELISM = 2;
@@ -98,7 +93,7 @@ public final class DeterministicKeyExporter {
     fillRandomNonZero(nonce);
     guardSaltNonceReuse(salt, nonce);
     final byte bundleVersion = KeyExportBundle.VERSION_V4;
-    final KdfResult kdf = derivePreferredKey(alias, passphrase, salt);
+    final KdfResult kdf = deriveExportKey(alias, passphrase, salt);
     try {
       final Cipher cipher = Cipher.getInstance(AES_TRANSFORMATION);
       final GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_BITS, nonce);
@@ -286,8 +281,7 @@ public final class DeterministicKeyExporter {
       final KeyExportBundle bundle, final char[] passphrase) throws KeyExportException {
     Objects.requireNonNull(bundle, "bundle");
     Objects.requireNonNull(passphrase, "passphrase");
-    if (bundle.version() != KeyExportBundle.VERSION_V3
-        && bundle.version() != KeyExportBundle.VERSION_V4) {
+    if (bundle.version() != KeyExportBundle.VERSION_V4) {
       throw new KeyExportException("Unsupported key export version: " + bundle.version());
     }
     ensurePassphraseStrength(passphrase);
@@ -342,29 +336,17 @@ public final class DeterministicKeyExporter {
       throw new KeyExportException("Invalid KDF work factor: " + workFactor);
     }
     return switch (kdfKind) {
-      case KDF_KIND_PBKDF2_HMAC_SHA256 ->
-          derivePbkdf2Key(alias, passphrase, salt, workFactor);
-      case KDF_KIND_ARGON2ID ->
-          deriveArgon2Key(alias, passphrase, salt, workFactor);
+      case KDF_KIND_ARGON2ID -> deriveArgon2Key(alias, passphrase, salt, workFactor);
       default -> throw new KeyExportException("Unsupported KDF kind: " + kdfKind);
     };
   }
 
-  private static KdfResult derivePreferredKey(
+  private static KdfResult deriveExportKey(
       final String alias, final char[] passphrase, final byte[] salt)
       throws KeyExportException {
-    if (argon2Available()) {
-      try {
-        final byte[] argonKey =
-            deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS);
-        return new KdfResult(argonKey, KDF_KIND_ARGON2ID, DEFAULT_ARGON2_ITERATIONS);
-      } catch (final KeyExportException | RuntimeException | LinkageError ex) {
-        // fall through to PBKDF2 fallback
-      }
-    }
-    final byte[] pbkdfKey =
-        derivePbkdf2Key(alias, passphrase, salt, DEFAULT_PBKDF2_ITERATIONS);
-    return new KdfResult(pbkdfKey, KDF_KIND_PBKDF2_HMAC_SHA256, DEFAULT_PBKDF2_ITERATIONS);
+    final byte[] argonKey =
+        deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS);
+    return new KdfResult(argonKey, KDF_KIND_ARGON2ID, DEFAULT_ARGON2_ITERATIONS);
   }
 
   private static byte[] deriveArgon2Key(
@@ -373,9 +355,6 @@ public final class DeterministicKeyExporter {
       final byte[] salt,
       final int iterations)
       throws KeyExportException {
-    if (!argon2Available()) {
-      throw new KeyExportException("Argon2id derivation unavailable");
-    }
     final byte[] aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
     final byte[] kdfSalt = ByteBuffer.allocate(salt.length + aliasBytes.length)
         .put(salt)
@@ -416,50 +395,12 @@ public final class DeterministicKeyExporter {
               AES_KEY_LENGTH_BYTES);
       Arrays.fill(kdfOutput, (byte) 0);
       return derived;
-    } catch (final ReflectiveOperationException ex) {
+    } catch (final ReflectiveOperationException | LinkageError ex) {
       throw new KeyExportException("Argon2id derivation unavailable", ex);
     } finally {
       Arrays.fill(kdfSalt, (byte) 0);
       Arrays.fill(passphraseBytes, (byte) 0);
       Arrays.fill(kdfOutput, (byte) 0);
-    }
-  }
-
-  private static byte[] derivePbkdf2Key(
-      final String alias,
-      final char[] passphrase,
-      final byte[] salt,
-      final int iterations)
-      throws KeyExportException {
-    final byte[] aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
-    final byte[] kdfSalt = ByteBuffer.allocate(salt.length + aliasBytes.length)
-        .put(salt)
-        .put(aliasBytes)
-        .array();
-    PBEKeySpec spec = null;
-    byte[] kdfOutput = null;
-    try {
-      spec = new PBEKeySpec(passphrase, kdfSalt, iterations, AES_KEY_LENGTH_BYTES * 8);
-      final SecretKeyFactory factory = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM);
-      kdfOutput = factory.generateSecret(spec).getEncoded();
-      final byte[] derived =
-          hkdf(
-              kdfOutput,
-              sha256(hkdfSaltDomain(), aliasBytes),
-              hkdfInfoDomain().getBytes(StandardCharsets.UTF_8),
-              AES_KEY_LENGTH_BYTES);
-      Arrays.fill(kdfOutput, (byte) 0);
-      return derived;
-    } catch (final GeneralSecurityException ex) {
-      throw new KeyExportException("PBKDF2 derivation failed", ex);
-    } finally {
-      if (spec != null) {
-        spec.clearPassword();
-      }
-      if (kdfOutput != null) {
-        Arrays.fill(kdfOutput, (byte) 0);
-      }
-      Arrays.fill(kdfSalt, (byte) 0);
     }
   }
 
@@ -521,15 +462,6 @@ public final class DeterministicKeyExporter {
       return digest.digest();
     } catch (final GeneralSecurityException ex) {
       throw new KeyExportException("SHA-256 digest failed", ex);
-    }
-  }
-
-  private static boolean argon2Available() {
-    try {
-      Class.forName("org.bouncycastle.crypto.generators.Argon2BytesGenerator");
-      return true;
-    } catch (final ClassNotFoundException | LinkageError ignored) {
-      return false;
     }
   }
 

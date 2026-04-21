@@ -225,10 +225,10 @@ public final class ConnectWalletRequest {
     }
   }
 
-  private static URI resolveBaseUri(final String nodeValue, final URI fallback)
+  private static URI resolveBaseUri(final String nodeValue, final URI defaultUri)
       throws ConnectProtocolException {
     if (nodeValue == null || nodeValue.isEmpty()) {
-      return fallback;
+      return defaultUri;
     }
     URI parsed = tryParse(nodeValue);
     if (parsed != null && parsed.getScheme() != null && parsed.getHost() != null) {

@@ -33,17 +33,16 @@ public final class AccountIdLiteralTests {
   }
 
   @Test
-  public void rejectsLegacyAndHexLiterals() throws Exception {
+  public void rejectsMalformedAndHexLiterals() throws Exception {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x44);
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
     try {
-      AccountIdLiteral.requireCanonicalI105Address(
-          "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316", "accountId");
-      throw new AssertionError("expected legacy non-i105 literal to be rejected");
+      AccountIdLiteral.requireCanonicalI105Address("malformed-i105", "accountId");
+      throw new AssertionError("expected malformed non-i105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("canonical I105")
-          : "legacy rejection must mention canonical I105";
+          : "malformed rejection must mention canonical I105";
     }
     try {
       AccountIdLiteral.requireCanonicalI105Address(address.canonicalHex(), "accountId");

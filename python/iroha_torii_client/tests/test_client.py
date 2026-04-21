@@ -653,8 +653,8 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
                 "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
                 "message_job_path": "/v1/sccp/jobs/message/{message_id}",
                 "proof_manifest_path": "/v1/sccp/manifests",
-                "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
-                "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
+                "burn_registry_backend": "bridge/sccp/burn-v1",
+                "governance_registry_backend": "bridge/sccp/governance-v1",
                 "proof_submit_path": "/v1/bridge/proofs/submit",
                 "message_submit_path": "/v1/bridge/messages",
                 "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
@@ -687,6 +687,8 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
     assert capabilities.message_proof_path == "/v1/sccp/artifacts/message/{message_id}"
     assert capabilities.message_job_path == "/v1/sccp/jobs/message/{message_id}"
     assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
+    assert capabilities.burn_registry_backend == "bridge/sccp/burn-v1"
+    assert capabilities.governance_registry_backend == "bridge/sccp/governance-v1"
     assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
     assert capabilities.codecs[0].key == "ton_raw"
     assert capabilities.counterparties[0].message_backend == "sccp/stark-fri-v1/ton"
@@ -2440,9 +2442,9 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     invalid_proposal = page.items[1]
     assert invalid_proposal.payload_hash == "dd44"
     assert invalid_proposal.reason == "payload mismatch"
-    fallback = page.items[2]
-    assert fallback.kind == "UnknownEvidence"
-    assert fallback.detail == "unknown entry"
+    unknown = page.items[2]
+    assert unknown.kind == "UnknownEvidence"
+    assert unknown.detail == "unknown entry"
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
     assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
@@ -3663,7 +3665,7 @@ def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
     assert decode_pdp_commitment_header(None) is None
 
 
-def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
+def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(

@@ -17,11 +17,6 @@ interface TelemetrySink {
 
     fun onFailure(record: TelemetryRecord, error: Throwable)
 
-    /**
-     * Emits structured telemetry signals that are not tied to HTTP lifecycle callbacks (e.g., queue
-     * depth gauges). Default implementation is a no-op so existing sinks remain compatible.
-     */
-    fun emitSignal(signalId: String, fields: Map<String, Any>) {
-        // Intentionally empty.
-    }
+    /** Emits structured telemetry signals that are not tied to HTTP lifecycle callbacks. */
+    fun emitSignal(signalId: String, fields: Map<String, Any>)
 }

@@ -93,7 +93,7 @@ final class AccountAddressFixtureTests: XCTestCase {
                 return XCTFail("\(vector.caseId): expected AccountAddressError, got \(error)")
             }
             if vector.format == "canonical_hex" {
-                XCTAssertEqual(addressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parser must reject legacy format")
+                XCTAssertEqual(addressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parser must reject non-canonical format")
                 return
             }
             let expectedCode = vector.expectedError.code

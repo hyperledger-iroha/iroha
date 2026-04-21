@@ -19,9 +19,9 @@ object IdentifierReceiptCanonicalEncoder {
         val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         encodeSizedField(writer, PassthroughBytesAdapter, encodePolicyId(payload.policyId))
         encodeSizedField(writer, PassthroughBytesAdapter, encodeExecution(payload.execution))
-        encodeSizedField(writer, PassthroughBytesAdapter, encodePrefixedHash(payload.opaqueId, "opaque:", "payload.opaque_id"))
+        encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.opaqueId, "opaque:", "payload.opaque_id"))
         encodeSizedField(writer, PassthroughBytesAdapter, decodeHash(payload.receiptHash, "payload.receipt_hash"))
-        encodeSizedField(writer, PassthroughBytesAdapter, encodePrefixedHash(payload.uaid, "uaid:", "payload.uaid"))
+        encodeSizedField(writer, PassthroughBytesAdapter, encodeOpaqueHash(payload.uaid, "uaid:", "payload.uaid"))
         encodeSizedField(writer, PassthroughBytesAdapter, TransferWirePayloadEncoder.encodeAccountIdPayload(payload.accountId))
         return writer.toByteArray()
     }
@@ -101,6 +101,15 @@ object IdentifierReceiptCanonicalEncoder {
         val normalized = raw.trim().lowercase()
         val body = if (normalized.startsWith(prefix)) normalized.substring(prefix.length) else normalized
         return decodeHash(body, field)
+    }
+
+    private fun encodeOpaqueHash(raw: String, prefix: String, field: String): ByteArray {
+        val hash = encodePrefixedHash(raw, prefix, field)
+        val writer = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+        val compact = (writer.flags and NoritoHeader.COMPACT_LEN) != 0
+        writer.writeLength(hash.size.toLong(), compact)
+        writer.writeBytes(hash)
+        return writer.toByteArray()
     }
 
     private fun decodeHash(raw: String, field: String): ByteArray {

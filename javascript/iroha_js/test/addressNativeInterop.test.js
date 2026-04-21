@@ -20,6 +20,9 @@ const SAMPLE_PUBLIC_KEY = Uint8Array.from([
 test("AccountAddress lazily resolves injected native codecs after import", () => {
   const canonical = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
   }).canonicalBytes();
+  const canonicalI105 = AccountAddress.fromAccount({
+    publicKey: SAMPLE_PUBLIC_KEY,
+  }).toI105(753);
   let parseCalls = 0;
   let renderCalls = 0;
 
@@ -27,7 +30,7 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
     globalThis.__IROHA_NATIVE_BINDING__ = {
       accountAddressParseEncoded(input, expectedPrefix) {
         parseCalls += 1;
-        assert.equal(input, "synthetic-i105");
+        assert.equal(input, canonicalI105);
         assert.equal(expectedPrefix, 753);
         return {
           canonical_bytes: canonical,
@@ -40,19 +43,19 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
         assert.equal(prefix, 753);
         return {
           canonical_hex: "0xsynthetic",
-          i105: "synthetic-i105",
+          i105: canonicalI105,
         };
       },
     };
     __resetAddressNativeStateForTests();
 
-    const parsed = AccountAddress.parseEncoded("synthetic-i105", 753);
-    assert.equal(parsed.chainDiscriminant, undefined);
+    const parsed = AccountAddress.parseEncoded(canonicalI105, 753);
+    assert.equal(parsed.chainDiscriminant, 753);
     assert.deepEqual(
       Buffer.from(parsed.address.canonicalBytes()),
       Buffer.from(canonical),
     );
-    assert.equal(parsed.address.toI105(753), "synthetic-i105");
+    assert.equal(parsed.address.toI105(753), canonicalI105);
     assert.equal(parseCalls, 1);
     assert.equal(renderCalls, 2);
   } finally {
@@ -64,13 +67,16 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
 test("normalizeAccountId accepts native-rendered i105 without an explicit prefix", () => {
   const canonical = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
   }).canonicalBytes();
+  const canonicalI105 = AccountAddress.fromAccount({
+    publicKey: SAMPLE_PUBLIC_KEY,
+  }).toI105(753);
   let parseCalls = 0;
 
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = {
       accountAddressParseEncoded(input, expectedPrefix) {
         parseCalls += 1;
-        assert.equal(input, "synthetic-i105");
+        assert.equal(input, canonicalI105);
         assert.equal(expectedPrefix, null);
         return {
           canonical_bytes: canonical,
@@ -82,13 +88,13 @@ test("normalizeAccountId accepts native-rendered i105 without an explicit prefix
         assert.equal(prefix, 753);
         return {
           canonical_hex: "0xsynthetic",
-          i105: "synthetic-i105",
+          i105: canonicalI105,
         };
       },
     };
     __resetAddressNativeStateForTests();
 
-    assert.equal(normalizeAccountId("synthetic-i105"), "synthetic-i105");
+    assert.equal(normalizeAccountId(canonicalI105), canonicalI105);
     assert.equal(parseCalls, 1);
   } finally {
     delete globalThis.__IROHA_NATIVE_BINDING__;

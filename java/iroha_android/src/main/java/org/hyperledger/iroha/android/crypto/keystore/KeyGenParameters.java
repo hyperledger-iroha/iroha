@@ -13,7 +13,6 @@ import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 public final class KeyGenParameters {
   private final boolean requireStrongBox;
   private final boolean preferStrongBox;
-  private final boolean allowStrongBoxFallback;
   private final boolean userAuthenticationRequired;
   private final Duration userAuthenticationTimeout;
   private final String algorithm;
@@ -22,7 +21,6 @@ public final class KeyGenParameters {
   private KeyGenParameters(final Builder builder) {
     this.requireStrongBox = builder.requireStrongBox;
     this.preferStrongBox = builder.preferStrongBox;
-    this.allowStrongBoxFallback = builder.allowStrongBoxFallback;
     this.userAuthenticationRequired = builder.userAuthenticationRequired;
     this.userAuthenticationTimeout = builder.userAuthenticationTimeout;
     this.algorithm = builder.algorithm;
@@ -32,10 +30,6 @@ public final class KeyGenParameters {
 
   public boolean requireStrongBox() {
     return requireStrongBox;
-  }
-
-  public boolean allowStrongBoxFallback() {
-    return allowStrongBoxFallback;
   }
 
   public boolean preferStrongBox() {
@@ -66,7 +60,6 @@ public final class KeyGenParameters {
     return new Builder()
         .setRequireStrongBox(requireStrongBox)
         .setPreferStrongBox(preferStrongBox)
-        .setAllowStrongBoxFallback(allowStrongBoxFallback)
         .setUserAuthenticationRequired(userAuthenticationRequired)
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
         .setSigningAlgorithm(signingAlgorithm())
@@ -80,7 +73,6 @@ public final class KeyGenParameters {
   public static final class Builder {
     private boolean requireStrongBox = false;
     private boolean preferStrongBox = false;
-    private boolean allowStrongBoxFallback = true;
     private boolean userAuthenticationRequired = false;
     private Duration userAuthenticationTimeout = Duration.ZERO;
     private String algorithm = "Ed25519";
@@ -88,25 +80,11 @@ public final class KeyGenParameters {
 
     public Builder setRequireStrongBox(final boolean requireStrongBox) {
       this.requireStrongBox = requireStrongBox;
-      if (requireStrongBox) {
-        this.allowStrongBoxFallback = false;
-      }
       return this;
     }
 
     public Builder setPreferStrongBox(final boolean preferStrongBox) {
       this.preferStrongBox = preferStrongBox;
-      if (preferStrongBox && !requireStrongBox) {
-        this.allowStrongBoxFallback = true;
-      }
-      return this;
-    }
-
-    public Builder setAllowStrongBoxFallback(final boolean allowStrongBoxFallback) {
-      this.allowStrongBoxFallback = allowStrongBoxFallback;
-      if (!allowStrongBoxFallback) {
-        this.requireStrongBox = true;
-      }
       return this;
     }
 

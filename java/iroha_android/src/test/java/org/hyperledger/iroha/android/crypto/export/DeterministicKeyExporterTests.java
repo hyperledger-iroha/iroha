@@ -27,6 +27,7 @@ public final class DeterministicKeyExporterTests {
     rejectsNonEd25519Keys();
     tamperedSaltFails();
     tamperedNonceFails();
+    nonArgon2KdfRejected();
     mlDsaExportRoundTrips();
     mixedAlgorithmRestoreRejected();
     saltLengthTamperFails();
@@ -49,6 +50,10 @@ public final class DeterministicKeyExporterTests {
 
     assert !bundleA.encodeBase64().equals(bundleB.encodeBase64())
         : "Export must include per-run randomness (salt/nonce)";
+    assert bundleA.kdfKind() == DeterministicKeyExporter.KDF_KIND_ARGON2ID
+        : "Export must use the canonical Argon2id KDF";
+    assert bundleB.kdfKind() == DeterministicKeyExporter.KDF_KIND_ARGON2ID
+        : "Export must use the canonical Argon2id KDF";
     Arrays.fill(passphrase, '\0');
   }
 
@@ -305,6 +310,12 @@ public final class DeterministicKeyExporterTests {
     return offset;
   }
 
+  private static int offsetToKdfKind(final byte[] raw) {
+    final int saltLengthOffset = offsetToSaltLength(raw);
+    final int saltLength = raw[saltLengthOffset] & 0xFF;
+    return saltLengthOffset + 1 + saltLength;
+  }
+
   private static int readU16(final byte[] raw, final int offset) {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
   }
@@ -348,6 +359,25 @@ public final class DeterministicKeyExporterTests {
       threw = true;
     }
     assert threw : "Decoder must reject unsupported bundle versions";
+    Arrays.fill(passphrase, '\0');
+  }
+
+  private static void nonArgon2KdfRejected() throws Exception {
+    final SoftwareKeyProvider provider = new SoftwareKeyProvider();
+    final KeyPair keyPair = provider.generate("non-argon2");
+    final char[] passphrase = "reject-pbkdf2-bundle".toCharArray();
+    final KeyExportBundle bundle =
+        DeterministicKeyExporter.exportKeyPair(
+            keyPair.getPrivate(), keyPair.getPublic(), "non-argon2", passphrase);
+    final byte[] raw = bundle.encode();
+    raw[offsetToKdfKind(raw)] = 0x01;
+    boolean threw = false;
+    try {
+      KeyExportBundle.decode(raw);
+    } catch (final KeyExportException expected) {
+      threw = true;
+    }
+    assert threw : "Decoder must reject non-Argon2id KDF kind";
     Arrays.fill(passphrase, '\0');
   }
 

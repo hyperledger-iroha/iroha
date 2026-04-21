@@ -1,7 +1,6 @@
 import Foundation
 
-/// Direction of a Connect frame. Encoded via the Norito bridge when available,
-/// otherwise falls back to a lightweight JSON shim for environments without the XCFramework.
+/// Direction of a Connect frame. Encoded via the required Norito bridge.
 public enum ConnectDirection: String, Codable, Equatable, Sendable {
     case appToWallet = "AppToWallet"
     case walletToApp = "WalletToApp"

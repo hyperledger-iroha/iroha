@@ -128,7 +128,7 @@ public struct AccelerationState: Sendable {
 
 public extension AccelerationSettings {
     /// Decode settings from the JSON payload used by `iroha_config`.
-    /// Missing fields fall back to the Swift defaults while negative thresholds are ignored.
+    /// Missing fields use the Swift defaults while negative thresholds are ignored.
     static func fromJSON(_ data: Data, decoder: JSONDecoder = JSONDecoder()) throws -> AccelerationSettings {
         decoder.keyDecodingStrategy = .useDefaultKeys
         let decoded = try decoder.decode(AccelerationSettings.self, from: data)

@@ -18,11 +18,6 @@ public interface TelemetrySink {
 
   void onFailure(TelemetryRecord record, Throwable error);
 
-  /**
-   * Emits structured telemetry signals that are not tied to HTTP lifecycle callbacks (e.g., queue
-   * depth gauges). Default implementation is a no-op so existing sinks remain compatible.
-   */
-  default void emitSignal(final String signalId, final Map<String, Object> fields) {
-    // Intentionally empty.
-  }
+  /** Emits structured telemetry signals that are not tied to HTTP lifecycle callbacks. */
+  void emitSignal(String signalId, Map<String, Object> fields);
 }

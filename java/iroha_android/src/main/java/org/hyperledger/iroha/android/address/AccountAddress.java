@@ -274,29 +274,6 @@ public final class AccountAddress {
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
 
-  /**
-   * Backward-compatible alias for the older encoded-address parsing name.
-   */
-  public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
-      throws AccountAddressException {
-    final String trimmed = input.trim();
-    if (trimmed.isEmpty()) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
-    }
-    if (trimmed.contains("@")) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical I105 form");
-    }
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical I105 form");
-    }
-    return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
-  }
-
   public static Integer detectI105Discriminant(final String input) {
     if (input == null) {
       return null;

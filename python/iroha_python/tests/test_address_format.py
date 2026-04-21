@@ -169,18 +169,18 @@ def test_i105_rejects_fullwidth_sentinel_literal() -> None:
         AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
 
 
-def test_i105_rejects_legacy_fullwidth_kana_payload() -> None:
+def test_i105_rejects_noncanonical_fullwidth_kana_payload() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x02F1)
-    legacy = literal
+    noncanonical = literal
     for halfwidth, fullwidth in (("ﾛ", "ロ"), ("ﾊ", "ハ"), ("ﾆ", "ニ"), ("ﾎ", "ホ")):
-        if halfwidth in legacy:
-            legacy = legacy.replace(halfwidth, fullwidth, 1)
+        if halfwidth in noncanonical:
+            noncanonical = noncanonical.replace(halfwidth, fullwidth, 1)
             break
-    assert legacy != literal
+    assert noncanonical != literal
 
     with pytest.raises(AccountAddressError, match="invalid i105 alphabet symbol"):
-        AccountAddress.parse_encoded(legacy, expected_discriminant=0x02F1)
+        AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
 
 
 def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:

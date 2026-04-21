@@ -306,45 +306,6 @@ const SNS_CONTROLLER_TYPES = new Set(["Account", "Multisig", "ResolverTemplate",
 const SNS_NAME_STATUS_VALUES = new Set(["Active", "GracePeriod", "Redemption", "Frozen", "Tombstoned"]);
 const SNS_SUFFIX_STATUS_VALUES = new Set(["Active", "Paused", "Revoked"]);
 const SNS_AUCTION_KIND_VALUES = new Set(["VickreyCommitReveal", "DutchReopen"]);
-const SNS_GOV_CASE_DISPUTE_TYPES = new Set([
-  "ownership",
-  "policy_violation",
-  "abuse",
-  "billing",
-  "other",
-]);
-const SNS_GOV_CASE_PRIORITY_VALUES = new Set(["urgent", "high", "standard", "info"]);
-const SNS_GOV_CASE_STATUS_VALUES = new Set([
-  "open",
-  "triage",
-  "hearing",
-  "decision",
-  "remediation",
-  "closed",
-  "suspended",
-]);
-const SNS_GOV_CASE_REPORTER_ROLES = new Set([
-  "registrar",
-  "steward",
-  "guardian",
-  "public",
-  "support",
-]);
-const SNS_GOV_CASE_RESPONDENT_ROLES = new Set([
-  "registrant",
-  "controller",
-  "registrar",
-  "steward",
-  "other",
-]);
-const SNS_GOV_CASE_EVIDENCE_KIND_VALUES = new Set([
-  "document",
-  "screenshot",
-  "log",
-  "governance",
-  "other",
-]);
-const SNS_GOV_CASE_DECISION_FINDINGS = new Set(["upheld", "rejected", "partial", "withdrawn"]);
 const ITERABLE_LIST_OPTION_KEYS = new Set([
   "limit",
   "offset",
@@ -513,8 +474,6 @@ const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
   "maxItems",
 ]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type"]);
-const SNS_GOV_CASE_PUBLICATION_STATES = new Set(["public", "redacted", "sealed"]);
-
 const OFFLINE_SUMMARY_STRING_FIELDS = new Set(["certificate_id_hex", "controller_id"]);
 const OFFLINE_SUMMARY_EXISTS_FIELDS = new Set([...OFFLINE_SUMMARY_STRING_FIELDS]);
 
@@ -749,9 +708,9 @@ function coerceRejectionReason(value) {
   return text ? text : null;
 }
 
-function normalizeStatusSet(input, fallback) {
+function normalizeStatusSet(input, defaultStatuses) {
   if (!input) {
-    return new Set(fallback.map((status) => String(status)));
+    return new Set(defaultStatuses.map((status) => String(status)));
   }
   const result = new Set();
   for (const value of input) {
@@ -760,11 +719,11 @@ function normalizeStatusSet(input, fallback) {
   return result;
 }
 
-function normalizeTransactionStatusScope(value, context, fallback = "auto") {
-  const raw = value === undefined || value === null ? fallback : value;
+function normalizeTransactionStatusScope(value, context, defaultScope = "auto") {
+  const raw = value === undefined || value === null ? defaultScope : value;
   const normalized = String(raw).trim().toLowerCase();
   if (!normalized) {
-    return fallback;
+    return defaultScope;
   }
   if (normalized === "local" || normalized === "auto" || normalized === "global") {
     return normalized;
@@ -846,9 +805,9 @@ function readHeaderValue(headers, name) {
     if (typeof direct === "string") {
       return direct;
     }
-    const fallback = headers[lower];
-    if (typeof fallback === "string") {
-      return fallback;
+    const lowerValue = headers[lower];
+    if (typeof lowerValue === "string") {
+      return lowerValue;
     }
   }
   return null;
@@ -3712,21 +3671,11 @@ export class ToriiClient {
       body: rawPayload,
       retryProfile: "pipeline",
     };
-    let response = await this._request(
+    const response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    if (response.status === 404 || response.status === 405) {
-      const native = resolveNativeBinding();
-      if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
-        throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
-      }
-      response = await this._request("POST", "/transaction", {
-        ...requestOptions,
-        body: Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
-      });
-    }
     await this._expectStatus(response, [200, 201, 202, 204]);
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
@@ -4943,65 +4892,6 @@ export class ToriiClient {
       throw new Error("sns unfreeze endpoint returned no payload");
     }
     return normalizeSnsNameRecord(body, "sns unfreeze response");
-  }
-
-  /**
-   * SNS governance case routes were removed from Torii.
-   * @param {Record<string, unknown>} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<never>}
-   */
-  async createSnsGovernanceCase(payload, options = {}) {
-    normalizeSnsGovernanceCaseCreatePayload(payload);
-    normalizeSignalOnlyOption(options, "createSnsGovernanceCase");
-    throw new Error("Torii removed /v1/sns/governance/cases; use /v1/sns/names operations instead");
-  }
-
-  /**
-   * SNS governance case routes were removed from Torii.
-   * @param {SnsCaseExportOptions} [options]
-   * @returns {Promise<never>}
-   */
-  async exportSnsGovernanceCases(options = {}) {
-    normalizeSnsCaseExportOptions(options);
-    throw new Error("Torii removed /v1/sns/governance/cases; use /v1/sns/names operations instead");
-  }
-
-  /**
-   * Iterate SNS arbitration cases using the export feed.
-   * @param {SnsCaseExportOptions} [options]
-   * @returns {AsyncGenerator<SnsGovernanceCase, void, unknown>}
-   */
-  iterateSnsGovernanceCases(options = {}) {
-    const { signal, params } = normalizeSnsCaseExportOptions(options);
-    const baseOptions = {};
-    if (Object.prototype.hasOwnProperty.call(params, "status")) {
-      baseOptions.status = params.status;
-    }
-    if (Object.prototype.hasOwnProperty.call(params, "limit")) {
-      baseOptions.limit = params.limit;
-    }
-    const initialSince = Object.prototype.hasOwnProperty.call(params, "since")
-      ? params.since
-      : undefined;
-    const self = this;
-    return (async function* iterator() {
-      let sinceCursor = initialSince;
-      while (true) {
-        const exportOptions = { ...baseOptions, signal };
-        if (sinceCursor !== undefined && sinceCursor !== null) {
-          exportOptions.since = sinceCursor;
-        }
-        const page = await self.exportSnsGovernanceCases(exportOptions);
-        for (const entry of page.cases) {
-          yield entry;
-        }
-        if (!page.nextSince) {
-          return;
-        }
-        sinceCursor = page.nextSince;
-      }
-    })();
   }
 
   /**
@@ -9188,7 +9078,7 @@ export class ToriiClient {
     }
   }
 
-  _extractErrorMessage(payload, fallbackText) {
+  _extractErrorMessage(payload, defaultText) {
     const nested = this._extractErrorMessageValue(payload);
     if (nested) {
       return nested;
@@ -9197,8 +9087,8 @@ export class ToriiClient {
     if (compact) {
       return compact;
     }
-    if (typeof fallbackText === "string" && fallbackText.trim()) {
-      return this._trimErrorBodyText(fallbackText);
+    if (typeof defaultText === "string" && defaultText.trim()) {
+      return this._trimErrorBodyText(defaultText);
     }
     return null;
   }
@@ -13140,9 +13030,10 @@ function parseGovernanceUnlockStats(payload) {
 
 function normalizeGovernanceCouncilCurrentResponse(payload) {
   const record = ensureRecord(payload, "governance council current response");
-  const derivedRaw = record.derived_by ?? "Vrf";
-  const derivedBy =
-    String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
+  const derivedBy = normalizeCouncilDerivedBy(
+    record.derived_by ?? "Vrf",
+    "governance council current response.derived_by",
+  );
   return {
     epoch: ToriiClient._normalizeUnsignedInteger(
       record.epoch,
@@ -13306,9 +13197,10 @@ function normalizeGovernanceCouncilDeriveResponse(
   context = "governance council derive response",
 ) {
   const record = ensureRecord(payload, context);
-  const derivedRaw = record.derived_by ?? "Vrf";
-  const derivedBy =
-    String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
+  const derivedBy = normalizeCouncilDerivedBy(
+    record.derived_by ?? "Vrf",
+    `${context}.derived_by`,
+  );
   return {
     epoch: ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
       allowZero: true,
@@ -13454,9 +13346,10 @@ function buildGovernanceCouncilAuditQuery(options = {}) {
 
 function normalizeGovernanceCouncilAuditResponse(payload) {
   const record = ensureRecord(payload, "governance council audit response");
-  const derivedRaw = record.derived_by ?? "Vrf";
-  const derivedBy =
-    String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
+  const derivedBy = normalizeCouncilDerivedBy(
+    record.derived_by ?? "Vrf",
+    "governance council audit response.derived_by",
+  );
   return {
     epoch: ToriiClient._normalizeUnsignedInteger(
       record.epoch,
@@ -13497,6 +13390,14 @@ function normalizeGovernanceCouncilAuditResponse(payload) {
       "governance council audit response.chain_id",
     ),
   };
+}
+
+function normalizeCouncilDerivedBy(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (normalized.toLowerCase() !== "vrf") {
+    throw new TypeError(`${context} must be Vrf`);
+  }
+  return "Vrf";
 }
 
 function normalizeProtectedNamespaceList(input) {
@@ -13602,13 +13503,13 @@ function normalizeSccpCapabilitiesResponse(payload) {
       record.proof_manifest_path,
       "sccp capabilities response.proof_manifest_path",
     ),
-    legacyBurnRegistryBackend: requireNonEmptyString(
-      record.legacy_burn_registry_backend,
-      "sccp capabilities response.legacy_burn_registry_backend",
+    burnRegistryBackend: requireNonEmptyString(
+      record.burn_registry_backend,
+      "sccp capabilities response.burn_registry_backend",
     ),
-    legacyGovernanceRegistryBackend: requireNonEmptyString(
-      record.legacy_governance_registry_backend,
-      "sccp capabilities response.legacy_governance_registry_backend",
+    governanceRegistryBackend: requireNonEmptyString(
+      record.governance_registry_backend,
+      "sccp capabilities response.governance_registry_backend",
     ),
     proofSubmitPath: optionalString(
       record.proof_submit_path ?? null,
@@ -15609,596 +15510,6 @@ function normalizeSnsRegisterResponse(payload) {
   return {
     nameRecord: normalizeSnsNameRecord(record.name_record, "sns register response.name_record"),
   };
-}
-
-function normalizeSnsGovernanceCaseSelectorInput(selector, context) {
-  if (selector === undefined || selector === null) {
-    return undefined;
-  }
-  if (typeof selector === "string") {
-    return requireNonEmptyString(selector, context);
-  }
-  const normalized = normalizeSnsGovernanceCaseSelector(selector, context);
-  return {
-    suffix_id: normalized.suffixId,
-    label: normalized.label,
-    global_form: normalized.globalForm,
-  };
-}
-
-function normalizeSnsGovernanceCaseCreatePayload(payload) {
-  const record = ensureRecord(payload ?? {}, "createSnsGovernanceCase payload");
-  const normalized = {};
-  const handledKeys = new Set();
-
-  const selector = normalizeSnsGovernanceCaseSelectorInput(
-    record.selector,
-    "createSnsGovernanceCase payload.selector",
-  );
-  if (selector !== undefined) {
-    handledKeys.add("selector");
-    normalized.selector = selector;
-  }
-
-  const disputeType = record.dispute_type ?? record.disputeType;
-  if (disputeType !== undefined && disputeType !== null) {
-    handledKeys.add("dispute_type");
-    handledKeys.add("disputeType");
-    normalized.dispute_type = normalizeSnsGovernanceCaseDisputeType(
-      disputeType,
-      "createSnsGovernanceCase payload.dispute_type",
-    );
-  }
-
-  const priority = record.priority;
-  if (priority !== undefined && priority !== null) {
-    handledKeys.add("priority");
-    normalized.priority = normalizeSnsGovernanceCasePriority(
-      priority,
-      "createSnsGovernanceCase payload.priority",
-    );
-  }
-
-  const status = record.status;
-  if (status !== undefined && status !== null) {
-    handledKeys.add("status");
-    normalized.status = normalizeSnsGovernanceCaseStatus(
-      status,
-      "createSnsGovernanceCase payload.status",
-    );
-  }
-
-  if (record.reason !== undefined && record.reason !== null) {
-    handledKeys.add("reason");
-    normalized.reason = requireNonEmptyString(
-      record.reason,
-      "createSnsGovernanceCase payload.reason",
-    );
-  }
-
-  const reporterRaw = record.reporter;
-  if (reporterRaw !== undefined && reporterRaw !== null) {
-    handledKeys.add("reporter");
-    const reporterRecord = ensureRecord(
-      reporterRaw,
-      "createSnsGovernanceCase payload.reporter",
-    );
-    const reporterWithAliases = { ...reporterRecord };
-    if (reporterRecord.referenceTicket !== undefined && reporterRecord.referenceTicket !== null) {
-      reporterWithAliases.reference_ticket = reporterRecord.referenceTicket;
-    }
-    const reporter = normalizeSnsGovernanceCaseReporter(
-      reporterWithAliases,
-      "createSnsGovernanceCase payload.reporter",
-    );
-    normalized.reporter = {
-      role: reporter.role,
-      contact: reporter.contact,
-    };
-    if (reporter.referenceTicket !== undefined && reporter.referenceTicket !== null) {
-      normalized.reporter.reference_ticket = reporter.referenceTicket;
-    }
-  }
-
-  const respondentsRaw = record.respondents;
-  if (respondentsRaw !== undefined && respondentsRaw !== null) {
-    handledKeys.add("respondents");
-    if (!Array.isArray(respondentsRaw)) {
-      throw new TypeError("createSnsGovernanceCase payload.respondents must be an array");
-    }
-    const respondentsWithAliases = respondentsRaw.map((entry, index) => {
-      const recordEntry = ensureRecord(
-        entry ?? {},
-        `createSnsGovernanceCase payload.respondents[${index}]`,
-      );
-      return {
-        ...recordEntry,
-        account_id: recordEntry.account_id ?? recordEntry.accountId,
-      };
-    });
-    const respondents = normalizeSnsGovernanceCaseRespondents(
-      respondentsWithAliases,
-      "createSnsGovernanceCase payload.respondents",
-    );
-    normalized.respondents = respondents.map(({ role, accountId, contact }) => {
-      const out = { role, account_id: accountId };
-      if (contact !== undefined && contact !== null) {
-        out.contact = contact;
-      }
-      return out;
-    });
-  }
-
-  const allegationsRaw = record.allegations;
-  if (allegationsRaw !== undefined && allegationsRaw !== null) {
-    handledKeys.add("allegations");
-    if (!Array.isArray(allegationsRaw)) {
-      throw new TypeError("createSnsGovernanceCase payload.allegations must be an array");
-    }
-    const allegationsWithAliases = allegationsRaw.map((entry, index) => {
-      const recordEntry = ensureRecord(
-        entry ?? {},
-        `createSnsGovernanceCase payload.allegations[${index}]`,
-      );
-      return {
-        ...recordEntry,
-        policy_reference: recordEntry.policy_reference ?? recordEntry.policyReference,
-      };
-    });
-    const allegations = normalizeSnsGovernanceCaseAllegations(
-      allegationsWithAliases,
-      "createSnsGovernanceCase payload.allegations",
-    );
-    normalized.allegations = allegations.map(({ code, summary, policyReference }) => {
-      const out = { code };
-      if (summary !== undefined && summary !== null) {
-        out.summary = summary;
-      }
-      if (policyReference !== undefined && policyReference !== null) {
-        out.policy_reference = policyReference;
-      }
-      return out;
-    });
-  }
-
-  const evidenceRaw = record.evidence;
-  if (evidenceRaw !== undefined && evidenceRaw !== null) {
-    handledKeys.add("evidence");
-    if (!Array.isArray(evidenceRaw)) {
-      throw new TypeError("createSnsGovernanceCase payload.evidence must be an array");
-    }
-    const evidence = normalizeSnsGovernanceCaseEvidenceList(
-      evidenceRaw.map((entry, index) => {
-        const recordEntry = ensureRecord(
-          entry ?? {},
-          `createSnsGovernanceCase payload.evidence[${index}]`,
-        );
-        return {
-          ...recordEntry,
-          hash: recordEntry.hash ?? recordEntry.hashHex,
-        };
-      }),
-      "createSnsGovernanceCase payload.evidence",
-    );
-    normalized.evidence = evidence.map(({ id, kind, uri, hashHex, description, sealed }) => {
-      const out = { id, kind, hash: hashHex, sealed };
-      if (uri !== undefined && uri !== null) {
-        out.uri = uri;
-      }
-      if (description !== undefined && description !== null) {
-        out.description = description;
-      }
-      return out;
-    });
-  }
-
-  const slaRaw = record.sla;
-  if (slaRaw !== undefined && slaRaw !== null) {
-    handledKeys.add("sla");
-    const slaRecord = ensureRecord(slaRaw, "createSnsGovernanceCase payload.sla");
-    const slaWithAliases = { ...slaRecord };
-    slaWithAliases.acknowledge_by = slaRecord.acknowledge_by ?? slaRecord.acknowledgeBy;
-    slaWithAliases.resolution_by = slaRecord.resolution_by ?? slaRecord.resolutionBy;
-    if (Array.isArray(slaRecord.extensions)) {
-      slaWithAliases.extensions = slaRecord.extensions.map((entry, index) => {
-        const recordEntry = ensureRecord(
-          entry ?? {},
-          `createSnsGovernanceCase payload.sla.extensions[${index}]`,
-        );
-        return {
-          ...recordEntry,
-          approved_by: recordEntry.approved_by ?? recordEntry.approvedBy,
-          new_resolution_by: recordEntry.new_resolution_by ?? recordEntry.newResolutionBy,
-        };
-      });
-    }
-    const sla = normalizeSnsGovernanceCaseSla(
-      slaWithAliases,
-      "createSnsGovernanceCase payload.sla",
-    );
-    normalized.sla = {
-      acknowledge_by: sla.acknowledgeBy,
-      resolution_by: sla.resolutionBy,
-    };
-    if (sla.extensions.length > 0) {
-      normalized.sla.extensions = sla.extensions.map((entry) => ({
-        approved_by: entry.approvedBy,
-        reason: entry.reason,
-        new_resolution_by: entry.newResolutionBy,
-      }));
-    }
-  }
-
-  const actionsRaw = record.actions;
-  if (actionsRaw !== undefined && actionsRaw !== null) {
-    handledKeys.add("actions");
-    const actions = normalizeSnsGovernanceCaseActions(
-      actionsRaw,
-      "createSnsGovernanceCase payload.actions",
-    );
-    normalized.actions = actions.map(({ timestamp, actor, action, notes }) => {
-      const out = { timestamp, actor, action };
-      if (notes !== undefined && notes !== null) {
-        out.notes = notes;
-      }
-      return out;
-    });
-  }
-
-  const decisionRaw = record.decision;
-  if (decisionRaw !== undefined && decisionRaw !== null) {
-    handledKeys.add("decision");
-    const decisionRecord = ensureRecord(
-      decisionRaw,
-      "createSnsGovernanceCase payload.decision",
-    );
-    const decisionWithAliases = { ...decisionRecord };
-    decisionWithAliases.effective_at = decisionRecord.effective_at ?? decisionRecord.effectiveAt;
-    decisionWithAliases.publication_state =
-      decisionRecord.publication_state ?? decisionRecord.publicationState;
-    const decision = normalizeSnsGovernanceCaseDecision(
-      decisionWithAliases,
-      "createSnsGovernanceCase payload.decision",
-    );
-    const outgoingDecision = {};
-    if (decision.finding !== null && decision.finding !== undefined) {
-      outgoingDecision.finding = decision.finding;
-    }
-    if (decision.remedies && decision.remedies.length > 0) {
-      outgoingDecision.remedies = decision.remedies;
-    }
-    if (decision.effectiveAt !== undefined && decision.effectiveAt !== null) {
-      outgoingDecision.effective_at = decision.effectiveAt;
-    }
-    if (decision.publicationState !== null && decision.publicationState !== undefined) {
-      outgoingDecision.publication_state = decision.publicationState;
-    }
-    if (Object.keys(outgoingDecision).length > 0) {
-      normalized.decision = outgoingDecision;
-    }
-  }
-
-  const timestampFields = [
-    ["reported_at", "reportedAt"],
-    ["acknowledged_at", "acknowledgedAt"],
-    ["triage_started_at", "triageStartedAt"],
-    ["hearing_scheduled_at", "hearingScheduledAt"],
-    ["resolution_issued_at", "resolutionIssuedAt"],
-  ];
-
-  for (const [snake, camel] of timestampFields) {
-    const raw = record[snake] ?? record[camel];
-    if (raw !== undefined && raw !== null) {
-      handledKeys.add(snake);
-      handledKeys.add(camel);
-      normalized[snake] = requireNonEmptyString(
-        raw,
-        `createSnsGovernanceCase payload.${snake}`,
-      );
-    }
-  }
-
-  for (const [key, value] of Object.entries(record)) {
-    if (!handledKeys.has(key) && value !== undefined) {
-      normalized[key] = value;
-    }
-  }
-
-  return normalized;
-}
-
-const SNS_CASE_EXPORT_OPTION_KEYS = new Set(["since", "status", "limit", "signal"]);
-
-function normalizeSnsCaseExportOptions(options) {
-  if (options === undefined || options === null) {
-    return { signal: undefined, params: {} };
-  }
-  const record = ensureRecord(options, "exportSnsGovernanceCases options");
-  assertSupportedOptionKeys(
-    record,
-    SNS_CASE_EXPORT_OPTION_KEYS,
-    "exportSnsGovernanceCases options",
-  );
-  const params = {};
-  if (record.since !== undefined && record.since !== null) {
-    params.since = requireNonEmptyString(record.since, "exportSnsGovernanceCases.since");
-  }
-  if (record.status !== undefined && record.status !== null) {
-    params.status = requireNonEmptyString(record.status, "exportSnsGovernanceCases.status");
-  }
-  if (record.limit !== undefined && record.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(record.limit, "exportSnsGovernanceCases.limit", {
-      allowZero: true,
-    });
-  }
-  const { signal } = normalizeSignalOption(record, "exportSnsGovernanceCases");
-  return { signal, params };
-}
-
-function normalizeSnsGovernanceCaseExportResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "sns governance case export response");
-  const cases = normalizeSnsGovernanceCaseList(record.cases, "sns governance case export response.cases");
-  const nextSinceRaw = record.next_since;
-  const nextCursorRaw = record.next_cursor;
-  const totalCountRaw = record.total_count;
-  const nextSince =
-    nextSinceRaw === undefined || nextSinceRaw === null
-      ? null
-      : requireNonEmptyString(nextSinceRaw, "sns governance case export response.next_since");
-  const nextCursor =
-    nextCursorRaw === undefined || nextCursorRaw === null
-      ? null
-      : requireNonEmptyString(nextCursorRaw, "sns governance case export response.next_cursor");
-  const totalCount =
-    totalCountRaw === undefined || totalCountRaw === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          totalCountRaw,
-          "sns governance case export response.total_count",
-          { allowZero: true },
-        );
-  return { cases, nextSince, nextCursor, totalCount };
-}
-
-function normalizeSnsGovernanceCaseList(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCase(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCase(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const caseId = requireNonEmptyString(record.case_id, `${context}.case_id`);
-  const selector = normalizeSnsGovernanceCaseSelector(record.selector, `${context}.selector`);
-  const disputeType = normalizeSnsGovernanceCaseDisputeType(record.dispute_type, `${context}.dispute_type`);
-  const priority = normalizeSnsGovernanceCasePriority(record.priority, `${context}.priority`);
-  const reportedAt = requireNonEmptyString(record.reported_at, `${context}.reported_at`);
-  const acknowledgedAt = optionalString(record.acknowledged_at, `${context}.acknowledged_at`);
-  const triageStartedAt = optionalString(record.triage_started_at, `${context}.triage_started_at`);
-  const hearingScheduledAt = optionalString(record.hearing_scheduled_at, `${context}.hearing_scheduled_at`);
-  const resolutionIssuedAt = optionalString(record.resolution_issued_at, `${context}.resolution_issued_at`);
-  const status = normalizeSnsGovernanceCaseStatus(record.status, `${context}.status`);
-  const reporter = normalizeSnsGovernanceCaseReporter(record.reporter, `${context}.reporter`);
-  const respondents = normalizeSnsGovernanceCaseRespondents(record.respondents, `${context}.respondents`);
-  const allegations = normalizeSnsGovernanceCaseAllegations(record.allegations, `${context}.allegations`);
-  const evidence = normalizeSnsGovernanceCaseEvidenceList(record.evidence, `${context}.evidence`);
-  const sla = normalizeSnsGovernanceCaseSla(record.sla, `${context}.sla`);
-  const actions = normalizeSnsGovernanceCaseActions(record.actions, `${context}.actions`);
-  const decision = normalizeSnsGovernanceCaseDecision(record.decision, `${context}.decision`);
-  return {
-    caseId,
-    selector,
-    disputeType,
-    priority,
-    reportedAt,
-    acknowledgedAt,
-    triageStartedAt,
-    hearingScheduledAt,
-    resolutionIssuedAt,
-    status,
-    reporter,
-    respondents,
-    allegations,
-    evidence,
-    sla,
-    actions,
-    decision,
-  };
-}
-
-function normalizeSnsGovernanceCaseSelector(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const suffixRaw = record.suffix_id ?? record.suffixId;
-  const labelRaw = record.label;
-  const globalFormRaw = record.global_form ?? record.globalForm;
-  const suffixId = ToriiClient._normalizeUnsignedInteger(
-    suffixRaw,
-    `${context}.suffix_id`,
-    {
-      allowZero: true,
-    },
-  );
-  const label = requireNonEmptyString(labelRaw, `${context}.label`);
-  const globalForm = requireNonEmptyString(globalFormRaw, `${context}.global_form`);
-  return { suffixId, label, globalForm };
-}
-
-function normalizeSnsGovernanceCaseDisputeType(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!SNS_GOV_CASE_DISPUTE_TYPES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(SNS_GOV_CASE_DISPUTE_TYPES).join(", ")}`,
-    );
-  }
-  return normalized;
-}
-
-function normalizeSnsGovernanceCasePriority(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!SNS_GOV_CASE_PRIORITY_VALUES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(SNS_GOV_CASE_PRIORITY_VALUES).join(", ")}`,
-    );
-  }
-  return normalized;
-}
-
-function normalizeSnsGovernanceCaseStatus(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!SNS_GOV_CASE_STATUS_VALUES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(SNS_GOV_CASE_STATUS_VALUES).join(", ")}`,
-    );
-  }
-  return normalized;
-}
-
-function normalizeSnsGovernanceCaseReporter(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const role = requireNonEmptyString(record.role, `${context}.role`);
-  if (!SNS_GOV_CASE_REPORTER_ROLES.has(role)) {
-    throw new TypeError(
-      `${context}.role must be one of ${Array.from(SNS_GOV_CASE_REPORTER_ROLES).join(", ")}`,
-    );
-  }
-  const contact = requireNonEmptyString(record.contact, `${context}.contact`);
-  const referenceTicket = optionalString(record.reference_ticket, `${context}.reference_ticket`);
-  return { role, contact, referenceTicket };
-}
-
-function normalizeSnsGovernanceCaseRespondents(value, context) {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCaseRespondent(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCaseRespondent(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const role = requireNonEmptyString(record.role, `${context}.role`);
-  if (!SNS_GOV_CASE_RESPONDENT_ROLES.has(role)) {
-    throw new TypeError(
-      `${context}.role must be one of ${Array.from(SNS_GOV_CASE_RESPONDENT_ROLES).join(", ")}`,
-    );
-  }
-  const accountId = requireNonEmptyString(record.account_id, `${context}.account_id`);
-  const contact = optionalString(record.contact, `${context}.contact`);
-  return { role, accountId, contact };
-}
-
-function normalizeSnsGovernanceCaseAllegations(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCaseAllegation(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCaseAllegation(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const code = requireNonEmptyString(record.code, `${context}.code`);
-  const summary = optionalString(record.summary, `${context}.summary`);
-  const policyReference = optionalString(record.policy_reference, `${context}.policy_reference`);
-  return { code, summary, policyReference };
-}
-
-function normalizeSnsGovernanceCaseEvidenceList(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCaseEvidence(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCaseEvidence(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const id = requireNonEmptyString(record.id, `${context}.id`);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
-  if (!SNS_GOV_CASE_EVIDENCE_KIND_VALUES.has(kind)) {
-    throw new TypeError(
-      `${context}.kind must be one of ${Array.from(SNS_GOV_CASE_EVIDENCE_KIND_VALUES).join(", ")}`,
-    );
-  }
-  const uri = optionalString(record.uri, `${context}.uri`);
-  const hashHex = normalizeHex32String(record.hash, `${context}.hash`);
-  const description = optionalString(record.description, `${context}.description`);
-  const sealed =
-    record.sealed === undefined || record.sealed === null ? false : coerceBoolean(record.sealed, `${context}.sealed`);
-  return { id, kind, uri, hashHex, description, sealed };
-}
-
-function normalizeSnsGovernanceCaseSla(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const acknowledgeBy = requireNonEmptyString(record.acknowledge_by, `${context}.acknowledge_by`);
-  const resolutionBy = requireNonEmptyString(record.resolution_by, `${context}.resolution_by`);
-  const extensions =
-    record.extensions === undefined || record.extensions === null
-      ? []
-      : normalizeSnsGovernanceCaseSlaExtensions(record.extensions, `${context}.extensions`);
-  return { acknowledgeBy, resolutionBy, extensions };
-}
-
-function normalizeSnsGovernanceCaseSlaExtensions(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCaseSlaExtension(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCaseSlaExtension(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const approvedBy = requireNonEmptyString(record.approved_by, `${context}.approved_by`);
-  const reason = requireNonEmptyString(record.reason, `${context}.reason`);
-  const newResolutionBy = requireNonEmptyString(record.new_resolution_by, `${context}.new_resolution_by`);
-  return { approvedBy, reason, newResolutionBy };
-}
-
-function normalizeSnsGovernanceCaseActions(value, context) {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(`${context} must be a non-empty array`);
-  }
-  return value.map((entry, index) => normalizeSnsGovernanceCaseAction(entry, `${context}[${index}]`));
-}
-
-function normalizeSnsGovernanceCaseAction(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const timestamp = requireNonEmptyString(record.timestamp, `${context}.timestamp`);
-  const actor = requireNonEmptyString(record.actor, `${context}.actor`);
-  const action = requireNonEmptyString(record.action, `${context}.action`);
-  const notes = optionalString(record.notes, `${context}.notes`);
-  return { timestamp, actor, action, notes };
-}
-
-function normalizeSnsGovernanceCaseDecision(payload, context) {
-  if (payload === undefined || payload === null) {
-    return null;
-  }
-  const record = ensureRecord(payload ?? {}, context);
-  let finding = null;
-  if (record.finding !== undefined && record.finding !== null) {
-    const normalized = requireNonEmptyString(record.finding, `${context}.finding`);
-    if (!SNS_GOV_CASE_DECISION_FINDINGS.has(normalized)) {
-      throw new TypeError(
-        `${context}.finding must be one of ${Array.from(SNS_GOV_CASE_DECISION_FINDINGS).join(", ")}`,
-      );
-    }
-    finding = normalized;
-  }
-  const remedies =
-    record.remedies === undefined || record.remedies === null
-      ? []
-      : normalizeStringList(record.remedies, `${context}.remedies`);
-  const effectiveAt = optionalString(record.effective_at, `${context}.effective_at`);
-  let publicationState = null;
-  if (record.publication_state !== undefined && record.publication_state !== null) {
-    const normalized = requireNonEmptyString(record.publication_state, `${context}.publication_state`);
-    if (!SNS_GOV_CASE_PUBLICATION_STATES.has(normalized)) {
-      throw new TypeError(
-        `${context}.publication_state must be one of ${Array.from(SNS_GOV_CASE_PUBLICATION_STATES).join(", ")}`,
-      );
-    }
-    publicationState = normalized;
-  }
-  return { finding, remedies, effectiveAt, publicationState };
 }
 
 function normalizeStringList(value, context) {

@@ -77,7 +77,7 @@ public final class GatewayFetchOptions {
   }
 
   /**
-   * Serialise the options to a JSON-compatible map. Only explicitly configured entries are
+   * Serialise the options to a JSON-ready map. Only explicitly configured entries are
    * included.
    */
   public Map<String, Object> toJson() {

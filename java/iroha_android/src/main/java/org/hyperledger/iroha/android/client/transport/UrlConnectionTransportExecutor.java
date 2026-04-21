@@ -17,9 +17,8 @@ import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 /**
  * {@link HttpTransportExecutor} implementation backed by {@link HttpURLConnection}.
  *
- * <p>This executor avoids {@code java.net.http} so it can serve as a portable fallback across JVM
- * and Android targets. Callers should prefer platform-optimised executors (OkHttp on Android, JDK
- * HTTP client on JVM) when available.
+ * <p>This executor avoids {@code java.net.http} so it can serve JVM and Android targets with the
+ * same canonical implementation.
  */
 public final class UrlConnectionTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
@@ -183,9 +182,9 @@ public final class UrlConnectionTransportExecutor
     return value == null ? "" : value;
   }
 
-  private static int toMillis(final Duration timeout, final int fallback) {
+  private static int toMillis(final Duration timeout, final int defaultValue) {
     if (timeout == null) {
-      return fallback;
+      return defaultValue;
     }
     final long millis = timeout.toMillis();
     if (millis > Integer.MAX_VALUE) {

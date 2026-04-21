@@ -217,9 +217,9 @@ public final class NoritoTests {
     byte[] encoded = encoding.payload();
     byte[] expected = new byte[] {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04,
         0x01, 0x00, 0x00, 0x00,
-        0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04,
         0x02, 0x00, 0x00, 0x00
     };
     assert Arrays.equals(encoded, expected) : "sequence encoding mismatch";
@@ -236,8 +236,8 @@ public final class NoritoTests {
     byte[] encoded = encoding.payload();
     byte[] expected = new byte[] {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+        0x01, 0x01,
+        0x01, 0x02
     };
     assert Arrays.equals(encoded, expected) : "byte vec encoding mismatch";
     NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
@@ -295,7 +295,7 @@ public final class NoritoTests {
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
     assert decoded.isEmpty() : "Expected empty sequence";
-    assert decoder.remaining() == 0 : "Decoder should consume compat tail";
+    assert decoder.remaining() == 0 : "Decoder should consume canonical empty packed tail";
   }
 
   private static void testSequenceAcceptsEmptyPackedTailWithFollowingData() {

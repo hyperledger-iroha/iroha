@@ -3,7 +3,6 @@ package org.hyperledger.iroha.sdk.crypto.keystore
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.KeyPair
@@ -58,9 +57,6 @@ internal class SystemAndroidKeystoreBackend private constructor(
         try {
             spec = buildKeyGenParameterSpec(alias, parameters, strongBoxRequested)
         } catch (ex: GeneralSecurityException) {
-            if (strongBoxRequested && parameters.allowStrongBoxFallback && isStrongBoxUnavailable(ex)) {
-                return generateInternal(generator, alias, parameters, false)
-            }
             throw KeyManagementException("Failed to prepare Android Keystore parameters", ex)
         }
 
@@ -69,14 +65,8 @@ internal class SystemAndroidKeystoreBackend private constructor(
             val pair = generator.generateKeyPair()
             return KeyGenerationResult(pair, strongBoxRequested)
         } catch (ex: ProviderException) {
-            if (strongBoxRequested && parameters.allowStrongBoxFallback && isStrongBoxUnavailable(ex)) {
-                return generateInternal(generator, alias, parameters, false)
-            }
             throw KeyManagementException("Android Keystore generation failed", ex)
         } catch (ex: GeneralSecurityException) {
-            if (strongBoxRequested && parameters.allowStrongBoxFallback && isStrongBoxUnavailable(ex)) {
-                return generateInternal(generator, alias, parameters, false)
-            }
             throw KeyManagementException("Android Keystore generation failed", ex)
         }
     }
@@ -245,17 +235,6 @@ internal class SystemAndroidKeystoreBackend private constructor(
             }
 
             return builder.build()
-        }
-
-        private fun isStrongBoxUnavailable(throwable: Throwable): Boolean {
-            var current: Throwable? = throwable
-            while (current != null) {
-                if (Build.VERSION.SDK_INT >= 28 && current is StrongBoxUnavailableException) {
-                    return true
-                }
-                current = current.cause
-            }
-            return false
         }
 
         private fun detectStrongBoxSupport(keyStore: KeyStore): Boolean {

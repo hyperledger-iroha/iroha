@@ -1,51 +1,45 @@
 package org.hyperledger.iroha.sdk.client.websocket
 
-/** Factory that selects a WebSocket connector per runtime (OkHttp on Android, JDK connector on JVM). */
+/** Factory that constructs the canonical WebSocket connector for the current runtime. */
 object PlatformWebSocketConnector {
 
-    /** Returns a platform-appropriate connector (prefers OkHttp when available). */
+    /** Returns the canonical connector for Android or JVM. */
     @JvmStatic
     fun createDefault(): ToriiWebSocketClient.WebSocketConnector =
         createDefault(PlatformWebSocketConnector::class.java.classLoader)
 
     @JvmStatic
     internal fun createDefault(loader: ClassLoader?): ToriiWebSocketClient.WebSocketConnector {
-        tryCreateOkHttpConnector(loader)?.let { return it }
-        tryCreateJdkConnector(loader)?.let { return it }
-        throw IllegalStateException("No WebSocket connector is available on the classpath.")
+        val factory = if (isAndroidRuntime()) {
+            "org.hyperledger.iroha.sdk.client.okhttp.OkHttpWebSocketConnectorFactory"
+        } else {
+            "org.hyperledger.iroha.sdk.client.websocket.JdkWebSocketConnectorFactory"
+        }
+        return createFromFactory(loader, factory)
     }
 
-    private fun tryCreateOkHttpConnector(loader: ClassLoader?): ToriiWebSocketClient.WebSocketConnector? {
+    private fun createFromFactory(loader: ClassLoader?, factoryName: String): ToriiWebSocketClient.WebSocketConnector {
         val effectiveLoader = loader ?: PlatformWebSocketConnector::class.java.classLoader
-        return try {
+        try {
             val factoryClass = Class.forName(
-                "org.hyperledger.iroha.sdk.client.okhttp.OkHttpWebSocketConnectorFactory",
+                factoryName,
                 true,
                 effectiveLoader,
             )
             val method = factoryClass.getMethod("createDefault")
-            method.invoke(null) as? ToriiWebSocketClient.WebSocketConnector
-        } catch (_: ClassNotFoundException) {
-            null
-        } catch (_: Exception) {
-            null
+            val connector = method.invoke(null)
+            if (connector is ToriiWebSocketClient.WebSocketConnector) return connector
+            throw IllegalStateException("$factoryName did not return a WebSocket connector")
+        } catch (ex: ReflectiveOperationException) {
+            throw IllegalStateException("Required WebSocket connector factory is unavailable", ex)
         }
     }
 
-    private fun tryCreateJdkConnector(loader: ClassLoader?): ToriiWebSocketClient.WebSocketConnector? {
-        val effectiveLoader = loader ?: PlatformWebSocketConnector::class.java.classLoader
-        return try {
-            val factoryClass = Class.forName(
-                "org.hyperledger.iroha.sdk.client.websocket.JdkWebSocketConnectorFactory",
-                true,
-                effectiveLoader,
-            )
-            val method = factoryClass.getMethod("createDefault")
-            method.invoke(null) as? ToriiWebSocketClient.WebSocketConnector
+    private fun isAndroidRuntime(): Boolean =
+        try {
+            Class.forName("android.os.Build")
+            true
         } catch (_: ClassNotFoundException) {
-            null
-        } catch (_: Exception) {
-            null
+            false
         }
-    }
 }

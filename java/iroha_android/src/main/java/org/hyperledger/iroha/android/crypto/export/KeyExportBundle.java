@@ -19,7 +19,7 @@ import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
  * <pre>
  * magic[5] = "IRKEY"
  * version[1] = 0x04
- * algorithm_code[1] (v4+)
+ * algorithm_code[1]
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -28,15 +28,14 @@ import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
  * nonce_bytes
  * ciphertext_len[2]
  * ciphertext_bytes (GCM ciphertext + tag)
- * salt_len[1] (v2+)
- * salt_bytes (v2+)
- * kdf_kind[1] (v2+)
- * kdf_work_factor[4] (big-endian, v2+)
+ * salt_len[1]
+ * salt_bytes
+ * kdf_kind[1] = 0x02 (Argon2id)
+ * kdf_work_factor[4] (big-endian)
  * </pre>
  */
 public final class KeyExportBundle {
   private static final byte[] MAGIC = "IRKEY".getBytes(StandardCharsets.UTF_8);
-  public static final byte VERSION_V3 = 3;
   public static final byte VERSION_V4 = 4;
   public static final int EXPECTED_NONCE_LENGTH_BYTES = 12;
   public static final int EXPECTED_SALT_LENGTH_BYTES = 16;
@@ -145,7 +144,7 @@ public final class KeyExportBundle {
     if (aliasBytes.length > 0xFFFF) {
       throw new IllegalArgumentException("alias is too long");
     }
-    if (version != VERSION_V3 && version != VERSION_V4) {
+    if (version != VERSION_V4) {
       throw new IllegalArgumentException("unsupported key export version: " + version);
     }
     if (publicKey.length > 0xFFFF) {
@@ -171,14 +170,15 @@ public final class KeyExportBundle {
     if (kdfWorkFactor < 0) {
       throw new IllegalArgumentException("kdfWorkFactor must be non-negative");
     }
+    if (kdfKind != DeterministicKeyExporter.KDF_KIND_ARGON2ID) {
+      throw new IllegalArgumentException("key export bundle KDF must be Argon2id");
+    }
 
     final ByteArrayOutputStream output = new ByteArrayOutputStream();
     try {
       output.write(MAGIC);
       output.write(version);
-      if (version >= VERSION_V4) {
-        output.write(algorithmCode & 0xFF);
-      }
+      output.write(algorithmCode & 0xFF);
       output.write(shortBytes(aliasBytes.length));
       output.write(aliasBytes);
       output.write(shortBytes(publicKey.length));
@@ -217,18 +217,13 @@ public final class KeyExportBundle {
         throw new KeyExportException("Key export bundle magic mismatch");
       }
       final int version = input.read();
-      if (version != VERSION_V3 && version != VERSION_V4) {
+      if (version != VERSION_V4) {
         throw new KeyExportException(
             "Unsupported key export version: " + (version < 0 ? "EOF" : version));
       }
-      final int algorithmCode;
-      if (version >= VERSION_V4) {
-        algorithmCode = input.read();
-        if (algorithmCode < 0) {
-          throw new KeyExportException("Unexpected end of stream while reading algorithm code");
-        }
-      } else {
-        algorithmCode = SigningAlgorithm.ED25519.bridgeCode();
+      final int algorithmCode = input.read();
+      if (algorithmCode < 0) {
+        throw new KeyExportException("Unexpected end of stream while reading algorithm code");
       }
       final int aliasLength = readShort(input);
       final byte[] aliasBytes = input.readNBytes(aliasLength);
@@ -278,6 +273,9 @@ public final class KeyExportBundle {
       final int kdfKind = input.read();
       if (kdfKind < 0) {
         throw new KeyExportException("Unexpected end of stream while reading kdf kind");
+      }
+      if (kdfKind != DeterministicKeyExporter.KDF_KIND_ARGON2ID) {
+        throw new KeyExportException("Unsupported KDF kind: " + kdfKind);
       }
       final byte[] workFactorBytes = input.readNBytes(4);
       if (workFactorBytes.length != 4) {

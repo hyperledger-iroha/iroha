@@ -10,9 +10,8 @@ import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
  * will replace this class at build time with bindings that talk to {@code android.security.keystore}.
  *
  * <p>The stub advertises zero hardware capability and fails generation calls so application code can
- * detect the absence of the Android runtime and fall back to {@link
- * org.hyperledger.iroha.android.crypto.SoftwareKeyProvider}. Tests rely on {@link KeystoreBackend}
- * fakes instead of this stub.
+ * detect the absence of the Android runtime. Tests rely on {@link KeystoreBackend} fakes instead of
+ * this stub.
  */
 public final class AndroidKeystoreStubBackend implements KeystoreBackend {
 

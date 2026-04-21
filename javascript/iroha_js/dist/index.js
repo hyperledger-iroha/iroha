@@ -1,8 +1,8 @@
 /**
  * Entry point for the experimental Iroha JS SDK.
  *
- * Native bindings (Norito + crypto) are provided via `iroha_js_host`. When the
- * native module is unavailable, the SDK falls back to pure JS implementations.
+ * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
+ * module.
  */
 export {
   AccountAddress,
@@ -211,6 +211,9 @@ export {
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
+  buildRegisterAssetDefinitionInstruction,
+  buildGrantAccountPermissionInstruction,
+  buildSetAssetDefinitionAliasInstruction,
   buildExecuteTriggerInstruction,
   buildExecuteTriggerNorito,
   buildMultisigTriggerArgs,

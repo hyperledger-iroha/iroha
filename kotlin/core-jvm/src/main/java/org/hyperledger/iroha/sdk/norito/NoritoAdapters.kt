@@ -239,14 +239,12 @@ object NoritoAdapters {
      */
     private object RawByteVecAdapter : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
-            encoder.writeLength(value.size.toLong(), compactLen)
+            encoder.writeLength(value.size.toLong(), false)
             encoder.writeBytes(value)
         }
 
         override fun decode(decoder: NoritoDecoder): ByteArray {
-            val compactLen = decoder.compactLenActive()
-            val length = decoder.readLength(compactLen)
+            val length = decoder.readLength(false)
             require(length <= Int.MAX_VALUE) { "Raw byte vector too large" }
             return decoder.readBytes(length.toInt())
         }
@@ -480,7 +478,7 @@ object NoritoAdapters {
             if ((encoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
                 encodePacked(encoder, entries)
             } else {
-                encodeCompat(encoder, entries)
+                encodeDelimited(encoder, entries)
             }
         }
 
@@ -491,13 +489,13 @@ object NoritoAdapters {
             return if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
                 decodePacked(decoder, count)
             } else {
-                decodeCompat(decoder, count)
+                decodeDelimited(decoder, count)
             }
         }
 
         override fun isSelfDelimiting(): Boolean = true
 
-        private fun decodeCompat(decoder: NoritoDecoder, count: Int): Map<K, V> {
+        private fun decodeDelimited(decoder: NoritoDecoder, count: Int): Map<K, V> {
             val map = LinkedHashMap<K, V>(count)
             val compactLen = decoder.compactLenActive()
             for (i in 0 until count) {
@@ -559,7 +557,7 @@ object NoritoAdapters {
             )
         }
 
-        private fun encodeCompat(encoder: NoritoEncoder, entries: List<Map.Entry<K, V>>) {
+        private fun encodeDelimited(encoder: NoritoEncoder, entries: List<Map.Entry<K, V>>) {
             val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
             for (entry in entries) {
                 val keyBytes = encodeField(encoder, key, entry.key)

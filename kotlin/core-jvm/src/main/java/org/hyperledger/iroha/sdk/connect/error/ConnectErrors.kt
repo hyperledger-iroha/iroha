@@ -27,7 +27,7 @@ object ConnectErrors {
 
     @JvmStatic
     fun from(throwable: Throwable?, options: ConnectErrorOptions?): ConnectError {
-        val base = classifyOrFallback(throwable)
+        val base = classifyOrUnknown(throwable)
         if (options == null) return base
         val overrideFatal = options.fatal != null
         val overrideStatus = options.httpStatus != null
@@ -55,7 +55,7 @@ object ConnectErrors {
         return builder.build()
     }
 
-    private fun classifyOrFallback(input: Throwable?): ConnectError {
+    private fun classifyOrUnknown(input: Throwable?): ConnectError {
         if (input == null) return unknown(null)
         if (input is ConnectError) return input
         if (input is ConnectErrorConvertible) return input.toConnectError()
@@ -158,9 +158,9 @@ object ConnectErrors {
         category: ConnectErrorCategory,
         code: String,
         cause: Throwable?,
-        fallback: String,
+        defaultMessage: String,
     ): ConnectError {
-        val message = messageOrDefault(cause, fallback)
+        val message = messageOrDefault(cause, defaultMessage)
         val builder = ConnectError.builder()
             .category(category)
             .code(code)
@@ -178,8 +178,8 @@ object ConnectErrors {
     private fun unknown(cause: Throwable?): ConnectError =
         newError(ConnectErrorCategory.INTERNAL, "unknown_error", cause, "Unknown Connect error")
 
-    private fun messageOrDefault(cause: Throwable?, fallback: String): String {
+    private fun messageOrDefault(cause: Throwable?, defaultMessage: String): String {
         val message = cause?.message
-        return if (message.isNullOrEmpty()) fallback else message
+        return if (message.isNullOrEmpty()) defaultMessage else message
     }
 }

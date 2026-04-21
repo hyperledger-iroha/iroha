@@ -3494,10 +3494,10 @@ test(
       );
       return;
     }
-    const fallbackEpoch =
+    const fixtureEpoch =
       coerceNonNegativeInteger(manifestPayload.expiry_epoch ?? manifestPayload.expiryEpoch) ??
       coerceNonNegativeInteger(manifestPayload.activation_epoch ?? manifestPayload.activationEpoch);
-    const revokedEpoch = SPACE_DIRECTORY_REVOKE_EPOCH ?? fallbackEpoch;
+    const revokedEpoch = SPACE_DIRECTORY_REVOKE_EPOCH ?? fixtureEpoch;
     if (revokedEpoch === null) {
       t.diagnostic(
         "set IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch> or include activation/expiry epochs in the manifest fixture",
@@ -5249,7 +5249,7 @@ test(
   },
   async (t) => {
     if (!ISO_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise alias fallback coverage");
+      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise alias-missing coverage");
       return;
     }
     const client = new ToriiClient(BASE_URL, {
@@ -5978,9 +5978,9 @@ function parseJsonEnv(rawValue) {
   }
 }
 
-function parsePositiveIntegerEnv(rawValue, fallback) {
+function parsePositiveIntegerEnv(rawValue, defaultValue) {
   if (!rawValue) {
-    return fallback;
+    return defaultValue;
   }
   const parsed = Number.parseInt(rawValue, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {

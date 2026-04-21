@@ -12,7 +12,7 @@ private const val DYNAMIC_FLAGS_MASK = 0
 /** High-level helpers for Norito encoding/decoding. */
 object NoritoCodec {
     @JvmField
-    val DEFAULT_FLAGS: Int = NoritoHeader.MINOR_VERSION
+    val DEFAULT_FLAGS: Int = NoritoHeader.COMPACT_LEN
 
     private val DECODE_FLAGS_STACK: ThreadLocal<Deque<Int>> =
         ThreadLocal.withInitial { ArrayDeque() }

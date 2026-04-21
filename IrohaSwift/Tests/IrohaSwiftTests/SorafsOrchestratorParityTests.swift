@@ -290,7 +290,7 @@ private enum SorafsBridgeBootstrap {
             }
         }
 
-        // Prefer the prebuilt bridge when it is available; only fall back to cargo builds when needed.
+        // Prefer the prebuilt bridge when it is available; build locally only when needed.
         if hasPrebuilt {
             return urls
         }

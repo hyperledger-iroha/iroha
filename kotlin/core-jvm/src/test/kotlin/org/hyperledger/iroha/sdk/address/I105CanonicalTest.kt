@@ -4,11 +4,11 @@ import org.hyperledger.iroha.sdk.crypto.SoftwareKeyProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-class I105CompatTest {
+class I105CanonicalTest {
 
     @Test
     fun `fromAccount produces 36 canonical bytes for ed25519`() {
-        // Use SoftwareKeyProvider like the E2E test does
+        // Use SoftwareKeyProvider like the E2E test does.
         val keyProvider = SoftwareKeyProvider(SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED)
         val keyPair = keyProvider.generateEphemeral()
         val spki = keyPair.public.encoded

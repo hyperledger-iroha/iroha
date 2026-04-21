@@ -60,7 +60,7 @@ public final class TransactionBuilderTests {
     final FakeSigner signer = new FakeSigner();
     final NoritoCodecAdapter codec = new NoritoJavaCodecAdapter();
     final TransactionBuilder builder =
-        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareFallback());
+        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
 
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
     final byte[] expectedSignature = concat(signed.encodedPayload(), "-signature".getBytes());
@@ -92,7 +92,7 @@ public final class TransactionBuilderTests {
             .setNonce(null)
             .build();
 
-    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareProvider();
     final TransactionBuilder builder =
         new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
 
@@ -134,7 +134,7 @@ public final class TransactionBuilderTests {
                         InstructionBox.fromWirePayload("iroha.register.account", wirePayloadB))))
             .build();
     final TransactionBuilder builder =
-        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareFallback());
+        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareProvider());
     final SignedTransaction signed = builder.encodeAndSign(payload, new FakeSigner());
     final TransactionPayload decoded = new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
     assert decoded.executable().isInstructions() : "Executable variant must remain instructions";
@@ -174,7 +174,7 @@ public final class TransactionBuilderTests {
   }
 
   private static void encodeAndSignEnvelopeWithAttestationWithoutHardware() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), manager);
     final TransactionPayload payload =
         TransactionPayload.builder()

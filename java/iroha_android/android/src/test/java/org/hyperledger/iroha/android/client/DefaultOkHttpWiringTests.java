@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -317,6 +318,9 @@ public final class DefaultOkHttpWiringTests {
 
     @Override
     public void onFailure(final TelemetryRecord record, final Throwable error) {}
+
+    @Override
+    public void emitSignal(final String signalId, final Map<String, Object> fields) {}
   }
 
   private static final class RecordingSseListener implements ToriiEventStreamListener, AutoCloseable {

@@ -267,7 +267,7 @@ public final class CudaAccelerators {
 
   static class NoopBackend implements Backend {
 
-    // Kotlin/Java fallback when the JNI bridge is missing or disabled.
+    // Portable CPU path used when CUDA acceleration is unavailable.
 
     @Override
     public boolean cudaAvailable() {

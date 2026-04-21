@@ -34,7 +34,7 @@
   `ArchiveView::flags*` helpers and rejecting unsupported minor versions when
   deframing.
 - Added enum/discriminant NCB/AoS columnar helpers for `(u64, enum(Name|Code), bool)`
-  rows, matching the Rust/Python descriptors and legacy AoS layout.
+  rows, matching the Rust/Python descriptors and current AoS layout.
 - Enabled Maven/Gradle publishing via `maven-publish` with coordinates
   `org.hyperledger.iroha:norito-java`.
 - Revalidated parity after the Rust Norito streaming RD harness/PSNR flag

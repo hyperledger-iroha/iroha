@@ -146,9 +146,9 @@ public final class SubscriptionJsonParser {
     return number.longValue();
   }
 
-  private static long asLongOrDefault(final Object value, final String path, final long fallback) {
+  private static long asLongOrDefault(final Object value, final String path, final long defaultValue) {
     if (value == null) {
-      return fallback;
+      return defaultValue;
     }
     return asLong(value, path);
   }

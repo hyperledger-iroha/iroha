@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /**
@@ -52,7 +53,7 @@ object RegisterAccountWirePayloadEncoder {
             val variantChild = encoder.childEncoder()
             encodeRegisterAccountStruct(variantChild, value)
             val variantPayload = variantChild.toByteArray()
-            encoder.writeUInt(variantPayload.size.toLong(), 64)
+            writeLength(encoder, variantPayload.size)
             encoder.writeBytes(variantPayload)
         }
 
@@ -61,7 +62,7 @@ object RegisterAccountWirePayloadEncoder {
             val objectChild = encoder.childEncoder()
             encodeNewAccount(objectChild, accountId)
             val objectPayload = objectChild.toByteArray()
-            encoder.writeUInt(objectPayload.size.toLong(), 64)
+            writeLength(encoder, objectPayload.size)
             encoder.writeBytes(objectPayload)
         }
 
@@ -93,8 +94,12 @@ object RegisterAccountWirePayloadEncoder {
         }
 
         private fun writeFieldWithLength(encoder: NoritoEncoder, payload: ByteArray) {
-            encoder.writeUInt(payload.size.toLong(), 64)
+            writeLength(encoder, payload.size)
             encoder.writeBytes(payload)
+        }
+
+        private fun writeLength(encoder: NoritoEncoder, size: Int) {
+            encoder.writeLength(size.toLong(), (encoder.flags and NoritoHeader.COMPACT_LEN) != 0)
         }
 
         /** Empty sequence/set/map: u64_le(0) — zero element count. */

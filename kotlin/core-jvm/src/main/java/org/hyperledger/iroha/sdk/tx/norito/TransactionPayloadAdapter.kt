@@ -375,6 +375,10 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =
             NoritoAdapters.sequence(InstructionAdapter())
         private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
+        private const val EXECUTABLE_INSTRUCTIONS_TAG = 0L
+        private const val EXECUTABLE_CONTRACT_CALL_TAG = 1L
+        private const val EXECUTABLE_IVM_TAG = 2L
+        private const val EXECUTABLE_IVM_PROVED_TAG = 3L
         private val TTL_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(64))
         private val NONCE_ADAPTER: TypeAdapter<Optional<Long>> = NoritoAdapters.option(NoritoAdapters.uint(32))
         private val EXECUTABLE_ADAPTER: TypeAdapter<Executable> = ExecutableAdapter()
@@ -411,11 +415,11 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private fun encodeExecutable(encoder: NoritoEncoder, executable: Executable) {
             when (executable) {
                 is Executable.Ivm -> {
-                    ENUM_TAG_ADAPTER.encode(encoder, 1L)
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_IVM_TAG)
                     encodeSizedField(encoder, IVM_BYTECODE_ADAPTER, executable.ivmBytes)
                 }
                 is Executable.Instructions -> {
-                    ENUM_TAG_ADAPTER.encode(encoder, 0L)
+                    ENUM_TAG_ADAPTER.encode(encoder, EXECUTABLE_INSTRUCTIONS_TAG)
                     encodeSizedField(encoder, INSTRUCTION_LIST_ADAPTER, executable.instructions)
                 }
             }
@@ -424,14 +428,16 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         private fun decodeExecutable(decoder: NoritoDecoder): Executable {
             val tag = ENUM_TAG_ADAPTER.decode(decoder)
             return when (tag) {
-                1L -> {
+                EXECUTABLE_IVM_TAG -> {
                     val bytes = decodeSizedField(decoder, IVM_BYTECODE_ADAPTER)
                     Executable.ivm(bytes)
                 }
-                0L -> {
+                EXECUTABLE_INSTRUCTIONS_TAG -> {
                     val instructions = decodeSizedField(decoder, INSTRUCTION_LIST_ADAPTER)
                     Executable.instructions(instructions)
                 }
+                EXECUTABLE_CONTRACT_CALL_TAG, EXECUTABLE_IVM_PROVED_TAG ->
+                    throw IllegalArgumentException("Unsupported Executable discriminant: $tag")
                 else -> throw IllegalArgumentException("Unknown Executable discriminant: $tag")
             }
         }

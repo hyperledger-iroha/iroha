@@ -19,7 +19,7 @@ class GatewayProvider(
         SorafsInputValidator.normalizeBase64MaybeUrl(streamTokenBase64, "streamTokenBase64")
     }
 
-    /** Serialise the provider descriptor to a JSON-compatible map. */
+    /** Serialise the provider descriptor to a JSON-ready map. */
     fun toJson(): Map<String, Any> = linkedMapOf(
         "name" to name,
         "provider_id_hex" to providerIdHex,

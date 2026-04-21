@@ -7,18 +7,31 @@ package org.hyperledger.iroha.sdk.core.model.instructions
  * If the binary is not built yet, this helper builds it automatically.
  */
 internal object FixtureGeneratorRunner {
+    @Volatile
+    private var built = false
+    private val buildLock = Any()
 
     fun run(subcommand: String): List<String> {
         val repoRoot = locateRepoRoot()
-        val binary = java.io.File(repoRoot, "target/debug/kotlin-fixture-gen")
-        if (!binary.exists()) {
-            val build = ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
-                .directory(repoRoot)
-                .redirectErrorStream(true)
-                .start()
-            val buildExit = build.waitFor()
-            require(buildExit == 0) {
-                "cargo build failed (exit $buildExit): ${build.inputStream.bufferedReader().readText()}"
+        val targetDir = java.io.File(repoRoot, "target/kotlin-fixture-gen-test")
+        val binary = java.io.File(targetDir, "debug/kotlin-fixture-gen")
+        if (!built || !binary.exists()) {
+            synchronized(buildLock) {
+                if (!built || !binary.exists()) {
+                    val build = ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+                        .directory(repoRoot)
+                        .apply {
+                            environment()["CARGO_TARGET_DIR"] = targetDir.absolutePath
+                        }
+                        .redirectErrorStream(true)
+                        .start()
+                    val buildOutput = build.inputStream.bufferedReader().readText()
+                    val buildExit = build.waitFor()
+                    require(buildExit == 0) {
+                        "cargo build failed (exit $buildExit): $buildOutput"
+                    }
+                    built = true
+                }
             }
         }
         val process = ProcessBuilder(binary.absolutePath, subcommand)

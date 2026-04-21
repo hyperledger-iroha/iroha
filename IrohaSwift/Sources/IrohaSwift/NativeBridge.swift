@@ -2758,9 +2758,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     var isConnectCryptoAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
-        if let override = connectCryptoAvailabilityOverride {
-            return override
-        }
         return canUseConnectCrypto
         #else
         return false
@@ -2817,14 +2814,21 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     var isAccountAddressCodecAvailable: Bool {
-        true
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return accountAddressParseFn != nil
+            && accountAddressRenderFn != nil
+            && freeFn != nil
+        #else
+        return false
+        #endif
     }
 
     var isConnectCodecAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
-        if let override = connectCodecAvailabilityOverride {
-            return override
+        if connectCodecAvailabilityOverride == false {
+            return false
         }
         return canUseConnectCodec
         #else
@@ -2835,12 +2839,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     func overrideConnectCodecAvailabilityForTests(_ override: Bool?) {
         #if canImport(Darwin)
         connectCodecAvailabilityOverride = override
-        #endif
-    }
-
-    func overrideConnectCryptoAvailabilityForTests(_ override: Bool?) {
-        #if canImport(Darwin)
-        connectCryptoAvailabilityOverride = override
         #endif
     }
 
@@ -2867,7 +2865,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private var bridgeAvailabilityOverride: Bool?
     private var connectCodecAvailabilityOverride: Bool?
-    private var connectCryptoAvailabilityOverride: Bool?
     #endif
 
     private var canUseConnectCodec: Bool {
@@ -2992,67 +2989,54 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         expectedPrefix: UInt16?
     ) throws -> NativeAccountAddressParseResult? {
         #if canImport(Darwin)
-        if let accountAddressParseFn {
-            var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
-            var canonicalLen: UInt = 0
-            var networkPrefix: UInt16 = 0
-            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-            var errorLen: UInt = 0
-            let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
-            let prefixValue = expectedPrefix ?? 0
-
-            let status = literal.withCString { cString in
-                accountAddressParseFn(
-                    cString,
-                    UInt(literal.utf8.count),
-                    prefixValue,
-                    prefixFlag,
-                    &canonicalPtr,
-                    &canonicalLen,
-                    &networkPrefix,
-                    &errorPtr,
-                    &errorLen
-                )
-            }
-
-            if status == 0 {
-                guard let canonicalPtr,
-                      let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
-                else {
-                    return nil
-                }
-                return NativeAccountAddressParseResult(
-                    canonicalBytes: canonical,
-                    networkPrefix: networkPrefix
-                )
-            }
-
-            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
-                throw error
-            }
-            if let canonicalPtr {
-                freeFn?(canonicalPtr)
-            }
+        guard isAccountAddressCodecAvailable,
+              let accountAddressParseFn else {
             return nil
         }
 
-        let address = try AccountAddress.parseEncodedSwiftOnly(
-            literal,
-            expectedPrefix: expectedPrefix
-        )
-        return NativeAccountAddressParseResult(
-            canonicalBytes: try address.canonicalBytes(),
-            networkPrefix: expectedPrefix ?? inferredAccountAddressDiscriminant(literal)
-        )
+        var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
+        var canonicalLen: UInt = 0
+        var networkPrefix: UInt16 = 0
+        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+        var errorLen: UInt = 0
+        let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
+        let prefixValue = expectedPrefix ?? 0
+
+        let status = literal.withCString { cString in
+            accountAddressParseFn(
+                cString,
+                UInt(literal.utf8.count),
+                prefixValue,
+                prefixFlag,
+                &canonicalPtr,
+                &canonicalLen,
+                &networkPrefix,
+                &errorPtr,
+                &errorLen
+            )
+        }
+
+        if status == 0 {
+            guard let canonicalPtr,
+                  let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
+            else {
+                return nil
+            }
+            return NativeAccountAddressParseResult(
+                canonicalBytes: canonical,
+                networkPrefix: networkPrefix
+            )
+        }
+
+        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+            throw error
+        }
+        if let canonicalPtr {
+            freeFn?(canonicalPtr)
+        }
+        return nil
         #else
-        let address = try AccountAddress.parseEncodedSwiftOnly(
-            literal,
-            expectedPrefix: expectedPrefix
-        )
-        return NativeAccountAddressParseResult(
-            canonicalBytes: try address.canonicalBytes(),
-            networkPrefix: expectedPrefix ?? inferredAccountAddressDiscriminant(literal)
-        )
+        return nil
         #endif
     }
 
@@ -3061,63 +3045,56 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         networkPrefix: UInt16
     ) throws -> NativeAccountAddressRenderResult? {
         #if canImport(Darwin)
-        if let accountAddressRenderFn {
-            var hexPtr: UnsafeMutablePointer<UInt8>? = nil
-            var hexLen: UInt = 0
-            var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
-            var i105Len: UInt = 0
-            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-            var errorLen: UInt = 0
-
-            let status = canonicalBytes.withUnsafeBytes { buffer in
-                accountAddressRenderFn(
-                    buffer.bindMemory(to: UInt8.self).baseAddress,
-                    UInt(canonicalBytes.count),
-                    networkPrefix,
-                    &hexPtr,
-                    &hexLen,
-                    &i105Ptr,
-                    &i105Len,
-                    &errorPtr,
-                    &errorLen
-                )
-            }
-
-            if status == 0 {
-                guard
-                    let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
-                    let i105 = takeString(pointer: i105Ptr, length: i105Len)
-                else {
-                    return nil
-                }
-                return NativeAccountAddressRenderResult(
-                    canonicalHex: canonicalHex,
-                    i105: i105
-                )
-            }
-
-            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
-                if let hexPtr { freeFn?(hexPtr) }
-                if let i105Ptr { freeFn?(i105Ptr) }
-                throw error
-            }
-
-            if let hexPtr { freeFn?(hexPtr) }
-            if let i105Ptr { freeFn?(i105Ptr) }
+        guard isAccountAddressCodecAvailable,
+              let accountAddressRenderFn else {
             return nil
         }
 
-        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
-        return NativeAccountAddressRenderResult(
-            canonicalHex: try address.canonicalHex(),
-            i105: try address.toI105(networkPrefix: networkPrefix)
-        )
+        var hexPtr: UnsafeMutablePointer<UInt8>? = nil
+        var hexLen: UInt = 0
+        var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
+        var i105Len: UInt = 0
+        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+        var errorLen: UInt = 0
+
+        let status = canonicalBytes.withUnsafeBytes { buffer in
+            accountAddressRenderFn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                UInt(canonicalBytes.count),
+                networkPrefix,
+                &hexPtr,
+                &hexLen,
+                &i105Ptr,
+                &i105Len,
+                &errorPtr,
+                &errorLen
+            )
+        }
+
+        if status == 0 {
+            guard
+                let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
+                let i105 = takeString(pointer: i105Ptr, length: i105Len)
+            else {
+                return nil
+            }
+            return NativeAccountAddressRenderResult(
+                canonicalHex: canonicalHex,
+                i105: i105
+            )
+        }
+
+        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+            if let hexPtr { freeFn?(hexPtr) }
+            if let i105Ptr { freeFn?(i105Ptr) }
+            throw error
+        }
+
+        if let hexPtr { freeFn?(hexPtr) }
+        if let i105Ptr { freeFn?(i105Ptr) }
+        return nil
         #else
-        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
-        return NativeAccountAddressRenderResult(
-            canonicalHex: try address.canonicalHex(),
-            i105: try address.toI105(networkPrefix: networkPrefix)
-        )
+        return nil
         #endif
     }
 
@@ -5948,26 +5925,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func connectGenerateKeypair() -> (publicKey: Data, privateKey: Data)? {
         #if canImport(Darwin)
-        if let override = connectCryptoAvailabilityOverride, override {
-            let priv = [UInt8](0..<32)
-            var pub = [UInt8](repeating: 0, count: 32)
-            let status = priv.withUnsafeBytes { skBuffer -> Int32 in
-                guard skBuffer.bindMemory(to: UInt8.self).baseAddress != nil else { return -1 }
-                return pub.withUnsafeMutableBytes { pkBuffer -> Int32 in
-                    guard let pkBase = pkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-                    // Derive a pseudo public key by hashing the private key bytes deterministically.
-                    var hasher = SHA256()
-                    hasher.update(data: Data(priv))
-                    let digest = Array(hasher.finalize())
-                    for idx in 0..<32 {
-                        pkBase[idx] = digest[idx]
-                    }
-                    return 0
-                }
-            }
-            guard status == 0 else { return nil }
-            return (Data(pub), Data(priv))
-        }
         guard let connectGenerateKeypairFn else { return nil }
         var publicKey = [UInt8](repeating: 0, count: 32)
         var privateKey = [UInt8](repeating: 0, count: 32)
@@ -5987,12 +5944,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func connectPublicFromPrivate(_ privateKey: Data) -> Data? {
         #if canImport(Darwin)
-        if let override = connectCryptoAvailabilityOverride, override {
-            guard privateKey.count == 32 else { return nil }
-            var hasher = SHA256()
-            hasher.update(data: privateKey)
-            return Data(hasher.finalize())
-        }
         guard let connectPublicFromPrivateFn,
               privateKey.count == 32 else { return nil }
         var publicKey = [UInt8](repeating: 0, count: 32)
@@ -6012,19 +5963,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func connectDeriveKeys(privateKey: Data, peerPublicKey: Data, sessionID: Data) -> (appKey: Data, walletKey: Data)? {
         #if canImport(Darwin)
-        if let override = connectCryptoAvailabilityOverride, override {
-            guard privateKey.count == 32,
-                  peerPublicKey.count == 32,
-                  sessionID.count == 32 else { return nil }
-            var hasher = SHA256()
-            hasher.update(data: privateKey)
-            hasher.update(data: peerPublicKey)
-            hasher.update(data: sessionID)
-            let digest = Array(hasher.finalize())
-            let appKey = Data(digest.prefix(32))
-            let walletKey = Data(digest.prefix(32).reversed())
-            return (appKey, walletKey)
-        }
         guard let connectDeriveKeysFn,
               privateKey.count == 32,
               peerPublicKey.count == 32,
@@ -6056,27 +5994,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func connectEncryptEnvelope(key: Data, sessionID: Data, direction: ConnectDirection, envelope: Data) -> Data? {
         #if canImport(Darwin)
-        if let override = connectCryptoAvailabilityOverride, override {
-            let envelopePayload = decodeEnvelopeJSON(envelope) ?? envelope
-            let sequenceHint: UInt64 = {
-                guard let json = decodeEnvelopeJSON(envelopePayload) else { return 0 }
-                let value = try? JSONSerialization.jsonObject(with: json, options: [])
-                let root = value as? [String: Any]
-                return StrictJSONNumber.uint64(from: root?["seq"]) ?? 0
-            }()
-            let keyStream = connectFallbackKeystream(key: key,
-                                                     sessionID: sessionID,
-                                                     direction: direction,
-                                                     length: envelopePayload.count)
-            let ciphertext = Data(zip(envelopePayload, keyStream).map { $0 ^ $1 })
-            let frame = ConnectFrame(sessionID: sessionID,
-                                     direction: direction,
-                                     sequence: sequenceHint,
-                                     kind: .ciphertext(ConnectCiphertext(payload: ciphertext)))
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            return try? encoder.encode(frame)
-        }
         guard let connectEncryptEnvelopeFn,
               let freeFn,
               key.count == 32,
@@ -6112,40 +6029,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    private func connectFallbackKeystream(key: Data,
-                                          sessionID: Data,
-                                          direction: ConnectDirection,
-                                          length: Int) -> [UInt8] {
-        var output: [UInt8] = []
-        output.reserveCapacity(length)
-        var counter: UInt8 = 0
-        while output.count < length {
-            var hasher = SHA256()
-            hasher.update(data: key)
-            hasher.update(data: sessionID)
-            hasher.update(data: [direction == .appToWallet ? 0 : 1, counter])
-            let digest = hasher.finalize()
-            output.append(contentsOf: digest)
-            counter &+= 1
-        }
-        return Array(output.prefix(length))
-    }
-
     func connectDecryptCiphertext(key: Data, frame: Data) -> Data? {
         #if canImport(Darwin)
-        if let override = connectCryptoAvailabilityOverride, override {
-            let decoder = JSONDecoder()
-            guard let connectFrame = try? decoder.decode(ConnectFrame.self, from: frame),
-                  let ciphertext = connectFrame.ciphertextPayload else {
-                return nil
-            }
-            let keyStream = connectFallbackKeystream(key: key,
-                                                     sessionID: connectFrame.sessionID,
-                                                     direction: connectFrame.direction,
-                                                     length: ciphertext.count)
-            let plaintext = Data(zip(ciphertext, keyStream).map { $0 ^ $1 })
-            return plaintext
-        }
         guard let connectDecryptCiphertextFn,
               let freeFn,
               key.count == 32 else { return nil }
@@ -6534,11 +6419,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func encodeConnectFrame(_ frame: ConnectFrame) -> Data? {
         #if canImport(Darwin)
-        if let override = connectCodecAvailabilityOverride, override {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            return try? encoder.encode(frame)
-        }
         guard isConnectCodecAvailable else { return nil }
         switch frame.kind {
         case .control(let control):
@@ -6566,10 +6446,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func decodeConnectFrame(_ data: Data) -> ConnectFrame? {
         #if canImport(Darwin)
-        if let override = connectCodecAvailabilityOverride, override {
-            let decoder = JSONDecoder()
-            return try? decoder.decode(ConnectFrame.self, from: data)
-        }
         guard isConnectCodecAvailable else { return nil }
         var sessionBytes = [UInt8](repeating: 0, count: 32)
         var dirRaw: UInt8 = 0

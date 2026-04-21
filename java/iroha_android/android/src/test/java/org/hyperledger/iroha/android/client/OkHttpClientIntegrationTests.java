@@ -272,6 +272,9 @@ public final class OkHttpClientIntegrationTests {
     public void onFailure(final TelemetryRecord record, final Throwable error) {
       failures.add(record);
     }
+
+    @Override
+    public void emitSignal(final String signalId, final Map<String, Object> fields) {}
   }
 
   private static final class RecordingObserver implements ClientObserver {

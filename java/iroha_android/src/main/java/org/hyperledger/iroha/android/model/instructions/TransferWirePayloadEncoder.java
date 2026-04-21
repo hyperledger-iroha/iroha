@@ -91,7 +91,7 @@ public final class TransferWirePayloadEncoder {
   public static byte[] encodeAccountIdPayload(String accountId) {
     Objects.requireNonNull(accountId, "accountId");
     final AccountId parsed = AccountId.parse(accountId);
-    final NoritoEncoder encoder = new NoritoEncoder(0);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     new AccountIdAdapter().encode(encoder, parsed);
     return encoder.toByteArray();
   }
@@ -396,24 +396,24 @@ public final class TransferWirePayloadEncoder {
       // TransferBox enum tag (Asset = 2)
       UINT32_ADAPTER.encode(encoder, (long) TRANSFER_BOX_ASSET_DISCRIMINANT);
 
-      // Norito enum variants have a u64 length prefix for the variant payload.
+      // Norito enum variants have a layout-flagged length prefix for the variant payload.
       // Encode the Transfer struct to a child buffer first to compute length.
       NoritoEncoder child = encoder.childEncoder();
       encodeTransferStruct(child, value);
       byte[] variantPayload = child.toByteArray();
 
-      // Write u64 length prefix (little-endian, not compact)
-      encoder.writeUInt(variantPayload.length, 64);
+      // Write the canonical payload length.
+      writePayloadLength(encoder, variantPayload.length);
       encoder.writeBytes(variantPayload);
     }
 
     /**
-     * Encode Transfer<Asset, Numeric, Account> struct fields with u64 length prefixes.
+     * Encode Transfer<Asset, Numeric, Account> struct fields with canonical length prefixes.
      *
      * <p>In norito non-packed mode, each struct field is prefixed with a u64 (little-endian) length.
      */
     private void encodeTransferStruct(NoritoEncoder encoder, TransferAssetPayload value) {
-      // Transfer struct fields in order with u64 length prefixes:
+      // Transfer struct fields in order with canonical length prefixes:
       // - source: AssetId (struct)
       // - object: Numeric
       // - destination: AccountId (struct)
@@ -429,8 +429,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      // u64 little-endian length prefix (NOT compact/varint)
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -443,9 +442,7 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding AssetDefinitionId as {@code [u8; 16]}.
    *
-   * <p>With {@code flags=0} (no COMPACT_LEN), Rust serializes each array element with a u64 length
-   * prefix: 16 × (u64_le(1) + byte) = 144 bytes. With COMPACT_LEN, Rust uses varint lengths
-   * instead. The current signing path always uses {@code flags=0}.
+   * <p>Canonical SDK encoders use {@code COMPACT_LEN}, so each element length is a compact varint.
    */
   private static final class AssetDefinitionIdAdapter implements TypeAdapter<AssetDefinitionId> {
 
@@ -470,7 +467,7 @@ public final class TransferWirePayloadEncoder {
    *   }
    * </pre>
    *
-   * Each field has a u64 length prefix in norito non-packed mode.
+   * Each field has a layout-flagged length prefix in non-packed mode.
    */
   private static final class AccountIdAdapter implements TypeAdapter<AccountId> {
     private static final TypeAdapter<AccountController> CONTROLLER_ADAPTER =
@@ -501,7 +498,7 @@ public final class TransferWirePayloadEncoder {
    *   }
    * </pre>
    *
-   * Standard enum format: u32 discriminant + u64 length prefix + variant payload.
+   * Standard enum format: u32 discriminant + canonical length prefix + variant payload.
    */
   private static final class AccountControllerAdapter implements TypeAdapter<AccountController> {
     private static final int SINGLE_DISCRIMINANT = 0;
@@ -523,7 +520,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       STRING_ADAPTER.encode(child, publicKeyMultihash);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -538,7 +535,7 @@ public final class TransferWirePayloadEncoder {
       encodeMultisigMembers(policyEncoder, policy.members());
 
       byte[] policyPayload = policyEncoder.toByteArray();
-      encoder.writeUInt(policyPayload.length, 64);
+      writePayloadLength(encoder, policyPayload.length);
       encoder.writeBytes(policyPayload);
     }
 
@@ -565,11 +562,11 @@ public final class TransferWirePayloadEncoder {
         encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash);
         encodeSizedField(memberEncoder, UINT16_ADAPTER, (long) member.weight());
         byte[] memberPayload = memberEncoder.toByteArray();
-        vecEncoder.writeUInt(memberPayload.length, 64);
+        writePayloadLength(vecEncoder, memberPayload.length);
         vecEncoder.writeBytes(memberPayload);
       }
       byte[] vecPayload = vecEncoder.toByteArray();
-      encoder.writeUInt(vecPayload.length, 64);
+      writePayloadLength(encoder, vecPayload.length);
       encoder.writeBytes(vecPayload);
     }
 
@@ -578,7 +575,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -601,20 +598,20 @@ public final class TransferWirePayloadEncoder {
 
     @Override
     public void encode(NoritoEncoder encoder, AssetId value) {
-      // AssetId struct fields in order with u64 length prefixes:
+      // AssetId struct fields in order with canonical length prefixes:
       // 1. account: AccountId
       // 2. definition: AssetDefinitionId
       // 3. scope: AssetBalanceScope
       byte[] encodedAccountPayload = value.encodedAccountPayload();
       if (encodedAccountPayload != null) {
-        encoder.writeUInt(encodedAccountPayload.length, 64);
+        writePayloadLength(encoder, encodedAccountPayload.length);
         encoder.writeBytes(encodedAccountPayload);
       } else {
         encodeFieldWithLength(encoder, ACCOUNT_ID_ADAPTER, value.account());
       }
       encodeFieldWithLength(encoder, ASSET_DEF_ID_ADAPTER, value.definition());
       byte[] scopePayload = value.scopePayload();
-      encoder.writeUInt(scopePayload.length, 64);
+      writePayloadLength(encoder, scopePayload.length);
       encoder.writeBytes(scopePayload);
     }
 
@@ -627,7 +624,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
   }
@@ -635,7 +632,7 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding Numeric values (mantissa + scale).
    *
-   * <p>Numeric is a struct with two fields that need u64 length prefixes:
+   * <p>Numeric is a struct with two fields that need canonical length prefixes:
    * - mantissa: BigInt
    * - scale: u32
    */
@@ -643,7 +640,7 @@ public final class TransferWirePayloadEncoder {
 
     @Override
     public void encode(NoritoEncoder encoder, NumericValue value) {
-      // Numeric struct fields with u64 length prefixes:
+      // Numeric struct fields with canonical length prefixes:
       // 1. mantissa: BigInt
       // 2. scale: u32
       encodeFieldBigInt(encoder, value.mantissa());
@@ -656,22 +653,22 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Encode BigInt field with u64 length prefix.
+     * Encode BigInt field with a canonical length prefix.
      */
     private void encodeFieldBigInt(NoritoEncoder encoder, BigInteger value) {
       NoritoEncoder child = encoder.childEncoder();
       encodeBigInt(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
     /**
-     * Encode u32 field with u64 length prefix.
+     * Encode u32 field with a canonical length prefix.
      */
     private void encodeFieldU32(NoritoEncoder encoder, int value) {
       // u32 is always 4 bytes
-      encoder.writeUInt(4, 64);  // length prefix
+      writePayloadLength(encoder, 4);
       UINT32_ADAPTER.encode(encoder, (long) value);
     }
 
@@ -731,11 +728,7 @@ public final class TransferWirePayloadEncoder {
 
   /**
    * Encodes a fixed-size byte array as per-element length-prefixed bytes for {@code [u8; N]}.
-   * Each element is written as {@code u64_le(1) + byte}, producing 9 bytes per element.
-   *
-   * <p>This matches Rust's {@code [T; N]::NoritoSerialize} only when {@code COMPACT_LEN} is off
-   * ({@code flags=0}). With {@code COMPACT_LEN} active, Rust uses varint lengths instead of
-   * fixed u64. The current signing path always uses {@code flags=0}.
+   * Canonical SDK encoders use {@code COMPACT_LEN}, so each element length is a compact varint.
    */
   public static void encodeFixedByteArray(NoritoEncoder encoder, byte[] bytes) {
     boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
@@ -815,11 +808,15 @@ public final class TransferWirePayloadEncoder {
     if (scope.isGlobal()) {
       return globalScopePayload();
     }
-    final NoritoEncoder encoder = new NoritoEncoder(0);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     UINT32_ADAPTER.encode(encoder, 1L);
-    encoder.writeUInt(8, 64);
+    writePayloadLength(encoder, 8);
     encoder.writeUInt(scope.dataspaceId(), 64);
     return encoder.toByteArray();
+  }
+
+  private static void writePayloadLength(NoritoEncoder encoder, int size) {
+    encoder.writeLength(size, (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
   }
 
   private static <T> T decodeSizedTypedField(

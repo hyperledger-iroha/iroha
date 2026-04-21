@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
@@ -329,6 +330,9 @@ public final class AndroidClientFactoryTests {
       failures.add(record);
       responseLatch.countDown();
     }
+
+    @Override
+    public void emitSignal(final String signalId, final Map<String, Object> fields) {}
 
     boolean await() throws InterruptedException {
       return requestLatch.await(2, TimeUnit.SECONDS)

@@ -387,9 +387,9 @@ def _read_header_value(
         direct = getter(name)
         if isinstance(direct, str):
             return direct
-        fallback = getter(lowered)
-        if isinstance(fallback, str):
-            return fallback
+        lower_value = getter(lowered)
+        if isinstance(lower_value, str):
+            return lower_value
     try:
         items = headers.items()
     except AttributeError:
@@ -984,8 +984,8 @@ class SccpCapabilities:
     message_proof_path: str
     message_job_path: str
     proof_manifest_path: str
-    legacy_burn_registry_backend: str
-    legacy_governance_registry_backend: str
+    burn_registry_backend: str
+    governance_registry_backend: str
     proof_submit_path: Optional[str]
     message_submit_path: Optional[str]
     message_payload_kinds: List[str]
@@ -7659,13 +7659,13 @@ class ToriiClient:
                 record.get("proof_manifest_path"),
                 f"{context}.proof_manifest_path",
             ),
-            legacy_burn_registry_backend=ToriiClient._require_string(
-                record.get("legacy_burn_registry_backend"),
-                f"{context}.legacy_burn_registry_backend",
+            burn_registry_backend=ToriiClient._require_string(
+                record.get("burn_registry_backend"),
+                f"{context}.burn_registry_backend",
             ),
-            legacy_governance_registry_backend=ToriiClient._require_string(
-                record.get("legacy_governance_registry_backend"),
-                f"{context}.legacy_governance_registry_backend",
+            governance_registry_backend=ToriiClient._require_string(
+                record.get("governance_registry_backend"),
+                f"{context}.governance_registry_backend",
             ),
             proof_submit_path=ToriiClient._coerce_optional_string(
                 record.get("proof_submit_path"),

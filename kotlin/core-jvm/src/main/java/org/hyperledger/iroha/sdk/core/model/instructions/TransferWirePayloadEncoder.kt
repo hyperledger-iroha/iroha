@@ -78,18 +78,14 @@ object TransferWirePayloadEncoder {
     @JvmStatic
     internal fun encodeAccountIdPayload(accountId: String): ByteArray {
         val parsed = AccountId.parse(accountId)
-        val encoder = NoritoEncoder(0)
+        val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         AccountIdAdapter().encode(encoder, parsed)
         return encoder.toByteArray()
     }
 
     /**
      * Encodes a fixed-size byte array as per-element length-prefixed bytes for `[u8; N]`.
-     * Each element is written as `u64_le(1) + byte`, producing 9 bytes per element.
-     *
-     * This matches Rust's `[T; N]::NoritoSerialize` only when `COMPACT_LEN` is off
-     * (`flags=0`). With `COMPACT_LEN` active, Rust uses varint lengths instead of
-     * fixed u64. The current signing path always uses `flags=0`.
+     * Canonical SDK encoders use `COMPACT_LEN`, so each element length is a compact varint.
      */
     @JvmStatic
     fun encodeFixedByteArray(encoder: NoritoEncoder, bytes: ByteArray) {
@@ -236,7 +232,7 @@ object TransferWirePayloadEncoder {
             val child = encoder.childEncoder()
             encodeTransferStruct(child, value)
             val variantPayload = child.toByteArray()
-            encoder.writeUInt(variantPayload.size.toLong(), 64)
+            writePayloadLength(encoder, variantPayload.size)
             encoder.writeBytes(variantPayload)
         }
 
@@ -250,7 +246,7 @@ object TransferWirePayloadEncoder {
             val child = encoder.childEncoder()
             adapter.encode(child, value)
             val payload = child.toByteArray()
-            encoder.writeUInt(payload.size.toLong(), 64)
+            writePayloadLength(encoder, payload.size)
             encoder.writeBytes(payload)
         }
 
@@ -292,7 +288,7 @@ object TransferWirePayloadEncoder {
             val child = encoder.childEncoder()
             STRING_ADAPTER.encode(child, publicKeyMultihash)
             val payload = child.toByteArray()
-            encoder.writeUInt(payload.size.toLong(), 64)
+            writePayloadLength(encoder, payload.size)
             encoder.writeBytes(payload)
         }
 
@@ -306,7 +302,7 @@ object TransferWirePayloadEncoder {
             encodeMultisigMembers(policyEncoder, policy.members)
 
             val policyPayload = policyEncoder.toByteArray()
-            encoder.writeUInt(policyPayload.size.toLong(), 64)
+            writePayloadLength(encoder, policyPayload.size)
             encoder.writeBytes(policyPayload)
         }
 
@@ -326,11 +322,11 @@ object TransferWirePayloadEncoder {
                 encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash)
                 encodeSizedField(memberEncoder, UINT16_ADAPTER, member.weight.toLong())
                 val memberPayload = memberEncoder.toByteArray()
-                vecEncoder.writeUInt(memberPayload.size.toLong(), 64)
+                writePayloadLength(vecEncoder, memberPayload.size)
                 vecEncoder.writeBytes(memberPayload)
             }
             val vecPayload = vecEncoder.toByteArray()
-            encoder.writeUInt(vecPayload.size.toLong(), 64)
+            writePayloadLength(encoder, vecPayload.size)
             encoder.writeBytes(vecPayload)
         }
 
@@ -345,14 +341,14 @@ object TransferWirePayloadEncoder {
         override fun encode(encoder: NoritoEncoder, value: AssetId) {
             val encodedAccountPayload = value.encodedAccountPayload()
             if (encodedAccountPayload != null) {
-                encoder.writeUInt(encodedAccountPayload.size.toLong(), 64)
+                writePayloadLength(encoder, encodedAccountPayload.size)
                 encoder.writeBytes(encodedAccountPayload)
             } else {
                 encodeFieldWithLength(encoder, accountIdAdapter, value.account!!)
             }
             encodeFieldWithLength(encoder, assetDefIdAdapter, value.definition)
             val scopePayload = value.scopePayload()
-            encoder.writeUInt(scopePayload.size.toLong(), 64)
+            writePayloadLength(encoder, scopePayload.size)
             encoder.writeBytes(scopePayload)
         }
 
@@ -363,7 +359,7 @@ object TransferWirePayloadEncoder {
             val child = encoder.childEncoder()
             adapter.encode(child, value)
             val payload = child.toByteArray()
-            encoder.writeUInt(payload.size.toLong(), 64)
+            writePayloadLength(encoder, payload.size)
             encoder.writeBytes(payload)
         }
     }
@@ -381,12 +377,12 @@ object TransferWirePayloadEncoder {
             val child = encoder.childEncoder()
             encodeBigInt(child, value)
             val payload = child.toByteArray()
-            encoder.writeUInt(payload.size.toLong(), 64)
+            writePayloadLength(encoder, payload.size)
             encoder.writeBytes(payload)
         }
 
         private fun encodeFieldU32(encoder: NoritoEncoder, value: Int) {
-            encoder.writeUInt(4, 64)
+            writePayloadLength(encoder, 4)
             UINT32_ADAPTER.encode(encoder, value.toLong())
         }
 
@@ -421,8 +417,12 @@ object TransferWirePayloadEncoder {
         val child = encoder.childEncoder()
         adapter.encode(child, value)
         val payload = child.toByteArray()
-        encoder.writeUInt(payload.size.toLong(), 64)
+        writePayloadLength(encoder, payload.size)
         encoder.writeBytes(payload)
+    }
+
+    private fun writePayloadLength(encoder: NoritoEncoder, size: Int) {
+        encoder.writeLength(size.toLong(), (encoder.flags and NoritoHeader.COMPACT_LEN) != 0)
     }
 
     private fun globalScopePayload(): ByteArray {
@@ -473,9 +473,9 @@ object TransferWirePayloadEncoder {
 
     private fun encodeAssetBalanceScopePayload(scope: AssetBalanceScopePayload): ByteArray {
         if (scope.isGlobal) return globalScopePayload()
-        val encoder = NoritoEncoder(0)
+        val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
         UINT32_ADAPTER.encode(encoder, 1L)
-        encoder.writeUInt(8, 64)
+        writePayloadLength(encoder, 8)
         encoder.writeUInt(scope.dataspaceId, 64)
         return encoder.toByteArray()
     }

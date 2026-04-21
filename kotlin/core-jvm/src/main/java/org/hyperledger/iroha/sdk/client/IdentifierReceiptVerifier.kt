@@ -1,8 +1,5 @@
 package org.hyperledger.iroha.sdk.client
 
-import java.security.KeyFactory
-import java.security.Signature
-import java.security.spec.X509EncodedKeySpec
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
@@ -10,10 +7,6 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
 /** Client-side verification helper for identifier-resolution receipts. */
 object IdentifierReceiptVerifier {
-    private val ED25519_SPKI_PREFIX = byteArrayOf(
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
-    )
-
     @JvmStatic
     fun verify(receipt: IdentifierResolutionReceipt, policy: IdentifierPolicySummary): Boolean {
         require(receipt.policyId == policy.policyId) {
@@ -47,35 +40,13 @@ object IdentifierReceiptVerifier {
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
         try {
-            val spki = ByteArray(ED25519_SPKI_PREFIX.size + publicKey.size)
-            System.arraycopy(ED25519_SPKI_PREFIX, 0, spki, 0, ED25519_SPKI_PREFIX.size)
-            System.arraycopy(publicKey, 0, spki, ED25519_SPKI_PREFIX.size, publicKey.size)
-            val keyFactory = KeyFactory.getInstance("Ed25519")
-            val key = keyFactory.generatePublic(X509EncodedKeySpec(spki))
-            val verifier = Signature.getInstance("Ed25519")
-            verifier.initVerify(key)
-            verifier.update(message)
-            return verifier.verify(signature)
-        } catch (ex: Exception) {
-            return verifyEd25519WithBouncyCastle(publicKey, message, signature, ex)
-        }
-    }
-
-    private fun verifyEd25519WithBouncyCastle(
-        publicKey: ByteArray,
-        message: ByteArray,
-        signature: ByteArray,
-        jcaFailure: Exception
-    ): Boolean {
-        try {
             val verifier = Ed25519Signer()
             verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
             verifier.update(message, 0, message.size)
             return verifier.verifySignature(signature)
-        } catch (fallbackFailure: Exception) {
-            fallbackFailure.addSuppressed(jcaFailure)
+        } catch (ex: Exception) {
             throw IllegalArgumentException(
-                "failed to verify Ed25519 identifier receipt", fallbackFailure
+                "failed to verify Ed25519 identifier receipt", ex
             )
         }
     }

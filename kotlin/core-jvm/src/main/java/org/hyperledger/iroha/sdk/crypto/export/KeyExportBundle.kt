@@ -22,7 +22,7 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  * ```
  * magic[5] = "IRKEY"
  * version[1] = 0x04
- * algorithm_code[1] (v4+)
+ * algorithm_code[1]
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -31,10 +31,10 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  * nonce_bytes
  * ciphertext_len[2]
  * ciphertext_bytes (GCM ciphertext + tag)
- * salt_len[1] (v2+)
- * salt_bytes (v2+)
- * kdf_kind[1] (v2+)
- * kdf_work_factor[4] (big-endian, v2+)
+ * salt_len[1]
+ * salt_bytes
+ * kdf_kind[1] = 0x02 (Argon2id)
+ * kdf_work_factor[4] (big-endian)
  * ```
  */
 class KeyExportBundle internal constructor(
@@ -66,7 +66,7 @@ class KeyExportBundle internal constructor(
     fun encode(): ByteArray {
         val aliasBytes = alias.toByteArray(Charsets.UTF_8)
         require(aliasBytes.size <= 0xFFFF) { "alias is too long" }
-        require(version == VERSION_V3 || version == VERSION_V4) { "unsupported key export version: $version" }
+        require(version == VERSION_V4) { "unsupported key export version: $version" }
         require(_publicKey.size <= 0xFFFF) { "publicKey is too long" }
         require(_ciphertext.size <= 0xFFFF) { "ciphertext is too long" }
         require(_nonce.size == EXPECTED_NONCE_LENGTH_BYTES) {
@@ -76,14 +76,15 @@ class KeyExportBundle internal constructor(
             "salt must be $EXPECTED_SALT_LENGTH_BYTES bytes, found ${_salt.size}"
         }
         require(kdfWorkFactor >= 0) { "kdfWorkFactor must be non-negative" }
+        require(kdfKind == DeterministicKeyExporter.KDF_KIND_ARGON2ID) {
+            "key export bundle KDF must be Argon2id"
+        }
 
         val output = ByteArrayOutputStream()
         try {
             output.write(MAGIC)
             output.write(version.toInt())
-            if (version >= VERSION_V4) {
-                output.write(algorithmCode and 0xFF)
-            }
+            output.write(algorithmCode and 0xFF)
             output.write(shortBytes(aliasBytes.size))
             output.write(aliasBytes)
             output.write(shortBytes(_publicKey.size))
@@ -103,7 +104,6 @@ class KeyExportBundle internal constructor(
     }
 
     companion object {
-        const val VERSION_V3: Byte = 3
         const val VERSION_V4: Byte = 4
         const val EXPECTED_NONCE_LENGTH_BYTES: Int = 12
         const val EXPECTED_SALT_LENGTH_BYTES: Int = 16
@@ -131,19 +131,14 @@ class KeyExportBundle internal constructor(
                         throw KeyExportException("Key export bundle magic mismatch")
                     }
                     val version = input.read()
-                    if (version != VERSION_V3.toInt() && version != VERSION_V4.toInt()) {
+                    if (version != VERSION_V4.toInt()) {
                         throw KeyExportException(
                             "Unsupported key export version: ${if (version < 0) "EOF" else version}"
                         )
                     }
-                    val algorithmCode = if (version >= VERSION_V4.toInt()) {
-                        val code = input.read()
-                        if (code < 0) {
-                            throw KeyExportException("Unexpected end of stream while reading algorithm code")
-                        }
-                        code
-                    } else {
-                        SigningAlgorithm.ED25519.bridgeCode
+                    val algorithmCode = input.read()
+                    if (algorithmCode < 0) {
+                        throw KeyExportException("Unexpected end of stream while reading algorithm code")
                     }
                     val aliasLength = readShort(input)
                     val aliasBytes = readExactly(input,aliasLength)
@@ -189,6 +184,9 @@ class KeyExportBundle internal constructor(
                     val kdfKind = input.read()
                     if (kdfKind < 0) {
                         throw KeyExportException("Unexpected end of stream while reading kdf kind")
+                    }
+                    if (kdfKind != DeterministicKeyExporter.KDF_KIND_ARGON2ID) {
+                        throw KeyExportException("Unsupported KDF kind: $kdfKind")
                     }
                     val workFactorBytes = readExactly(input,4)
                     if (workFactorBytes.size != 4) {

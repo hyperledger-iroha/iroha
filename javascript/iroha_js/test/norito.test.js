@@ -12,7 +12,7 @@ const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMN
 const REGISTER_DOMAIN = {
   Register: {
     Domain: {
-      id: "wonderland",
+      id: "wonderland.sora",
       logo: null,
       metadata: {
         key: "value",

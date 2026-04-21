@@ -278,8 +278,8 @@ public final class NoritoRpcClientTests {
           : "RPC telemetry should capture route";
       assert "POST".equals(rpcSignal.fields().get("method"))
           : "RPC telemetry should capture method";
-      assert !rpcSignal.fields().containsKey("fallback")
-          : "RPC telemetry should not emit fallback field";
+      assert !rpcSignal.fields().containsKey("alternate_path")
+          : "RPC telemetry should not emit alternate-path field";
       final Object status = rpcSignal.fields().get("status_code");
       assert status instanceof Number && ((Number) status).intValue() == 200
           : "RPC telemetry should record status";

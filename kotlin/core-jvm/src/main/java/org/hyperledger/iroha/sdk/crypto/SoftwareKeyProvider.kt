@@ -4,7 +4,6 @@ import java.security.InvalidParameterException
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.NoSuchAlgorithmException
-import java.security.NoSuchProviderException
 import java.security.Provider
 import java.security.SecureRandom
 import java.security.Security
@@ -31,10 +30,8 @@ class SoftwareKeyProvider(
 
     /** Controls which JCA provider is used for Ed25519 key generation. */
     enum class ProviderPolicy {
-        /** Use the default JCA provider order, falling back to BouncyCastle when needed. */
+        /** Use the default JCA provider order. */
         DEFAULT,
-        /** Prefer BouncyCastle when available to keep keys exportable. */
-        BOUNCY_CASTLE_PREFERRED,
         /** Require BouncyCastle; fail if the provider is unavailable. */
         BOUNCY_CASTLE_REQUIRED,
     }
@@ -69,7 +66,7 @@ class SoftwareKeyProvider(
         exportStore: KeyExportStore,
         passphraseProvider: KeyPassphraseProvider,
         signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519,
-    ) : this(ProviderPolicy.BOUNCY_CASTLE_PREFERRED, exportStore, passphraseProvider, signingAlgorithm)
+    ) : this(ProviderPolicy.BOUNCY_CASTLE_REQUIRED, exportStore, passphraseProvider, signingAlgorithm)
 
     @Throws(KeyManagementException::class)
     override fun load(alias: String): KeyPair? {
@@ -144,17 +141,8 @@ class SoftwareKeyProvider(
             }
         }
         val generator = newKeyPairGenerator()
-        val usedBouncyCastle =
-            generator.provider != null && "BC" == generator.provider.name
         val keyPair = generateWithGenerator(generator)
         if (isExportable(keyPair)) return keyPair
-        if (!usedBouncyCastle && providerPolicy != ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
-            val fallback = tryBouncyCastleGenerator()
-            if (fallback != null) {
-                val fallbackPair = generateWithGenerator(fallback)
-                if (isExportable(fallbackPair)) return fallbackPair
-            }
-        }
         throw KeyManagementException(
             "Ed25519 key material is not exportable; use BouncyCastle provider"
         )
@@ -164,22 +152,12 @@ class SoftwareKeyProvider(
         if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
             return bouncyCastleGeneratorOrThrow()
         }
-        if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_PREFERRED) {
-            val preferred = tryBouncyCastleGenerator()
-            if (preferred != null) return preferred
-        }
         return try {
             KeyPairGenerator.getInstance("Ed25519")
-        } catch (_: NoSuchAlgorithmException) {
-            val fallback = tryBouncyCastleGenerator()
-            if (fallback != null) return fallback
-            try {
-                KeyPairGenerator.getInstance("EdDSA")
-            } catch (ex: NoSuchAlgorithmException) {
-                throw KeyManagementException(
-                    "Ed25519 key generation is not supported on this JVM", ex
-                )
-            }
+        } catch (ex: NoSuchAlgorithmException) {
+            throw KeyManagementException(
+                "Ed25519 key generation is not supported on this JVM", ex
+            )
         }
     }
 
@@ -271,13 +249,7 @@ class SoftwareKeyProvider(
                 if (Security.getProvider(providerName) == null) {
                     Security.addProvider(provider)
                 }
-                try {
-                    KeyPairGenerator.getInstance("EdDSA", providerName)
-                } catch (_: NoSuchAlgorithmException) {
-                    KeyPairGenerator.getInstance("EdDSA")
-                } catch (_: NoSuchProviderException) {
-                    KeyPairGenerator.getInstance("EdDSA")
-                }
+                KeyPairGenerator.getInstance("EdDSA", providerName)
             } catch (_: ClassNotFoundException) {
                 null
             } catch (_: ReflectiveOperationException) {

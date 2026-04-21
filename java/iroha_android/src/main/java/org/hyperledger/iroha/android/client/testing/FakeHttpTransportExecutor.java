@@ -36,7 +36,7 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
         .add(Objects.requireNonNull(response, "response"));
   }
 
-  /** Sets the fallback response used when no queued response is available. */
+  /** Sets the default response used when no queued response is available. */
   public void setDefaultResponse(final TransportResponse response) {
     this.defaultResponse = Objects.requireNonNull(response, "response");
   }

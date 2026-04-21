@@ -253,9 +253,9 @@ final class AccountAddressTests: XCTestCase {
 
     func testRejectsLegacyFullwidthKanaPayload() throws {
         let literal = "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
-        let legacy = literal.replacingOccurrences(of: "ﾛ", with: "ロ")
+        let nonCanonical = literal.replacingOccurrences(of: "ﾛ", with: "ロ")
 
-        XCTAssertThrowsError(try AccountAddress.fromI105(legacy, expectedPrefix: 753)) { error in
+        XCTAssertThrowsError(try AccountAddress.fromI105(nonCanonical, expectedPrefix: 753)) { error in
             guard let addressError = error as? AccountAddressError else {
                 return XCTFail("unexpected error: \(error)")
             }
@@ -469,7 +469,7 @@ final class AccountAddressTests: XCTestCase {
                 try AccountAddress.parseEncoded(vector.input),
                 "\(vector.caseId): canonical negative should fail"
             ) { error in
-                XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parser must reject legacy format")
+                XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat, "\(vector.caseId): canonical hex parser must reject non-canonical format")
             }
         default:
             XCTFail("\(vector.caseId): unsupported negative format \(vector.format)")

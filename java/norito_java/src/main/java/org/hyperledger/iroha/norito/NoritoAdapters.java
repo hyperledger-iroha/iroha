@@ -19,7 +19,7 @@ import java.util.Optional;
 public final class NoritoAdapters {
   private NoritoAdapters() {}
 
-  // Reflection avoids unchecked casts while staying compatible with Android API levels < 26.
+  // Reflection avoids unchecked casts while supporting Android API levels below 26.
   private static final Method TYPE_ADAPTER_ENCODE;
   private static final Method TYPE_ADAPTER_DECODE;
 
@@ -357,15 +357,13 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, byte[] value) {
-      final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-      encoder.writeLength(value.length, compactLen);
+      encoder.writeLength(value.length, false);
       encoder.writeBytes(value);
     }
 
     @Override
     public byte[] decode(NoritoDecoder decoder) {
-      final boolean compactLen = decoder.compactLenActive();
-      long length = decoder.readLength(compactLen);
+      long length = decoder.readLength(false);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Raw byte vector too large");
       }
@@ -683,7 +681,7 @@ public final class NoritoAdapters {
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, entries);
       } else {
-        encodeCompat(encoder, entries);
+        encodeDelimited(encoder, entries);
       }
     }
 
@@ -697,7 +695,7 @@ public final class NoritoAdapters {
       if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         return decodePacked(decoder, count);
       }
-      return decodeCompat(decoder, count);
+      return decodeDelimited(decoder, count);
     }
 
     @Override
@@ -705,7 +703,7 @@ public final class NoritoAdapters {
       return true;
     }
 
-    private Map<K, V> decodeCompat(final NoritoDecoder decoder, final int count) {
+    private Map<K, V> decodeDelimited(final NoritoDecoder decoder, final int count) {
       Map<K, V> map = new LinkedHashMap<>(count);
       boolean compactLen = decoder.compactLenActive();
       for (int i = 0; i < count; i++) {
@@ -776,7 +774,7 @@ public final class NoritoAdapters {
       throw new IllegalArgumentException("Map keys must be Comparable for deterministic encoding");
     }
 
-    private void encodeCompat(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
+    private void encodeDelimited(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
       boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
       for (Map.Entry<K, V> entry : entries) {
         byte[] keyBytes = encodeField(encoder, key, entry.getKey());

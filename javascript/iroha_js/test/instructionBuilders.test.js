@@ -133,9 +133,17 @@ function canonicalizeClone(value) {
   return canonicalizeValue(JSON.parse(JSON.stringify(value)));
 }
 
-function canonicalizeAccountIdUsingNorito(accountId, domainId = DOMAIN_ID) {
+function canonicalizeAccountIdUsingNorito(accountId) {
   const encoded = noritoEncodeInstruction({
-    Register: { Account: { id: accountId, domain: domainId, metadata: {} } },
+    Register: {
+      Account: {
+        id: accountId,
+        label: null,
+        uaid: null,
+        opaque_ids: [],
+        metadata: {},
+      },
+    },
   });
   const decoded = noritoDecodeInstruction(encoded);
   return canonicalizeValue(decoded).Register.Account.id;
@@ -160,7 +168,7 @@ function buildLocal8Literal(address) {
   return `0x${truncated.toString("hex")}`;
 }
 
-const DOMAIN_ID = "wonderland";
+const DOMAIN_ID = "wonderland.sora";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
@@ -177,11 +185,11 @@ const ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_INPUT}`;
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
-const NFT_ID = "dragon$wonderland";
+const NFT_ID = "dragon$wonderland.sora";
 const RWA_ID =
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
 const RWA_ID_INPUT =
-  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities";
+  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities.sora";
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
@@ -517,7 +525,7 @@ test("buildTransferNftInstruction covers nft transfer", () => {
 test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
   const instruction = buildRegisterRwaInstruction({
     rwa: {
-      domain: "commodities",
+      domain: "commodities.sora",
       quantity: "10.5",
       spec: { scale: 1 },
       primaryReference: "vault-cert-001",
@@ -535,7 +543,7 @@ test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
   assert.deepEqual(decoded, {
     RegisterRwa: {
       rwa: {
-        domain: "commodities",
+        domain: "commodities.sora",
         quantity: "10.5",
         spec: { scale: 1 },
         primary_reference: "vault-cert-001",
@@ -703,31 +711,33 @@ test("buildRegisterDomainInstruction accepts custom logo strings", () => {
 test("buildRegisterAccountInstruction defaults metadata and validates", () => {
   const instruction = buildRegisterAccountInstruction({
     accountId: ACCOUNT_ID,
-    domainId: DOMAIN_ID,
   });
   const account = instruction.Register.Account;
   assert.equal(account.id, ACCOUNT_ID_CANONICAL);
-  assert.equal(account.domain, DOMAIN_ID);
   assert.deepEqual(account.metadata, {});
   assert.equal(account.label ?? null, null);
+  assert.equal(account.uaid ?? null, null);
+  assert.deepEqual(account.opaque_ids, []);
   const decoded = encodeAndDecode(instruction);
   const decodedAccount = decoded.Register.Account;
   assert.equal(decodedAccount.id, ACCOUNT_ID_CANONICAL);
   assert.deepEqual(decodedAccount.metadata, {});
   assert.equal(decodedAccount.domain ?? null, null);
   assert.equal(decodedAccount.label ?? null, null);
-  assert.throws(
-    () =>
-      buildRegisterAccountInstruction({
-        accountId: ACCOUNT_ID,
-      }),
-    /domainId must be a non-empty string/i,
-  );
+  assert.equal(decodedAccount.uaid ?? null, null);
+  assert.deepEqual(decodedAccount.opaque_ids, []);
   assert.throws(
     () =>
       buildRegisterAccountInstruction({
         accountId: ACCOUNT_ID,
         domainId: DOMAIN_ID,
+      }),
+    /domainless/i,
+  );
+  assert.throws(
+    () =>
+      buildRegisterAccountInstruction({
+        accountId: ACCOUNT_ID,
         metadata: ["invalid"],
       }),
     /plain object/i,
@@ -807,7 +817,7 @@ const RELAY_ACCOUNT_ID = ACCOUNT_ID_CANONICAL;
 
 test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () => {
   const instruction = buildCreateKaigiInstruction({
-    id: { domainId: "wonderland", callName: "weekly-sync" },
+    id: { domainId: "wonderland.sora", callName: "weekly-sync" },
     host: ACCOUNT_ID,
     title: "Weekly Sync",
     description: "Roadmap alignment",
@@ -833,7 +843,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
     Kaigi: {
       CreateKaigi: {
         call: {
-          id: { domain_id: "wonderland", call_name: "weekly-sync" },
+          id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
           host: ACCOUNT_ID_CANONICAL,
           title: "Weekly Sync",
           description: "Roadmap alignment",
@@ -868,7 +878,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
 
 test("noritoDecodeInstruction decodes Kaigi manifests", () => {
   const instruction = buildCreateKaigiInstruction({
-    id: "wonderland:weekly-sync",
+    id: "wonderland.sora:weekly-sync",
     host: ACCOUNT_ID,
     gasRatePerMinute: 120,
     relayManifest: {
@@ -893,7 +903,7 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
   const rosterRootBytes = Buffer.alloc(32, 0x66);
   const proofBytes = Buffer.from([0xca, 0xfe]);
   const instruction = buildCreateKaigiInstruction({
-    id: "wonderland:private-room",
+    id: "wonderland.sora:private-room",
     host: ACCOUNT_ID,
     privacyMode: "ZkRosterV1",
     commitment: { commitment: commitmentBytes, aliasTag: "host" },
@@ -905,7 +915,7 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
     Kaigi: {
       CreateKaigi: {
         call: {
-          id: { domain_id: "wonderland", call_name: "private-room" },
+          id: { domain_id: "wonderland.sora", call_name: "private-room" },
           host: ACCOUNT_ID_CANONICAL,
           title: null,
           description: null,
@@ -941,7 +951,7 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
   const rosterRootBytes = Buffer.alloc(32, 0x33);
   const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
   const instruction = buildJoinKaigiInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     participant: ACCOUNT_ID,
     commitment: {
       commitment: commitmentBytes,
@@ -956,7 +966,7 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
   const expected = {
     Kaigi: {
       JoinKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         participant: ACCOUNT_ID_CANONICAL,
         commitment: {
           commitment: normalizedHashHex(commitmentBytes),
@@ -977,13 +987,13 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
 
 test("buildLeaveKaigiInstruction accepts minimal payload", () => {
   const instruction = buildLeaveKaigiInstruction({
-    callId: { domain_id: "wonderland", call_name: "weekly-sync" },
+    callId: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
     participant: ACCOUNT_ID,
   });
   const expected = {
     Kaigi: {
       LeaveKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         participant: ACCOUNT_ID_CANONICAL,
         commitment: null,
         nullifier: null,
@@ -998,13 +1008,13 @@ test("buildLeaveKaigiInstruction accepts minimal payload", () => {
 
 test("buildEndKaigiInstruction normalizes optional timestamp", () => {
   const instruction = buildEndKaigiInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     endedAtMs: "1700001234567",
   });
   const expected = {
     Kaigi: {
       EndKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         ended_at_ms: 1700001234567,
         commitment: null,
         nullifier: null,
@@ -1023,7 +1033,7 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
   const rosterRootBytes = Buffer.alloc(32, 0x99);
   const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
   const instruction = buildEndKaigiInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     commitment: { commitment: commitmentBytes, aliasTag: "host" },
     nullifier: { digest: nullifierBytes, issuedAtMs: 13 },
     rosterRoot: rosterRootBytes,
@@ -1032,7 +1042,7 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
   const expected = {
     Kaigi: {
       EndKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         ended_at_ms: null,
         commitment: {
           commitment: normalizedHashHex(commitmentBytes),
@@ -1055,7 +1065,7 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
   const usageCommitment = Buffer.alloc(32, 0x55);
   const proof = Buffer.from([0xde, 0xad]);
   const instruction = buildRecordKaigiUsageInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     durationMs: 60000,
     billedGas: "512",
     usageCommitment,
@@ -1064,7 +1074,7 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
   const expected = {
     Kaigi: {
       RecordKaigiUsage: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         duration_ms: 60000,
         billed_gas: 512,
         usage_commitment: normalizedHashHex(usageCommitment),
@@ -1078,13 +1088,13 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
 
 test("buildSetKaigiRelayManifestInstruction allows clearing manifest", () => {
   const instruction = buildSetKaigiRelayManifestInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     relayManifest: null,
   });
   const expected = {
     Kaigi: {
       SetKaigiRelayManifest: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         relay_manifest: null,
       },
     },
@@ -1313,7 +1323,7 @@ test("buildCastZkBallotInstruction defaults public inputs to empty object", () =
   assert.deepEqual(decoded, instruction);
 });
 
-test("buildCastZkBallotInstruction rejects deprecated public input keys", () => {
+test("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -1493,7 +1503,7 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
     epoch: 10,
     members: [ACCOUNT_ID],
     candidatesCount: 5,
-    derivedBy: "fallback",
+    derivedBy: "Vrf",
   });
   const expected = {
     PersistCouncilForEpoch: {
@@ -1502,12 +1512,22 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
       alternates: [],
       verified: 0,
       candidates_count: 5,
-      derived_by: "Fallback",
+      derived_by: "Vrf",
     },
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+  assert.throws(
+    () =>
+      buildPersistCouncilForEpochInstruction({
+        epoch: 10,
+        members: [ACCOUNT_ID],
+        candidatesCount: 5,
+        derivedBy: "Manual",
+      }),
+    /derivedBy must be Vrf/,
+  );
 });
 
 test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {
@@ -1541,7 +1561,7 @@ test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload",
     ],
     submitter: {
       name: "Explorer Moderator",
-      contact: "moderation@example.invalid",
+      contact: "https://example.invalid/moderation",
     },
     duplicates: [],
   };

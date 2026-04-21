@@ -607,11 +607,13 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
  * Build instructions combining an account registration with a follow-up transfer.
  */
 function buildRegisterAccountInstructions({ account, transfers = [] }) {
+  if (account.domainId !== undefined || account.domain !== undefined) {
+    throw new TypeError("account registration is domainless; bind account aliases separately");
+  }
   const instructions = [];
   instructions.push(
     buildRegisterAccountInstruction({
       accountId: account.accountId,
-      domainId: account.domainId ?? account.domain,
       metadata: account.metadata,
     }),
   );

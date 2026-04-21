@@ -2329,8 +2329,8 @@ test("getUaidBindings enforces UAID formats and normalizes entries", async () =>
     /least significant bit/i,
   );
   await assert.rejects(
-    () => client.getUaidBindings(fixture.uaid, { legacyFormat: "i105" }),
-    /getUaidBindings options contains unsupported fields: legacyFormat/,
+    () => client.getUaidBindings(fixture.uaid, { format: "i105" }),
+    /getUaidBindings options contains unsupported fields: format/,
   );
 });
 
@@ -2356,8 +2356,8 @@ test("getUaidManifests validates lifecycle metadata and filters by dataspace", a
   assert.equal(record.lifecycle.activated_epoch, 4097);
   assert.equal(record.manifest.entries[0].effect.Allow.max_amount, "500000000");
   await assert.rejects(
-    () => client.getUaidManifests(fixture.uaid, { dataspaceId: 11, legacyFormat: "i105" }),
-    /getUaidManifests options contains unsupported fields: legacyFormat/,
+    () => client.getUaidManifests(fixture.uaid, { dataspaceId: 11, format: "i105" }),
+    /getUaidManifests options contains unsupported fields: format/,
   );
 });
 
@@ -3220,7 +3220,6 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
       gatewayManifestProvided: false,
       gatewayManifestId: manifestHashHex,
       gatewayManifestCid: null,
-      allowSingleSourceFallback: false,
       allowImplicitMetadata: false,
     },
   };
@@ -3236,12 +3235,17 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
+    {
+      name: "beta",
+      providerIdHex: "cc".repeat(32),
+      baseUrl: "https://gateway-two.test/",
+      streamTokenB64: "dG9rZW4y",
+    },
   ];
   const session = await client.fetchDaPayloadViaGateway({
     storageTicketHex: ticketHex,
     chunkerHandle,
     gatewayProviders: providers,
-    fetchOptions: { allowSingleSourceFallback: true },
   });
   assert.equal(session.manifest.storage_ticket_hex, ticketHex.slice(2));
   assert.equal(session.manifestIdHex, manifestHashHex);
@@ -3254,7 +3258,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   assert.equal(manifestArg, manifestHashHex);
   assert.equal(handleArg, chunkerHandle);
   assert.ok(planJsonArg.includes('"chunk_index":0'));
-  assert.equal(providerArg.length, 1);
+  assert.equal(providerArg.length, 2);
 });
 
 test("fetchDaPayloadViaGateway validates signal option", async () => {
@@ -3284,6 +3288,12 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
       baseUrl: "https://gateway.test",
       streamTokenB64: bufferToBase64Url(Buffer.from("token")),
     },
+    {
+      name: "beta",
+      providerIdHex: "22".repeat(32),
+      baseUrl: "https://gateway-two.test",
+      streamTokenB64: bufferToBase64Url(Buffer.from("token-2")),
+    },
   ];
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
@@ -3309,106 +3319,9 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
         manifestBundle,
         chunkerHandle: "sorafs.sf1@1.0.0",
         gatewayProviders,
-        fetchOptions: { allowSingleSourceFallback: true },
         signal: "not-a-signal",
       }),
     /fetchDaPayloadViaGateway options\.signal must be an AbortSignal/i,
-  );
-});
-
-test("fetchDaPayloadViaGateway rejects non-boolean allowSingleSourceFallback", async () => {
-  const manifestBundle = {
-    storage_ticket_hex: "aa".repeat(32),
-    client_blob_id_hex: "bb".repeat(32),
-    blob_hash_hex: "cc".repeat(32),
-    manifest_hash_hex: "cc".repeat(32),
-    chunk_root_hex: "dd".repeat(32),
-    lane_id: 1,
-    epoch: 1,
-    manifest_len: 64,
-    manifest_b64: Buffer.from("manifest").toString("base64"),
-    chunk_plan: [
-      { chunk_index: 0, offset: 0, length: 32, digest_blake3: "ee".repeat(32) },
-    ],
-  };
-  const stubBinding = {
-    sorafsGatewayFetch: () => ({
-      manifest_id_hex: manifestBundle.manifest_hash_hex,
-      chunker_handle: "sorafs.sf1@1.0.0",
-      chunk_count: 1,
-      assembled_bytes: 1,
-      payload: Buffer.alloc(0),
-      telemetry_region: null,
-      anonymity_policy: "anon-guard-pq",
-      anonymity_status: "met",
-      anonymity_reason: "none",
-      anonymity_soranet_selected: 0,
-      anonymity_pq_selected: 0,
-      anonymity_classical_selected: 0,
-      anonymity_classical_ratio: 0,
-      anonymity_pq_ratio: 0,
-      anonymity_candidate_ratio: 0,
-      anonymity_deficit_ratio: 0,
-      anonymity_supply_delta: 0,
-      anonymity_brownout: false,
-      anonymity_brownout_effective: false,
-      anonymity_uses_classical: false,
-      provider_reports: [],
-      chunk_receipts: [],
-      metadata: {
-        provider_count: 2,
-        gateway_provider_count: 2,
-        provider_mix: "gateway-only",
-        transport_policy: "soranet-first",
-        transport_policy_override: false,
-        transport_policy_override_label: null,
-        anonymity_policy: "anon-guard-pq",
-        anonymity_policy_override: false,
-        anonymity_policy_override_label: null,
-        max_parallel: null,
-        max_peers: null,
-        retry_budget: null,
-        provider_failure_threshold: 1,
-        assume_now_unix: 0,
-        telemetry_source_label: null,
-        gateway_manifest_provided: false,
-        gateway_manifest_id: manifestBundle.manifest_hash_hex,
-        gateway_manifest_cid: null,
-        allow_single_source_fallback: false,
-        allow_implicit_metadata: false,
-      },
-    }),
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
-    sorafsGatewayFetch: (manifestIdHex, chunkerHandle, planJson, providers, options) =>
-      sorafsGatewayFetch(manifestIdHex, chunkerHandle, planJson, providers, {
-        ...options,
-        __nativeBinding: stubBinding,
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.fetchDaPayloadViaGateway({
-        manifestBundle,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        gatewayProviders: [
-          {
-            name: "alpha",
-            providerIdHex: "11".repeat(32),
-            baseUrl: "https://gateway.one",
-            streamTokenB64: "dG9rZW4=",
-          },
-          {
-            name: "beta",
-            providerIdHex: "22".repeat(32),
-            baseUrl: "https://gateway.two",
-            streamTokenB64: "dG9rZW4y",
-          },
-        ],
-        fetchOptions: { allowSingleSourceFallback: "true" },
-      }),
-    /allowSingleSourceFallback must be a boolean/i,
   );
 });
 
@@ -3442,8 +3355,13 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
             baseUrl: "https://gateway.one",
             streamTokenB64: "not-base64!!",
           },
+          {
+            name: "beta",
+            providerIdHex: "22".repeat(32),
+            baseUrl: "https://gateway.two",
+            streamTokenB64: "dG9rZW4y",
+          },
         ],
-        fetchOptions: { allowSingleSourceFallback: true },
       }),
     /streamTokenB64/,
   );
@@ -3543,7 +3461,6 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
       gatewayManifestProvided: false,
       gatewayManifestId: "aa".repeat(32),
       gatewayManifestCid: null,
-      allowSingleSourceFallback: false,
       allowImplicitMetadata: false,
     },
   };
@@ -3581,8 +3498,13 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
         baseUrl: "https://gateway.example/",
         streamTokenB64: "c3R1Yg==",
       },
+      {
+        name: "gamma",
+        providerIdHex: "33".repeat(32),
+        baseUrl: "https://gateway-two.example/",
+        streamTokenB64: "c3R1Yi0y",
+      },
     ],
-    fetchOptions: { allowSingleSourceFallback: true },
   });
   assert.equal(session.chunkerHandle, "sorafs.sf2@2.0.0");
   assert.equal(session.manifestIdHex, "aa".repeat(32));
@@ -3612,6 +3534,12 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
       providerIdHex: "98".repeat(32),
       baseUrl: "https://gateway.test",
       streamTokenB64: Buffer.from("token").toString("base64"),
+    },
+    {
+      name: "delta",
+      providerIdHex: "97".repeat(32),
+      baseUrl: "https://gateway-two.test",
+      streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
   ];
   const gatewayMock = t.mock.fn(() => ({
@@ -3720,7 +3648,6 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
       gatewayManifestProvided: false,
       gatewayManifestId: blobHashHex,
       gatewayManifestCid: null,
-      allowSingleSourceFallback: false,
       allowImplicitMetadata: false,
     },
   };
@@ -3733,18 +3660,23 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
     generateDaProofSummary: proofMock,
   });
   const providers = [
-    {
-      name: "alpha",
-      providerIdHex: "bb".repeat(32),
-      baseUrl: "https://gateway.test/",
-      streamTokenB64: "dG9rZW4=",
-    },
-  ];
+      {
+        name: "alpha",
+        providerIdHex: "bb".repeat(32),
+        baseUrl: "https://gateway.test/",
+        streamTokenB64: "dG9rZW4=",
+      },
+      {
+        name: "beta",
+        providerIdHex: "bc".repeat(32),
+        baseUrl: "https://gateway-two.test/",
+        streamTokenB64: "dG9rZW4y",
+      },
+    ];
   const session = await client.fetchDaPayloadViaGateway({
     storageTicketHex: ticketHex,
     chunkerHandle: "sorafs.sf1@1.0.0",
     gatewayProviders: providers,
-    fetchOptions: { allowSingleSourceFallback: true },
     proofSummary: { sampleCount: 2, leafIndexes: [0] },
   });
   assert.equal(session.proofSummary, proofSummary);
@@ -4081,8 +4013,13 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
           baseUrl: "https://gateway.test/",
           streamTokenB64: Buffer.from("token").toString("base64"),
         },
+        {
+          name: "beta",
+          providerIdHex: "bc".repeat(32),
+          baseUrl: "https://gateway-two.test/",
+          streamTokenB64: Buffer.from("token-2").toString("base64"),
+        },
       ],
-      fetchOptions: { allowSingleSourceFallback: true },
       proofSummary: { sampleCount: 1 },
       outputDir: tmpDir,
     });
@@ -5842,9 +5779,8 @@ test("submitTransaction retries broken pipe failures without an explicit error c
   assert.equal(attempts, 2);
 });
 
-test("submitTransaction falls back to /transaction when pipeline submit is unavailable", async () => {
+test("submitTransaction rejects unavailable pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
-  const encodedPayload = Buffer.from([0xfa, 0xce, 0x01]);
   const seenUrls = [];
   const fetchImpl = async (url, init) => {
     seenUrls.push(url);
@@ -5881,44 +5817,14 @@ test("submitTransaction falls back to /transaction when pipeline submit is unava
       assert.equal(init.method, "POST");
       return createResponse({ status: 405 });
     }
-    if (url === `${BASE_URL}/transaction`) {
-      assert.equal(init.method, "POST");
-      assert.equal(init.headers["Content-Type"], "application/x-norito");
-      assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [...encodedPayload.values()]);
-      return createResponse({
-        status: 200,
-        jsonData: { ok: true, route: "fallback" },
-        headers: { "content-type": "application/json" },
-      });
-    }
     throw new Error(`Unexpected URL ${url}`);
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
-    ...(originalBinding ?? {}),
-    encodeSignedTransactionNorito: (buffer) => {
-      assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
-      return encodedPayload;
-    },
-  };
-  try {
-    const response = await client.submitTransaction(payload);
-    assert.deepEqual(response, { ok: true, route: "fallback" });
-    assert.deepEqual(seenUrls, [
-      `${BASE_URL}/v1/node/capabilities`,
-      `${BASE_URL}/v1/pipeline/transactions`,
-      `${BASE_URL}/transaction`,
-    ]);
-  } finally {
-    if (originalBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
-    }
-  }
+  await assert.rejects(() => client.submitTransaction(payload), /405/);
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/node/capabilities`,
+    `${BASE_URL}/v1/pipeline/transactions`,
+  ]);
 });
 
 test("submitTransaction tolerates missing node capabilities advert", async () => {
@@ -6071,7 +5977,7 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
 
 test("getTransactionStatus fans out to alternate endpoints in auto scope", async () => {
   const hashHex = "ef".repeat(32);
-  const fallbackBaseUrl = "https://torii-centralbank.soramitsu.io";
+  const alternateBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);
@@ -6080,7 +5986,7 @@ test("getTransactionStatus fans out to alternate endpoints in auto scope", async
     }
     if (
       url ===
-      `${fallbackBaseUrl}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`
+      `${alternateBaseUrl}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`
     ) {
       return createResponse({
         status: 200,
@@ -6095,16 +6001,16 @@ test("getTransactionStatus fans out to alternate endpoints in auto scope", async
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    statusEndpoints: [fallbackBaseUrl],
+    statusEndpoints: [alternateBaseUrl],
   });
   const payload = await client.getTransactionStatus(hashHex);
   assert.equal(seenUrls.length, 2);
-  assert.equal(payload?.resolved_from, fallbackBaseUrl);
+  assert.equal(payload?.resolved_from, alternateBaseUrl);
 });
 
 test("getTransactionStatus local scope does not fan out", async () => {
   const hashHex = "01".repeat(32);
-  const fallbackBaseUrl = "https://torii-centralbank.soramitsu.io";
+  const alternateBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);
@@ -6115,7 +6021,7 @@ test("getTransactionStatus local scope does not fan out", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    statusEndpoints: [fallbackBaseUrl],
+    statusEndpoints: [alternateBaseUrl],
   });
   const payload = await client.getTransactionStatus(hashHex, { scope: "local" });
   assert.equal(payload, null);
@@ -8695,8 +8601,8 @@ test("getSccpCapabilities normalizes discovery response", async () => {
         message_job_path: "/v1/sccp/jobs/message/{message_id}",
         recent_messages_path: "/v1/sccp/messages/recent",
         proof_manifest_path: "/v1/sccp/manifests",
-        legacy_burn_registry_backend: "bridge/sccp/burn-v1",
-        legacy_governance_registry_backend: "bridge/sccp/governance-v1",
+        burn_registry_backend: "bridge/sccp/burn-v1",
+        governance_registry_backend: "bridge/sccp/governance-v1",
         proof_submit_path: "/v1/bridge/proofs/submit",
         message_submit_path: "/v1/bridge/messages",
         message_payload_kinds: ["asset_register", "route_activate", "transfer"],
@@ -8752,8 +8658,8 @@ test("getSccpCapabilities normalizes discovery response", async () => {
     messageJobPath: "/v1/sccp/jobs/message/{message_id}",
     recentMessagesPath: "/v1/sccp/messages/recent",
     proofManifestPath: "/v1/sccp/manifests",
-    legacyBurnRegistryBackend: "bridge/sccp/burn-v1",
-    legacyGovernanceRegistryBackend: "bridge/sccp/governance-v1",
+    burnRegistryBackend: "bridge/sccp/burn-v1",
+    governanceRegistryBackend: "bridge/sccp/governance-v1",
     proofSubmitPath: "/v1/bridge/proofs/submit",
     messageSubmitPath: "/v1/bridge/messages",
     messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
@@ -10264,11 +10170,11 @@ test("typed governance finalize/enact helpers always return drafts", async () =>
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const fallback = await client.governanceFinalizeReferendumTyped({
+  const finalizeDraft = await client.governanceFinalizeReferendumTyped({
     referendumId: "ref-204",
     proposalId: `0x${"01".repeat(32)}`,
   });
-  assert.deepEqual(fallback, {
+  assert.deepEqual(finalizeDraft, {
     ok: true,
     proposal_id: null,
     tx_instructions: [],
@@ -10781,7 +10687,7 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
   );
 });
 
-test("governanceSubmitZk ballots reject deprecated public input keys", async () => {
+test("governanceSubmitZk ballots reject unsupported public input keys", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not run");
@@ -12421,7 +12327,7 @@ test("listAccounts encodes iterable params", async () => {
   assert.deepEqual(payload, toriiFixtures.iterable.accountListPage);
 });
 
-test("listAccounts rejects unsupported legacy option", async () => {
+test("listAccounts rejects unsupported format option", async () => {
   let called = false;
   const fetchImpl = async () => {
     called = true;
@@ -12433,10 +12339,10 @@ test("listAccounts rejects unsupported legacy option", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAccounts({ legacyFormat: "i105" }),
-    /unsupported fields: legacyFormat/i,
+    () => client.listAccounts({ format: "i105" }),
+    /unsupported fields: format/i,
   );
-  assert.equal(called, false, "request should not fire when legacyFormat is unsupported");
+  assert.equal(called, false, "request should not fire when format is unsupported");
 });
 
 test("listAccounts rejects unsupported sort order entries", async () => {
@@ -12569,7 +12475,7 @@ test("queryAccounts rejects array filters from JSON strings", async () => {
   assert.equal(callCount, 0);
 });
 
-test("queryAccounts rejects unsupported legacy option", async () => {
+test("queryAccounts rejects unsupported format option", async () => {
   let captured;
   const fetchImpl = async (_url, init) => {
     captured = JSON.parse(init.body);
@@ -12581,8 +12487,8 @@ test("queryAccounts rejects unsupported legacy option", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.queryAccounts({ legacyFormat: "i105" }),
-    /unsupported fields: legacyFormat/i,
+    () => client.queryAccounts({ format: "i105" }),
+    /unsupported fields: format/i,
   );
   assert.equal(captured, undefined);
 });
@@ -15147,10 +15053,10 @@ test("listKaigiRelays forwards AbortSignal", async () => {
 });
 test("getKaigiRelay returns null on 404 and normalizes detail response", async () => {
   const relayId = FIXTURE_ALICE_ID;
-  const fallbackClient = new ToriiClient(BASE_URL, {
+  const notFoundClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const missing = await fallbackClient.getKaigiRelay(relayId);
+  const missing = await notFoundClient.getKaigiRelay(relayId);
   assert.equal(missing, null);
 
   let requested;
@@ -17662,16 +17568,16 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
         "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
     },
   });
-  const fallback = page.items[1];
-  assert.equal(fallback.refresh_at_ms, null);
-  assert.equal(fallback.verdict_id_hex, null);
-  assert.equal(fallback.attestation_nonce_hex, null);
-  assert.equal(fallback.deadline_kind, null);
-  assert.equal(fallback.deadline_state, null);
-  assert.equal(fallback.deadline_ms, null);
-  assert.equal(fallback.deadline_ms_remaining, null);
-  assert.equal(fallback.remaining_amount, "125");
-  assert.equal(fallback.integrity_metadata, null);
+  const secondAllowance = page.items[1];
+  assert.equal(secondAllowance.refresh_at_ms, null);
+  assert.equal(secondAllowance.verdict_id_hex, null);
+  assert.equal(secondAllowance.attestation_nonce_hex, null);
+  assert.equal(secondAllowance.deadline_kind, null);
+  assert.equal(secondAllowance.deadline_state, null);
+  assert.equal(secondAllowance.deadline_ms, null);
+  assert.equal(secondAllowance.deadline_ms_remaining, null);
+  assert.equal(secondAllowance.remaining_amount, "125");
+  assert.equal(secondAllowance.integrity_metadata, null);
 });
 
 test("listOfflineAllowances encodes convenience query params", async () => {
@@ -17871,7 +17777,7 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
   assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
   assert.equal(parsed.searchParams.get("platform_policy"), "play_integrity");
   assert.equal(page.total, 2);
-  const [transfer, fallback] = page.items;
+  const [transfer, secondTransfer] = page.items;
   assert.equal(transfer.bundle_id_hex, "CAFEBABE");
   assert.equal(transfer.controller_id, FIXTURE_ALICE_ID);
   assert.equal(transfer.receiver_id, receiverId);
@@ -17891,7 +17797,7 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
         "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
     },
   });
-  assert.equal(fallback.integrity_metadata, null);
+  assert.equal(secondTransfer.integrity_metadata, null);
 });
 
 test("iterateOfflineAllowances paginates and honours maxItems", async () => {
@@ -18759,8 +18665,8 @@ test("getExplorerAccountQr rejects unsupported option fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { legacyFormat: "i105", extra: true }),
-    /getExplorerAccountQr options contains unsupported fields: legacyFormat, extra/,
+    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { format: "i105", extra: true }),
+    /getExplorerAccountQr options contains unsupported fields: format, extra/,
   );
 });
 
@@ -19415,148 +19321,6 @@ test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
         { retry: false },
       ),
     /unfreezeSnsRegistration options contains unsupported fields: retry/,
-  );
-});
-
-test("createSnsGovernanceCase rejects because Torii removed the endpoint", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run when the endpoint is removed");
-    },
-  });
-  await assert.rejects(
-    () => client.createSnsGovernanceCase({ reason: "abuse-report", selector: "alice" }),
-    /Torii removed \/v1\/sns\/governance\/cases/,
-  );
-});
-
-test("createSnsGovernanceCase rejects non-object payload", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run for validation failures");
-    },
-  });
-  await assert.rejects(
-    // @ts-expect-error runtime validation
-    () => client.createSnsGovernanceCase("not-an-object"),
-    /createSnsGovernanceCase payload must be an object/,
-  );
-});
-
-test("createSnsGovernanceCase rejects unsupported option keys", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run for validation failures");
-    },
-  });
-  const controller = new AbortController();
-  await assert.rejects(
-    () =>
-      client.createSnsGovernanceCase(
-        { reason: "abuse-report", selector: "alice" },
-        // @ts-expect-error runtime validation
-        { signal: controller.signal, retry: false },
-      ),
-    /createSnsGovernanceCase options contains unsupported fields: retry/,
-  );
-});
-
-test("createSnsGovernanceCase still validates payload before reporting endpoint removal", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run when the endpoint is removed");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.createSnsGovernanceCase({
-        selector: { suffixId: 7, label: "alice", globalForm: "alice.sora" },
-        disputeType: "ownership",
-        priority: "high",
-        reason: "abuse-report",
-      }),
-    /Torii removed \/v1\/sns\/governance\/cases/,
-  );
-});
-
-test("createSnsGovernanceCase rejects invalid dispute type before calling Torii", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run for validation failures");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.createSnsGovernanceCase({
-        selector: "alice",
-        disputeType: "not-supported",
-      }),
-    /createSnsGovernanceCase payload\.dispute_type must be one of/,
-  );
-});
-
-test("exportSnsGovernanceCases rejects because Torii removed the endpoint", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run when the endpoint is removed");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.exportSnsGovernanceCases({
-        since: "2026-01-01T00:00:00Z",
-        status: "open",
-        limit: 10,
-      }),
-    /Torii removed \/v1\/sns\/governance\/cases/,
-  );
-});
-
-test("exportSnsGovernanceCases enforces option validation", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not be invoked for invalid options");
-    },
-  });
-  await assert.rejects(
-    // @ts-expect-error runtime validation
-    () => client.exportSnsGovernanceCases("oops"),
-    /exportSnsGovernanceCases options must be an object/,
-  );
-  await assert.rejects(
-    () => client.exportSnsGovernanceCases({ since: 123 }),
-    /exportSnsGovernanceCases\.since must be a string/,
-  );
-  await assert.rejects(
-    () => client.exportSnsGovernanceCases({ status: "   " }),
-    /exportSnsGovernanceCases\.status must not be empty/,
-  );
-  await assert.rejects(
-    () => client.exportSnsGovernanceCases({ limit: -1 }),
-    /exportSnsGovernanceCases\.limit must be a non-negative integer/,
-  );
-  await assert.rejects(
-    () => client.exportSnsGovernanceCases({ since: "2026-01-01", unexpected: true }),
-    /exportSnsGovernanceCases options contains unsupported fields: unexpected/,
-  );
-});
-
-test("iterateSnsGovernanceCases rejects because Torii removed the endpoint", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run when the endpoint is removed");
-    },
-  });
-  await assert.rejects(
-    async () => {
-      for await (const _ of client.iterateSnsGovernanceCases({
-        since: "2026-01-01T00:00:00Z",
-        limit: 1,
-      })) {
-        // no-op
-      }
-    },
-    /Torii removed \/v1\/sns\/governance\/cases/,
   );
 });
 

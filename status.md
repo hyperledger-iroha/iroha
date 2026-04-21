@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: first-release SDK compatibility cleanup
+- Java/Kotlin Connect envelope decoding is canonical Norito-only now; the
+  alternate raw/body compatibility decoder branches were removed.
+- Java/Kotlin software key export is v4 + Argon2id-only. PBKDF2 downgrade
+  export/import support and v3 bundle acceptance were removed, and bundle
+  decoding now rejects non-Argon2id KDF kinds.
+- Java/Kotlin Android key management no longer silently walks provider errors
+  or StrongBox downgrade paths: default providers no longer append software
+  automatically, ephemeral/attestation generation uses the selected provider,
+  StrongBox requests fail directly, and the public software-provider API no
+  longer exposes alternate-provider naming.
+- Transport factories no longer use OkHttp/JDK reflection ladders. Java HTTP
+  defaults use Android OkHttp, JVM JavaHttp, or the core URLConnection executor
+  according to the artifact/runtime; WebSocket defaults choose Android OkHttp or
+  JVM JDK directly. The remaining CUDA Java path is retained because hardware
+  acceleration policy requires a deterministic non-native path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from `java/iroha_android`
+  - `./gradlew :core-jvm:test --console=plain` from `kotlin`
+  - `ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :client-android:assembleRelease --console=plain` from `kotlin`
+  - `./gradlew :norito_java:test --console=plain` from `java/iroha_android`
+  - `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml -- --nocapture`
+- Full `git diff --check` is still blocked by unrelated existing trailing
+  whitespace in `kotlin/README.md`.
+
 ## 2026-04-21 Follow-up: Torii generic QueryEnvelope executor expansion
 - Added a shared Torii `QueryEnvelope` row/aggregate executor and routed the
   current app query resources through it when `select` or `aggregate` is
@@ -13,8 +39,14 @@ Last updated: 2026-04-21
   catalog/export/checkpoint planning to cover `accounts`, `account_assets`,
   `asset_holders`, `asset_definitions`, and `domains`; capability adverts,
   MCP metadata, OpenAPI text, and Torii docs now list the broader resource set.
-- Validation is in progress: `cargo check -p iroha_torii --features app_api --no-default-features`
-  is currently waiting behind an existing workspace Cargo build lock.
+- Focused validation for this slice:
+  - `cargo check -p iroha_torii --features app_api`
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii generic_query --features app_api`
+- Projection rowset validation still needs a clean retry: an initial
+  `cargo test -p iroha_core projection_rowset` waited behind unrelated active
+  Cargo artifact locks, and an isolated-target retry was terminated by the
+  local command runner before diagnostics.
 
 ## 2026-04-21 Follow-up: iroha_data_model signed-query roundtrip compile unblock
 - `crates/iroha_data_model/src/query/mod.rs` no longer asks `assert_eq!` to

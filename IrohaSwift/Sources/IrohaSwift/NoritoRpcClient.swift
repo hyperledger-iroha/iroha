@@ -4,7 +4,7 @@ import Foundation
 public struct NoritoRpcError: Error, Sendable {
     /// HTTP status code returned by Torii.
     public let statusCode: Int
-    /// Response body rendered as UTF-8 (or a fallback message when decoding failed).
+    /// Response body rendered as UTF-8 (or a generated message when decoding failed).
     public let body: String
 }
 

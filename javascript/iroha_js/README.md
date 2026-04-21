@@ -1,6 +1,6 @@
-# Iroha JS SDK (Preview)
+# Iroha JS SDK
 
-`@iroha/iroha-js` is an experimental JavaScript/TypeScript SDK for interacting
+`@iroha/iroha-js` is a JavaScript/TypeScript SDK for interacting
 with Hyperledger Iroha nodes from Node.js runtimes. The initial focus mirrors
 the Python helper coverage so developers can manage attachments, prover
 reports, Ed25519 signing, and Norito payloads while we thread manifest builders
@@ -25,28 +25,9 @@ npm run build:dist
 
 Native bindings load only after verifying the platform-specific SHA-256 recorded
 in `native/iroha_js_host.checksums.json`. When the checksum is missing or
-mismatched, the SDK logs the failure and falls back to the pure-JS
-implementations; it no longer tries to auto-build the native module at runtime.
-Run `npm run build:native` explicitly after installing the Rust toolchain to
-enable the native path. Set `IROHA_JS_NATIVE_DIR` to point at an alternate
-`native/` folder for test harness overrides; pass `IROHA_JS_NATIVE_WARN=0` to
-silence verification warnings in noisy CI logs.
-Set `IROHA_JS_FORCE_NATIVE=1` to throw when the native binding is unavailable
-or fails verification (useful for CI that must exercise native paths).
-
-When you only need the pure JS layer (for example, on machines where the native
-build is unavailable), run tests with `npm run test:js`, which sets
-`IROHA_JS_DISABLE_NATIVE=1`. The default `npm test` still exercises the native
-binding when present.
-
-In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` still emit
-canonical binary Norito for the current JS builder surface, including the
-mint/burn families, `Register.Domain`, `Register.Account`, the supported
-`Transfer.*` variants, `ExecuteTrigger`, canonical `Custom` payloads plus the
-multisig alias inputs, and the current Kaigi / governance / social /
-smart-contract / zk / RWA direct-instruction helpers. When the native binding
-is present but rejects one of those supported shapes, the SDK now falls back to
-the pure-JS encoder automatically so callers still get canonical Norito bytes.
+mismatched, SDK startup fails. Run `npm run build:native` explicitly after
+installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only in test harnesses
+that need to point at an alternate `native/` folder.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -1515,8 +1496,13 @@ const proveResult = await torii.proveDaAvailabilityToDir({
       baseUrl: "https://gateway.example.com/",
       streamTokenB64: process.env.SORAFS_STREAM_TOKEN,
     },
+    {
+      name: "beta",
+      providerIdHex: process.env.SORAFS_SECOND_PROVIDER_ID,
+      baseUrl: "https://gateway-two.example.com/",
+      streamTokenB64: process.env.SORAFS_SECOND_STREAM_TOKEN,
+    },
   ],
-  fetchOptions: { allowSingleSourceFallback: true },
   proofSummary: { sampleCount: 4, leafIndexes: [0, 2] },
   outputDir: "./artifacts/da/prove_availability",
 });
@@ -1527,7 +1513,7 @@ console.log("proof summary saved:", proveResult.proofSummaryPath);
 
 `fetchDaPayloadViaGateway` automatically derives the chunker handle from the manifest bundle when you omit `chunkerHandle`, and the exported `deriveDaChunkerHandle` helper surfaces the same logic for bespoke tooling. `generateDaProofSummary` reuses the Norito + PoR logic from the CLI via the native binding so proofs remain identical across SDKs.
 
-> **Multi-source enforcement:** the JS SDK now requires at least two gateway providers for every orchestrated fetch. This matches the SF-6c roadmap requirement and keeps `cargo xtask sorafs-adoption-check` green by default. When you must temporarily fall back to a single healthy provider (e.g., during an incident), pass `fetchOptions: { allowSingleSourceFallback: true }` and include the incident ticket in your release notes.
+> **Multi-source enforcement:** the JS SDK requires at least two gateway providers for every orchestrated fetch. This matches the SF-6c roadmap requirement and keeps `cargo xtask sorafs-adoption-check` green by default.
 
 Every gateway fetch also exposes the orchestrator’s scoreboard metadata so you
 can attach the same evidence bundle as the CLI. `gatewayResult.metadata`
@@ -2080,7 +2066,7 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 ```
 
 `buildRegisterSmartContractCodeInstruction/Transaction` accepts partial manifests
-when governance stages code hashes separately, and the JS-only Norito path now
+when governance stages code hashes separately, and the native Norito path
 round-trips the full current manifest metadata surface including
 `entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
@@ -2654,10 +2640,9 @@ const pending = await journal.records(ConnectDirection.APP_TO_WALLET);
 const drained = await journal.popOldest(ConnectDirection.APP_TO_WALLET, 1);
 ```
 
-When IndexedDB is unavailable (private browsing or unsupported browser),
-the journal automatically falls back to an in-memory store; the last error is
-exposed via `journal.fallbackError`. Applications can inspect `journal.sessionKey`
-to derive deterministic evidence paths.
+IndexedDB is the default browser store. Use `storage: "memory"` only when a
+test harness intentionally wants ephemeral storage. Applications can inspect
+`journal.sessionKey` to derive deterministic evidence paths.
 
 ### Connect queue diagnostics
 
@@ -3208,14 +3193,10 @@ console.log(registration.nameRecord.status.status);
 ```
 
 Look up an existing domain-namespace name via `getSnsRegistration("demo.domain")`, renew with
-`renewSnsRegistration`, or transfer/freeze/unfreeze using the corresponding helpers. The JS helper
-still accepts a legacy `label.suffix` selector string for these read/mutation flows, but Torii now
-serves them from the ledger-backed `/v1/sns/names/{namespace}/{literal}` routes.
+`renewSnsRegistration`, or transfer/freeze/unfreeze using the corresponding helpers. Torii serves
+them from the ledger-backed `/v1/sns/names/{namespace}/{literal}` routes.
 
-Governance evidence now travels inline with the register/transfer/unfreeze request bodies. Torii no
-longer exposes the old `/v1/sns/governance/cases` export feed, so the JS SDK's
-`createSnsGovernanceCase`, `exportSnsGovernanceCases`, and `iterateSnsGovernanceCases` helpers are
-retained only as explicit validation stubs that reject immediately.
+Governance evidence travels inline with the register/transfer/unfreeze request bodies.
 
 ## Torii Queries & Events
 
@@ -3323,7 +3304,7 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 });
 console.log(proposal?.kind);
 
-// Typed wrapper returns a structured fallback when the proposal is missing.
+// Typed wrapper returns a structured not-found result when the proposal is missing.
 const proposalResult = await torii.getGovernanceProposalTyped("proposal-missing");
 if (!proposalResult.found) {
   console.warn("proposal not found");

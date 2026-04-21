@@ -2653,8 +2653,8 @@ export function buildRegisterDomainInstruction({ domainId, logo = null, metadata
 
 /**
  * Build a `Register::Account` instruction payload.
- * @param {{ accountId: string, domainId?: string, domain?: string, metadata?: object | null }} options
- * @returns {{Register: {Account: {id: string, domain: string, metadata: object}}}}
+ * @param {{ accountId: string, metadata?: object | null }} options
+ * @returns {{Register: {Account: {id: string, label: null, uaid: null, opaque_ids: [], metadata: object}}}}
  */
 export function buildRegisterAccountInstruction({
   accountId,
@@ -2662,16 +2662,144 @@ export function buildRegisterAccountInstruction({
   domain,
   metadata,
 }) {
+  if (domainId !== undefined || domain !== undefined) {
+    throw new TypeError("account registration is domainless; bind account aliases separately");
+  }
   const id = normalizeAccountId(accountId, "accountId");
-  const resolvedDomainId = assertString(domainId ?? domain, "domainId");
   const normalizedMetadata = normalizeMetadata(metadata);
   return {
     Register: {
       Account: {
         id,
-        domain: resolvedDomainId,
+        label: null,
+        uaid: null,
+        opaque_ids: [],
         metadata: normalizedMetadata,
       },
+    },
+  };
+}
+
+/**
+ * Build a `Register::AssetDefinition` instruction payload.
+ * @param {{
+ *   assetDefinitionId?: string,
+ *   id?: string,
+ *   name?: string,
+ *   description?: string | null,
+ *   alias?: string | null,
+ *   logo?: string | null,
+ *   scale?: number|string|bigint|null,
+ *   mintable?: string,
+ *   mintOnce?: boolean,
+ *   metadata?: object | null,
+ *   balanceScopePolicy?: string,
+ *   balance_scope_policy?: string,
+ *   confidentialPolicy?: object,
+ *   confidential_policy?: object
+ * }} options
+ * @returns {{Register: {AssetDefinition: object}}}
+ */
+export function buildRegisterAssetDefinitionInstruction(options = {}) {
+  const source = assertPlainObject(options, "registerAssetDefinition");
+  const scale = source.scale === undefined || source.scale === null
+    ? null
+    : asU128JsonNumber(source.scale, "registerAssetDefinition.scale");
+  const description = source.description === undefined || source.description === null
+    ? null
+    : assertString(source.description, "registerAssetDefinition.description");
+  const alias = source.alias === undefined || source.alias === null
+    ? null
+    : assertString(source.alias, "registerAssetDefinition.alias");
+  const logo = source.logo === undefined || source.logo === null
+    ? null
+    : assertString(source.logo, "registerAssetDefinition.logo");
+  return {
+    Register: {
+      AssetDefinition: {
+        id: assertString(
+          source.assetDefinitionId ?? source.asset_definition_id ?? source.id,
+          "registerAssetDefinition.assetDefinitionId",
+        ),
+        name: assertString(source.name ?? "", "registerAssetDefinition.name"),
+        description,
+        alias,
+        spec: { scale },
+        mintable: source.mintOnce === true
+          ? "Once"
+          : assertString(source.mintable ?? "Infinitely", "registerAssetDefinition.mintable"),
+        logo,
+        metadata: normalizeMetadata(source.metadata),
+        balance_scope_policy: assertString(
+          source.balanceScopePolicy ?? source.balance_scope_policy ?? "Global",
+          "registerAssetDefinition.balanceScopePolicy",
+        ),
+        confidential_policy: source.confidentialPolicy ?? source.confidential_policy ?? {
+          mode: "TransparentOnly",
+          vk_set_hash: null,
+          poseidon_params_id: null,
+          pedersen_params_id: null,
+          pending_transition: null,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Build a `Grant::Permission` instruction payload for an account.
+ * @param {{ accountId?: string, destinationAccountId?: string, permission?: object, name?: string, payload?: any }} options
+ * @returns {{Grant: {Permission: {object: {name: string, payload: any}, destination: string}}}}
+ */
+export function buildGrantAccountPermissionInstruction(options = {}) {
+  const source = assertPlainObject(options, "grantAccountPermission");
+  const permissionSource = source.permission === undefined || source.permission === null
+    ? source
+    : assertPlainObject(source.permission, "grantAccountPermission.permission");
+  return {
+    Grant: {
+      Permission: {
+        object: {
+          name: assertString(
+            permissionSource.name,
+            "grantAccountPermission.permission.name",
+          ),
+          payload: permissionSource.payload === undefined
+            ? null
+            : normalizeJsonValue(
+                permissionSource.payload,
+                "grantAccountPermission.permission.payload",
+              ),
+        },
+        destination: normalizeAccountId(
+          source.accountId ?? source.destinationAccountId ?? source.destination,
+          "grantAccountPermission.accountId",
+        ),
+      },
+    },
+  };
+}
+
+/**
+ * Build a `SetAssetDefinitionAlias` instruction payload.
+ * @param {{ assetDefinitionId?: string, asset_definition_id?: string, alias?: string | null, leaseExpiryMs?: number|string|bigint|null, lease_expiry_ms?: number|string|bigint|null }} options
+ * @returns {{SetAssetDefinitionAlias: {asset_definition_id: string, alias: string | null, lease_expiry_ms: number | null}}}
+ */
+export function buildSetAssetDefinitionAliasInstruction(options = {}) {
+  const source = assertPlainObject(options, "setAssetDefinitionAlias");
+  const leaseExpiryMs = source.leaseExpiryMs ?? source.lease_expiry_ms;
+  return {
+    SetAssetDefinitionAlias: {
+      asset_definition_id: assertString(
+        source.assetDefinitionId ?? source.asset_definition_id,
+        "setAssetDefinitionAlias.assetDefinitionId",
+      ),
+      alias: source.alias === undefined || source.alias === null
+        ? null
+        : assertString(source.alias, "setAssetDefinitionAlias.alias"),
+      lease_expiry_ms: leaseExpiryMs === undefined || leaseExpiryMs === null
+        ? null
+        : asU128JsonNumber(leaseExpiryMs, "setAssetDefinitionAlias.leaseExpiryMs"),
     },
   };
 }
@@ -3404,8 +3532,10 @@ export function buildCancelTwitterEscrowInstruction(options) {
 export function buildPersistCouncilForEpochInstruction(options) {
   const source = assertPlainObject(options, "persistCouncilForEpoch");
   const derivedBy = source.derivedBy ?? source.derived_by ?? "Vrf";
-  const normalizedDerived =
-    String(derivedBy).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
+  const normalizedDerived = String(derivedBy).trim();
+  if (normalizedDerived.toLowerCase() !== "vrf") {
+    throw new TypeError("persistCouncilForEpoch.derivedBy must be Vrf");
+  }
   return {
     PersistCouncilForEpoch: {
       epoch: asNonNegativeInteger(source.epoch, "epoch"),
@@ -3426,7 +3556,7 @@ export function buildPersistCouncilForEpochInstruction(options) {
         source.candidatesCount ?? source.candidates_count,
         "candidatesCount",
       ),
-      derived_by: normalizedDerived,
+      derived_by: "Vrf",
     },
   };
 }

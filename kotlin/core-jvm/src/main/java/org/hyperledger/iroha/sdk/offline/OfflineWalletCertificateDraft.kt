@@ -19,38 +19,6 @@ class OfflineWalletCertificateDraft(
 
     val attestationReport: ByteArray get() = _attestationReport.copyOf()
 
-    /**
-     * @deprecated Operator is derived by Torii from its configured keypair and ignored in draft
-     *     payloads.
-     */
-    @Deprecated("Operator is derived by Torii from its configured keypair", ReplaceWith(""))
-    constructor(
-        controller: String,
-        @Suppress("UNUSED_PARAMETER") operator: String,
-        allowance: OfflineAllowanceCommitment,
-        spendPublicKey: String,
-        attestationReport: ByteArray,
-        issuedAtMs: Long,
-        expiresAtMs: Long,
-        policy: OfflineWalletPolicy,
-        metadata: Map<String, Any>?,
-        verdictIdHex: String?,
-        attestationNonceHex: String?,
-        refreshAtMs: Long?,
-    ) : this(
-        controller,
-        allowance,
-        spendPublicKey,
-        attestationReport,
-        issuedAtMs,
-        expiresAtMs,
-        policy,
-        metadata,
-        verdictIdHex,
-        attestationNonceHex,
-        refreshAtMs,
-    )
-
     fun toJsonMap(): Map<String, Any?> {
         val map = LinkedHashMap<String, Any?>()
         map["controller"] = controller

@@ -89,7 +89,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
     from .tx import TransactionDraft
-else:  # pragma: no cover - runtime fallback when extension is absent
+else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
@@ -668,10 +668,10 @@ def _parse_optional_duration_ms_field(value: Any, context: str) -> Optional[int]
 
 def _normalize_base64_payload(
     explicit_b64: Optional[Any],
-    fallback_payload: Optional[Any],
+    default_payload: Optional[Any],
     context: str,
 ) -> str:
-    source = explicit_b64 if explicit_b64 is not None else fallback_payload
+    source = explicit_b64 if explicit_b64 is not None else default_payload
     if source is None:
         raise ValueError(f"{context} must be provided")
     if isinstance(source, str):
@@ -6635,7 +6635,7 @@ def resolve_torii_client_config(
         )
         timeout = _coerce_timeout_seconds(
             source.get("timeout_ms"),
-            fallback=source.get("timeout"),
+            default_value=source.get("timeout"),
         )
         if timeout is not None:
             state["timeout"] = timeout
@@ -6648,7 +6648,7 @@ def resolve_torii_client_config(
             state["max_retries"] = max_retries
         backoff_initial = _coerce_duration_seconds(
             source.get("backoff_initial_ms"),
-            fallback=source.get("backoff_initial"),
+            default_value=source.get("backoff_initial"),
         )
         if backoff_initial is not None:
             state["backoff_initial"] = backoff_initial
@@ -6661,7 +6661,7 @@ def resolve_torii_client_config(
             state["backoff_multiplier"] = max(backoff_multiplier, 1.0)
         max_backoff = _coerce_duration_seconds(
             source.get("max_backoff_ms"),
-            fallback=source.get("max_backoff"),
+            default_value=source.get("max_backoff"),
         )
         if max_backoff is not None:
             state["max_backoff"] = max_backoff
@@ -6815,19 +6815,19 @@ def _coerce_float(value: Any, name: str, *, allow_zero: bool = False) -> Optiona
     return number
 
 
-def _coerce_duration_seconds(value: Any, *, fallback: Any = None) -> Optional[float]:
+def _coerce_duration_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
     millis = _coerce_float(value, "duration_ms", allow_zero=True)
     if millis is not None:
         return millis / 1000.0
-    seconds = _coerce_float(fallback, "duration", allow_zero=True)
+    seconds = _coerce_float(default_value, "duration", allow_zero=True)
     return seconds
 
 
-def _coerce_timeout_seconds(value: Any, *, fallback: Any = None) -> Optional[float]:
+def _coerce_timeout_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
     result = _coerce_duration_seconds(value)
     if result is not None:
         return result
-    seconds = _coerce_float(fallback, "timeout", allow_zero=True)
+    seconds = _coerce_float(default_value, "timeout", allow_zero=True)
     return seconds
 
 

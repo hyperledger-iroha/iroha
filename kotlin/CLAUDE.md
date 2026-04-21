@@ -76,7 +76,7 @@ All mutable collections and byte arrays are copied on construction and access. U
 
 ## Key Patterns
 - **Two instruction representations**: typed (structured fields) vs wire (opaque `ByteArray` + wire name); `InstructionBox` unifies both
-- **Source layout**: main sources under `src/main/java/` (Kotlin files, legacy path from Java migration), tests under `src/test/kotlin/`
+- **Source layout**: main sources under `src/main/java/` (Kotlin files, retained path from Java migration), tests under `src/test/kotlin/`
 - **Native libraries**: `.so` files built from Rust via `./gradlew :offline-wallet-android:buildNativeLibs`, not tracked in git
 
 ## Testing

@@ -146,7 +146,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         XCTAssertEqual(try rawPreimage.noritoPayload(), try canonicalPreimage.noritoPayload())
     }
 
-    /// Calls the native bridge `offlineReceiptChallenge` directly (no Swift fallback)
+    /// Calls the native bridge `offlineReceiptChallenge` directly.
     /// to verify that the C function pointer obtained via dlsym is valid and callable.
     /// This reproduces the EXC_BAD_ACCESS that occurs when dlopen returns a stale handle.
     func testNativeBridgeOfflineReceiptChallengeDoesNotCrash() throws {

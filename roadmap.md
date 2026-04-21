@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 first-release SDK compatibility cleanup):
+Java/Kotlin SDK compatibility paths are cut over to first-release canonical
+behaviour. Connect envelopes decode only through the current Norito schema, key
+exports are v4 Argon2id-only, StrongBox/provider downgrade paths now fail
+directly, and transport defaults use explicit runtime/artifact choices rather
+than reflection ladders. The CUDA Java path remains as the deterministic
+non-native hardware-acceleration path required by repository policy.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/client-android`
+  - `/Users/takemiyamakoto/dev/iroha/java/norito_java`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `./gradlew :core-jvm:test --console=plain`
+  - `ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :client-android:assembleRelease --console=plain`
+  - `./gradlew :norito_java:test --console=plain`
+  - `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml -- --nocapture`
+- open work after this slice:
+  - full diff whitespace check still needs unrelated `kotlin/README.md`
+    trailing whitespace cleaned or excluded
+
 Latest sync (2026-04-21 Torii generic QueryEnvelope executor expansion):
 Torii now has one internal executor for row-mode and aggregate-mode
 QueryEnvelope routes. Public query routes preserve their legacy default
@@ -19,11 +45,15 @@ planning now include the five DA-backed inventory families.
   - `/Users/takemiyamakoto/dev/iroha/status.md`
   - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
 - validation status:
-  - `cargo check -p iroha_torii --features app_api --no-default-features`
-    is waiting behind an existing workspace Cargo build lock
+  - `cargo check -p iroha_torii --features app_api`
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii generic_query --features app_api`
+  - `cargo test -p iroha_core projection_rowset` still needs a clean retry;
+    the shared-target run waited behind unrelated active Cargo artifact locks
+    and an isolated-target retry was terminated before diagnostics
 - open work after this slice:
-  - complete the targeted Torii check and then run focused row/aggregate route
-    regressions once the shared build lock clears
+  - run focused row/aggregate route regressions and projection rowset tests
+    again once the shared build contention clears
 
 Latest sync (2026-04-21 iroha_data_model signed-query roundtrip compile unblock):
 The reported `iroha_data_model` clean-build blocker in
