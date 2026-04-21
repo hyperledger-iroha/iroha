@@ -127,6 +127,7 @@ async fn norito_transaction_returns_submission_receipt() {
                 .method("POST")
                 .uri(uri::TRANSACTION)
                 .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
                 .body(Body::from(tx_bytes))
                 .expect("request"),
         )
@@ -168,6 +169,7 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
                 .method("POST")
                 .uri(uri::TRANSACTION)
                 .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
                 .body(Body::from(
                     norito_rpc_harness::sample_transaction_entrypoint_bytes(),
                 ))
@@ -192,6 +194,7 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
 async fn norito_query_accepts_versioned_signed_query_payload() {
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
     use iroha_torii_shared::uri;
     use tower::ServiceExt as _;
 
@@ -207,13 +210,21 @@ async fn norito_query_accepts_versioned_signed_query_payload() {
                 .method("POST")
                 .uri(uri::QUERY)
                 .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
                 .body(Body::from(norito_rpc_harness::sample_query_bytes()))
                 .expect("request"),
         )
         .await
         .expect("response");
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    let status = resp.status();
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8_lossy(&body);
+
+    assert_eq!(status, StatusCode::OK, "unexpected error body: {text}");
 }
 
 #[tokio::test]
@@ -236,6 +247,7 @@ async fn public_query_route_rejects_bare_signed_query_payload() {
                 .method("POST")
                 .uri(uri::QUERY)
                 .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
                 .body(Body::from(norito_rpc_harness::sample_bare_query_bytes()))
                 .expect("request"),
         )

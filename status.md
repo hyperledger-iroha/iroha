@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii Norito ingress harness compile unblock and loopback request wiring
+- `crates/iroha_torii/tests/common/norito_rpc_harness.rs` now builds the
+  shared signed-query sample as a versioned singular `FindAbiVersion`
+  request instead of trying to erase `FindDomains` into
+  `QueryOutputBatchBox`. That removes the `E0271` / `E0308` type mismatch in
+  the shared harness, and the harness now keeps a direct regression proving
+  the sample query roundtrips through `decode_all_versioned(...)`.
+- The shared Norito test harness now exposes a loopback
+  `ConnectInfo<SocketAddr>` helper and attaches it to harness-built
+  transaction requests. The direct `oneshot(...)` requests in
+  `crates/iroha_torii/tests/norito_ingress.rs` and
+  `crates/iroha_torii/tests/configuration_endpoint.rs` now attach the same
+  extension so handlers that require remote peer metadata no longer fail with
+  `Missing request extension` under Axum test routing.
+- Focused validation for this slice:
+  - `cargo test -p iroha_torii --test norito_ingress norito_rpc_harness::sample_signed_query_roundtrips_as_a_versioned_singular_request -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress norito_query_accepts_versioned_signed_query_payload -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test configuration_endpoint configuration_endpoint_includes_transport_summary -- --exact --nocapture`
+
 ## 2026-04-21 Follow-up: first-release canonical Norito submission cleanup
 - Torii MCP transaction/query submission now accepts only canonical
   `body_base64` bytes for versioned `SignedTransaction` and `SignedQuery`

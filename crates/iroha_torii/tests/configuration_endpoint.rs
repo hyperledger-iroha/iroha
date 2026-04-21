@@ -38,7 +38,7 @@ async fn configuration_endpoint_includes_transport_summary() {
     let expected_allowlist = cfg.torii.transport.norito_rpc.allowed_clients.len();
     let expected_access_kind = cfg.streaming.soranet.access_kind.as_str();
 
-    let req = fixtures::operator_signed_request(
+    let mut req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
             .uri(iroha_torii_shared::uri::CONFIGURATION)
@@ -46,6 +46,8 @@ async fn configuration_endpoint_includes_transport_summary() {
             .unwrap(),
         &[],
     );
+    req.extensions_mut()
+        .insert(norito_rpc_harness::loopback_connect_info());
     let response = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
