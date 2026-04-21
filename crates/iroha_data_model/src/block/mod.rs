@@ -4,7 +4,6 @@
 
 use std::{
     borrow::Cow,
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     convert::TryInto,
     fmt, format,
@@ -18,7 +17,7 @@ use iroha_crypto::Hash;
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use iroha_version::{UnsupportedVersion, Version};
+use iroha_version::Version;
 use norito::{
     codec::{Decode, Encode},
     core::{
@@ -1189,8 +1188,6 @@ pub fn decode_framed_signed_block(
 
     decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
 }
-
-type VersionError = iroha_version::error::Error;
 
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
     norito::core::reset_decode_state();

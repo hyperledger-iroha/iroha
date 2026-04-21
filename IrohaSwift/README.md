@@ -513,7 +513,7 @@ if #available(iOS 15, macOS 12, *) {
     ]
     let session = URLSession(configuration: configuration)
     let sdk = ToriiClient(baseURL: coreApiBaseURL, session: session)
-    let request = ToriiOfflineCashLoadRequest(
+    let request = try ToriiOfflineCashLoadRequest(
         operationId: UUID().uuidString,
         lineageId: existingEnvelope.lineageState.lineageId,
         accountId: authorityId,

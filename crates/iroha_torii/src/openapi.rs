@@ -2966,6 +2966,98 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/node/query/projection/checkpoint/plan".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Plan a rebuilt query projection checkpoint.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates them against the uploaded manifest/ticket set, and returns the checkpoint descriptor without persisting it."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionCheckpointPlan".to_owned()),
+            );
+            operation.insert(
+                "requestBody".into(),
+                Value::Object(json_request_body("#/components/schemas/JsonValue")),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Validated query projection checkpoint descriptor.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("post".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/node/query/projection/checkpoint/publish".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Publish a rebuilt query projection checkpoint.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates them against the uploaded manifest/ticket set, and persists the resulting checkpoint descriptor."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionCheckpointPublish".to_owned()),
+            );
+            operation.insert(
+                "requestBody".into(),
+                Value::Object(json_request_body("#/components/schemas/JsonValue")),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Persisted query projection checkpoint descriptor.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("post".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
         "/v1/node/query/projection/catalog/{resource}".to_owned(),
         Value::Object({
             let mut operation = Map::new();
@@ -10849,6 +10941,8 @@ mod tests {
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));
         assert!(paths.contains_key("/v1/node/query/projection/catalog/{resource}"));
         assert!(paths.contains_key("/v1/node/query/projection/shards/{resource}/{partition_id}"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));

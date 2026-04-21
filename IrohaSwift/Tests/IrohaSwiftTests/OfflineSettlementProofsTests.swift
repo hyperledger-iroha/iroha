@@ -29,6 +29,93 @@ final class OfflineSettlementProofsTests: XCTestCase {
         }
     }
 
+    func testAmountArithmeticUsesRustScaleRules() throws {
+        XCTAssertEqual(try ToriiOfflineCashCodec.addAmounts("1.20", "0.30"), "1.50")
+        XCTAssertEqual(try ToriiOfflineCashCodec.addAmounts("1", "2.00"), "3.00")
+        XCTAssertEqual(try ToriiOfflineCashCodec.subtractAmounts("3.00", "1"), "2.00")
+        XCTAssertEqual(try ToriiOfflineCashCodec.compareAmounts("1.0", "1.00"), .orderedSame)
+
+        XCTAssertThrowsError(try ToriiOfflineCashCodec.addAmounts("1,000", "1")) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("1,000"))
+        }
+        XCTAssertThrowsError(try ToriiOfflineCashCodec.subtractAmounts("1.00", "2.00")) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .negativeResult)
+        }
+
+        let maxPositiveMantissa = decimalSubtractOne(decimalPowerOfTwo(511))
+        XCTAssertEqual(
+            try ToriiOfflineCashCodec.compareAmounts(maxPositiveMantissa, "0.1"),
+            .orderedDescending
+        )
+        XCTAssertThrowsError(try ToriiOfflineCashCodec.addAmounts(maxPositiveMantissa, "1"))
+    }
+
+    func testPublicOfflineModelInitializersCanonicalizeInputs() throws {
+        let deviceBinding = sampleDeviceBinding()
+        let deviceProof = sampleDeviceProof()
+        let authorization = try ToriiOfflineSpendAuthorization(
+            authorizationId: "auth-1",
+            lineageId: "lineage-1",
+            accountId: "account-1",
+            verdictId: "verdict-1",
+            policyMaxBalance: "001000.00",
+            policyMaxTxValue: "000200.50",
+            issuedAtMs: 1,
+            refreshAtMs: 2,
+            expiresAtMs: 3,
+            deviceBinding: deviceBinding,
+            issuerSignatureBase64: "authorization-signature"
+        )
+        XCTAssertEqual(authorization.policyMaxBalance, "1000.00")
+        XCTAssertEqual(authorization.policyMaxTxValue, "200.50")
+
+        let loadRequest = try ToriiOfflineCashLoadRequest(
+            operationId: "load-1",
+            lineageId: "lineage-1",
+            accountId: "account-1",
+            assetDefinitionId: "asset-1",
+            amount: "0001.20",
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof
+        )
+        XCTAssertEqual(loadRequest.amount, "1.20")
+
+        let commitments = try ToriiOfflineStarkCommitmentsV1(
+            version: 1,
+            roots: ["AABB"],
+            compRoot: "CCDD"
+        )
+        XCTAssertEqual(commitments.roots, ["aabb"])
+        XCTAssertEqual(commitments.compRoot, "ccdd")
+
+        let path = try ToriiOfflineMerklePath(dirs: " AQ== ", siblings: ["AABB"])
+        XCTAssertEqual(path.dirs, "AQ==")
+        XCTAssertEqual(path.siblings, ["aabb"])
+    }
+
+    func testPublicOfflineModelInitializersRejectInvalidCanonicalFields() {
+        let deviceBinding = sampleDeviceBinding()
+        let deviceProof = sampleDeviceProof()
+
+        XCTAssertThrowsError(
+            try ToriiOfflineCashLoadRequest(
+                operationId: "load-1",
+                lineageId: nil,
+                accountId: "account-1",
+                assetDefinitionId: "asset-1",
+                amount: "1,000",
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof
+            )
+        )
+        XCTAssertThrowsError(
+            try ToriiOfflineStarkCommitmentsV1(version: 1, roots: ["0xaabb"], compRoot: nil)
+        )
+        XCTAssertThrowsError(
+            try ToriiOfflineMerklePath(dirs: "not-base64", siblings: [])
+        )
+    }
+
     func testRedeemRequestProofJSONUsesCanonicalHexAndByteArrayDirs() throws {
         let request = try makeRedeemRequest()
         let jsonObject = try XCTUnwrap(
@@ -78,56 +165,33 @@ final class OfflineSettlementProofsTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiOfflineRedeemRequestProof.self, from: data))
     }
 
-    func testVerifyRedeemRequestProofRejectsPrefixedHex() throws {
-        let request = try makeRedeemRequest()
-        var commits = request.redeemProof.envelope.proof.commits
-        var roots = commits.roots
+    func testRedeemProofDecodingRejectsPrefixedHex() throws {
+        let proof = try makeRedeemRequest().redeemProof
+        var jsonObject = try proofJSONObject(for: proof)
+        var envelope = try XCTUnwrap(jsonObject["envelope"] as? [String: Any])
+        var proofObject = try XCTUnwrap(envelope["proof"] as? [String: Any])
+        var commits = try XCTUnwrap(proofObject["commits"] as? [String: Any])
+        var roots = try XCTUnwrap(commits["roots"] as? [String])
         roots[0] = "0x" + roots[0]
-        commits = ToriiOfflineStarkCommitmentsV1(
-            version: commits.version,
-            roots: roots,
-            compRoot: commits.compRoot
-        )
-        let mutatedEnvelope = ToriiOfflineStarkVerifyEnvelopeV1(
-            params: request.redeemProof.envelope.params,
-            proof: ToriiOfflineStarkProofV1(
-                version: request.redeemProof.envelope.proof.version,
-                commits: commits,
-                queries: request.redeemProof.envelope.proof.queries
-            ),
-            transcriptLabel: request.redeemProof.envelope.transcriptLabel
-        )
-        let mutatedProof = ToriiOfflineRedeemRequestProof(
-            backend: request.redeemProof.backend,
-            circuitId: request.redeemProof.circuitId,
-            recursionDepth: request.redeemProof.recursionDepth,
-            publicInputsHex: request.redeemProof.publicInputsHex,
-            envelope: mutatedEnvelope
-        )
+        commits["roots"] = roots
+        proofObject["commits"] = commits
+        envelope["proof"] = proofObject
+        jsonObject["envelope"] = envelope
 
-        XCTAssertThrowsError(
-            try ToriiOfflineSettlementProofs.verifyRedeemRequestProof(
-                proof: mutatedProof,
-                operationId: request.operationId,
-                accountId: request.accountId,
-                lineageId: request.lineageId,
-                assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                amount: request.amount,
-                offlinePublicKey: request.deviceBinding.offlinePublicKey,
-                authorizationId: try sampleAuthorization(deviceBinding: request.deviceBinding).authorizationId,
-                preStateHash: String(repeating: "a", count: 64),
-                receipts: request.receipts
-            )
-        ) { error in
-            guard case .invalidSettlement = error as? ToriiOfflineSettlementProofError else {
-                return XCTFail("Expected invalidSettlement, got \(error)")
-            }
-        }
+        let data = try JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiOfflineRedeemRequestProof.self, from: data))
     }
 
-    func testMerklePathEncodingRejectsInvalidBase64Dirs() {
-        let path = ToriiOfflineMerklePath(dirs: "not-base64", siblings: [])
-        XCTAssertThrowsError(try JSONEncoder().encode(path))
+    func testCashModelDecodingRejectsInvalidAmounts() throws {
+        let request = try makeRedeemRequest()
+        let jsonObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try JSONEncoder().encode(request)) as? [String: Any]
+        )
+        var mutated = jsonObject
+        mutated["amount"] = "1,000"
+
+        let data = try JSONSerialization.data(withJSONObject: mutated, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiOfflineCashRedeemRequest.self, from: data))
     }
 
     private func makeRedeemRequest() throws -> ToriiOfflineCashRedeemRequest {
@@ -135,7 +199,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
         let deviceBinding = sampleDeviceBinding()
         let deviceProof = sampleDeviceProof()
         let authorization = try sampleAuthorization(deviceBinding: deviceBinding)
-        let receipt = ToriiOfflineTransferReceipt(
+        let receipt = try ToriiOfflineTransferReceipt(
             transferId: "transfer-1",
             direction: .incoming,
             lineageId: "lineage-1",
@@ -171,7 +235,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
             preStateHash: String(repeating: "a", count: 64),
             receipts: [receipt]
         )
-        return ToriiOfflineCashRedeemRequest(
+        return try ToriiOfflineCashRedeemRequest(
             operationId: "redeem-1",
             lineageId: "lineage-1",
             accountId: accountId,
@@ -209,7 +273,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
     private func sampleAuthorization(
         deviceBinding: ToriiOfflineDeviceBinding
     ) throws -> ToriiOfflineSpendAuthorization {
-        ToriiOfflineSpendAuthorization(
+        try ToriiOfflineSpendAuthorization(
             authorizationId: "auth-1",
             lineageId: "lineage-1",
             accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",

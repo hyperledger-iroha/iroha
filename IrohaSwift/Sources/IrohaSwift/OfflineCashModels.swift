@@ -134,18 +134,35 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
         expiresAtMs: UInt64,
         deviceBinding: ToriiOfflineDeviceBinding,
         issuerSignatureBase64: String
-    ) {
+    ) throws {
         self.authorizationId = authorizationId
         self.lineageId = lineageId
         self.accountId = accountId
         self.verdictId = verdictId
-        self.policyMaxBalance = policyMaxBalance
-        self.policyMaxTxValue = policyMaxTxValue
+        self.policyMaxBalance = try ToriiOfflineCashCodec.canonicalAmountString(policyMaxBalance)
+        self.policyMaxTxValue = try ToriiOfflineCashCodec.canonicalAmountString(policyMaxTxValue)
         self.issuedAtMs = issuedAtMs
         self.refreshAtMs = refreshAtMs
         self.expiresAtMs = expiresAtMs
         self.deviceBinding = deviceBinding
         self.issuerSignatureBase64 = issuerSignatureBase64
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            authorizationId: container.decode(String.self, forKey: .authorizationId),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            verdictId: container.decode(String.self, forKey: .verdictId),
+            policyMaxBalance: container.decode(String.self, forKey: .policyMaxBalance),
+            policyMaxTxValue: container.decode(String.self, forKey: .policyMaxTxValue),
+            issuedAtMs: container.decode(UInt64.self, forKey: .issuedAtMs),
+            refreshAtMs: container.decode(UInt64.self, forKey: .refreshAtMs),
+            expiresAtMs: container.decode(UInt64.self, forKey: .expiresAtMs),
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            issuerSignatureBase64: container.decode(String.self, forKey: .issuerSignatureBase64)
+        )
     }
 
     public func isExpired(nowMs: UInt64 = ToriiOfflineCashCodec.currentTimestampMs()) -> Bool {
@@ -196,19 +213,37 @@ public struct ToriiOfflineCashState: Codable, Sendable, Equatable, Identifiable 
         pendingLocalRevision: UInt64,
         authorization: ToriiOfflineSpendAuthorization,
         issuerSignatureBase64: String
-    ) {
+    ) throws {
         self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.assetDefinitionId = assetDefinitionId
-        self.balance = balance
-        self.lockedBalance = lockedBalance
+        self.balance = try ToriiOfflineCashCodec.canonicalAmountString(balance)
+        self.lockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(lockedBalance)
         self.serverRevision = serverRevision
         self.serverStateHash = serverStateHash
         self.pendingLocalRevision = pendingLocalRevision
         self.authorization = authorization
         self.issuerSignatureBase64 = issuerSignatureBase64
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            balance: container.decode(String.self, forKey: .balance),
+            lockedBalance: container.decode(String.self, forKey: .lockedBalance),
+            serverRevision: container.decode(UInt64.self, forKey: .serverRevision),
+            serverStateHash: container.decode(String.self, forKey: .serverStateHash),
+            pendingLocalRevision: container.decode(UInt64.self, forKey: .pendingLocalRevision),
+            authorization: container.decode(ToriiOfflineSpendAuthorization.self, forKey: .authorization),
+            issuerSignatureBase64: container.decode(String.self, forKey: .issuerSignatureBase64)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -284,10 +319,19 @@ public struct ToriiOfflineAssetSendLimit: Codable, Sendable, Equatable {
         assetDefinitionId: String,
         dailySendLimit: String,
         monthlySendLimit: String
-    ) {
+    ) throws {
         self.assetDefinitionId = assetDefinitionId
-        self.dailySendLimit = dailySendLimit
-        self.monthlySendLimit = monthlySendLimit
+        self.dailySendLimit = try ToriiOfflineCashCodec.canonicalAmountString(dailySendLimit)
+        self.monthlySendLimit = try ToriiOfflineCashCodec.canonicalAmountString(monthlySendLimit)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            dailySendLimit: container.decode(String.self, forKey: .dailySendLimit),
+            monthlySendLimit: container.decode(String.self, forKey: .monthlySendLimit)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -350,7 +394,7 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         sourcePayload: String?,
         senderSignatureBase64: String,
         createdAtMs: UInt64
-    ) {
+    ) throws {
         self.version = version
         self.transferId = transferId
         self.direction = direction
@@ -358,10 +402,10 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
-        self.preBalance = preBalance
-        self.postBalance = postBalance
-        self.preLockedBalance = preLockedBalance
-        self.postLockedBalance = postLockedBalance
+        self.preBalance = try ToriiOfflineCashCodec.canonicalAmountString(preBalance)
+        self.postBalance = try ToriiOfflineCashCodec.canonicalAmountString(postBalance)
+        self.preLockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(preLockedBalance)
+        self.postLockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(postLockedBalance)
         self.preStateHash = preStateHash
         self.postStateHash = postStateHash
         self.localRevision = localRevision
@@ -369,12 +413,42 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.counterpartyAccountId = counterpartyAccountId
         self.counterpartyDeviceId = counterpartyDeviceId
         self.counterpartyOfflinePublicKey = counterpartyOfflinePublicKey
-        self.amount = amount
+        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
         self.authorization = authorization
         self.deviceProof = deviceProof
         self.sourcePayload = sourcePayload
         self.senderSignatureBase64 = senderSignatureBase64
         self.createdAtMs = createdAtMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decodeIfPresent(Int.self, forKey: .version) ?? 1,
+            transferId: container.decode(String.self, forKey: .transferId),
+            direction: container.decode(ToriiOfflineTransferDirection.self, forKey: .direction),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
+            preBalance: container.decode(String.self, forKey: .preBalance),
+            postBalance: container.decode(String.self, forKey: .postBalance),
+            preLockedBalance: container.decode(String.self, forKey: .preLockedBalance),
+            postLockedBalance: container.decode(String.self, forKey: .postLockedBalance),
+            preStateHash: container.decode(String.self, forKey: .preStateHash),
+            postStateHash: container.decode(String.self, forKey: .postStateHash),
+            localRevision: container.decode(UInt64.self, forKey: .localRevision),
+            counterpartyLineageId: container.decode(String.self, forKey: .counterpartyLineageId),
+            counterpartyAccountId: container.decode(String.self, forKey: .counterpartyAccountId),
+            counterpartyDeviceId: container.decode(String.self, forKey: .counterpartyDeviceId),
+            counterpartyOfflinePublicKey: container.decode(String.self, forKey: .counterpartyOfflinePublicKey),
+            amount: container.decode(String.self, forKey: .amount),
+            authorization: container.decodeIfPresent(ToriiOfflineSpendAuthorization.self, forKey: .authorization),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
+            sourcePayload: container.decodeIfPresent(String.self, forKey: .sourcePayload),
+            senderSignatureBase64: container.decode(String.self, forKey: .senderSignatureBase64),
+            createdAtMs: container.decode(UInt64.self, forKey: .createdAtMs)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -474,14 +548,27 @@ public struct ToriiOfflineCashLoadRequest: Codable, Sendable, Equatable {
         amount: String,
         deviceBinding: ToriiOfflineDeviceBinding,
         deviceProof: ToriiOfflineDeviceProof
-    ) {
+    ) throws {
         self.operationId = operationId
         self.lineageId = lineageId
         self.accountId = accountId
         self.assetDefinitionId = assetDefinitionId
-        self.amount = amount
+        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
         self.deviceBinding = deviceBinding
         self.deviceProof = deviceProof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            lineageId: container.decodeIfPresent(String.self, forKey: .lineageId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            amount: container.decode(String.self, forKey: .amount),
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -578,15 +665,29 @@ public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
         amount: String,
         receipts: [ToriiOfflineTransferReceipt],
         redeemProof: ToriiOfflineRedeemRequestProof
-    ) {
+    ) throws {
         self.operationId = operationId
         self.lineageId = lineageId
         self.accountId = accountId
         self.deviceBinding = deviceBinding
         self.deviceProof = deviceProof
-        self.amount = amount
+        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
         self.receipts = receipts
         self.redeemProof = redeemProof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
+            amount: container.decode(String.self, forKey: .amount),
+            receipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .receipts),
+            redeemProof: container.decode(ToriiOfflineRedeemRequestProof.self, forKey: .redeemProof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -670,22 +771,25 @@ public enum ToriiOfflineCashCodec {
     }
 
     public static func addAmounts(_ lhs: String, _ rhs: String) throws -> String {
-        let result = try parseAmount(lhs) + parseAmount(rhs)
-        return NSDecimalNumber(decimal: result).stringValue
+        let left = try parseAmount(lhs)
+        let right = try parseAmount(rhs)
+        return try left.adding(right, maxBytes: OfflineNorito.maxBigIntBytes).canonicalString
     }
 
     public static func subtractAmounts(_ lhs: String, _ rhs: String) throws -> String {
-        let result = try parseAmount(lhs) - parseAmount(rhs)
-        if NSDecimalNumber(decimal: result).compare(NSDecimalNumber.zero) == .orderedAscending {
+        let left = try parseAmount(lhs)
+        let right = try parseAmount(rhs)
+        let result = try left.subtracting(right, maxBytes: OfflineNorito.maxBigIntBytes)
+        if result.isNegative {
             throw ToriiOfflineAmountError.negativeResult
         }
-        return NSDecimalNumber(decimal: result).stringValue
+        return result.canonicalString
     }
 
     public static func compareAmounts(_ lhs: String, _ rhs: String) throws -> ComparisonResult {
-        let left = NSDecimalNumber(decimal: try parseAmount(lhs))
-        let right = NSDecimalNumber(decimal: try parseAmount(rhs))
-        return left.compare(right)
+        let left = try parseAmount(lhs)
+        let right = try parseAmount(rhs)
+        return left.compared(to: right)
     }
 
     public static func nextLocalStateHash(
@@ -1002,15 +1106,12 @@ private extension ToriiOfflineCashCodec {
         }
     }
 
-    static func parseAmount(_ rawValue: String) throws -> Decimal {
-        let normalized = rawValue
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ",", with: "")
-        guard !normalized.isEmpty,
-              let value = Decimal(string: normalized, locale: Locale(identifier: "en_US_POSIX")) else {
+    static func parseAmount(_ rawValue: String) throws -> OfflineCanonicalNumeric {
+        do {
+            return try OfflineNorito.parseCanonicalNumeric(rawValue)
+        } catch {
             throw ToriiOfflineAmountError.invalidAmount(rawValue)
         }
-        return value
     }
 
     static func verifySignature(
