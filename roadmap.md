@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii targeted limiter and SCCP disabled-lane regression repair):
+The four reported `iroha_torii` library reds are green again. Small-capacity
+rate limiters no longer split their tiny bucket budget across multiple shards,
+the SCCP synthetic proof override is now scoped to the exact test bundle that
+requested it instead of the whole counterparty domain, and the lightweight
+`KisoHandle::mock` / Connect bus helpers now tolerate construction from
+synchronous tests by hosting their background tasks on a dedicated
+current-thread Tokio runtime when no reactor is already running.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/limits.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/connect.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/kiso.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib limits::tests::limiter_caps_bucket_growth -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_proof_submit_rejects_disabled_sccp_message_bundle_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_rejects_disabled_inbound_transfer_lane -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_prepares_ephemeral_settlement_contract_call -- --exact`
+  - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_derives_settlement_route_from_transfer_bundle -- --exact`
+  - broader `cargo test -p iroha_torii ...` package-target validation still
+    stops in unrelated pre-existing compile errors under
+    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+- open work after this slice:
+  - fix or isolate the unrelated `iroha_torii` integration-test compile errors
+    in `tests/common/norito_rpc_harness.rs`
+  - rerun a broader Torii package validation window once those package-target
+    build errors are addressed
+
 Latest sync (2026-04-21 deterministic SoraNet puzzle transcript mismatch regression):
 The `iroha_crypto` puzzle transcript-mismatch regression is deterministic
 again. Instead of asserting against one hard-coded alternate transcript under a
