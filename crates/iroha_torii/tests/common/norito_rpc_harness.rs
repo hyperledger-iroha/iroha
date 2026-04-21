@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
+    extract::connect_info::ConnectInfo,
     http::{Request, header::CONTENT_TYPE},
 };
 use iroha_config::parameters::actual::{Queue as QueueConfig, Root as ActualRoot};
@@ -19,8 +20,7 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::Log,
-    prelude::FindDomains,
-    query::{QueryOutputBatchBox, QueryRequest, QueryWithParams},
+    query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_logger::Level;
@@ -31,6 +31,12 @@ use tower::ServiceExt as _;
 
 #[allow(dead_code)]
 const NORITO_MIME: &str = "application/x-norito";
+
+/// Return a loopback peer address for Axum handlers that require `ConnectInfo`.
+#[must_use]
+pub fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
+    ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+}
 
 /// Shared Norito-RPC harness used by integration tests to avoid ad-hoc runtimes.
 pub struct NoritoRpcHarness {
@@ -106,9 +112,10 @@ impl NoritoRpcHarness {
             builder = builder.header(*name, *value);
         }
 
-        let req = builder
+        let mut req = builder
             .body(Body::from(sample_transaction_bytes()))
             .expect("request");
+        req.extensions_mut().insert(loopback_connect_info());
 
         self.app.clone().oneshot(req).await.expect("response")
     }
@@ -142,12 +149,7 @@ pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
 pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
     let key_pair = KeyPair::random();
     let account = AccountId::of(key_pair.public_key().clone());
-    let query_box: iroha_data_model::query::QueryBox<QueryOutputBatchBox> = Box::new(FindDomains);
-    #[cfg(feature = "fast_dsl")]
-    let query = QueryWithParams::new(&query_box, Default::default());
-    #[cfg(not(feature = "fast_dsl"))]
-    let query = QueryWithParams::new(query_box, Default::default());
-    QueryRequest::Start(query)
+    QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
         .with_authority(account)
         .sign(&key_pair)
 }
@@ -162,4 +164,26 @@ pub fn sample_query_bytes() -> Vec<u8> {
 #[allow(dead_code)]
 pub fn sample_bare_query_bytes() -> Vec<u8> {
     norito::to_bytes(&sample_signed_query()).expect("encode bare signed query")
+}
+
+#[test]
+fn sample_signed_query_roundtrips_as_a_versioned_singular_request() {
+    use iroha_version::codec::DecodeVersioned as _;
+
+    let signed = sample_signed_query();
+    assert!(matches!(
+        signed.request(),
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
+    ));
+
+    let bytes = signed.encode_versioned();
+    let decoded = iroha_data_model::query::SignedQuery::decode_all_versioned(&bytes)
+        .expect("decode versioned signed query");
+
+    assert!(matches!(
+        decoded.request(),
+        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
+    ));
+    assert_eq!(decoded.authority(), signed.authority());
+    assert_eq!(decoded.encode_versioned(), bytes);
 }

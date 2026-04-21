@@ -2,6 +2,43 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: iroha_data_model compute/oracle/offline fixture resync
+- Refreshed the stale `iroha_data_model` goldens and JSON fixtures behind the
+  reported failures in `compute`, `governance`, `offline::poseidon`, and
+  `oracle`. This updates the compute receipt request-hash literal/checksum, the
+  price-oracle request-hash chain (`observation`/`report`/`feed_event`), the
+  social observation request hash, the offline aggregate-bundle receipts root,
+  and the inline Poseidon/governance/oracle stability assertions to match the
+  current canonical encodings.
+- Validation for this slice:
+  - `cargo run --quiet --manifest-path /tmp/iroha-fixture-dump.0NfG4i/Cargo.toml`
+    to confirm the refreshed compute request hash, governance fingerprint,
+    oracle ABI hash, price/social request-hash literals, and Poseidon leaf/root
+    values against the current code.
+  - A clean fresh `CARGO_TARGET_DIR=/tmp/iroha_data_model_fix_target cargo test -p iroha_data_model`
+    is still blocked by unrelated pre-existing test-build errors in
+    `crates/iroha_data_model/src/query/mod.rs` (`QueryRequest` missing
+    `PartialEq`/`Debug`, plus `payload().as_slice()` method resolution).
+
+## 2026-04-21 Follow-up: Torii Norito ingress harness compile unblock and loopback request wiring
+- `crates/iroha_torii/tests/common/norito_rpc_harness.rs` now builds the
+  shared signed-query sample as a versioned singular `FindAbiVersion`
+  request instead of trying to erase `FindDomains` into
+  `QueryOutputBatchBox`. That removes the `E0271` / `E0308` type mismatch in
+  the shared harness, and the harness now keeps a direct regression proving
+  the sample query roundtrips through `decode_all_versioned(...)`.
+- The shared Norito test harness now exposes a loopback
+  `ConnectInfo<SocketAddr>` helper and attaches it to harness-built
+  transaction requests. The direct `oneshot(...)` requests in
+  `crates/iroha_torii/tests/norito_ingress.rs` and
+  `crates/iroha_torii/tests/configuration_endpoint.rs` now attach the same
+  extension so handlers that require remote peer metadata no longer fail with
+  `Missing request extension` under Axum test routing.
+- Focused validation for this slice:
+  - `cargo test -p iroha_torii --test norito_ingress norito_rpc_harness::sample_signed_query_roundtrips_as_a_versioned_singular_request -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress norito_query_accepts_versioned_signed_query_payload -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test configuration_endpoint configuration_endpoint_includes_transport_summary -- --exact --nocapture`
+
 ## 2026-04-21 Follow-up: iroha_test_network permit convoy regression in config/genesis tests
 - `crates/iroha_test_network/src/lib.rs` now routes the reported
   config/genesis-only regression tests through `build_with_isolated_permit(...)`
