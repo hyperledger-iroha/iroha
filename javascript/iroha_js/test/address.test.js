@@ -796,6 +796,22 @@ test("fromI105 normalizes expectedPrefix inputs", () => {
   );
 });
 
+test("fromAccountId parses canonical account ids with an expected prefix", () => {
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
+  });
+  const accountId = address.toI105(8);
+
+  const parsed = AccountAddress.fromAccountId(accountId, "8");
+  assert.equal(parsed.toI105(8), accountId);
+
+  assert.throws(
+    () => AccountAddress.fromAccountId(accountId, 9),
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+  );
+});
+
 test("account address compliance vectors", () => {
   const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
   assert.equal(fixture.format_version, 1, "fixture format version");

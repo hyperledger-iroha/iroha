@@ -1866,6 +1866,7 @@ mod tests {
     async fn node_query_projection_checkpoint_plan_rejects_incomplete_shard_set() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
+        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
         let authority = iroha_crypto::KeyPair::random();
         let authority_id =
@@ -1900,12 +1901,13 @@ mod tests {
             .await
             .expect_err("incomplete shard set must fail");
 
-        let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) = err
+        let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            message,
+        ))) = err
         else {
             panic!("unexpected error shape: {err:?}");
         };
+        assert!(message.contains("checkpoint shard set must match"));
         assert!(message.contains("canonical live shard catalog"));
         assert!(message.contains("missing"));
     }

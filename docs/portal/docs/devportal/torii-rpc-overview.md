@@ -69,6 +69,37 @@ For roadmap evidence, pair the Try It screenshot with a run of
 `artifacts/norito_rpc/<timestamp>/`, and captures the same fixtures that the
 portal consumed.
 
+## Aggregate DSL example
+
+SBP dashboards can read alias-derived PKR holder totals directly from Torii
+without middleware:
+
+```json
+{
+  "filter": {
+    "op": "and",
+    "args": [
+      { "op": "in", "args": ["primary_alias_domain", ["hbl.sbp", "ubl.sbp"]] },
+      { "op": "nin", "args": ["primary_alias", ["cbdc@hbl.sbp", "cbdc@ubl.sbp"]] }
+    ]
+  },
+  "aggregate": {
+    "group_by": ["primary_alias_domain"],
+    "metrics": [
+      { "alias": "user_count", "fn": "distinct_count", "field": "account_id" },
+      { "alias": "pkr_total", "fn": "sum", "field": "quantity" }
+    ]
+  },
+  "sort": [{ "key": "primary_alias_domain", "order": "asc" }],
+  "pagination": { "limit": 8, "offset": 0 }
+}
+```
+
+Call `POST /v1/assets/{definition_id}/holders/query`, where
+`definition_id` may be the PKR asset id or alias. Responses include exact
+counts and totals plus `query_source`; `projection_da_cache` means Torii served
+the aggregate from published DA projection shards.
+
 ## Troubleshooting
 
 | Symptom | Where it appears | Likely cause | Fix |
