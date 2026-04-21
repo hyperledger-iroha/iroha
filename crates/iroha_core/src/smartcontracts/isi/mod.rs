@@ -601,11 +601,11 @@ mod tests {
         let manifest_root = [0x42; 32];
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
             .with_manifest_root(Some(manifest_root));
-        let proof_digest = envelope.expected_fastpq_proof_digest(Some(envelope.block_height));
-        let verified_at_height = envelope.block_height;
+        let verified_at_height = Some(envelope.block_height);
+        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
         let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest,
-            verified_at_height: Some(verified_at_height),
+            verified_at_height,
         }));
         let instruction =
             InstructionBox::from(iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {

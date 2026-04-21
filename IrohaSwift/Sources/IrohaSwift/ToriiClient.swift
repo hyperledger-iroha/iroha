@@ -2520,7 +2520,9 @@ public extension ToriiExplorerInstructionItem {
         case "transfer":
             return ToriiExplorerTransferDetails.parse(from: box.json)
         case "mint", "burn":
-            return ToriiExplorerTransferDetails.parseMintBurn(from: box.json)
+            return ToriiExplorerTransferDetails.parseMintBurn(from: box.json,
+                                                              kind: normalizedKind,
+                                                              authority: authority)
         default:
             return nil
         }
@@ -2933,9 +2935,10 @@ extension ToriiExplorerTransferDetails {
         }
     }
 
-    /// Parse Mint/Burn payloads. These have `destination` (an asset id) and `object` (amount)
-    /// but no `source` field (unlike Transfer).
-    fileprivate static func parseMintBurn(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
+    /// Parse Mint/Burn payloads. These have `destination` (an asset id) and `object` (amount).
+    fileprivate static func parseMintBurn(from json: ToriiJSONValue,
+                                          kind: String,
+                                          authority: String) -> ToriiExplorerTransferDetails? {
         guard let payload = payloadObject(from: json) else {
             return nil
         }
@@ -2953,11 +2956,15 @@ extension ToriiExplorerTransferDetails {
               let amount = stringValue(map["object"]) else {
             return nil
         }
-        let (definition, accountId) = parseAssetId(destination)
-        let details = ToriiExplorerTransferAsset(destinationAccountId: accountId,
+        let parsedAsset = parseAssetId(destination)
+        let actor = parsedAsset.account ?? authority
+        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sender = normalizedKind == "burn" ? actor : authority
+        let receiver = normalizedKind == "mint" ? actor : authority
+        let details = ToriiExplorerTransferAsset(destinationAccountId: receiver,
                                                  amount: amount,
-                                                 senderAccountId: nil,
-                                                 assetDefinitionId: definition)
+                                                 senderAccountId: sender,
+                                                 assetDefinitionId: parsedAsset.definition)
         return .asset(details)
     }
 
@@ -3047,21 +3054,21 @@ extension ToriiExplorerTransferDetails {
         }
     }
 
-    fileprivate static func parseAssetId(_ value: String) -> (definition: String?, account: String) {
+    fileprivate static func parseAssetId(_ value: String) -> (definition: String?, account: String?) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return (nil, "")
+            return (nil, nil)
         }
         if let parsed = OfflineNorito.parsePublicAssetIdLiteral(trimmed) {
             return (parsed.assetDefinitionId, parsed.accountId)
         }
         if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
-            return (canonical, "")
+            return (canonical, nil)
         }
         if let canonicalAccount = try? normalizeToriiAccountIdQueryValue(trimmed, field: "asset_id.account_id") {
             return (nil, canonicalAccount)
         }
-        return (nil, "")
+        return (nil, nil)
     }
 
     fileprivate struct DecodedToriiAssetIdFields {

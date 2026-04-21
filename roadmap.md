@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 iroha_core identifier and lane relay test compile unblock):
+The reported `iroha_core` test-build blockers are cleared. Identifier ISI test
+helpers now import `RamLfeReceiptAttestation` directly, and the lane relay
+registration test computes its expected `FastPQ` proof digest before moving the
+envelope into `with_fastpq_proof_material(...)`, so the check no longer needs
+to clone the envelope just to satisfy the borrow checker.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/identifier.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/smartcontracts/isi/mod.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --tests`
+- open work after this slice:
+  - rerun a broader workspace/package validation window when there is budget
+    beyond the reported `iroha_core` compile blockers
+
 Latest sync (2026-04-21 first-release SDK compatibility cleanup):
 Java/Kotlin SDK compatibility paths are cut over to first-release canonical
 behaviour. Connect envelopes decode only through the current Norito schema, key
