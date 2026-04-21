@@ -1562,6 +1562,8 @@ test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload",
     submitter: {
       name: "Explorer Moderator",
       contact: "https://example.invalid/moderation",
+      organization: null,
+      pgp_fingerprint: null,
     },
     duplicates: [],
   };

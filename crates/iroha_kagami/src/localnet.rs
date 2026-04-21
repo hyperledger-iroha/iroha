@@ -1100,7 +1100,14 @@ fn generate_localnet_with_line<T: Write>(
         signature_batch_max_ed25519,
         queue_capacity,
     );
-    let da_proof_policies = resolve_localnet_da_proof_policies(&bootstrap_config)?;
+    // Iroha2 localnets intentionally keep DA disabled, so the rendered config does not satisfy
+    // the current runtime parser's DA-on invariant. Only derive and embed the proof-policy bundle
+    // when the selected build line actually enables DA/RBC.
+    let da_proof_policies = if da_rbc_enabled {
+        Some(resolve_localnet_da_proof_policies(&bootstrap_config)?)
+    } else {
+        None
+    };
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
         .with_consensus_meta();
@@ -1111,7 +1118,7 @@ fn generate_localnet_with_line<T: Write>(
         chain_discriminant,
         &genesis_json_path,
         &genesis_signed_path,
-        Some(da_proof_policies),
+        da_proof_policies,
     )?;
     tui::success("Genesis ready");
 

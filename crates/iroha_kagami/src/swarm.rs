@@ -680,15 +680,13 @@ api_port = 9000
     }
 
     fn write_minimal_genesis(path: &Path) {
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Permissioned",
-            "transactions": [
-                {}
-            ]
-        }"#;
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .build_raw()
+                .with_consensus_mode(
+                    iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+                );
+        let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
 
