@@ -302,7 +302,7 @@ offline cash lineage, and returns the new authoritative envelope. Authorization 
 ```swift
 let loaded = try await authenticatedTransport.post(
     "/v1/offline/cash/load",
-    body: ToriiOfflineCashLoadRequest(
+    body: try ToriiOfflineCashLoadRequest(
         operationId: UUID().uuidString,
         lineageId: envelope.lineageState.lineageId,
         accountId: controllerId,

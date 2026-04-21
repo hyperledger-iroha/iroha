@@ -62,7 +62,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             assertionBase64: "YXNzZXJ0aW9u",
             counter: 7
         )
-        let authorization = ToriiOfflineSpendAuthorization(
+        let authorization = try ToriiOfflineSpendAuthorization(
             authorizationId: "auth-1",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -75,7 +75,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: deviceBinding,
             issuerSignatureBase64: "authorization-signature"
         )
-        let cashState = ToriiOfflineCashState(
+        let cashState = try ToriiOfflineCashState(
             lineageId: "lineage-1",
             accountId: aliceId,
             deviceId: "device-1",
@@ -118,7 +118,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 issuerSignatureBase64: "bundle-signature"
             )
         )
-        let receipt = ToriiOfflineTransferReceipt(
+        let receipt = try ToriiOfflineTransferReceipt(
             transferId: "transfer-1",
             direction: .outgoing,
             lineageId: "lineage-1",
@@ -149,7 +149,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: deviceBinding,
             deviceProof: deviceProof
         )
-        let loadRequest = ToriiOfflineCashLoadRequest(
+        let loadRequest = try ToriiOfflineCashLoadRequest(
             operationId: "load-1",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -184,7 +184,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             preStateHash: String(repeating: "a", count: 64),
             receipts: [receipt]
         )
-        let redeemRequest = ToriiOfflineCashRedeemRequest(
+        let redeemRequest = try ToriiOfflineCashRedeemRequest(
             operationId: "redeem-1",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -349,7 +349,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             assertionBase64: "YXNzZXJ0aW9uLTI=",
             counter: 9
         )
-        let authorization = ToriiOfflineSpendAuthorization(
+        let authorization = try ToriiOfflineSpendAuthorization(
             authorizationId: "auth-1",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -362,7 +362,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: deviceBinding,
             issuerSignatureBase64: "authorization-signature"
         )
-        let cashState = ToriiOfflineCashState(
+        let cashState = try ToriiOfflineCashState(
             lineageId: "lineage-1",
             accountId: aliceId,
             deviceId: "device-1",
@@ -377,7 +377,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             issuerSignatureBase64: "cash-signature"
         )
         let responseBody = try JSONEncoder().encode(ToriiOfflineCashEnvelope(lineageState: cashState))
-        let receiptA = ToriiOfflineTransferReceipt(
+        let receiptA = try ToriiOfflineTransferReceipt(
             transferId: "transfer-1",
             direction: .outgoing,
             lineageId: "lineage-1",
@@ -402,7 +402,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             senderSignatureBase64: "sender-signature",
             createdAtMs: 1_700_000_123_456
         )
-        let receiptB = ToriiOfflineTransferReceipt(
+        let receiptB = try ToriiOfflineTransferReceipt(
             transferId: "transfer-2",
             direction: .incoming,
             lineageId: "lineage-1",
@@ -440,7 +440,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: alternateDeviceBinding,
             deviceProof: deviceProof
         )
-        let loadRequestA = ToriiOfflineCashLoadRequest(
+        let loadRequestA = try ToriiOfflineCashLoadRequest(
             operationId: "load-stable",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -449,7 +449,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: deviceBinding,
             deviceProof: deviceProof
         )
-        let loadRequestB = ToriiOfflineCashLoadRequest(
+        let loadRequestB = try ToriiOfflineCashLoadRequest(
             operationId: "load-stable",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -510,7 +510,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             preStateHash: String(repeating: "f", count: 64),
             receipts: [receiptA, receiptB]
         )
-        let redeemRequestA = ToriiOfflineCashRedeemRequest(
+        let redeemRequestA = try ToriiOfflineCashRedeemRequest(
             operationId: "redeem-stable",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -520,7 +520,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             receipts: [receiptA],
             redeemProof: redeemProofA
         )
-        let redeemRequestB = ToriiOfflineCashRedeemRequest(
+        let redeemRequestB = try ToriiOfflineCashRedeemRequest(
             operationId: "redeem-stable",
             lineageId: "lineage-1",
             accountId: aliceId,
@@ -586,7 +586,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
     }
 
     func testAuthorizationCanonicalPayloadOmitsNilIosBindingFields() throws {
-        let authorization = ToriiOfflineSpendAuthorization(
+        let authorization = try ToriiOfflineSpendAuthorization(
             authorizationId: "authorization-1",
             lineageId: "lineage-1",
             accountId: "account-1",

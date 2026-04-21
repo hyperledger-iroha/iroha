@@ -20,7 +20,7 @@ use iroha_data_model::{
     account::AccountId,
     isi::Log,
     prelude::FindDomains,
-    query::{QueryRequest, QueryWithFilter, QueryWithParams},
+    query::{QueryOutputBatchBox, QueryRequest, QueryWithParams},
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_logger::Level;
@@ -142,15 +142,11 @@ pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
 pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
     let key_pair = KeyPair::random();
     let account = AccountId::of(key_pair.public_key().clone());
-    let query = QueryWithParams::new(
-        QueryWithFilter::new_with_query(
-            Box::new(FindDomains),
-            iroha_data_model::predicate::CompoundPredicate::PASS,
-            iroha_data_model::query::SelectorTuple::default(),
-        )
-        .into(),
-        Default::default(),
-    );
+    let query_box: iroha_data_model::query::QueryBox<QueryOutputBatchBox> = Box::new(FindDomains);
+    #[cfg(feature = "fast_dsl")]
+    let query = QueryWithParams::new(&query_box, Default::default());
+    #[cfg(not(feature = "fast_dsl"))]
+    let query = QueryWithParams::new(query_box, Default::default());
     QueryRequest::Start(query)
         .with_authority(account)
         .sign(&key_pair)
