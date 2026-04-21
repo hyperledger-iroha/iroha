@@ -5,63 +5,74 @@ import PackageDescription
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
 let bridgeAbsolutePath = packageDirectory.appendingPathComponent(bridgeRelativePath).standardized
-let hasBridgeArtifact = FileManager.default.fileExists(atPath: bridgeAbsolutePath.path)
-if !hasBridgeArtifact {
-    print("notice: NoritoBridge.xcframework not found at \(bridgeAbsolutePath.path)")
-}
 
-enum BridgePolicy {
-    case required
-    case optional
+func validateBridgeArtifact(at artifactRoot: URL) -> String? {
+    guard FileManager.default.fileExists(atPath: artifactRoot.path) else {
+        return """
+        error: NoritoBridge.xcframework is required at \(artifactRoot.path). \
+        Materialize it from ../dist/NoritoBridge.xcframework.zip before building.
+        """
+    }
 
-    var swiftDefine: String {
-        switch self {
-        case .required:
-            return "IROHASWIFT_BRIDGE_REQUIRED"
-        case .optional:
-            return "IROHASWIFT_BRIDGE_OPTIONAL"
+    let infoURL = artifactRoot.appendingPathComponent("Info.plist")
+    guard
+        let data = try? Data(contentsOf: infoURL),
+        let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+        let dictionary = plist as? [String: Any],
+        let libraries = dictionary["AvailableLibraries"] as? [[String: Any]],
+        !libraries.isEmpty
+    else {
+        return "error: NoritoBridge.xcframework at \(artifactRoot.path) has unreadable metadata."
+    }
+
+    for library in libraries {
+        let identifier = library["LibraryIdentifier"] as? String ?? "<unknown>"
+        let relativePaths = ["BinaryPath", "LibraryPath"].compactMap { library[$0] as? String }
+        guard !relativePaths.isEmpty else {
+            return "error: NoritoBridge.xcframework slice \(identifier) is missing BinaryPath/LibraryPath metadata."
+        }
+
+        for relativePath in relativePaths {
+            let referencedURL = artifactRoot
+                .appendingPathComponent(identifier, isDirectory: true)
+                .appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(atPath: referencedURL.path) else {
+                return "error: NoritoBridge.xcframework slice \(identifier) is missing \(relativePath)."
+            }
         }
     }
+
+    return nil
 }
 
-let bridgePolicy: BridgePolicy = hasBridgeArtifact ? .required : .optional
-if !hasBridgeArtifact {
-    print("""
-    warning: NoritoBridge.xcframework missing at \(bridgeAbsolutePath.path); \
-    continuing with Swift-only fallback.
-    """)
+if let bridgeArtifactError = validateBridgeArtifact(at: bridgeAbsolutePath) {
+    fatalError(bridgeArtifactError)
 }
-
-let shouldLinkBridge = hasBridgeArtifact
 var targets: [Target] = []
 var irohaSwiftDependencies: [Target.Dependency] = []
 var testDependencies: [Target.Dependency] = ["IrohaSwift"]
 var irohaSwiftLinkerSettings: [LinkerSetting] = []
 
-if shouldLinkBridge {
-    targets.append(
-        .binaryTarget(
-            name: "NoritoBridge",
-            path: bridgeRelativePath
-        )
+targets.append(
+    .binaryTarget(
+        name: "NoritoBridge",
+        path: bridgeRelativePath
     )
-    let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", condition: .when(platforms: [.iOS, .macOS]))
-    irohaSwiftDependencies.append(bridgeDependency)
-    testDependencies.append(bridgeDependency)
-    // Ensure static bridge object files are retained so runtime dlsym lookups resolve.
-    irohaSwiftLinkerSettings.append(.unsafeFlags(["-all_load"], .when(platforms: [.iOS])))
-}
+)
+let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", condition: .when(platforms: [.iOS, .macOS]))
+irohaSwiftDependencies.append(bridgeDependency)
+testDependencies.append(bridgeDependency)
+// Ensure static bridge object files are retained so runtime dlsym lookups resolve.
+irohaSwiftLinkerSettings.append(.unsafeFlags(["-all_load"], .when(platforms: [.iOS])))
 
 var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),
     .define("IROHASWIFT_ENABLE_SECP256K1"),
     .define("IROHASWIFT_ENABLE_MLDSA"),
     .define("IROHASWIFT_ENABLE_SM"),
-    .define(bridgePolicy.swiftDefine)
+    .define("IROHASWIFT_BRIDGE_REQUIRED"),
+    .define("IROHASWIFT_BRIDGE_PRESENT")
 ]
-if hasBridgeArtifact {
-    swiftSettings.append(.define("IROHASWIFT_BRIDGE_PRESENT"))
-}
 
 let package = Package(
     name: "IrohaSwift",

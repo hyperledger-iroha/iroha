@@ -37456,6 +37456,52 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
+    fn accounts_checkpoint_request_for_app(
+        app: &SharedAppState,
+        emitted_at_unix: u64,
+        archive_emitted_at_unix: u64,
+        manifest_seed: u8,
+        ticket_seed: u8,
+    ) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
+        use std::collections::BTreeSet;
+
+        let world = app.state.world_view();
+        let partitions: Vec<u32> = crate::routing::collect_subject_accounts(&world)
+            .into_iter()
+            .map(|account| {
+                iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
+                    &iroha_data_model::Identifiable::id(&account).to_string(),
+                )
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        drop(world);
+
+        crate::runtime::NodeProjectionCheckpointPublishRequest {
+            emitted_at_unix: Some(emitted_at_unix),
+            shards: partitions
+                .into_iter()
+                .enumerate()
+                .map(|(index, partition_id)| {
+                    crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                        resource: "accounts".to_owned(),
+                        partition_id,
+                        asset_definition_id: None,
+                        archive_emitted_at_unix,
+                        manifest_digest_hex: hex::encode(
+                            [manifest_seed.wrapping_add(index as u8); 32],
+                        ),
+                        storage_ticket_hex: hex::encode(
+                            [ticket_seed.wrapping_add(index as u8); 32],
+                        ),
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload() {
         use iroha_data_model::Registrable;
@@ -37476,29 +37522,15 @@ pub(crate) mod tests_runtime_handlers {
             [],
         );
         let app = mk_app_state_for_tests_with_world(world);
-        let partition_id =
-            iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
-                &alice_id.to_string(),
-            );
+        let request =
+            accounts_checkpoint_request_for_app(&app, 1_714_002_111, 1_714_002_000, 0x21, 0x31);
 
         let response = super::handler_node_query_projection_checkpoint_plan(
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::utils::extractors::NoritoJson(
-                crate::runtime::NodeProjectionCheckpointPublishRequest {
-                    emitted_at_unix: Some(1_714_002_111),
-                    shards: vec![crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                        resource: "accounts".to_owned(),
-                        partition_id,
-                        asset_definition_id: None,
-                        archive_emitted_at_unix: 1_714_002_000,
-                        manifest_digest_hex: hex::encode([0x21; 32]),
-                        storage_ticket_hex: hex::encode([0x31; 32]),
-                    }],
-                },
-            ),
+            crate::utils::extractors::NoritoJson(request),
         )
         .await
         .expect("ok");
@@ -37509,7 +37541,10 @@ pub(crate) mod tests_runtime_handlers {
         let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
             norito::json::from_slice(&body).expect("decode json");
         assert_eq!(checkpoint.emitted_at_unix, 1_714_002_111);
-        assert_eq!(checkpoint.shards.len(), 1);
+        assert!(
+            !checkpoint.shards.is_empty(),
+            "checkpoint preview must include the canonical live shard set"
+        );
         assert!(
             app.state.query_projection_checkpoint_snapshot().is_none(),
             "plan route must not persist checkpoint state"
@@ -37538,29 +37573,15 @@ pub(crate) mod tests_runtime_handlers {
             [],
         );
         let app = mk_app_state_for_tests_with_world(world);
-        let partition_id =
-            iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
-                &alice_id.to_string(),
-            );
+        let request =
+            accounts_checkpoint_request_for_app(&app, 1_714_002_333, 1_714_002_222, 0x41, 0x51);
 
         let response = super::handler_node_query_projection_checkpoint_publish(
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::utils::extractors::NoritoJson(
-                crate::runtime::NodeProjectionCheckpointPublishRequest {
-                    emitted_at_unix: Some(1_714_002_333),
-                    shards: vec![crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                        resource: "accounts".to_owned(),
-                        partition_id,
-                        asset_definition_id: None,
-                        archive_emitted_at_unix: 1_714_002_222,
-                        manifest_digest_hex: hex::encode([0x41; 32]),
-                        storage_ticket_hex: hex::encode([0x51; 32]),
-                    }],
-                },
-            ),
+            crate::utils::extractors::NoritoJson(request),
         )
         .await
         .expect("ok");
@@ -37571,7 +37592,10 @@ pub(crate) mod tests_runtime_handlers {
         let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
             norito::json::from_slice(&body).expect("decode json");
         assert_eq!(checkpoint.emitted_at_unix, 1_714_002_333);
-        assert_eq!(checkpoint.shards.len(), 1);
+        assert!(
+            !checkpoint.shards.is_empty(),
+            "checkpoint publish must persist the canonical live shard set"
+        );
         assert_eq!(
             app.state
                 .query_projection_checkpoint_snapshot()

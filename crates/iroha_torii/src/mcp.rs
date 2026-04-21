@@ -8828,7 +8828,7 @@ fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_plan".to_owned(),
         description:
-            "Validate uploaded shard refs and preview the rebuilt query projection checkpoint (`/v1/node/query/projection/checkpoint/plan`)."
+            "Validate that uploaded shard refs exactly cover the canonical live query projection shard set and preview the rebuilt checkpoint (`/v1/node/query/projection/checkpoint/plan`)."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/node/query/projection/checkpoint/plan".to_owned(),
@@ -8843,7 +8843,7 @@ fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
                 },
                 "shards": {
                     "type": "array",
-                    "description": "Uploaded shard references that will be rebuilt and validated against the live query snapshot.",
+                    "description": "Uploaded shard references that must exactly cover the canonical non-empty live query snapshot.",
                     "items": {
                         "type": "object",
                         "additionalProperties": false,
@@ -8879,7 +8879,7 @@ fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_publish".to_owned(),
         description:
-            "Rebuild uploaded shard refs and persist the query projection checkpoint (`/v1/node/query/projection/checkpoint/publish`)."
+            "Rebuild uploaded shard refs that exactly cover the canonical live shard set and persist the query projection checkpoint (`/v1/node/query/projection/checkpoint/publish`)."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/node/query/projection/checkpoint/publish".to_owned(),
@@ -8894,7 +8894,7 @@ fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
                 },
                 "shards": {
                     "type": "array",
-                    "description": "Uploaded shard references that will be rebuilt, validated, and persisted as a checkpoint.",
+                    "description": "Uploaded shard references that must exactly cover the canonical non-empty live query snapshot before the checkpoint is persisted.",
                     "items": {
                         "type": "object",
                         "additionalProperties": false,

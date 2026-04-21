@@ -30,6 +30,7 @@ pub mod isi {
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
+        nexus::DataSpaceCatalog,
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
     };
     use iroha_logger::prelude::*;
@@ -168,6 +169,36 @@ pub mod isi {
             }
             other => InstructionExecutionError::InvariantViolation(other.to_string().into()),
         })
+    }
+
+    fn account_alias_is_open_retail_namespace(
+        label: &AccountAlias,
+        catalog: &DataSpaceCatalog,
+    ) -> bool {
+        let Some(dataspace_alias) = catalog
+            .by_id(label.dataspace)
+            .map(|entry| entry.alias.as_str())
+        else {
+            return false;
+        };
+        let domain_alias = label.domain.as_ref().map(|domain| domain.name().as_ref());
+        matches!(
+            (dataspace_alias, domain_alias),
+            ("sbp", None) | ("sbp", Some("hbl" | "ubl")) | ("cbuae", None)
+        )
+    }
+
+    fn ensure_account_alias_lease_unless_open_retail_namespace(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        label: &AccountAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        if account_alias_is_open_retail_namespace(label, &state_transaction.nexus.dataspace_catalog)
+        {
+            return Ok(());
+        }
+        crate::sns::ensure_account_alias_lease(state_transaction, authority, label)
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))
     }
 
     fn contract_alias_matches_account_label(
@@ -793,10 +824,11 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                crate::sns::ensure_account_alias_lease(state_transaction, authority, label)
-                    .map_err(|e| {
-                        InstructionExecutionError::InvariantViolation(e.to_string().into())
-                    })?;
+                ensure_account_alias_lease_unless_open_retail_namespace(
+                    state_transaction,
+                    authority,
+                    label,
+                )?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -2585,8 +2617,11 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            crate::sns::ensure_account_alias_lease(state_transaction, authority, &alias)
-                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
+            ensure_account_alias_lease_unless_open_retail_namespace(
+                state_transaction,
+                authority,
+                &alias,
+            )?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2686,8 +2721,11 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            crate::sns::ensure_account_alias_lease(state_transaction, authority, &alias)
-                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
+            ensure_account_alias_lease_unless_open_retail_namespace(
+                state_transaction,
+                authority,
+                &alias,
+            )?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -3008,7 +3046,10 @@ mod tests {
         },
         metadata::Metadata,
         name::Name,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{
+            AssetPermissionManifest, DataSpaceId, DataSpaceMetadata, ManifestVersion,
+            UniversalAccountId,
+        },
         nft::{Nft, NftId},
         offline::{
             OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment, OfflineAllowanceRecord,
@@ -3068,6 +3109,14 @@ mod tests {
         state.world.accounts.insert(account_id, account_value);
     }
 
+    fn test_state_with_authority(authority: &AccountId) -> State {
+        let mut state = test_state();
+        let domain_id = DomainId::try_new("authority", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, authority);
+        seed_account(&mut state, authority, &domain_id);
+        state
+    }
+
     #[test]
     fn find_domain_by_id_returns_registered_domain() {
         let mut state = test_state();
@@ -3117,6 +3166,75 @@ mod tests {
 
     fn alias_in_domain(domain: &DomainId, label: Name) -> AccountAlias {
         AccountAlias::new(label, Some(alias_domain(domain)), DataSpaceId::UNIVERSAL)
+    }
+
+    fn alias_in_dataspace_domain(
+        domain: &DomainId,
+        dataspace: DataSpaceId,
+        label: Name,
+    ) -> AccountAlias {
+        AccountAlias::new_in_dataspace(label, Some(alias_domain(domain)), dataspace)
+    }
+
+    fn install_retail_dataspace_catalog(
+        tx: &mut StateTransaction<'_, '_>,
+    ) -> (DataSpaceId, DataSpaceId) {
+        let sbp = DataSpaceId::new(12);
+        let cbuae = DataSpaceId::new(13);
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: sbp,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: cbuae,
+                alias: "cbuae".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("retail dataspace catalog");
+        tx.nexus.dataspace_catalog = catalog.clone();
+        tx.world.dataspace_catalog = catalog;
+        (sbp, cbuae)
+    }
+
+    fn seed_account_alias_manage_permissions(
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        tx.world.add_account_permission(
+            authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+            }),
+        );
+        if let Some(domain_id) = alias
+            .domain_id(&tx.nexus.dataspace_catalog)
+            .expect("alias domain id")
+        {
+            tx.world.add_account_permission(
+                authority,
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain_id),
+                }),
+            );
+        }
+    }
+
+    fn open_retail_account_aliases(sbp: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
+        let hbl = DomainId::try_new("hbl", "sbp").expect("hbl domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("ubl domain");
+        vec![
+            AccountAlias::domainless("retailsbp".parse::<Name>().expect("label"), sbp),
+            alias_in_dataspace_domain(&hbl, sbp, "retailhbl".parse::<Name>().expect("label")),
+            alias_in_dataspace_domain(&ubl, sbp, "retailubl".parse::<Name>().expect("label")),
+            AccountAlias::domainless("retailcbuae".parse::<Name>().expect("label"), cbuae),
+        ]
     }
 
     fn seed_account_alias_lease(
@@ -3399,6 +3517,26 @@ mod tests {
     }
 
     #[test]
+    fn register_account_with_open_retail_aliases_does_not_require_sns_lease() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let (sbp, cbuae) = install_retail_dataspace_catalog(&mut tx);
+
+        for alias in open_retail_account_aliases(sbp, cbuae) {
+            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
+
+            Register::account(Account::new(account_id.clone()).with_label(Some(alias.clone())))
+                .execute(&authority, &mut tx)
+                .expect("open retail alias should not require an SNS lease");
+            assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+        }
+    }
+
+    #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
@@ -3572,6 +3710,59 @@ mod tests {
             err.to_string().contains("active SNS lease"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn bind_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let (sbp, _) = install_retail_dataspace_catalog(&mut tx);
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let alias = AccountAlias::domainless("bindretail".parse::<Name>().expect("label"), sbp);
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
+
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("open retail alias binding should not require an SNS lease");
+        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+    }
+
+    #[test]
+    fn set_primary_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let (_, cbuae) = install_retail_dataspace_catalog(&mut tx);
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let alias =
+            AccountAlias::domainless("primaryretail".parse::<Name>().expect("label"), cbuae);
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
+
+        SetPrimaryAccountAlias {
+            account: account_id.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("open retail primary alias should not require an SNS lease");
+        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
     }
 
     #[test]
