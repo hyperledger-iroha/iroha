@@ -37,6 +37,18 @@ Last updated: 2026-04-21
 - Full workspace `cargo test` remains outside this validation window because
   it is a multi-hour run on this repository.
 
+## 2026-04-21 Follow-up: Torii accounts smoke loopback request wiring
+- `crates/iroha_torii/tests/accounts_endpoints.rs` now attaches a loopback
+  `ConnectInfo<SocketAddr>` extension to each direct `oneshot(...)` request
+  hitting `/v1/accounts`, `/v1/accounts/query`, and
+  `/v1/accounts/{account_id}/permissions`.
+- Those app-api router handlers now extract remote socket metadata, so the
+  smoke was previously failing Axum's missing-request-extension path instead of
+  exercising the mounted endpoints.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_endpoints accounts_endpoints_exist -- --nocapture`
+
 ## 2026-04-21 Follow-up: iroha_js_host signed-transaction decode and Kaigi fixture resync
 - Fixed the reported `iroha_js_host` reds in `crates/iroha_js_host/src/lib.rs`.
   `decode_signed_transaction(...)` now retries the three wire shapes that the

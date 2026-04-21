@@ -41,6 +41,25 @@ output and Swift parity fixtures were regenerated after the API cleanup.
     window; no SDK-specific gaps were found in the focused source scans and
     SDK test suites above
 
+Latest sync (2026-04-21 Torii accounts smoke loopback request wiring):
+The reported `accounts_endpoints_exist` red is fixed.
+`crates/iroha_torii/tests/accounts_endpoints.rs` now attaches loopback
+`ConnectInfo<SocketAddr>` to each direct `oneshot(...)` request, so the smoke
+exercises the mounted `/v1/accounts`, `/v1/accounts/query`, and
+`/v1/accounts/{account_id}/permissions` routes instead of failing Axum's
+missing-request-extension path first.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/accounts_endpoints.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_endpoints accounts_endpoints_exist -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported smoke regression
+
 Latest sync (2026-04-21 iroha_js_host signed-transaction decode and Kaigi fixture resync):
 the reported `iroha_js_host` reds are cleared. The native signed-transaction
 decoder in `crates/iroha_js_host/src/lib.rs` now accepts the bridge’s actual
