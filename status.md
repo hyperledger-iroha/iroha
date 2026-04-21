@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii node capability and projection checkpoint test resync
+- Updated the `iroha_torii` runtime and handler regression tests to follow the
+  expanded generic-query capability advert instead of the older
+  `accounts`/`asset_holders` subset. The node-capability assertions now derive
+  aggregate and projection-export resource lists from the registered
+  `generic_query` surface so the tests stay aligned when supported resources
+  expand again.
+- Reworked the projection-checkpoint request builders used by the Torii lib
+  tests to cover the full canonical five-family export catalog:
+  `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and
+  `domains`. The durable publish helper now also hashes manifests from shard
+  archives rebuilt with the same `archive_emitted_at_unix` value that the
+  publish path validates, so local SoraFS seeding checks no longer drift on the
+  emitted-at timestamp.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib node_capabilities -- --nocapture`
+  - `cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
+
 ## 2026-04-21 Follow-up: Torii generic QueryEnvelope executor expansion
 - Added a shared Torii `QueryEnvelope` row/aggregate executor and routed the
   current app query resources through it when `select` or `aggregate` is

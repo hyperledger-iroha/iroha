@@ -37436,7 +37436,14 @@ pub(crate) mod tests_runtime_handlers {
         assert!(caps.query.aggregate.exact_results);
         assert_eq!(
             caps.query.aggregate.supported_resources,
-            vec!["accounts".to_string(), "asset_holders".to_string()]
+            if cfg!(feature = "app_api") {
+                crate::generic_query::aggregate_supported_resources()
+                    .iter()
+                    .map(|resource| (*resource).to_owned())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
         );
         assert!(caps.query.indexed_snapshot_marker);
         assert!(
@@ -37483,7 +37490,10 @@ pub(crate) mod tests_runtime_handlers {
         if cfg!(feature = "app_api") {
             assert_eq!(
                 caps.query.projection.export_supported_resources,
-                vec!["accounts".to_string(), "asset_holders".to_string()]
+                crate::generic_query::projection_export_supported_resources()
+                    .iter()
+                    .map(|resource| (*resource).to_owned())
+                    .collect::<Vec<_>>()
             );
         } else {
             assert!(caps.query.projection.export_supported_resources.is_empty());
@@ -37569,98 +37579,126 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[cfg(feature = "app_api")]
-    fn accounts_checkpoint_request_for_app(
+    async fn projection_checkpoint_request_for_app(
         app: &SharedAppState,
         emitted_at_unix: u64,
         archive_emitted_at_unix: u64,
         manifest_seed: u8,
         ticket_seed: u8,
     ) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
-        use std::collections::BTreeSet;
-
-        let world = app.state.world_view();
-        let partitions: Vec<u32> = crate::routing::collect_subject_accounts(&world)
-            .into_iter()
-            .map(|account| {
-                iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
-                    &iroha_data_model::Identifiable::id(&account).to_string(),
-                )
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        drop(world);
+        let mut shards = Vec::new();
+        let mut next_seed = 0u8;
+        for resource in crate::generic_query::projection_export_supported_resources() {
+            let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
+                app.state.clone(),
+                (*resource).to_owned(),
+                crate::runtime::NodeProjectionShardCatalogQuery {
+                    asset_definition_id: None,
+                    offset: None,
+                    limit: None,
+                },
+            )
+            .await
+            .expect("build projection shard catalog");
+            for entry in catalog.entries {
+                shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                    resource: (*resource).to_owned(),
+                    partition_id: entry.partition_id,
+                    asset_definition_id: entry.asset_definition_id,
+                    archive_emitted_at_unix,
+                    manifest_digest_hex: hex::encode([manifest_seed.wrapping_add(next_seed); 32]),
+                    storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
+                });
+                next_seed = next_seed.wrapping_add(1);
+            }
+        }
 
         crate::runtime::NodeProjectionCheckpointPublishRequest {
             emitted_at_unix: Some(emitted_at_unix),
-            shards: partitions
-                .into_iter()
-                .enumerate()
-                .map(|(index, partition_id)| {
-                    crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                        resource: "accounts".to_owned(),
-                        partition_id,
-                        asset_definition_id: None,
-                        archive_emitted_at_unix,
-                        manifest_digest_hex: hex::encode(
-                            [manifest_seed.wrapping_add(index as u8); 32],
-                        ),
-                        storage_ticket_hex: hex::encode(
-                            [ticket_seed.wrapping_add(index as u8); 32],
-                        ),
-                    }
-                })
-                .collect(),
+            shards,
         }
     }
 
     #[cfg(feature = "app_api")]
-    async fn accounts_checkpoint_request_for_app_with_real_manifests(
+    async fn projection_checkpoint_request_for_app_with_real_manifests(
         app: &SharedAppState,
         emitted_at_unix: u64,
         archive_emitted_at_unix: u64,
         ticket_seed: u8,
     ) -> crate::runtime::NodeProjectionCheckpointPublishRequest {
-        use std::collections::BTreeSet;
-
-        let world = app.state.world_view();
-        let partitions: Vec<u32> = crate::routing::collect_subject_accounts(&world)
-            .into_iter()
-            .map(|account| {
-                iroha_core::query::projection_checkpoint::query_projection_default_partition_for_account(
-                    &iroha_data_model::Identifiable::id(&account).to_string(),
-                )
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        drop(world);
-
-        let mut shards = Vec::with_capacity(partitions.len());
-        for (index, partition_id) in partitions.into_iter().enumerate() {
-            let archive = crate::runtime::build_accounts_projection_shard_archive(
-                app.state.as_ref(),
-                partition_id,
-                archive_emitted_at_unix,
+        let mut shards = Vec::new();
+        let mut next_seed = 0u8;
+        for resource in crate::generic_query::projection_export_supported_resources() {
+            let catalog = crate::runtime::handle_node_query_projection_shard_catalog(
+                app.state.clone(),
+                (*resource).to_owned(),
+                crate::runtime::NodeProjectionShardCatalogQuery {
+                    asset_definition_id: None,
+                    offset: None,
+                    limit: None,
+                },
             )
-            .expect("build accounts projection shard archive");
-            let (_, _, manifest) =
-                crate::routing::query_projection_archive_storage_artifacts(&archive)
-                    .expect("build projection archive storage artifacts");
-            let manifest_digest_hex = hex::encode(
-                manifest
-                    .digest()
-                    .expect("digest projection archive manifest")
-                    .as_bytes(),
-            );
-            shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
-                resource: "accounts".to_owned(),
-                partition_id,
-                asset_definition_id: None,
-                archive_emitted_at_unix,
-                manifest_digest_hex,
-                storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(index as u8); 32]),
-            });
+            .await
+            .expect("build projection shard catalog");
+            for entry in catalog.entries {
+                let archive = match *resource {
+                    "accounts" => crate::runtime::build_accounts_projection_shard_archive(
+                        app.state.as_ref(),
+                        entry.partition_id,
+                        archive_emitted_at_unix,
+                    ),
+                    "account_assets" => {
+                        crate::runtime::build_account_assets_projection_shard_archive(
+                            app.state.as_ref(),
+                            entry.partition_id,
+                            archive_emitted_at_unix,
+                        )
+                    }
+                    "asset_holders" => {
+                        crate::runtime::build_asset_holders_projection_shard_archive(
+                            app.state.as_ref(),
+                            entry
+                                .asset_definition_id
+                                .as_deref()
+                                .expect("asset_holders catalog entry asset definition"),
+                            entry.partition_id,
+                            archive_emitted_at_unix,
+                        )
+                    }
+                    "asset_definitions" => {
+                        crate::runtime::build_asset_definitions_projection_shard_archive(
+                            app.state.as_ref(),
+                            entry.partition_id,
+                            archive_emitted_at_unix,
+                        )
+                    }
+                    "domains" => crate::runtime::build_domains_projection_shard_archive(
+                        app.state.as_ref(),
+                        entry.partition_id,
+                        archive_emitted_at_unix,
+                    ),
+                    other => panic!("unsupported projection checkpoint test resource: {other}"),
+                }
+                .expect("build projection shard archive");
+                let (_, _, manifest) =
+                    crate::routing::query_projection_archive_storage_artifacts(&archive)
+                        .expect("build projection archive storage artifacts");
+                let manifest_digest_hex = hex::encode(
+                    manifest
+                        .digest()
+                        .expect("digest projection archive manifest")
+                        .as_bytes(),
+                );
+                shards.push(crate::runtime::NodeProjectionCheckpointPublishShardRef {
+                    resource: (*resource).to_owned(),
+                    partition_id: entry.partition_id,
+                    asset_definition_id: entry.asset_definition_id,
+                    archive_emitted_at_unix,
+                    manifest_digest_hex,
+                    storage_ticket_hex: hex::encode([ticket_seed.wrapping_add(next_seed); 32]),
+                });
+                next_seed = next_seed.wrapping_add(1);
+            }
         }
 
         crate::runtime::NodeProjectionCheckpointPublishRequest {
@@ -37691,7 +37729,8 @@ pub(crate) mod tests_runtime_handlers {
         );
         let app = mk_app_state_for_tests_with_world(world);
         let request =
-            accounts_checkpoint_request_for_app(&app, 1_714_002_111, 1_714_002_000, 0x21, 0x31);
+            projection_checkpoint_request_for_app(&app, 1_714_002_111, 1_714_002_000, 0x21, 0x31)
+                .await;
 
         let response = super::handler_node_query_projection_checkpoint_plan(
             State(app.clone()),
@@ -37742,7 +37781,8 @@ pub(crate) mod tests_runtime_handlers {
         );
         let app = mk_app_state_for_tests_with_world(world);
         let request =
-            accounts_checkpoint_request_for_app(&app, 1_714_002_333, 1_714_002_222, 0x41, 0x51);
+            projection_checkpoint_request_for_app(&app, 1_714_002_333, 1_714_002_222, 0x41, 0x51)
+                .await;
 
         let response = super::handler_node_query_projection_checkpoint_publish(
             State(app.clone()),
@@ -37804,7 +37844,7 @@ pub(crate) mod tests_runtime_handlers {
                 .build(),
         );
         let app = Arc::new(inner);
-        let request = accounts_checkpoint_request_for_app_with_real_manifests(
+        let request = projection_checkpoint_request_for_app_with_real_manifests(
             &app,
             1_714_002_555,
             1_714_002_444,
