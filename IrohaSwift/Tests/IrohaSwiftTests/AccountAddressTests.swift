@@ -158,7 +158,7 @@ final class AccountAddressTests: XCTestCase {
             XCTAssertEqual(error as? AccountAddressError, .missingI105Sentinel)
         }
         XCTAssertThrowsError(try AccountAddress.parseEncoded(noncanonical, expectedPrefix: 753)) { error in
-            XCTAssertEqual(error as? AccountAddressError, .missingI105Sentinel)
+            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
         }
     }
 

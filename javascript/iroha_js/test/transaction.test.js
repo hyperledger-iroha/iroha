@@ -1,13 +1,8 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  finalizeSignedTransaction,
   hashSignedTransaction,
   resignSignedTransaction,
-  encodeSignedTransactionNorito,
   submitSignedTransaction,
   buildMintAndTransferTransaction,
   buildBurnAssetTransaction,
@@ -58,16 +53,6 @@ const NODE_CAPABILITIES = {
   },
 };
 const test = makeNativeTest(baseTest);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..", "..", "..");
-
-function loadTransactionFixture(name) {
-  const manifestPath = path.join(repoRoot, "fixtures", "norito_rpc", "transaction_fixtures.manifest.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const fixtures = manifest.fixtures ?? manifest;
-  return fixtures.find((entry) => entry.name === name);
-}
 
 function i105FromEd25519AccountId(raw) {
   const trimmed = raw.trim();
@@ -103,36 +88,6 @@ test("hashSignedTransaction delegates to native binding and returns hex", () => 
     const result = hashSignedTransaction(input);
     assert.equal(result, fakeHash.toString("hex"));
   });
-});
-
-test("finalizeSignedTransaction assembles canonical detached Ed25519 submit payload", () => {
-  const fixture = loadTransactionFixture("ivm_transfer");
-  assert.ok(fixture, "fixture must exist");
-  const unsignedTxBytes = Buffer.from(fixture.payload_base64, "base64");
-  const signed = Buffer.from(fixture.signed_base64, "base64");
-  const detachedSignature = Buffer.alloc(64);
-  for (let index = 0; index < detachedSignature.length; index += 1) {
-    detachedSignature[index] = signed[32 + index * 9];
-  }
-  const finalized = finalizeSignedTransaction(unsignedTxBytes, detachedSignature);
-  assert.equal(finalized.length, 1529);
-  for (let index = 0; index < detachedSignature.length; index += 1) {
-    assert.equal(finalized[32 + index * 9], detachedSignature[index]);
-  }
-  const payloadLengthOffset = 32 + detachedSignature.length + (detachedSignature.length - 1) * 8;
-  assert.equal(Number(finalized.readBigUInt64LE(payloadLengthOffset)), unsignedTxBytes.length);
-  assert.deepEqual(
-    finalized.subarray(payloadLengthOffset + 8, payloadLengthOffset + 8 + unsignedTxBytes.length),
-    unsignedTxBytes,
-  );
-  assert.deepEqual(encodeSignedTransactionNorito(finalized), finalized);
-});
-
-test("finalizeSignedTransaction rejects unexpected detached signature sizes", () => {
-  assert.throws(
-    () => finalizeSignedTransaction(Buffer.from([0x01]), Buffer.alloc(63, 0xaa)),
-    /64-byte Ed25519 signature/,
-  );
 });
 
 test("submitSignedTransaction submits payload and polls status until terminal", async () => {

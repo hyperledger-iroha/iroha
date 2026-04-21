@@ -3739,6 +3739,58 @@ mod tests {
     }
 
     #[test]
+    fn open_retail_alias_owner_can_repoint_binding_without_explicit_manage_permission() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let (sbp, _) = install_retail_dataspace_catalog(&mut tx);
+        let hbl = DomainId::try_new("hbl", "sbp").expect("hbl domain");
+        let alias = alias_in_dataspace_domain(&hbl, sbp, "cbdc".parse::<Name>().expect("label"));
+        let current_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let replacement_account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        for account_id in [&current_account_id, &replacement_account_id] {
+            let account = Account {
+                id: account_id.clone(),
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+            };
+            let (account_id, account_value) = account.into_key_value();
+            tx.world.accounts.insert(account_id, account_value);
+        }
+        tx.world
+            .insert_account_alias_binding(alias.clone(), current_account_id.clone());
+        tx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), current_account_id.clone()),
+        );
+
+        SetAccountAliasBinding {
+            account: replacement_account_id.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&current_account_id, &mut tx)
+        .expect("current open retail alias owner should be allowed to repoint its alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&replacement_account_id)
+        );
+        assert_eq!(
+            tx.world
+                .account_rekey_records
+                .get(&alias)
+                .expect("rekey record should follow alias")
+                .active_account_id,
+            replacement_account_id
+        );
+    }
+
+    #[test]
     fn set_primary_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
