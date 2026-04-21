@@ -3251,7 +3251,7 @@ final class ToriiClientTests: XCTestCase {
         let summaries = page.transferSummaries(relativeTo: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
         XCTAssertEqual(summaries.count, 1, "Burn should produce exactly 1 summary")
 
-        let summary = summaries[0]
+        let summary = try XCTUnwrap(summaries.first)
         XCTAssertEqual(summary.kind, "Burn")
         XCTAssertEqual(summary.amount, "25")
         XCTAssertEqual(summary.direction, .outgoing, "Burn should always be outgoing")

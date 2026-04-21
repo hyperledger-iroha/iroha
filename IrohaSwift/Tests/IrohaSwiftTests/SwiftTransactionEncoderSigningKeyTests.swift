@@ -10,13 +10,14 @@ final class SwiftTransactionEncoderSigningKeyTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 0x11, count: 32))
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let authority = AccountId.make(publicKey: keypair.publicKey)
+        let sponsor = try AccountId.makeI105(publicKey: Data(repeating: 0x12, count: 32))
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinitionId,
                                       quantity: "2",
                                       destination: authority,
                                       description: "fee-sponsor",
-                                      feeSponsor: "sponsor@sbp",
+                                      feeSponsor: sponsor,
                                       ttlMs: 120)
         let envelope = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
                                                                   signingKey: signingKey,
