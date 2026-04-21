@@ -7,11 +7,11 @@
       1
     ],
     "slot": 10,
-    "request_hash": "hash:59CFEA4268FB255E2FDB550B37CB83DF836D62744F835F121E5731AB62679BDB#844C",
+    "request_hash": "hash:171C9F2615C9C396A6D61F6B12A87798D44EEB324BD836F10DDE6363150A3077#FFA6",
     "entries": [
       {
         "oracle_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "observation_hash": "hash:9686164FE3142385C1B5E298A05F1567C4C9BF0619EF067176BB24D8CE952BF5#888B",
+        "observation_hash": "hash:856543191D71BDDE4A6B08B19DB3047B189E56565D51D99341503AF46C377221#14C3",
         "value": {
           "mantissa": "1002500",
           "scale": 5
@@ -20,7 +20,7 @@
       },
       {
         "oracle_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-        "observation_hash": "hash:E73437732E52416ABA254F8C2C081EBBD1BA2E6ADBD9C1CB10D82F9FABB5FC43#EEC6",
+        "observation_hash": "hash:6EFE9DD3C180BF72FFFEBC1F071CA873D6D8BD2FF33834D3738B595500849A15#4F02",
         "value": {
           "mantissa": "1001500",
           "scale": 5

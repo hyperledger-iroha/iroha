@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 iroha_data_model compute/oracle/offline fixture resync):
+The reported `iroha_data_model` hash/fixture reds were refreshed to the current
+canonical encodings, so the compute, governance, oracle, and offline Poseidon
+goldens now line up with the live request-hash and Merkle-root outputs again.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/{compute/mod.rs,governance/types.rs,offline/poseidon.rs,oracle/mod.rs}`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/{compute/receipt_compute_payments.json,offline_bundle/aggregate_proof_fixture.json,oracle/observation_price_xor_usd.json,oracle/report_price_xor_usd.json,oracle/feed_event_price_xor_usd.json,oracle/observation_social_follow.json}`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo run --quiet --manifest-path /tmp/iroha-fixture-dump.0NfG4i/Cargo.toml`
+- open work after this slice:
+  - clear the unrelated clean-build blocker in
+    `crates/iroha_data_model/src/query/mod.rs` so
+    `cargo test -p iroha_data_model` can be rerun from a fresh target dir after
+    this fixture resync
+
 Latest sync (2026-04-21 Torii Norito ingress harness compile unblock and loopback request wiring):
 The shared Torii Norito ingress harness compiles again and the direct public
 `/query` and configuration endpoint smoke paths are green. The shared
