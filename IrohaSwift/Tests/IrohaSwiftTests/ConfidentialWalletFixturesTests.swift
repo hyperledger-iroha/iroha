@@ -20,9 +20,6 @@ private struct WalletFixtureCase: Decodable {
 }
 
 final class ConfidentialWalletFixturesTests: XCTestCase {
-    private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
-    private static let fixtureDomain = "wonderland"
-    private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTime: UInt64 = 1_700_000_000_000
     private static let fixtureTtlMs: UInt64 = 45
     private static let fixturePrivateKeyHex =
@@ -36,9 +33,11 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         }
         let envelope: SignedTransactionEnvelope
         do {
-            envelope = try Self.buildShieldEnvelope()
+            envelope = try Self.buildShieldEnvelope(fixture: fixture)
+        } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
+            throw XCTSkip("Shield fixture unavailable: native bridge unavailable")
         } catch {
-            throw XCTSkip("Shield fixture unavailable: \(error)")
+            throw error
         }
         assertEnvelope(caseEntry, matches: envelope)
     }
@@ -50,9 +49,11 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         }
         let envelope: SignedTransactionEnvelope
         do {
-            envelope = try Self.buildUnshieldEnvelope()
+            envelope = try Self.buildUnshieldEnvelope(fixture: fixture)
+        } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
+            throw XCTSkip("Unshield fixture unavailable: native bridge unavailable")
         } catch {
-            throw XCTSkip("Unshield fixture unavailable: \(error)")
+            throw error
         }
         assertEnvelope(caseEntry, matches: envelope)
     }
@@ -64,27 +65,28 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         }
         let envelope: SignedTransactionEnvelope
         do {
-            envelope = try Self.buildZkTransferEnvelope()
+            envelope = try Self.buildZkTransferEnvelope(fixture: fixture)
+        } catch SwiftTransactionEncoderError.nativeBridgeUnavailable {
+            throw XCTSkip("ZkTransfer fixture unavailable: native bridge unavailable")
         } catch {
-            throw XCTSkip("ZkTransfer fixture unavailable: \(error)")
+            throw error
         }
         assertEnvelope(transferCase, matches: envelope)
     }
 
-    private static func buildShieldEnvelope() throws -> SignedTransactionEnvelope {
+    private static func buildShieldEnvelope(fixture: WalletFixtureDocument) throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
-        let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey)
+        try assertFixtureAuthorityMatchesSigningKey(fixture: fixture, signingKey: signingKey)
         let payload = try ConfidentialEncryptedPayload(
             ephemeralPublicKey: Data(repeating: 0x01, count: 32),
             nonce: Data(repeating: 0x02, count: 24),
             ciphertext: Data([0xDE, 0xAD, 0xBE, 0xEF])
         )
         let request = try ShieldRequest(
-            chainId: fixtureChainId,
-            authority: authority,
-            assetDefinitionId: fixtureAssetDefinition,
-            fromAccountId: authority,
+            chainId: fixture.chainId,
+            authority: fixture.authorityId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            fromAccountId: fixture.authorityId,
             amount: "42",
             noteCommitment: Data(repeating: 0xAB, count: 32),
             payload: payload,
@@ -97,16 +99,15 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         )
     }
 
-    private static func buildUnshieldEnvelope() throws -> SignedTransactionEnvelope {
+    private static func buildUnshieldEnvelope(fixture: WalletFixtureDocument) throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
-        let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey)
+        try assertFixtureAuthorityMatchesSigningKey(fixture: fixture, signingKey: signingKey)
         let proof = try makeProofAttachment(name: "vk_unshield")
         let request = try UnshieldRequest(
-            chainId: fixtureChainId,
-            authority: authority,
-            assetDefinitionId: fixtureAssetDefinition,
-            toAccountId: authority,
+            chainId: fixture.chainId,
+            authority: fixture.authorityId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            toAccountId: fixture.authorityId,
             publicAmount: "1337",
             inputs: [Data(repeating: 0x55, count: 32)],
             proof: proof,
@@ -120,15 +121,14 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
         )
     }
 
-    private static func buildZkTransferEnvelope() throws -> SignedTransactionEnvelope {
+    private static func buildZkTransferEnvelope(fixture: WalletFixtureDocument) throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
-        let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey)
+        try assertFixtureAuthorityMatchesSigningKey(fixture: fixture, signingKey: signingKey)
         let proof = try makeProofAttachment(name: "vk_transfer")
         let request = try ZkTransferRequest(
-            chainId: fixtureChainId,
-            authority: authority,
-            assetDefinitionId: fixtureAssetDefinition,
+            chainId: fixture.chainId,
+            authority: fixture.authorityId,
+            assetDefinitionId: fixture.assetDefinitionId,
             inputs: [Data(repeating: 0x10, count: 32), Data(repeating: 0x11, count: 32)],
             outputs: [Data(repeating: 0x22, count: 32), Data(repeating: 0x33, count: 32)],
             proof: proof,
@@ -140,6 +140,15 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
             signingKey: signingKey,
             creationTimeMs: fixtureCreationTime
         )
+    }
+
+    private static func assertFixtureAuthorityMatchesSigningKey(
+        fixture: WalletFixtureDocument,
+        signingKey: SigningKey
+    ) throws {
+        let publicKey = try signingKey.publicKey()
+        let authority = AccountId.make(publicKey: publicKey)
+        XCTAssertEqual(authority, fixture.authorityId)
     }
 
     private static func makeProofAttachment(name: String) throws -> ProofAttachment {

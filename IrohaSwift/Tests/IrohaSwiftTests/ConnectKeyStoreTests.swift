@@ -125,7 +125,10 @@ final class ConnectKeyStoreTests: XCTestCase {
         try encoder.encode(rewritten).write(to: path)
 
         XCTAssertThrowsError(try store.generateOrLoad(label: label)) { error in
-            XCTAssertEqual(error as? ConnectKeyStoreError, .integrityMismatch)
+            guard case ConnectKeyStoreError.integrityMismatch = error else {
+                XCTFail("expected integrityMismatch, got \(error)")
+                return
+            }
         }
     }
 

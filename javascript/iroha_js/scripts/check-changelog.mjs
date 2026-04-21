@@ -15,9 +15,9 @@ import process from "node:process";
  * Allows injecting alternative fixtures during tests while keeping the default
  * repository-relative resolution for normal CLI usage.
  */
-function resolvePath(envVar, fallback) {
+function resolvePath(envVar, defaultPath) {
   if (!envVar) {
-    return new URL(fallback, import.meta.url);
+    return new URL(defaultPath, import.meta.url);
   }
   if (envVar.startsWith("file://")) {
     return new URL(envVar);

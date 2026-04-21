@@ -134,31 +134,34 @@ public extension ToriiClient {
     func makeStreamPublisher<Output>(_ builder: @Sendable @escaping () -> AsyncThrowingStream<Output, Error>,
                                      scheduler: DispatchQueue?) -> AnyPublisher<Output, ToriiClientError> {
         let queue = scheduler ?? DispatchQueue.main
-        let subjectBox = ToriiCombineSubjectBox(PassthroughSubject<Output, ToriiClientError>())
-        let task = Task {
-            do {
-                var iterator = builder().makeAsyncIterator()
-                while let value = try await iterator.next() {
-                    if Task.isCancelled {
-                        break
+        return Deferred {
+            let subjectBox = ToriiCombineSubjectBox(PassthroughSubject<Output, ToriiClientError>())
+            let task = Task {
+                do {
+                    var iterator = builder().makeAsyncIterator()
+                    while let value = try await iterator.next() {
+                        if Task.isCancelled {
+                            break
+                        }
+                        subjectBox.subject.send(value)
                     }
-                    subjectBox.subject.send(value)
-                }
-                if !Task.isCancelled {
+                    if !Task.isCancelled {
+                        subjectBox.subject.send(completion: .finished)
+                    }
+                } catch is CancellationError {
                     subjectBox.subject.send(completion: .finished)
-                }
-            } catch is CancellationError {
-                subjectBox.subject.send(completion: .finished)
-            } catch {
-                if !Task.isCancelled {
-                    subjectBox.subject.send(completion: .failure(ToriiClient.mapToClientError(error)))
+                } catch {
+                    if !Task.isCancelled {
+                        subjectBox.subject.send(completion: .failure(ToriiClient.mapToClientError(error)))
+                    }
                 }
             }
-        }
 
-        return subjectBox.subject
-            .handleEvents(receiveCancel: { task.cancel() })
-            .receive(on: queue)
+            return subjectBox.subject
+                .handleEvents(receiveCancel: { task.cancel() })
+                .receive(on: queue)
+                .eraseToAnyPublisher()
+        }
             .eraseToAnyPublisher()
     }
 
