@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii Norito ingress harness compile unblock and loopback request wiring):
+The shared Torii Norito ingress harness compiles again and the direct public
+`/query` and configuration endpoint smoke paths are green. The shared
+`sample_signed_query()` helper now emits a versioned singular
+`FindAbiVersion` request instead of trying to erase `FindDomains` into
+`QueryOutputBatchBox`, and the Norito ingress/configuration tests now attach a
+loopback `ConnectInfo<SocketAddr>` extension so Axum `oneshot(...)` requests
+exercise the same remote metadata path as the live router.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/norito_ingress.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/configuration_endpoint.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_torii --test norito_ingress norito_rpc_harness::sample_signed_query_roundtrips_as_a_versioned_singular_request -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test norito_ingress norito_query_accepts_versioned_signed_query_payload -- --exact --nocapture`
+  - `cargo test -p iroha_torii --test configuration_endpoint configuration_endpoint_includes_transport_summary -- --exact --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target validation
+    window now that `configuration_endpoint` and `norito_ingress` build and
+    execute again
+
 Latest sync (2026-04-21 first-release canonical Norito submission cleanup):
 The transaction/query submission path is now canonical-only for the first
 release. Torii MCP exposes only `body_base64` for versioned `SignedTransaction`
@@ -61,9 +85,8 @@ of the lossy top-level error string.
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-dup-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
 - open work after this slice:
-  - broader `cargo test -p iroha_torii ...` package-target validation is still
-    blocked by unrelated pre-existing compile errors under
-    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+  - rerun a broader `cargo test -p iroha_torii ...` package-target validation
+    window now that the shared Norito ingress harness compiles again
 
 Latest sync (2026-04-21 Torii projection checkpoint upload helper restore):
 The `iroha_torii` projection checkpoint plan/publish handlers compile again.
@@ -83,9 +106,8 @@ requirement.
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib node_query_projection_checkpoint_ -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-projection-helper cargo test -p iroha_torii --lib runtime::tests::build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition -- --exact`
 - open work after this slice:
-  - broader `cargo test -p iroha_torii ...` package-target validation is still
-    blocked by unrelated pre-existing compile errors under
-    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
+  - rerun a broader `cargo test -p iroha_torii ...` package-target validation
+    window now that the shared Norito ingress harness compiles again
 
 Latest sync (2026-04-21 Torii targeted limiter and SCCP disabled-lane regression repair):
 The four reported `iroha_torii` library reds are green again. Small-capacity
@@ -112,14 +134,9 @@ current-thread Tokio runtime when no reactor is already running.
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_prepares_ephemeral_settlement_contract_call -- --exact`
   - `CARGO_TARGET_DIR=/tmp/iroha-fix-torii cargo test -p iroha_torii --lib tests_runtime_handlers::bridge_message_submit_derives_settlement_route_from_transfer_bundle -- --exact`
-  - broader `cargo test -p iroha_torii ...` package-target validation still
-    stops in unrelated pre-existing compile errors under
-    `crates/iroha_torii/tests/common/norito_rpc_harness.rs`
 - open work after this slice:
-  - fix or isolate the unrelated `iroha_torii` integration-test compile errors
-    in `tests/common/norito_rpc_harness.rs`
-  - rerun a broader Torii package validation window once those package-target
-    build errors are addressed
+  - rerun a broader Torii package validation window now that the
+    `tests/common/norito_rpc_harness.rs` package-target blocker is fixed
 
 Latest sync (2026-04-21 Swift offline model boundary hardening and numeric arithmetic parity):
 The Swift offline cash public models now fail fast on malformed amount fields
