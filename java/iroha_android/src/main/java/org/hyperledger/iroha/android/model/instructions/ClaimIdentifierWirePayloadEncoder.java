@@ -1,10 +1,9 @@
 package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Objects;
-import java.util.Optional;
+import org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoder;
 import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -13,22 +12,14 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /**
  * Encodes {@code ClaimIdentifier} instructions in wire-framed Norito format.
  *
- * <p>The Torii identifier endpoints already expose the canonical signed receipt payload as
- * {@code signature_payload_hex}, so the encoder can reuse those bytes directly instead of trying to
- * re-encode receipt internals on the wallet.
+ * <p>The Torii identifier endpoints expose canonical {@code payload} plus {@code attestation}
+ * receipts, so the encoder derives the canonical payload bytes and writes the explicit attestation.
  */
 public final class ClaimIdentifierWirePayloadEncoder {
 
   public static final String WIRE_NAME = "identity::ClaimIdentifier";
 
   private static final String SCHEMA_PATH = "iroha_data_model::isi::identifier::ClaimIdentifier";
-
-  private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
-  private static final TypeAdapter<byte[]> SIGNATURE_BYTE_VEC_ADAPTER = NoritoAdapters.byteVecAdapter();
-  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_SIGNATURE_ADAPTER =
-      NoritoAdapters.option(SIGNATURE_BYTE_VEC_ADAPTER);
-  private static final TypeAdapter<Optional<byte[]>> OPTIONAL_PROOF_ADAPTER =
-      NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER);
 
   private ClaimIdentifierWirePayloadEncoder() {}
 
@@ -47,11 +38,12 @@ public final class ClaimIdentifierWirePayloadEncoder {
     }
     final byte[] accountPayload =
         TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId);
-    final byte[] receiptPayload = decodeHex(receipt.signaturePayloadHex(), "receipt.signaturePayloadHex");
-    final byte[] signaturePayload = decodeHex(receipt.signature(), "receipt.signature");
+    final byte[] receiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload());
+    final byte[] attestationPayload =
+        IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation());
     final byte[] wirePayload =
         NoritoCodec.encode(
-            new ClaimIdentifierPayload(accountPayload, receiptPayload, signaturePayload),
+            new ClaimIdentifierPayload(accountPayload, receiptPayload, attestationPayload),
             SCHEMA_PATH,
             new ClaimIdentifierPayloadAdapter());
     return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
@@ -60,13 +52,13 @@ public final class ClaimIdentifierWirePayloadEncoder {
   private static final class ClaimIdentifierPayload {
     private final byte[] accountPayload;
     private final byte[] receiptPayload;
-    private final byte[] signaturePayload;
+    private final byte[] attestationPayload;
 
     private ClaimIdentifierPayload(
-        final byte[] accountPayload, final byte[] receiptPayload, final byte[] signaturePayload) {
+        final byte[] accountPayload, final byte[] receiptPayload, final byte[] attestationPayload) {
       this.accountPayload = accountPayload.clone();
       this.receiptPayload = receiptPayload.clone();
-      this.signaturePayload = signaturePayload.clone();
+      this.attestationPayload = attestationPayload.clone();
     }
   }
 
@@ -81,7 +73,7 @@ public final class ClaimIdentifierWirePayloadEncoder {
       encodeSizedField(
           encoder,
           RECEIPT_ADAPTER,
-          new ReceiptPayload(value.receiptPayload, Optional.of(value.signaturePayload), Optional.empty()));
+          new ReceiptPayload(value.receiptPayload, value.attestationPayload));
     }
 
     @Override
@@ -93,16 +85,11 @@ public final class ClaimIdentifierWirePayloadEncoder {
 
   private static final class ReceiptPayload {
     private final byte[] payloadBytes;
-    private final Optional<byte[]> signatureBytes;
-    private final Optional<byte[]> proofBytes;
+    private final byte[] attestationBytes;
 
-    private ReceiptPayload(
-        final byte[] payloadBytes,
-        final Optional<byte[]> signatureBytes,
-        final Optional<byte[]> proofBytes) {
+    private ReceiptPayload(final byte[] payloadBytes, final byte[] attestationBytes) {
       this.payloadBytes = payloadBytes.clone();
-      this.signatureBytes = Objects.requireNonNull(signatureBytes, "signatureBytes");
-      this.proofBytes = Objects.requireNonNull(proofBytes, "proofBytes");
+      this.attestationBytes = attestationBytes.clone();
     }
   }
 
@@ -112,8 +99,7 @@ public final class ClaimIdentifierWirePayloadEncoder {
     @Override
     public void encode(final NoritoEncoder encoder, final ReceiptPayload value) {
       encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.payloadBytes);
-      encodeSizedField(encoder, OPTIONAL_SIGNATURE_ADAPTER, value.signatureBytes);
-      encodeSizedField(encoder, OPTIONAL_PROOF_ADAPTER, value.proofBytes);
+      encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.attestationBytes);
     }
 
     @Override
@@ -155,23 +141,4 @@ public final class ClaimIdentifierWirePayloadEncoder {
     return trimmed;
   }
 
-  private static byte[] decodeHex(final String value, final String field) {
-    String trimmed = requireNonBlank(value, field);
-    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      trimmed = trimmed.substring(2);
-    }
-    if ((trimmed.length() & 1) == 1) {
-      throw new IllegalArgumentException(field + " must contain an even number of hex characters");
-    }
-    final byte[] out = new byte[trimmed.length() / 2];
-    for (int i = 0; i < trimmed.length(); i += 2) {
-      final int high = Character.digit(trimmed.charAt(i), 16);
-      final int low = Character.digit(trimmed.charAt(i + 1), 16);
-      if (high < 0 || low < 0) {
-        throw new IllegalArgumentException(field + " contains non-hex characters");
-      }
-      out[i / 2] = (byte) ((high << 4) | low);
-    }
-    return out;
-  }
 }

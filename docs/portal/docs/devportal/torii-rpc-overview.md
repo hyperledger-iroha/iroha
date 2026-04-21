@@ -96,13 +96,19 @@ without middleware:
 ```
 
 Call `POST /v1/assets/{definition_id}/holders/query`, where
-`definition_id` may be the PKR asset id or alias. Responses include exact
-counts and totals plus `query_source`; `projection_da_cache` means Torii served
-the aggregate from already-local published DA projection shards, while
-`projection_da_hydrated` means Torii hydrated missing shards from approved
-SoraFS providers during the request. Incomplete production projections return
-`projection_archive_unavailable` instead of scanning live holders; `live_debug`
-is only for explicit debug opt-in environments.
+`definition_id` may be the PKR asset id or alias. The same QueryEnvelope DSL is
+available on every current app query route; `select` returns row-mode
+`items/total/indexed_height/indexed_block_hash/query_source`, while `aggregate`
+returns exact grouped rows and is mutually exclusive with `select`. Without
+`select` or `aggregate`, each route keeps its legacy envelope and item shape.
+
+Projection export now covers `accounts`, `account_assets`, `asset_holders`,
+`asset_definitions`, and `domains`. For holder aggregates,
+`projection_da_cache` means Torii served rows from already-local published DA
+projection shards, while `projection_da_hydrated` means it hydrated missing
+shards from approved SoraFS providers during the request. Incomplete production
+projections return `projection_archive_unavailable` instead of scanning live
+holders; `live_debug` is only for explicit debug opt-in environments.
 
 ## Troubleshooting
 

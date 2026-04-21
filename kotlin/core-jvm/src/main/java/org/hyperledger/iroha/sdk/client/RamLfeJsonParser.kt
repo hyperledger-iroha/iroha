@@ -28,7 +28,12 @@ object RamLfeJsonParser {
                             "ram-lfe program policy list.items[$i].input_encryption_public_parameters_decoded"),
                         "ram-lfe program policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
-                    optionalString(item["note"])
+                    optionalString(item["note"]),
+                    if (item["proof_verifier"] == null) null
+                    else parseProofVerifier(
+                        expectObject(item["proof_verifier"], "ram-lfe program policy list.items[$i].proof_verifier"),
+                        "ram-lfe program policy list.items[$i].proof_verifier"
+                    )
                 )
             )
         }
@@ -132,6 +137,12 @@ object RamLfeJsonParser {
         return trimmed.lowercase()
     }
 
+    private fun canonicalizeHex32(value: String, context: String): String {
+        val normalized = canonicalizeHex(value, context)
+        require(normalized.length == 64) { "$context must contain 32 bytes" }
+        return normalized
+    }
+
     private fun normalizedMode(value: String): String = value.trim().lowercase()
 
     private fun parseBfvPublicParameters(root: Map<String, Any?>, context: String): IdentifierBfvPublicParameters {
@@ -151,6 +162,14 @@ object RamLfeJsonParser {
             Math.toIntExact(asLong(root["max_input_bytes"], "$context.max_input_bytes"))
         )
     }
+
+    private fun parseProofVerifier(root: Map<String, Any?>, context: String): RamLfeProofVerifierMetadata =
+        RamLfeProofVerifierMetadata(
+            requiredString(root["proof_backend"], "$context.proof_backend"),
+            requiredString(root["circuit_id"], "$context.circuit_id"),
+            canonicalizeHex32(requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
+            requiredString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
+        )
 
     private fun asLongList(value: Any?, path: String): List<Long> {
         val values = asArrayOrEmpty(value, path)

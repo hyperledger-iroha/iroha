@@ -118,8 +118,6 @@ pub struct RamLfeProofVerifierMetadata {
     pub circuit_id: String,
     /// Stable hash of the proof public-input schema.
     pub public_inputs_schema_hash: Hash,
-    /// Hash of the verifying-key bytes under `proof_backend`.
-    pub verifying_key_hash: Hash,
     /// Opaque verifying-key bytes published to clients for stateless verification.
     pub verifying_key_bytes: Vec<u8>,
 }

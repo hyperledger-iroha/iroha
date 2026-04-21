@@ -5,13 +5,24 @@ use std::{env, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if let Some(commit) = git_commit_hash() {
+    println!("cargo:rerun-if-env-changed=IROHA_GIT_COMMIT_HASH");
+    if let Some(commit) = env_commit_hash().or_else(git_commit_hash) {
         println!("cargo:rustc-env=GIT_COMMIT_HASH={commit}");
     } else {
         println!(
             "cargo:warning=iroha_core build.rs: unable to determine git commit hash; \
              persisted RBC sessions will be discarded across restarts"
         );
+    }
+}
+
+fn env_commit_hash() -> Option<String> {
+    let commit = env::var("IROHA_GIT_COMMIT_HASH").ok()?;
+    let trimmed = commit.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
     }
 }
 

@@ -1,19 +1,27 @@
 package org.hyperledger.iroha.sdk.client
 
 /** Resolution receipt returned by identifier resolve and claim-receipt endpoints. */
+class IdentifierReceiptAttestation(
+    @JvmField val kind: String,
+    @JvmField val signature: String?,
+    @JvmField val proofBackend: String?,
+    @JvmField val proofB64: String?,
+)
+
+/** Resolution receipt returned by identifier resolve and claim-receipt endpoints. */
 class IdentifierResolutionReceipt(
-    @JvmField val policyId: String,
-    @JvmField val opaqueId: String,
-    @JvmField val receiptHash: String,
-    @JvmField val uaid: String,
-    @JvmField val accountId: String,
-    @JvmField val resolvedAtMs: Long,
-    @JvmField val expiresAtMs: Long?,
-    @JvmField val backend: String,
-    @JvmField val signature: String,
-    @JvmField val signaturePayloadHex: String,
-    @JvmField val signaturePayload: IdentifierResolutionPayload,
+    @JvmField val payload: IdentifierResolutionPayload,
+    @JvmField val attestation: IdentifierReceiptAttestation,
 ) {
-    fun verifySignature(policy: IdentifierPolicySummary): Boolean =
+    val policyId: String get() = payload.policyId
+    val opaqueId: String get() = payload.opaqueId
+    val receiptHash: String get() = payload.receiptHash
+    val uaid: String get() = payload.uaid
+    val accountId: String get() = payload.accountId
+    val resolvedAtMs: Long get() = payload.execution.executedAtMs
+    val expiresAtMs: Long? get() = payload.execution.expiresAtMs
+    val backend: String get() = payload.execution.backend
+
+    fun verifyAttestation(policy: IdentifierPolicySummary): Boolean =
         IdentifierReceiptVerifier.verify(this, policy)
 }

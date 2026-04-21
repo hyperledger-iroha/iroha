@@ -3072,7 +3072,7 @@ fn runtime_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Returns the canonical ordered non-empty shard entries for the requested live projection resource. `asset_definition_id` narrows `asset_holders`, while `offset` and `limit` paginate the stable entry set."
+                    "Returns the canonical ordered non-empty shard entries for the requested live projection resource. Supported resources are `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and `domains`. `asset_definition_id` narrows `asset_holders`, while `offset` and `limit` paginate the stable entry set."
                         .to_owned(),
                 ),
             );
@@ -3085,7 +3085,7 @@ fn runtime_paths() -> Map {
                 Value::Array(vec![
                     string_path_param(
                         "resource",
-                        "Projection resource family (`accounts` or `asset_holders`).",
+                        "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`).",
                     ),
                     string_query_param(
                         "asset_definition_id",
@@ -3137,7 +3137,7 @@ fn runtime_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Builds a Norito-encoded `QueryProjectionShardArchive` for the requested resource partition directly from the node's live query snapshot. `asset_definition_id` is required when `resource=asset_holders`."
+                    "Builds a Norito-encoded `QueryProjectionShardArchive` for the requested resource partition directly from the node's live query snapshot. Supported resources are `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and `domains`; `asset_definition_id` is required when `resource=asset_holders`."
                         .to_owned(),
                 ),
             );
@@ -3150,7 +3150,7 @@ fn runtime_paths() -> Map {
                 Value::Array(vec![
                     string_path_param(
                         "resource",
-                        "Projection resource family (`accounts` or `asset_holders`).",
+                        "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`).",
                     ),
                     integer_path_param(
                         "partition_id",
@@ -3485,7 +3485,7 @@ fn identifier_paths() -> Map {
             json_post_operation(
                 "Identifiers",
                 "Issue an identifier claim receipt.",
-                "Normalize a raw identifier input under a hidden-function policy and return a signed receipt that can be embedded into `ClaimIdentifier`.",
+                "Normalize a raw identifier input under a hidden-function policy and return an attested receipt that can be embedded into `ClaimIdentifier`.",
                 "#/components/schemas/IdentifierResolveRequest",
                 "#/components/schemas/IdentifierResolveResponse",
                 params,
@@ -8001,17 +8001,20 @@ fn openapi_schemas() -> Map {
             "type": "object",
             "required": [
                 "policy_id",
+                "execution",
                 "opaque_id",
                 "receipt_hash",
                 "uaid",
-                "account_id",
-                "resolved_at_ms"
+                "account_id"
             ],
             "additionalProperties": false,
             "properties": {
                 "policy_id": {
                     "type": "string",
                     "description": "Identifier policy namespace used for the resolution."
+                },
+                "execution": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
                 },
                 "opaque_id": {
                     "type": "string",
@@ -8028,16 +8031,6 @@ fn openapi_schemas() -> Map {
                 "account_id": {
                     "type": "string",
                     "description": "Canonical account identifier currently bound to the UAID."
-                },
-                "resolved_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Resolution timestamp in milliseconds since Unix epoch."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
                 }
             }
         }),
@@ -8095,20 +8088,97 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "RamLfeProofVerifierMetadata".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "proof_backend",
+                "circuit_id",
+                "public_inputs_schema_hash",
+                "verifying_key_bytes_b64"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "proof_backend": {
+                    "type": "string",
+                    "description": "Proof backend expected by verifier records."
+                },
+                "circuit_id": {
+                    "type": "string",
+                    "description": "Circuit identifier bound to the verifier."
+                },
+                "public_inputs_schema_hash": {
+                    "type": "string",
+                    "description": "Hash of the public-input schema accepted by the verifier."
+                },
+                "verifying_key_bytes_b64": {
+                    "type": "string",
+                    "description": "Base64-encoded verifying key bytes; the on-chain verifier hash is derived from these bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeSignedReceiptAttestation".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["signed"]
+                },
+                "signature": {
+                    "type": "string",
+                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProofReceiptAttestation".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "proof_backend", "proof_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["proof"]
+                },
+                "proof_backend": {
+                    "type": "string",
+                    "description": "Proof backend used to produce the receipt attestation."
+                },
+                "proof_b64": {
+                    "type": "string",
+                    "description": "Base64-encoded proof bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptAttestation".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {"$ref": "#/components/schemas/RamLfeSignedReceiptAttestation"},
+                {"$ref": "#/components/schemas/RamLfeProofReceiptAttestation"}
+            ]
+        }),
+    );
+    schemas.insert(
         "RamLfeExecutionReceipt".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["payload"],
+            "required": ["payload", "attestation"],
             "additionalProperties": false,
             "properties": {
                 "payload": {
                     "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
                 },
-                "signature": {
-                    "$ref": "#/components/schemas/JsonValue"
-                },
-                "proof": {
-                    "$ref": "#/components/schemas/JsonValue"
+                "attestation": {
+                    "$ref": "#/components/schemas/RamLfeReceiptAttestation"
                 }
             }
         }),
@@ -8164,6 +8234,9 @@ fn openapi_schemas() -> Map {
                 },
                 "ram_fhe_profile": {
                     "$ref": "#/components/schemas/BfvRamProgramProfile"
+                },
+                "proof_verifier": {
+                    "$ref": "#/components/schemas/RamLfeProofVerifierMetadata"
                 },
                 "note": {
                     "type": "string",
@@ -8388,6 +8461,9 @@ fn openapi_schemas() -> Map {
                 "ram_fhe_profile": {
                     "$ref": "#/components/schemas/BfvRamProgramProfile"
                 },
+                "proof_verifier": {
+                    "$ref": "#/components/schemas/RamLfeProofVerifierMetadata"
+                },
                 "note": {
                     "type": "string",
                     "description": "Optional human-readable note attached to the policy."
@@ -8444,63 +8520,16 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": [
-                "policy_id",
-                "opaque_id",
-                "receipt_hash",
-                "uaid",
-                "account_id",
-                "resolved_at_ms",
-                "backend",
-                "signature",
-                "signature_payload_hex",
-                "signature_payload"
+                "payload",
+                "attestation"
             ],
             "additionalProperties": false,
             "properties": {
-                "policy_id": {
-                    "type": "string",
-                    "description": "Identifier policy namespace used for resolution."
-                },
-                "opaque_id": {
-                    "type": "string",
-                    "description": "Derived opaque identifier literal."
-                },
-                "receipt_hash": {
-                    "type": "string",
-                    "description": "Deterministic hidden-function receipt hash for this evaluation."
-                },
-                "uaid": {
-                    "type": "string",
-                    "description": "UAID currently bound to the opaque identifier."
-                },
-                "account_id": {
-                    "type": "string",
-                    "description": "Canonical account identifier currently bound to the UAID."
-                },
-                "resolved_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Resolution timestamp in milliseconds since Unix epoch."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
-                },
-                "backend": {
-                    "type": "string",
-                    "description": "Hidden-function backend that produced the opaque identifier."
-                },
-                "signature": {
-                    "type": "string",
-                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
-                },
-                "signature_payload_hex": {
-                    "type": "string",
-                    "description": "Hex-encoded Norito payload bytes that were signed by the resolver."
-                },
-                "signature_payload": {
+                "payload": {
                     "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+                },
+                "attestation": {
+                    "$ref": "#/components/schemas/RamLfeReceiptAttestation"
                 }
             }
         }),
@@ -8973,7 +9002,7 @@ fn openapi_schemas() -> Map {
         "OfflineQueryEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Superset of Torii's Norito QueryEnvelope structure.",
+            "description": "Torii QueryEnvelope. When `select` is present the route returns row-mode `{items,total,indexed_height,indexed_block_hash,query_source}` with only selected fields. When `aggregate` is present the same envelope carries aggregate rows after `having`; `select` and `aggregate` are mutually exclusive. Without both fields, each route keeps its legacy response shape.",
             "properties": {
                 "query": {
                     "type": "string",
@@ -8986,7 +9015,12 @@ fn openapi_schemas() -> Map {
                 },
                 "select": {
                     "type": "object",
-                    "description": "Optional projection selector.",
+                    "description": "Optional projection selector that switches the route into generic row-mode.",
+                    "additionalProperties": true
+                },
+                "aggregate": {
+                    "type": "object",
+                    "description": "Optional exact aggregate spec with `group_by`, `metrics`, and optional `having`; switches the route into aggregate-mode.",
                     "additionalProperties": true
                 },
                 "sort": {

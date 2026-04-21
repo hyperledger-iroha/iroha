@@ -26,19 +26,16 @@ public final class IdentifierReceiptVerifier {
     if (!receipt.policyId().equals(policy.policyId())) {
       throw new IllegalArgumentException("receipt policyId does not match the supplied policy");
     }
-    final IdentifierResolutionPayload payload = receipt.signaturePayload();
-    if (!receipt.policyId().equals(payload.policyId())
-        || !receipt.opaqueId().equals(payload.opaqueId())
-        || !receipt.receiptHash().equals(payload.receiptHash())
-        || !receipt.uaid().equals(payload.uaid())
-        || !receipt.accountId().equals(payload.accountId())
-        || receipt.resolvedAtMs() != payload.resolvedAtMs()
-        || !Objects.equals(receipt.expiresAtMs(), payload.expiresAtMs())) {
-      throw new IllegalArgumentException("receipt top-level fields do not match signaturePayload");
+    if (!"signed".equals(receipt.attestation().kind())) {
+      throw new IllegalArgumentException(
+          "only signed identifier receipt attestations can be verified with a resolver public key");
     }
-    final byte[] payloadBytes = hexToBytes(receipt.signaturePayloadHex());
+    final byte[] payloadBytes = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload());
     final byte[] message = IrohaHash.prehash(payloadBytes);
-    final byte[] signatureBytes = hexToBytes(receipt.signature());
+    final byte[] signatureBytes =
+        hexToBytes(
+            Objects.requireNonNull(
+                receipt.attestation().signature(), "signed attestation is missing signature"));
     final PublicKeyCodec.PublicKeyPayload keyPayload =
         PublicKeyCodec.decodePublicKeyLiteral(policy.resolverPublicKey());
     if (keyPayload == null) {

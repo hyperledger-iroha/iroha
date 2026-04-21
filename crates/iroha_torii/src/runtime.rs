@@ -14,10 +14,14 @@ use iroha_core::{
         QUERY_PROJECTION_SCHEMA_VERSION, QueryProjectionCheckpoint,
         QueryProjectionCheckpointPlanError, QueryProjectionResourceKind,
         QueryProjectionUploadedShardArchive, query_projection_default_partition_for_account,
+        query_projection_partition_for_key,
     },
     query::projection_rowset::{
+        QueryProjectionAccountAssetRow, QueryProjectionAccountAssetsShardRowSet,
         QueryProjectionAccountRow, QueryProjectionAccountsShardRowSet,
+        QueryProjectionAssetDefinitionRow, QueryProjectionAssetDefinitionsShardRowSet,
         QueryProjectionAssetHolderRow, QueryProjectionAssetHoldersShardRowSet,
+        QueryProjectionDomainRow, QueryProjectionDomainsShardRowSet, QueryProjectionMetadataEntry,
         QueryProjectionShardRowSet,
     },
     query::projection_shard::{
@@ -33,7 +37,7 @@ use iroha_core::{
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    Identifiable,
+    HasMetadata, Identifiable,
     account::curve::CurveId,
     da::types::{BlobClass, BlobDigest, Compression, StorageTicketId},
     transaction::SignedTransaction,
@@ -238,7 +242,7 @@ pub struct NodeProjectionCheckpointPublishRequest {
 #[derive(Debug, Clone, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// One uploaded shard reference used to plan or publish a projection checkpoint.
 pub struct NodeProjectionCheckpointPublishShardRef {
-    /// Stable resource family identifier (`accounts` or `asset_holders`).
+    /// Stable projection resource family identifier.
     pub resource: String,
     /// Stable partition identifier inside the resource family.
     pub partition_id: u32,
@@ -435,6 +439,21 @@ pub async fn handle_node_capabilities(
     };
     #[cfg(not(feature = "sm"))]
     let (neon_sm3, neon_sm4, policy_string) = (false, false, "scalar-only".to_string());
+    #[cfg(feature = "app_api")]
+    let aggregate_supported_resources = crate::generic_query::aggregate_supported_resources()
+        .iter()
+        .map(|resource| (*resource).to_owned())
+        .collect::<Vec<_>>();
+    #[cfg(not(feature = "app_api"))]
+    let aggregate_supported_resources = Vec::new();
+    #[cfg(feature = "app_api")]
+    let projection_export_supported_resources =
+        crate::generic_query::projection_export_supported_resources()
+            .iter()
+            .map(|resource| (*resource).to_owned())
+            .collect::<Vec<_>>();
+    #[cfg(not(feature = "app_api"))]
+    let projection_export_supported_resources = Vec::new();
     Ok(NodeCapabilitiesResponse {
         abi_version: world.abi_version(),
         data_model_version: iroha_data_model::DATA_MODEL_VERSION,
@@ -459,7 +478,7 @@ pub async fn handle_node_capabilities(
             aggregate: NodeAggregateQueryCapabilities {
                 v1: true,
                 exact_results: true,
-                supported_resources: vec!["accounts".to_string(), "asset_holders".to_string()],
+                supported_resources: aggregate_supported_resources,
             },
             indexed_snapshot_marker: true,
             row_enrichment_fields: vec![
@@ -495,11 +514,7 @@ pub async fn handle_node_capabilities(
                     QUERY_PROJECTION_METADATA_ROWSET_HASH_KEY.to_string(),
                     QUERY_PROJECTION_METADATA_EMITTED_AT_KEY.to_string(),
                 ],
-                export_supported_resources: if cfg!(feature = "app_api") {
-                    vec!["accounts".to_string(), "asset_holders".to_string()]
-                } else {
-                    Vec::new()
-                },
+                export_supported_resources: projection_export_supported_resources,
                 latest_checkpoint_indexed_height: latest_projection_checkpoint
                     .as_ref()
                     .map(|checkpoint| checkpoint.indexed_height),
@@ -660,6 +675,23 @@ fn build_query_projection_uploaded_archives(
                     shard.archive_emitted_at_unix,
                 )?
             }
+            "account_assets" => {
+                if let Some(asset_definition_id) = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    return Err(projection_export_conversion_error(format!(
+                        "asset_definition_id is not supported for account_assets checkpoint shards (got `{asset_definition_id}`)"
+                    )));
+                }
+                build_account_assets_projection_shard_archive(
+                    state,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
             "asset_holders" => {
                 let selector = shard
                     .asset_definition_id
@@ -679,9 +711,43 @@ fn build_query_projection_uploaded_archives(
                     shard.archive_emitted_at_unix,
                 )?
             }
+            "asset_definitions" => {
+                if let Some(asset_definition_id) = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    return Err(projection_export_conversion_error(format!(
+                        "asset_definition_id is not supported for asset_definitions checkpoint shards (got `{asset_definition_id}`)"
+                    )));
+                }
+                build_asset_definitions_projection_shard_archive(
+                    state,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
+            "domains" => {
+                if let Some(asset_definition_id) = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    return Err(projection_export_conversion_error(format!(
+                        "asset_definition_id is not supported for domains checkpoint shards (got `{asset_definition_id}`)"
+                    )));
+                }
+                build_domains_projection_shard_archive(
+                    state,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
             other => {
                 return Err(projection_export_conversion_error(format!(
-                    "unsupported checkpoint shard resource `{other}`; expected `accounts` or `asset_holders`"
+                    "unsupported checkpoint shard resource `{other}`"
                 )));
             }
         };
@@ -762,11 +828,41 @@ fn build_expected_projection_checkpoint_shard_keys(
             }),
     );
     expected.extend(
+        build_account_assets_projection_shard_catalog_entries(state)
+            .into_iter()
+            .map(|entry| {
+                ProjectionCheckpointShardKey::from_catalog_entry(
+                    QueryProjectionResourceKind::AccountAssets,
+                    entry,
+                )
+            }),
+    );
+    expected.extend(
         build_asset_holders_projection_shard_catalog_entries(state, None)?
             .into_iter()
             .map(|entry| {
                 ProjectionCheckpointShardKey::from_catalog_entry(
                     QueryProjectionResourceKind::AssetHolders,
+                    entry,
+                )
+            }),
+    );
+    expected.extend(
+        build_asset_definitions_projection_shard_catalog_entries(state)
+            .into_iter()
+            .map(|entry| {
+                ProjectionCheckpointShardKey::from_catalog_entry(
+                    QueryProjectionResourceKind::AssetDefinitions,
+                    entry,
+                )
+            }),
+    );
+    expected.extend(
+        build_domains_projection_shard_catalog_entries(state)
+            .into_iter()
+            .map(|entry| {
+                ProjectionCheckpointShardKey::from_catalog_entry(
+                    QueryProjectionResourceKind::Domains,
                     entry,
                 )
             }),
@@ -816,6 +912,28 @@ pub async fn handle_node_query_projection_shard_catalog(
                 build_accounts_projection_shard_catalog_entries(state.as_ref()),
             )
         }
+        "account_assets" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for account_assets catalog (got `{asset_definition_id}`)"
+                )));
+            }
+            build_projection_shard_catalog_response(
+                QueryProjectionResourceKind::AccountAssets,
+                index_status.indexed_height,
+                index_status
+                    .indexed_block_hash
+                    .map(|hash| hex::encode(hash.as_ref())),
+                query.offset,
+                query.limit,
+                build_account_assets_projection_shard_catalog_entries(state.as_ref()),
+            )
+        }
         "asset_holders" => build_projection_shard_catalog_response(
             QueryProjectionResourceKind::AssetHolders,
             index_status.indexed_height,
@@ -829,8 +947,52 @@ pub async fn handle_node_query_projection_shard_catalog(
                 query.asset_definition_id.as_deref(),
             )?,
         ),
+        "asset_definitions" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for asset_definitions catalog (got `{asset_definition_id}`)"
+                )));
+            }
+            build_projection_shard_catalog_response(
+                QueryProjectionResourceKind::AssetDefinitions,
+                index_status.indexed_height,
+                index_status
+                    .indexed_block_hash
+                    .map(|hash| hex::encode(hash.as_ref())),
+                query.offset,
+                query.limit,
+                build_asset_definitions_projection_shard_catalog_entries(state.as_ref()),
+            )
+        }
+        "domains" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for domains catalog (got `{asset_definition_id}`)"
+                )));
+            }
+            build_projection_shard_catalog_response(
+                QueryProjectionResourceKind::Domains,
+                index_status.indexed_height,
+                index_status
+                    .indexed_block_hash
+                    .map(|hash| hex::encode(hash.as_ref())),
+                query.offset,
+                query.limit,
+                build_domains_projection_shard_catalog_entries(state.as_ref()),
+            )
+        }
         other => Err(projection_export_conversion_error(format!(
-            "unsupported projection resource `{other}`; expected `accounts` or `asset_holders`"
+            "unsupported projection resource `{other}`"
         ))),
     }
 }
@@ -860,6 +1022,23 @@ pub async fn handle_node_query_projection_shard_export(
             }
             build_accounts_projection_shard_archive(state.as_ref(), partition_id, emitted_at_unix)
         }
+        "account_assets" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for account_assets export (got `{asset_definition_id}`)"
+                )));
+            }
+            build_account_assets_projection_shard_archive(
+                state.as_ref(),
+                partition_id,
+                emitted_at_unix,
+            )
+        }
         "asset_holders" => {
             let selector = query
                 .asset_definition_id
@@ -878,8 +1057,38 @@ pub async fn handle_node_query_projection_shard_export(
                 emitted_at_unix,
             )
         }
+        "asset_definitions" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for asset_definitions export (got `{asset_definition_id}`)"
+                )));
+            }
+            build_asset_definitions_projection_shard_archive(
+                state.as_ref(),
+                partition_id,
+                emitted_at_unix,
+            )
+        }
+        "domains" => {
+            if let Some(asset_definition_id) = query
+                .asset_definition_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Err(projection_export_conversion_error(format!(
+                    "asset_definition_id is not supported for domains export (got `{asset_definition_id}`)"
+                )));
+            }
+            build_domains_projection_shard_archive(state.as_ref(), partition_id, emitted_at_unix)
+        }
         other => Err(projection_export_conversion_error(format!(
-            "unsupported projection resource `{other}`; expected `accounts` or `asset_holders`"
+            "unsupported projection resource `{other}`"
         ))),
     }
 }
@@ -964,7 +1173,7 @@ fn build_accounts_projection_shard_catalog_entries(
 }
 
 #[cfg(feature = "app_api")]
-fn build_accounts_projection_shard_archive(
+pub(crate) fn build_accounts_projection_shard_archive(
     state: &iroha_core::state::State,
     partition_id: u32,
     emitted_at_unix: u64,
@@ -1006,6 +1215,279 @@ fn build_accounts_projection_shard_archive(
         state.query_index_status_snapshot(),
         emitted_at_unix,
         QueryProjectionResourceKind::Accounts,
+        partition_id,
+        None,
+        row_count,
+        payload,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_assets_projection_shard_catalog_entries(
+    state: &iroha_core::state::State,
+) -> Vec<NodeProjectionShardCatalogEntry> {
+    let world = state.world_view();
+    let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
+    for asset in world.assets_iter() {
+        let partition_id =
+            query_projection_default_partition_for_account(&asset.id().account().to_string());
+        *counts.entry(partition_id).or_default() += 1;
+    }
+    drop(world);
+
+    counts
+        .into_iter()
+        .map(
+            |(partition_id, row_count)| NodeProjectionShardCatalogEntry {
+                partition_id,
+                row_count,
+                asset_definition_id: None,
+                asset_alias: None,
+            },
+        )
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn build_account_assets_projection_shard_archive(
+    state: &iroha_core::state::State,
+    partition_id: u32,
+    emitted_at_unix: u64,
+) -> Result<QueryProjectionShardArchive, crate::Error> {
+    let world = state.world_view();
+    let mut rows = Vec::new();
+    for asset in world.assets_iter() {
+        let account_id = asset.id().account().to_string();
+        if query_projection_default_partition_for_account(&account_id) != partition_id {
+            continue;
+        }
+        let definition_id = asset.id().definition().clone();
+        let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
+            Ok(definition) => (
+                definition.name().clone(),
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.as_ref().to_owned()),
+            ),
+            Err(_) => (definition_id.to_string(), None),
+        };
+        let alias =
+            crate::routing::primary_alias_projection_for_account_id(state, asset.id().account());
+        rows.push(QueryProjectionAccountAssetRow {
+            account_id,
+            asset: definition_id.to_string(),
+            asset_name,
+            asset_alias,
+            scope: crate::routing::asset_balance_scope_literal(asset.id().scope()),
+            quantity: asset.value().clone().into_inner(),
+            primary_alias: alias.literal,
+            primary_alias_name: alias.name,
+            primary_alias_dataspace: alias.dataspace,
+            primary_alias_domain: alias.domain,
+            has_primary_alias: alias.has_primary_alias,
+        });
+    }
+    drop(world);
+    rows.sort_by(|left, right| {
+        left.account_id
+            .cmp(&right.account_id)
+            .then(left.asset.cmp(&right.asset))
+            .then(left.scope.cmp(&right.scope))
+    });
+
+    let rowset = QueryProjectionShardRowSet::AccountAssets(
+        QueryProjectionAccountAssetsShardRowSet::new(partition_id, rows),
+    );
+    let row_count = rowset.row_count();
+    let payload = rowset.encode_payload().map_err(|err| {
+        projection_export_conversion_error(format!(
+            "failed to encode account_assets projection shard rowset: {err}"
+        ))
+    })?;
+
+    Ok(QueryProjectionShardArchive::from_index_status(
+        state.query_index_status_snapshot(),
+        emitted_at_unix,
+        QueryProjectionResourceKind::AccountAssets,
+        partition_id,
+        None,
+        row_count,
+        payload,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn build_asset_definitions_projection_shard_catalog_entries(
+    state: &iroha_core::state::State,
+) -> Vec<NodeProjectionShardCatalogEntry> {
+    let world = state.world_view();
+    let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
+    for definition in world.asset_definitions_iter() {
+        let id = definition.id().to_string();
+        let partition_id = query_projection_partition_for_key(
+            id.as_bytes(),
+            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
+        );
+        *counts.entry(partition_id).or_default() += 1;
+    }
+    drop(world);
+
+    counts
+        .into_iter()
+        .map(
+            |(partition_id, row_count)| NodeProjectionShardCatalogEntry {
+                partition_id,
+                row_count,
+                asset_definition_id: None,
+                asset_alias: None,
+            },
+        )
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn build_asset_definitions_projection_shard_archive(
+    state: &iroha_core::state::State,
+    partition_id: u32,
+    emitted_at_unix: u64,
+) -> Result<QueryProjectionShardArchive, crate::Error> {
+    let now_ms = crate::routing::asset_alias_observation_time_ms(state);
+    let world = state.world_view();
+    let alias_bindings: BTreeMap<_, _> = world
+        .asset_definition_alias_bindings()
+        .iter()
+        .map(|(definition_id, binding)| {
+            (
+                definition_id.clone(),
+                crate::routing::asset_alias_binding_dto(binding, now_ms),
+            )
+        })
+        .collect();
+    let mut rows = Vec::new();
+    for definition in world.asset_definitions_iter() {
+        let definition = world
+            .asset_definition(definition.id())
+            .map_err(|err| projection_export_conversion_error(err.to_string()))?;
+        let id = definition.id().to_string();
+        let definition_partition = query_projection_partition_for_key(
+            id.as_bytes(),
+            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
+        );
+        if definition_partition != partition_id {
+            continue;
+        }
+        let binding = alias_bindings.get(definition.id());
+        let mut metadata = definition
+            .metadata()
+            .iter()
+            .map(|(key, value)| QueryProjectionMetadataEntry {
+                key: key.to_string(),
+                value_json: value.get().clone(),
+            })
+            .collect::<Vec<_>>();
+        metadata.sort_by(|left, right| left.key.cmp(&right.key));
+        rows.push(QueryProjectionAssetDefinitionRow {
+            id,
+            name: definition.name().clone(),
+            alias: definition.alias().as_ref().map(ToString::to_string),
+            alias_binding_alias: binding.map(|binding| binding.alias.clone()),
+            alias_binding_status: binding.map(|binding| binding.status.clone()),
+            alias_binding_lease_expiry_ms: binding.and_then(|binding| binding.lease_expiry_ms),
+            alias_binding_grace_until_ms: binding.and_then(|binding| binding.grace_until_ms),
+            alias_binding_bound_at_ms: binding.map(|binding| binding.bound_at_ms),
+            metadata,
+        });
+    }
+    drop(world);
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let rowset = QueryProjectionShardRowSet::AssetDefinitions(
+        QueryProjectionAssetDefinitionsShardRowSet::new(partition_id, rows),
+    );
+    let row_count = rowset.row_count();
+    let payload = rowset.encode_payload().map_err(|err| {
+        projection_export_conversion_error(format!(
+            "failed to encode asset_definitions projection shard rowset: {err}"
+        ))
+    })?;
+
+    Ok(QueryProjectionShardArchive::from_index_status(
+        state.query_index_status_snapshot(),
+        emitted_at_unix,
+        QueryProjectionResourceKind::AssetDefinitions,
+        partition_id,
+        None,
+        row_count,
+        payload,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn build_domains_projection_shard_catalog_entries(
+    state: &iroha_core::state::State,
+) -> Vec<NodeProjectionShardCatalogEntry> {
+    let world = state.world_view();
+    let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
+    for domain in world.domains_iter() {
+        let id = domain.id().to_string();
+        let partition_id = query_projection_partition_for_key(
+            id.as_bytes(),
+            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
+        );
+        *counts.entry(partition_id).or_default() += 1;
+    }
+    drop(world);
+
+    counts
+        .into_iter()
+        .map(
+            |(partition_id, row_count)| NodeProjectionShardCatalogEntry {
+                partition_id,
+                row_count,
+                asset_definition_id: None,
+                asset_alias: None,
+            },
+        )
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn build_domains_projection_shard_archive(
+    state: &iroha_core::state::State,
+    partition_id: u32,
+    emitted_at_unix: u64,
+) -> Result<QueryProjectionShardArchive, crate::Error> {
+    let world = state.world_view();
+    let mut rows = Vec::new();
+    for domain in world.domains_iter() {
+        let id = domain.id().to_string();
+        let domain_partition = query_projection_partition_for_key(
+            id.as_bytes(),
+            QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
+        );
+        if domain_partition == partition_id {
+            rows.push(QueryProjectionDomainRow { id });
+        }
+    }
+    drop(world);
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let rowset = QueryProjectionShardRowSet::Domains(QueryProjectionDomainsShardRowSet::new(
+        partition_id,
+        rows,
+    ));
+    let row_count = rowset.row_count();
+    let payload = rowset.encode_payload().map_err(|err| {
+        projection_export_conversion_error(format!(
+            "failed to encode domains projection shard rowset: {err}"
+        ))
+    })?;
+
+    Ok(QueryProjectionShardArchive::from_index_status(
+        state.query_index_status_snapshot(),
+        emitted_at_unix,
+        QueryProjectionResourceKind::Domains,
         partition_id,
         None,
         row_count,
@@ -1070,7 +1552,7 @@ fn build_asset_holders_projection_shard_catalog_entries(
 }
 
 #[cfg(feature = "app_api")]
-fn build_asset_holders_projection_shard_archive(
+pub(crate) fn build_asset_holders_projection_shard_archive(
     state: &iroha_core::state::State,
     asset_definition_selector: &str,
     partition_id: u32,

@@ -23,7 +23,10 @@ use iroha_data_model::{
     },
     nexus::UniversalAccountId,
     prelude::*,
-    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy},
+    ram_lfe::{
+        RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
+        RamLfeReceiptAttestation,
+    },
 };
 use thiserror::Error;
 
@@ -338,8 +341,7 @@ impl IdentifierResolutionService {
         let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
         Ok(iroha_data_model::ram_lfe::RamLfeExecutionReceipt {
             payload,
-            signature: Some(signature),
-            proof: None,
+            attestation: RamLfeReceiptAttestation::Signed(signature),
         })
     }
 
@@ -381,8 +383,7 @@ impl IdentifierResolutionService {
 
         Ok(IdentifierResolutionReceipt {
             payload,
-            signature: Some(signature),
-            proof: None,
+            attestation: RamLfeReceiptAttestation::Signed(signature),
         })
     }
 
@@ -581,11 +582,12 @@ mod tests {
             .sign_receipt(&policy, &program_policy, &draft, &claim)
             .expect("sign receipt");
 
-        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
-            receipt.signature.clone().expect("signature"),
-        )
-        .verify(&program_policy.resolver_public_key, &receipt.payload)
-        .expect("receipt signature should verify");
+        let RamLfeReceiptAttestation::Signed(signature) = &receipt.attestation else {
+            panic!("receipt attestation must be signed");
+        };
+        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(signature.clone())
+            .verify(&program_policy.resolver_public_key, &receipt.payload)
+            .expect("receipt signature should verify");
         assert_eq!(receipt.payload.policy_id, policy_id);
         assert_eq!(receipt.payload.opaque_id, draft.opaque_id);
         assert_eq!(receipt.payload.receipt_hash, draft.receipt_hash);

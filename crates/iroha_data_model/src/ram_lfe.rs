@@ -157,6 +157,40 @@ impl RamLfeExecutionReceiptPayload {
     }
 }
 
+/// Explicit attestation attached to a RAM-LFE receipt payload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum RamLfeReceiptAttestation {
+    /// Resolver signature over the canonical payload bytes.
+    Signed(Signature),
+    /// Proof payload over the canonical payload bytes.
+    Proof(ProofBox),
+}
+
+impl RamLfeReceiptAttestation {
+    /// Return the signature when this attestation is signed.
+    #[must_use]
+    pub const fn signature(&self) -> Option<&Signature> {
+        match self {
+            Self::Signed(signature) => Some(signature),
+            Self::Proof(_) => None,
+        }
+    }
+
+    /// Return the proof when this attestation is proof based.
+    #[must_use]
+    pub const fn proof(&self) -> Option<&ProofBox> {
+        match self {
+            Self::Signed(_) => None,
+            Self::Proof(proof) => Some(proof),
+        }
+    }
+}
+
 /// Self-contained generic RAM-LFE execution receipt.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -166,14 +200,8 @@ impl RamLfeExecutionReceiptPayload {
 pub struct RamLfeExecutionReceipt {
     /// Canonical receipt payload.
     pub payload: RamLfeExecutionReceiptPayload,
-    /// Signature over [`payload`] when `verification_mode == signed`.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub signature: Option<Signature>,
-    /// Proof payload when `verification_mode == proof`.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub proof: Option<ProofBox>,
+    /// Explicit receipt attestation.
+    pub attestation: RamLfeReceiptAttestation,
 }
 
 impl RamLfeExecutionReceipt {
@@ -191,8 +219,9 @@ impl RamLfeExecutionReceipt {
     /// Returns an error when the signature is missing or invalid.
     pub fn verify_signature(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
         SignatureOf::<RamLfeExecutionReceiptPayload>::from_signature(
-            self.signature
-                .clone()
+            self.attestation
+                .signature()
+                .cloned()
                 .ok_or(iroha_crypto::Error::BadSignature)?,
         )
         .verify(public_key, &self.payload)
@@ -203,6 +232,39 @@ impl RamLfeExecutionReceipt {
 pub mod prelude {
     pub use super::{
         RamLfeExecutionReceipt, RamLfeExecutionReceiptPayload, RamLfeProgramId,
-        RamLfeProgramIdParseError, RamLfeProgramPolicy,
+        RamLfeProgramIdParseError, RamLfeProgramPolicy, RamLfeReceiptAttestation,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{KeyPair, RamLfeBackend, RamLfeVerificationMode};
+
+    use super::*;
+
+    #[test]
+    fn signed_receipt_verifies_only_signed_attestation() {
+        let signer = KeyPair::random();
+        let payload = RamLfeExecutionReceiptPayload {
+            program_id: "email_retail".parse().expect("valid program id"),
+            program_digest: Hash::new(b"program"),
+            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            verification_mode: RamLfeVerificationMode::Signed,
+            output_hash: Hash::new(b"output"),
+            associated_data_hash: Hash::new(b"associated-data"),
+            executed_at_ms: 1_777_777_777_000,
+            expires_at_ms: Some(1_777_777_877_000),
+        };
+        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let receipt = RamLfeExecutionReceipt {
+            payload,
+            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
+                signature.payload(),
+            )),
+        };
+
+        receipt
+            .verify_signature(signer.public_key())
+            .expect("signed attestation should verify");
+    }
 }

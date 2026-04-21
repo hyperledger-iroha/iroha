@@ -300,87 +300,10 @@ final class TxBuilderTests: XCTestCase {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func claimFixtureHash(_ hex: String) throws -> Data {
-        guard let bytes = Data(hexString: hex) else {
-            throw FixtureError.invalidKey
-        }
-        return bytes
-    }
-
-    private func makeClaimIdentifierPayloadHex(accountId: String) throws -> String {
-        let policyParts = Self.fixtureClaimPolicyId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
-        guard policyParts.count == 2 else {
-            throw FixtureError.invalidKey
-        }
-
-        var policyId = OfflineNoritoWriter()
-        policyId.writeField(OfflineNorito.encodeString(String(policyParts[0])))
-        policyId.writeField(OfflineNorito.encodeString(String(policyParts[1])))
-
-        var programId = OfflineNoritoWriter()
-        programId.writeField(OfflineNorito.encodeString(Self.fixtureClaimProgramId))
-
-        var execution = OfflineNoritoWriter()
-        execution.writeField(programId.data)
-        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimProgramDigestHex)))
-        execution.writeField(OfflineNorito.encodeUInt32(2))
-        execution.writeField(OfflineNorito.encodeUInt32(0))
-        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimOutputHashHex)))
-        execution.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimAssociatedDataHashHex)))
-        execution.writeField(OfflineNorito.encodeUInt64(Self.fixtureClaimResolvedAtMs))
-        execution.writeField(try OfflineNorito.encodeOption(Self.fixtureClaimExpiresAtMs,
-                                                            encode: OfflineNorito.encodeUInt64))
-
-        var payload = OfflineNoritoWriter()
-        payload.writeField(policyId.data)
-        payload.writeField(execution.data)
-        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimOpaqueIdHex)))
-        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimReceiptHashHex)))
-        payload.writeField(try OfflineNorito.encodeHash(claimFixtureHash(Self.fixtureClaimUaidHex)))
-        payload.writeField(try OfflineNorito.encodeAccountId(accountId))
-        return hexEncoded(payload.data)
-    }
-
     private func makeNativeClaimIdentifierReceiptJSON(
         _ receipt: ToriiIdentifierResolutionReceipt
     ) throws -> Data {
-        guard let execution = receipt.signaturePayload.execution,
-              let programId = execution.programId,
-              let programDigest = execution.programDigest,
-              let backend = execution.backend,
-              let verificationMode = execution.verificationMode,
-              let outputHash = execution.outputHash,
-              let associatedDataHash = execution.associatedDataHash else {
-            throw FixtureError.invalidKey
-        }
-
-        let receiptJSON = """
-        {
-          "signature":"\(receipt.signature)",
-          "signature_payload":{
-            "policy_id":"\(receipt.signaturePayload.policyId)",
-            "execution":{
-              "program_id":"\(programId)",
-              "program_digest":"\(programDigest)",
-              "backend":"\(backend)",
-              "verification_mode":"\(verificationMode)",
-              "output_hash":"\(outputHash)",
-              "associated_data_hash":"\(associatedDataHash)",
-              "executed_at_ms":\(execution.executedAtMs),
-              "expires_at_ms":\(execution.expiresAtMs ?? 0)
-            },
-            "opaque_id":"\(receipt.signaturePayload.opaqueId)",
-            "receipt_hash":"\(receipt.signaturePayload.receiptHash)",
-            "uaid":"\(receipt.signaturePayload.uaid)",
-            "account_id":"\(receipt.signaturePayload.accountId)"
-          }
-        }
-        """
-        if execution.expiresAtMs == nil {
-            let withoutExpiry = receiptJSON.replacingOccurrences(of: ",\n              \"expires_at_ms\":0", with: "")
-            return Data(withoutExpiry.utf8)
-        }
-        return Data(receiptJSON.utf8)
+        try JSONEncoder().encode(receipt)
     }
 
     private func requireEd25519Encoder() throws {
@@ -419,47 +342,32 @@ final class TxBuilderTests: XCTestCase {
             throw FixtureError.invalidKey
         }
         let claimAccountId = AccountId.make(publicKey: Data(multihashBytes.dropFirst(3)))
-        let signaturePayloadHex = try makeClaimIdentifierPayloadHex(accountId: claimAccountId)
+        let payload = ToriiIdentifierResolutionPayload(
+            policyId: Self.fixtureClaimPolicyId,
+            opaqueId: "opaque:\(Self.fixtureClaimOpaqueIdHex)",
+            receiptHash: Self.fixtureClaimReceiptHashHex,
+            uaid: "uaid:\(Self.fixtureClaimUaidHex)",
+            accountId: claimAccountId,
+            execution: ToriiIdentifierResolutionExecutionPayload(
+                programId: Self.fixtureClaimProgramId,
+                programDigest: Self.fixtureClaimProgramDigestHex,
+                backend: "bfv-programmed-sha3-256-v1",
+                verificationMode: "signed",
+                outputHash: Self.fixtureClaimOutputHashHex,
+                associatedDataHash: Self.fixtureClaimAssociatedDataHashHex,
+                executedAtMs: Self.fixtureClaimResolvedAtMs,
+                expiresAtMs: Self.fixtureClaimExpiresAtMs
+            )
+        )
+        guard let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) else {
+            throw FixtureError.invalidKey
+        }
         let receiptJSON = """
         {
-          "policy_id":"\(Self.fixtureClaimPolicyId)",
-          "opaque_id":"opaque:\(Self.fixtureClaimOpaqueIdHex)",
-          "receipt_hash":"\(Self.fixtureClaimReceiptHashHex)",
-          "uaid":"uaid:\(Self.fixtureClaimUaidHex)",
-          "account_id":"\(claimAccountId)",
-          "resolved_at_ms":\(Self.fixtureClaimResolvedAtMs),
-          "expires_at_ms":\(Self.fixtureClaimExpiresAtMs),
-          "backend":"bfv-programmed-sha3-256-v1",
-          "signature":"\(Self.fixtureClaimSignatureHex)",
-          "signature_payload_hex":"\(signaturePayloadHex)",
-          "signature_payload":{
-            "policy_id":{
-              "kind":"email",
-              "business_rule":"retail"
-            },
-            "execution":{
-              "program_id":{
-                "name":"\(Self.fixtureClaimProgramId)"
-              },
-              "program_digest":"hash:\(Self.fixtureClaimProgramDigestHex)#ABCD",
-              "backend":"bfv-programmed-sha3-256-v1",
-              "verification_mode":{
-                "mode":"Signed",
-                "value":null
-              },
-              "output_hash":"hash:\(Self.fixtureClaimOutputHashHex)#BCDE",
-              "associated_data_hash":"hash:\(Self.fixtureClaimAssociatedDataHashHex)#CDEF",
-              "executed_at_ms":\(Self.fixtureClaimResolvedAtMs),
-              "expires_at_ms":\(Self.fixtureClaimExpiresAtMs)
-            },
-            "opaque_id":[
-              "hash:\(Self.fixtureClaimOpaqueIdHex.uppercased())#1234"
-            ],
-            "receipt_hash":"hash:\(Self.fixtureClaimReceiptHashHex.uppercased())#5678",
-            "uaid":[
-              "hash:\(Self.fixtureClaimUaidHex.uppercased())#9ABC"
-            ],
-            "account_id":"\(claimAccountId)"
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":"\(Self.fixtureClaimSignatureHex)"
           }
         }
         """

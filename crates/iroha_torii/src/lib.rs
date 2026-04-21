@@ -354,6 +354,8 @@ pub mod explorer;
 #[cfg(feature = "app_api")]
 pub mod filter;
 #[cfg(feature = "app_api")]
+pub(crate) mod generic_query;
+#[cfg(feature = "app_api")]
 mod gov;
 mod iso20022_bridge;
 mod limits;
@@ -5947,6 +5949,82 @@ fn derive_identifier_request_draft(
 }
 
 #[cfg(feature = "app_api")]
+fn ram_lfe_proof_verifier_metadata_dto(
+    verifier: Option<&iroha_crypto::RamLfeProofVerifierMetadata>,
+) -> Option<routing::RamLfeProofVerifierMetadataDto> {
+    verifier.map(|metadata| routing::RamLfeProofVerifierMetadataDto {
+        proof_backend: metadata.proof_backend.clone(),
+        circuit_id: metadata.circuit_id.clone(),
+        public_inputs_schema_hash: metadata.public_inputs_schema_hash.to_string(),
+        verifying_key_bytes_b64: BASE64_STANDARD.encode(&metadata.verifying_key_bytes),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_execution_receipt_payload_dto(
+    payload: &iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload,
+) -> routing::RamLfeExecutionReceiptPayloadDto {
+    routing::RamLfeExecutionReceiptPayloadDto {
+        program_id: payload.program_id.to_string(),
+        program_digest: payload.program_digest.to_string(),
+        backend: payload.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(payload.verification_mode).to_owned(),
+        output_hash: payload.output_hash.to_string(),
+        associated_data_hash: payload.associated_data_hash.to_string(),
+        executed_at_ms: payload.executed_at_ms,
+        expires_at_ms: payload.expires_at_ms,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_receipt_attestation_dto(
+    attestation: &iroha_data_model::ram_lfe::RamLfeReceiptAttestation,
+) -> routing::RamLfeReceiptAttestationDto {
+    match attestation {
+        iroha_data_model::ram_lfe::RamLfeReceiptAttestation::Signed(signature) => {
+            routing::RamLfeReceiptAttestationDto {
+                kind: "signed".to_owned(),
+                signature: Some(hex::encode_upper(signature.payload())),
+                proof_backend: None,
+                proof_b64: None,
+            }
+        }
+        iroha_data_model::ram_lfe::RamLfeReceiptAttestation::Proof(proof) => {
+            routing::RamLfeReceiptAttestationDto {
+                kind: "proof".to_owned(),
+                signature: None,
+                proof_backend: Some(proof.backend.to_string()),
+                proof_b64: Some(BASE64_STANDARD.encode(&proof.bytes)),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_execution_receipt_dto(
+    receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+) -> routing::RamLfeExecutionReceiptDto {
+    routing::RamLfeExecutionReceiptDto {
+        payload: ram_lfe_execution_receipt_payload_dto(&receipt.payload),
+        attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_resolution_receipt_payload_dto(
+    payload: &iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
+) -> routing::IdentifierResolutionReceiptPayloadDto {
+    routing::IdentifierResolutionReceiptPayloadDto {
+        policy_id: payload.policy_id.to_string(),
+        execution: ram_lfe_execution_receipt_payload_dto(&payload.execution),
+        opaque_id: payload.opaque_id.to_string(),
+        receipt_hash: payload.receipt_hash.to_string(),
+        uaid: payload.uaid.to_string(),
+        account_id: payload.account_id.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn ram_lfe_program_policy_summary_dto(
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
 ) -> routing::RamLfeProgramPolicySummaryDto {
@@ -5970,6 +6048,13 @@ fn ram_lfe_program_policy_summary_dto(
             .map(hex::encode_upper),
         input_encryption_public_parameters_decoded: public_parameters,
         ram_fhe_profile,
+        proof_verifier: ram_lfe_proof_verifier_metadata_dto(
+            identifier_resolution::decode_programmed_public_parameters(program_policy)
+                .ok()
+                .flatten()
+                .and_then(|parameters| parameters.proof_verifier)
+                .as_ref(),
+        ),
         note: program_policy.note.clone(),
     }
 }
@@ -6002,6 +6087,15 @@ fn identifier_policy_summary_dto(
             .map(hex::encode_upper),
         input_encryption_public_parameters_decoded: public_parameters,
         ram_fhe_profile,
+        proof_verifier: program_policy.and_then(|program_policy| {
+            ram_lfe_proof_verifier_metadata_dto(
+                identifier_resolution::decode_programmed_public_parameters(program_policy)
+                    .ok()
+                    .flatten()
+                    .and_then(|parameters| parameters.proof_verifier)
+                    .as_ref(),
+            )
+        }),
         note: policy.note.clone(),
     }
 }
@@ -6022,7 +6116,7 @@ fn ram_lfe_execute_response(
         expires_at_ms: draft.expires_at_ms,
         backend: draft.backend.as_str().to_owned(),
         verification_mode: ram_lfe_verification_mode_label(draft.verification_mode).to_owned(),
-        receipt: receipt.clone(),
+        receipt: ram_lfe_execution_receipt_dto(receipt),
     }
 }
 
@@ -6048,30 +6142,11 @@ fn ram_lfe_receipt_verify_response(
 #[cfg(feature = "app_api")]
 fn identifier_receipt_response(
     receipt: &iroha_data_model::identifier::IdentifierResolutionReceipt,
-    backend: &str,
+    _backend: &str,
 ) -> Result<routing::IdentifierResolveResponseDto, Error> {
-    let signature_payload = receipt.payload();
-    let signature_payload_hex = hex::encode_upper(receipt.payload_bytes());
     Ok(routing::IdentifierResolveResponseDto {
-        policy_id: receipt.payload.policy_id.to_string(),
-        opaque_id: receipt.payload.opaque_id.to_string(),
-        receipt_hash: receipt.payload.receipt_hash.to_string(),
-        uaid: receipt.payload.uaid.to_string(),
-        account_id: receipt.payload.account_id.to_string(),
-        resolved_at_ms: receipt.resolved_at_ms(),
-        expires_at_ms: receipt.expires_at_ms(),
-        backend: backend.to_owned(),
-        signature: hex::encode_upper(
-            receipt
-                .signature
-                .as_ref()
-                .ok_or_else(|| {
-                    identifier_internal_error("identifier receipt is missing a signature")
-                })?
-                .payload(),
-        ),
-        signature_payload_hex,
-        signature_payload,
+        payload: identifier_resolution_receipt_payload_dto(&receipt.payload),
+        attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
     })
 }
 
@@ -37563,16 +37638,12 @@ pub(crate) mod tests_runtime_handlers {
 
         let mut shards = Vec::with_capacity(partitions.len());
         for (index, partition_id) in partitions.into_iter().enumerate() {
-            let archive = crate::runtime::handle_node_query_projection_shard_export(
-                app.state.clone(),
-                "accounts".to_owned(),
+            let archive = crate::runtime::build_accounts_projection_shard_archive(
+                app.state.as_ref(),
                 partition_id,
-                crate::runtime::NodeProjectionShardExportQuery {
-                    asset_definition_id: None,
-                },
+                archive_emitted_at_unix,
             )
-            .await
-            .expect("export accounts projection shard");
+            .expect("build accounts projection shard archive");
             let (_, _, manifest) =
                 crate::routing::query_projection_archive_storage_artifacts(&archive)
                     .expect("build projection archive storage artifacts");
@@ -50456,13 +50527,14 @@ mod tests {
         assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
         assert_eq!(dto.verification_mode, "signed");
         assert!(!dto.output_hex.is_empty());
-        assert_eq!(dto.receipt.payload.program_id.to_string(), dto.program_id);
-        assert_eq!(dto.receipt.payload.output_hash.to_string(), dto.output_hash);
+        assert_eq!(dto.receipt.payload.program_id, dto.program_id);
+        assert_eq!(dto.receipt.payload.output_hash, dto.output_hash);
         assert_eq!(
-            dto.receipt.payload.associated_data_hash.to_string(),
+            dto.receipt.payload.associated_data_hash,
             dto.associated_data_hash
         );
-        assert!(dto.receipt.signature.is_some());
+        assert_eq!(dto.receipt.attestation.kind, "signed");
+        assert!(dto.receipt.attestation.signature.is_some());
     }
 
     #[cfg(feature = "app_api")]
@@ -50788,28 +50860,26 @@ mod tests {
             .to_bytes();
         let dto: routing::IdentifierResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.policy_id, policy_id.to_string());
-        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
-        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
-        assert_eq!(dto.uaid, uaid.to_string());
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.payload.policy_id, policy_id.to_string());
+        assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.account_id, authority.to_string());
+        assert_eq!(dto.payload.execution.backend, "bfv-programmed-sha3-256-v1");
         assert!(
-            !dto.signature.is_empty(),
+            !dto.attestation
+                .signature
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty(),
             "resolve responses should carry a signed receipt"
         );
-        assert!(
-            !dto.signature_payload_hex.is_empty(),
-            "resolve responses should expose the signed payload bytes"
-        );
-        assert_eq!(dto.signature_payload.policy_id.to_string(), dto.policy_id);
-        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
-        assert_eq!(
-            dto.signature_payload.receipt_hash.to_string(),
-            dto.receipt_hash
-        );
-        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
-        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
+        assert_eq!(dto.attestation.kind, "signed");
+        assert_eq!(dto.payload.policy_id, policy_id.to_string());
+        assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.account_id, authority.to_string());
     }
 
     #[cfg(feature = "app_api")]
@@ -50894,12 +50964,12 @@ mod tests {
             .to_bytes();
         let dto: routing::IdentifierResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.policy_id, policy_id.to_string());
-        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
-        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
-        assert_eq!(dto.uaid, uaid.to_string());
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.payload.policy_id, policy_id.to_string());
+        assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.account_id, authority.to_string());
+        assert_eq!(dto.payload.execution.backend, "bfv-programmed-sha3-256-v1");
     }
 
     #[cfg(feature = "app_api")]
@@ -51000,16 +51070,13 @@ mod tests {
             .to_bytes();
         let dto: routing::IdentifierResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.policy_id, policy_id.to_string());
-        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
-        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
-        assert_eq!(dto.uaid, uaid.to_string());
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
-        assert_eq!(
-            dto.signature_payload.receipt_hash.to_string(),
-            dto.receipt_hash
-        );
+        assert_eq!(dto.payload.policy_id, policy_id.to_string());
+        assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.account_id, authority.to_string());
+        assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
     }
 
     #[cfg(feature = "app_api")]
@@ -51106,12 +51173,15 @@ mod tests {
         let expected_draft = resolver
             .derive(&policy, &program_policy, "+15551234567")
             .expect("normalized derive");
-        assert_eq!(dto.opaque_id, expected_draft.opaque_id.to_string());
-        assert_eq!(dto.receipt_hash, expected_draft.receipt_hash.to_string());
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.uaid, uaid.to_string());
-        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
-        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
+        assert_eq!(dto.payload.opaque_id, expected_draft.opaque_id.to_string());
+        assert_eq!(
+            dto.payload.receipt_hash,
+            expected_draft.receipt_hash.to_string()
+        );
+        assert_eq!(dto.payload.account_id, authority.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.uaid, uaid.to_string());
+        assert_eq!(dto.payload.account_id, authority.to_string());
     }
 
     #[cfg(feature = "app_api")]

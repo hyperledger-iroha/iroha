@@ -22,8 +22,9 @@ use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::UniversalAccountId;
 use iroha_data_model::prelude::Numeric;
-use iroha_data_model::ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId};
-use norito::codec::Encode;
+use iroha_data_model::ram_lfe::{
+    RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation,
+};
 
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
@@ -111,16 +112,13 @@ fn emit_claim_identifier() {
         uaid,
         account_id: account_id.clone(),
     };
-    let receipt_payload_bytes = receipt_payload.encode();
-
     // Deterministic signature bytes (64 bytes of 0xCD).
     let signature_bytes = [0xCD_u8; 64];
     let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
 
     let receipt = IdentifierResolutionReceipt {
         payload: receipt_payload,
-        signature: Some(signature),
-        proof: None,
+        attestation: RamLfeReceiptAttestation::Signed(signature),
     };
 
     let claim = ClaimIdentifier {
@@ -133,8 +131,6 @@ fn emit_claim_identifier() {
     println!("{}", hex::encode(encoded));
     // Line 2: account I105
     println!("{}", account_id);
-    // Line 3: receipt payload bytes hex
-    println!("{}", hex::encode(&receipt_payload_bytes));
-    // Line 4: signature bytes hex
+    // Line 3: signature bytes hex
     println!("{}", hex::encode(signature_bytes));
 }

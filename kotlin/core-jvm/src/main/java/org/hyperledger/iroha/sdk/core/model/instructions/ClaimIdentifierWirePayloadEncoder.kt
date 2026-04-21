@@ -1,9 +1,8 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
-import java.util.Optional
 import org.hyperledger.iroha.sdk.client.IdentifierResolutionReceipt
+import org.hyperledger.iroha.sdk.client.IdentifierReceiptCanonicalEncoder
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
-import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -13,47 +12,41 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /**
  * Encodes `ClaimIdentifier` instructions in wire-framed Norito format.
  *
- * The Torii identifier endpoints already expose the canonical signed receipt payload as
- * `signature_payload_hex`, so the encoder can reuse those bytes directly instead of trying to
- * re-encode receipt internals on the wallet.
+ * The Torii identifier endpoints expose canonical `{ payload, attestation }` receipts, so the
+ * encoder derives payload bytes from the structured payload and encodes the explicit attestation.
  */
 object ClaimIdentifierWirePayloadEncoder {
 
     const val WIRE_NAME = "identity::ClaimIdentifier"
     private const val SCHEMA_PATH = "iroha_data_model::isi::identifier::ClaimIdentifier"
 
-    private val RAW_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
-    private val SIGNATURE_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
-    private val OPTIONAL_SIGNATURE_ADAPTER: TypeAdapter<Optional<ByteArray>> = NoritoAdapters.option(SIGNATURE_BYTE_VEC_ADAPTER)
-    private val OPTIONAL_PROOF_ADAPTER: TypeAdapter<Optional<ByteArray>> = NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER)
-
-    /** Encodes a signed `ClaimIdentifier` instruction as a wire-framed [InstructionBox]. */
+    /** Encodes a `ClaimIdentifier` instruction as a wire-framed [InstructionBox]. */
     @JvmStatic
     fun encode(accountId: String, receipt: IdentifierResolutionReceipt): InstructionBox {
         val normalizedAccountId = requireNonBlank(accountId, "accountId")
         val receiptAccountId = requireNonBlank(receipt.accountId, "receipt.accountId")
         require(normalizedAccountId == receiptAccountId) { "ClaimIdentifier accountId must match receipt.accountId" }
         val accountPayload = TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId)
-        val receiptPayload = decodeHex(receipt.signaturePayloadHex, "receipt.signaturePayloadHex")
-        val signaturePayload = decodeHex(receipt.signature, "receipt.signature")
+        val receiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
+        val attestationPayload = IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation)
         val wirePayload = NoritoCodec.encode(
-            ClaimIdentifierPayload(accountPayload, receiptPayload, signaturePayload),
+            ClaimIdentifierPayload(accountPayload, receiptPayload, attestationPayload),
             SCHEMA_PATH,
             ClaimIdentifierPayloadAdapter()
         )
         return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload)
     }
 
-    private class ClaimIdentifierPayload(accountPayload: ByteArray, receiptPayload: ByteArray, signaturePayload: ByteArray) {
+    private class ClaimIdentifierPayload(accountPayload: ByteArray, receiptPayload: ByteArray, attestationPayload: ByteArray) {
         val accountPayload: ByteArray = accountPayload.clone()
         val receiptPayload: ByteArray = receiptPayload.clone()
-        val signaturePayload: ByteArray = signaturePayload.clone()
+        val attestationPayload: ByteArray = attestationPayload.clone()
     }
 
     private class ClaimIdentifierPayloadAdapter : TypeAdapter<ClaimIdentifierPayload> {
         override fun encode(encoder: NoritoEncoder, value: ClaimIdentifierPayload) {
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.accountPayload)
-            encodeSizedField(encoder, RECEIPT_ADAPTER, ReceiptPayload(value.receiptPayload, Optional.of(value.signaturePayload), Optional.empty()))
+            encodeSizedField(encoder, RECEIPT_ADAPTER, ReceiptPayload(value.receiptPayload, value.attestationPayload))
         }
         override fun decode(decoder: NoritoDecoder): ClaimIdentifierPayload = throw UnsupportedOperationException("Decoding ClaimIdentifier is not supported")
         companion object {
@@ -62,15 +55,15 @@ object ClaimIdentifierWirePayloadEncoder {
         }
     }
 
-    private class ReceiptPayload(payloadBytes: ByteArray, val signatureBytes: Optional<ByteArray>, val proofBytes: Optional<ByteArray>) {
+    private class ReceiptPayload(payloadBytes: ByteArray, attestationBytes: ByteArray) {
         val payloadBytes: ByteArray = payloadBytes.clone()
+        val attestationBytes: ByteArray = attestationBytes.clone()
     }
 
     private class ReceiptPayloadAdapter : TypeAdapter<ReceiptPayload> {
         override fun encode(encoder: NoritoEncoder, value: ReceiptPayload) {
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.payloadBytes)
-            encodeSizedField(encoder, OPTIONAL_SIGNATURE_ADAPTER, value.signatureBytes)
-            encodeSizedField(encoder, OPTIONAL_PROOF_ADAPTER, value.proofBytes)
+            encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.attestationBytes)
         }
         override fun decode(decoder: NoritoDecoder): ReceiptPayload = throw UnsupportedOperationException("Decoding identifier receipts is not supported")
         companion object { private val PASSTHROUGH_ADAPTER = PassthroughBytesAdapter() }
@@ -97,19 +90,5 @@ object ClaimIdentifierWirePayloadEncoder {
         val trimmed = value?.trim() ?: ""
         require(trimmed.isNotEmpty()) { "$field must not be blank" }
         return trimmed
-    }
-
-    private fun decodeHex(value: String, field: String): ByteArray {
-        var trimmed = requireNonBlank(value, field)
-        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) trimmed = trimmed.substring(2)
-        require(trimmed.length % 2 == 0) { "$field must contain an even number of hex characters" }
-        val out = ByteArray(trimmed.length / 2)
-        for (i in trimmed.indices step 2) {
-            val high = Character.digit(trimmed[i], 16)
-            val low = Character.digit(trimmed[i + 1], 16)
-            require(high >= 0 && low >= 0) { "$field contains non-hex characters" }
-            out[i / 2] = ((high shl 4) or low).toByte()
-        }
-        return out
     }
 }

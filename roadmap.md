@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-21
 
+Latest sync (2026-04-21 Torii generic QueryEnvelope executor expansion):
+Torii now has one internal executor for row-mode and aggregate-mode
+QueryEnvelope routes. Public query routes preserve their legacy default
+responses when neither `select` nor `aggregate` is present, while `select`
+returns the common row envelope and `aggregate` returns exact grouped rows with
+post-group `having`. Projection shard rowsets/catalog/export/checkpoint
+planning now include the five DA-backed inventory families.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/generic_query.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/{lib.rs,routing.rs,runtime.rs,mcp.rs,openapi.rs}`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/query/projection_rowset.rs`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/torii/norito_rpc.md`
+  - `/Users/takemiyamakoto/dev/iroha/docs/portal/docs/devportal/torii-rpc-overview.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo check -p iroha_torii --features app_api --no-default-features`
+    is waiting behind an existing workspace Cargo build lock
+- open work after this slice:
+  - complete the targeted Torii check and then run focused row/aggregate route
+    regressions once the shared build lock clears
+
 Latest sync (2026-04-21 iroha_data_model compute/oracle/offline fixture resync):
 The reported `iroha_data_model` hash/fixture reds were refreshed to the current
 canonical encodings, so the compute, governance, oracle, and offline Poseidon

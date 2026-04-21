@@ -68,6 +68,7 @@ use iroha_data_model::{
         compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
     smart_contract::manifest::ContractManifest,
@@ -1378,9 +1379,6 @@ fn parse_identifier_receipt_bytes(
         return Err(BridgeError::IdentifierReceipt);
     }
     let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
-    if let Ok(receipt) = norito::json::from_slice::<IdentifierResolutionReceipt>(bytes) {
-        return Ok(receipt);
-    }
     let value =
         norito::json::from_slice::<JsonValue>(bytes).map_err(|_| BridgeError::IdentifierReceipt)?;
     parse_identifier_receipt_value(value)
@@ -1391,17 +1389,52 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
         return Err(BridgeError::IdentifierReceipt);
     };
 
-    let signature = parse_identifier_receipt_signature(object.get("signature"))?;
     let payload = parse_identifier_receipt_payload_value(
         object
-            .get("signature_payload")
+            .get("payload")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let attestation = parse_identifier_receipt_attestation(
+        object
+            .get("attestation")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     Ok(IdentifierResolutionReceipt {
         payload,
-        signature: Some(signature),
-        proof: None,
+        attestation,
     })
+}
+
+fn parse_identifier_receipt_attestation(
+    value: &JsonValue,
+) -> BridgeResult<RamLfeReceiptAttestation> {
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let kind = object
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    match kind {
+        "signed" => parse_identifier_receipt_signature(object.get("signature"))
+            .map(RamLfeReceiptAttestation::Signed),
+        "proof" => {
+            let proof_backend = object
+                .get("proof_backend")
+                .and_then(JsonValue::as_str)
+                .ok_or(BridgeError::IdentifierReceipt)?;
+            let proof_b64 = object
+                .get("proof_b64")
+                .and_then(JsonValue::as_str)
+                .ok_or(BridgeError::IdentifierReceipt)?;
+            let bytes = b64gp::STANDARD
+                .decode(proof_b64.trim())
+                .map_err(|_| BridgeError::IdentifierReceipt)?;
+            Ok(RamLfeReceiptAttestation::Proof(ProofBox::new(
+                proof_backend.trim().to_owned(),
+                bytes,
+            )))
+        }
+        _ => Err(BridgeError::IdentifierReceipt),
+    }
 }
 
 fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult<Signature> {
@@ -1440,7 +1473,6 @@ fn parse_identifier_receipt_payload_value(
         parse_identifier_uaid_value(object.get("uaid").ok_or(BridgeError::IdentifierReceipt)?)?;
     let account_id = object
         .get("account_id")
-        .or_else(|| object.get("accountId"))
         .and_then(JsonValue::as_str)
         .map(str::to_owned)
         .ok_or(BridgeError::IdentifierReceipt)
@@ -1553,22 +1585,12 @@ fn parse_identifier_hash_value(value: &JsonValue) -> BridgeResult<Hash> {
         .and_then(parse_identifier_hash_str)
 }
 
-fn parse_identifier_first_string(value: &JsonValue) -> BridgeResult<String> {
-    if let Some(literal) = value.as_str() {
-        return Ok(literal.to_owned());
-    }
-    let array = value.as_array().ok_or(BridgeError::IdentifierReceipt)?;
-    array
-        .first()
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned)
-        .ok_or(BridgeError::IdentifierReceipt)
-}
-
 fn parse_identifier_opaque_id_value(
     value: &JsonValue,
 ) -> BridgeResult<iroha_data_model::account::OpaqueAccountId> {
-    parse_identifier_first_string(value)?
+    value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)?
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
@@ -1576,7 +1598,9 @@ fn parse_identifier_opaque_id_value(
 fn parse_identifier_uaid_value(
     value: &JsonValue,
 ) -> BridgeResult<iroha_data_model::nexus::UniversalAccountId> {
-    parse_identifier_first_string(value)?
+    value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)?
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
@@ -1588,13 +1612,11 @@ fn parse_identifier_execution_payload_value(
     let program_id = parse_identifier_program_id_value(
         object
             .get("program_id")
-            .or_else(|| object.get("programId"))
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     let program_digest = parse_identifier_hash_value(
         object
             .get("program_digest")
-            .or_else(|| object.get("programDigest"))
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     let backend = parse_identifier_receipt_backend(
@@ -1605,30 +1627,23 @@ fn parse_identifier_execution_payload_value(
     let verification_mode = parse_identifier_receipt_verification_mode(
         object
             .get("verification_mode")
-            .or_else(|| object.get("verificationMode"))
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     let output_hash = parse_identifier_hash_value(
         object
             .get("output_hash")
-            .or_else(|| object.get("outputHash"))
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     let associated_data_hash = parse_identifier_hash_value(
         object
             .get("associated_data_hash")
-            .or_else(|| object.get("associatedDataHash"))
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
     let executed_at_ms = object
         .get("executed_at_ms")
-        .or_else(|| object.get("executedAtMs"))
         .and_then(JsonValue::as_u64)
         .ok_or(BridgeError::IdentifierReceipt)?;
-    let expires_at_ms = object
-        .get("expires_at_ms")
-        .or_else(|| object.get("expiresAtMs"))
-        .and_then(JsonValue::as_u64);
+    let expires_at_ms = object.get("expires_at_ms").and_then(JsonValue::as_u64);
 
     Ok(RamLfeExecutionReceiptPayload {
         program_id,
@@ -13024,15 +13039,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_accepts_torii_payload_hex() {
+    fn parse_identifier_receipt_accepts_canonical_payload_attestation() {
         let payload = sample_identifier_receipt_payload();
         let receipt = parse_identifier_receipt_value(json_object([
             (
-                "signature",
-                JsonValue::from(sample_identifier_signature_hex()),
-            ),
-            (
-                "signature_payload",
+                "payload",
                 json_object([
                     ("policy_id", JsonValue::from("email#retail")),
                     (
@@ -13079,18 +13090,31 @@ mod tests {
                     ),
                 ]),
             ),
+            (
+                "attestation",
+                json_object([
+                    ("kind", JsonValue::from("signed")),
+                    (
+                        "signature",
+                        JsonValue::from(sample_identifier_signature_hex()),
+                    ),
+                ]),
+            ),
         ]))
         .expect("parse structured torii receipt");
 
         assert_eq!(receipt.payload, payload);
+        let RamLfeReceiptAttestation::Signed(signature) = receipt.attestation else {
+            panic!("receipt attestation must be signed");
+        };
         assert_eq!(
-            hex::encode(receipt.signature.expect("signature").payload()),
+            hex::encode(signature.payload()),
             sample_identifier_signature_hex()
         );
     }
 
     #[test]
-    fn parse_identifier_receipt_rejects_missing_structured_payload() {
+    fn parse_identifier_receipt_rejects_legacy_payload_hex() {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
@@ -13103,7 +13127,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_rejects_incomplete_structured_payload() {
+    fn parse_identifier_receipt_rejects_legacy_signature_payload() {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
@@ -13127,11 +13151,10 @@ mod tests {
         let payload = sample_identifier_receipt_payload();
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
-            signature: Some(
+            attestation: RamLfeReceiptAttestation::Signed(
                 Signature::from_hex(sample_identifier_signature_hex())
                     .expect("valid signature hex"),
             ),
-            proof: None,
         };
         let instruction = ClaimIdentifier {
             account: payload.account_id.clone(),
