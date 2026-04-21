@@ -1,6 +1,25 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-20
+Last updated: 2026-04-21
+
+Latest sync (2026-04-21 deterministic SoraNet puzzle transcript mismatch regression):
+The `iroha_crypto` puzzle transcript-mismatch regression is deterministic
+again. Instead of asserting against one hard-coded alternate transcript under a
+4-bit difficulty target, the test now searches for a mismatched transcript
+binding that actually invalidates the minted ticket before checking for
+`Error::InvalidSolution`, which removes the intermittent false-green / false-red
+outcome from the unit-test shard.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_crypto/src/soranet/puzzle.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_crypto soranet::puzzle::tests::rejects_mismatched_transcript_hash -- --exact --nocapture`
+  - `cargo test -p iroha_crypto soranet::puzzle::tests:: -- --nocapture`
+- open work after this slice:
+  - rerun a broader `iroha_crypto` validation window when there is time budget
+    beyond the focused SoraNet puzzle subset
 
 Latest sync (2026-04-20 Connect canonical field-layout flags):
 Connect frame relaying no longer drops valid control frames during size
