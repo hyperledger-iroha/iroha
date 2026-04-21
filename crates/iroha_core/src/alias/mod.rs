@@ -96,7 +96,10 @@ fn authority_has_permission(
     false
 }
 
-fn account_alias_is_open_retail_namespace(world: &impl WorldReadOnly, alias: &AccountAlias) -> bool {
+fn account_alias_is_open_retail_namespace(
+    world: &impl WorldReadOnly,
+    alias: &AccountAlias,
+) -> bool {
     let Some(dataspace) = world.dataspace_catalog().by_id(alias.dataspace) else {
         return false;
     };

@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: Torii accounts smoke loopback request wiring
+- `crates/iroha_torii/tests/accounts_endpoints.rs` now attaches a loopback
+  `ConnectInfo<SocketAddr>` extension to each direct `oneshot(...)` request
+  hitting `/v1/accounts`, `/v1/accounts/query`, and
+  `/v1/accounts/{account_id}/permissions`.
+- Those app-api router handlers now extract remote socket metadata, so the
+  smoke was previously failing Axum's missing-request-extension path instead of
+  exercising the mounted endpoints.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test accounts_endpoints accounts_endpoints_exist -- --nocapture`
+
 ## 2026-04-21 Follow-up: iroha_core identifier and lane relay test compile unblock
 - Cleared the reported `iroha_core` test-build regressions in
   `crates/iroha_core/src/smartcontracts/isi/identifier.rs` and
