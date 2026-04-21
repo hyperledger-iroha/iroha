@@ -1385,6 +1385,34 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertTrue(json.contains("\"instructions\""))
     }
 
+    func testDecodeSignedTransactionJSONIncludesFeeSponsorWhenPresent() throws {
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native encoder not linked")
+        }
+
+        let keypair = try Keypair.generate()
+        let sponsorKeypair = try Keypair.generate()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
+        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+                                       authority: authority,
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                                       quantity: "1",
+                                       destination: authority,
+                                       description: nil,
+                                       feeSponsor: feeSponsor,
+                                       ttlMs: nil)
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
+        guard let json = sdk.decodeSignedTransaction(envelope: envelope) else {
+            XCTFail("expected JSON from native bridge")
+            return
+        }
+
+        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
+        XCTAssertTrue(json.contains(feeSponsor), json)
+    }
+
     func testMintNativeBridgeWhenAvailable() throws {
         try requireEd25519Encoder()
 

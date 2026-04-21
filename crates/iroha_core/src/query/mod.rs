@@ -6,6 +6,9 @@ pub mod cursor;
 pub mod index_status;
 pub mod pagination;
 pub mod projection_checkpoint;
+pub mod projection_checkpoint_journal;
+pub mod projection_rowset;
+pub mod projection_shard;
 pub mod snapshot;
 pub mod store;
 

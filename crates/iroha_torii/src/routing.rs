@@ -7661,7 +7661,7 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
 /// Returns recent shielded roots for the requested asset, bounded by the configured
 /// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
 #[cfg(feature = "app_api")]
-fn resolve_asset_definition_selector(
+pub(crate) fn resolve_asset_definition_selector(
     world: &impl WorldReadOnly,
     asset_literal: &str,
     now_ms: u64,
@@ -23196,6 +23196,52 @@ fn record_bundle_stage(receipt: &mut DeployContractBundleReceiptDto, stage: &str
 }
 
 #[cfg(feature = "app_api")]
+fn invalidate_completed_deploy_stage_if_contracts_drifted(
+    state: &CoreState,
+    receipt: &mut DeployContractBundleReceiptDto,
+) -> bool {
+    if !bundle_stage_completed(receipt, "deploy") {
+        return false;
+    }
+
+    let deploy_stage_stale = receipt.contracts.iter_mut().any(|contract| {
+        let (bound, active) = contract_alias_activation_state(
+            state,
+            &contract.contract_alias,
+            &contract.contract_address,
+        );
+        if bound && active {
+            return false;
+        }
+
+        contract.tx_hash_hex = None;
+        contract.status = "planned".to_owned();
+        true
+    });
+
+    if !deploy_stage_stale {
+        return false;
+    }
+
+    receipt.completed_stages.retain(|stage| stage == "plan");
+    receipt.ok = true;
+    receipt.failure_point = None;
+
+    for call in &mut receipt.init_calls {
+        call.tx_hash_hex = None;
+        call.status = "pending".to_owned();
+    }
+
+    for assertion in &mut receipt.assertions {
+        assertion.status = "pending".to_owned();
+        assertion.actual_result = None;
+        assertion.error = None;
+    }
+
+    true
+}
+
+#[cfg(feature = "app_api")]
 fn mark_bundle_failure(receipt: &mut DeployContractBundleReceiptDto, failure_point: String) {
     receipt.ok = false;
     receipt.failure_point = Some(failure_point);
@@ -23302,6 +23348,9 @@ async fn execute_contract_bundle_request(
     let mut receipt =
         load_contract_bundle_receipt(&planned.bundle_digest, &planned.chain_fingerprint)?
             .unwrap_or(planned);
+    if invalidate_completed_deploy_stage_if_contracts_drifted(state.as_ref(), &mut receipt) {
+        persist_contract_bundle_receipt(&receipt)?;
+    }
     receipt.ok = true;
     receipt.failure_point = None;
     persist_contract_bundle_receipt(&receipt)?;
@@ -23364,15 +23413,16 @@ async fn execute_contract_bundle_request(
                     return Err(err);
                 }
             };
-            receipt.contracts[index].tx_hash_hex = response.tx_hash_hex.clone();
-            receipt.contracts[index].status = response.status.clone();
+            let response_contract_alias = response.contract_alias.clone();
+            let response_contract_address = response.contract_address.clone();
+            receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
             if require_activation_wait {
                 if let Err(err) = wait_for_contract_alias_target(
                     state.clone(),
-                    &contract_alias,
-                    &contract_address,
+                    &response_contract_alias,
+                    &response_contract_address,
                 )
                 .await
                 {
@@ -23989,7 +24039,7 @@ mod contract_bundle_tests {
     }
 
     #[tokio::test]
-    async fn execute_contract_bundle_resume_reuses_completed_deploy_stage() {
+    async fn execute_contract_bundle_resume_redeploys_when_completed_stage_is_stale() {
         let dir = tempdir().expect("tempdir");
         let _guard = OverrideGuard::new(dir.path());
         let creds = crate::test_utils::random_authority();
@@ -24028,8 +24078,8 @@ mod contract_bundle_tests {
             resumed.completed_stages,
             vec!["plan".to_owned(), "deploy".to_owned()]
         );
-        assert_eq!(resumed.contracts[0].status, "deployed");
-        assert_eq!(resumed.contracts[0].tx_hash_hex, Some("11".repeat(32)));
+        assert_eq!(resumed.contracts[0].status, "submitted");
+        assert_ne!(resumed.contracts[0].tx_hash_hex, Some("11".repeat(32)));
     }
 }
 
@@ -50742,12 +50792,12 @@ fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
 
 #[cfg(feature = "app_api")]
 #[derive(Clone, Default)]
-struct PrimaryAliasProjection {
-    literal: Option<String>,
-    name: Option<String>,
-    dataspace: Option<String>,
-    domain: Option<String>,
-    has_primary_alias: bool,
+pub(crate) struct PrimaryAliasProjection {
+    pub(crate) literal: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) dataspace: Option<String>,
+    pub(crate) domain: Option<String>,
+    pub(crate) has_primary_alias: bool,
 }
 
 #[cfg(feature = "app_api")]
@@ -50802,7 +50852,7 @@ fn primary_alias_projection_from_binding_record(
 }
 
 #[cfg(feature = "app_api")]
-fn primary_alias_projection_for_account_id(
+pub(crate) fn primary_alias_projection_for_account_id(
     state: &CoreState,
     account_id: &AccountId,
 ) -> PrimaryAliasProjection {
@@ -52669,7 +52719,9 @@ fn account_read_response_from_world_entry(
 }
 
 #[cfg(feature = "app_api")]
-fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model::account::Account> {
+pub(crate) fn collect_subject_accounts(
+    world: &impl WorldReadOnly,
+) -> Vec<iroha_data_model::account::Account> {
     use std::collections::{BTreeMap, btree_map::Entry};
 
     let mut by_subject = BTreeMap::new();
@@ -70290,7 +70342,9 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
 }
 
 #[cfg(feature = "app_api")]
-fn asset_balance_scope_literal(scope: &iroha_data_model::asset::AssetBalanceScope) -> String {
+pub(crate) fn asset_balance_scope_literal(
+    scope: &iroha_data_model::asset::AssetBalanceScope,
+) -> String {
     match scope {
         iroha_data_model::asset::AssetBalanceScope::Global => "global".to_owned(),
         iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
