@@ -21,6 +21,36 @@ Last updated: 2026-04-21
   - `cargo test -p iroha_torii --test norito_ingress norito_query_accepts_versioned_signed_query_payload -- --exact --nocapture`
   - `cargo test -p iroha_torii --test configuration_endpoint configuration_endpoint_includes_transport_summary -- --exact --nocapture`
 
+## 2026-04-21 Follow-up: iroha_test_network permit convoy regression in config/genesis tests
+- `crates/iroha_test_network/src/lib.rs` now routes the reported
+  config/genesis-only regression tests through `build_with_isolated_permit(...)`
+  instead of the shared default `NetworkBuilder::build()` permit namespace.
+  This avoids the test-only permit convoy where one test could hold the global
+  `limit=1` permit while another build in the same shard, especially the
+  two-build `config_layers_include_trusted_peer_pop_and_bls` case, waited long
+  enough to cascade `timed out after 300s waiting for test network permit`
+  failures across unrelated assertions.
+- Removed a stray `dbg!` from
+  `config_layers_without_pop_excludes_bls_entries` while touching the failing
+  regression cluster.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - exact reported tests:
+    `cargo test -p iroha_test_network --lib tests::enables_norito_rpc_ga_stage_for_test_networks -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::config_layers_include_trusted_peer_pop_and_bls -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::config_layers_without_pop_excludes_bls_entries -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::builder_replaces_conflicting_da_enabled_parameter_with_resolved_value -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::default_npos_builder_bootstraps_validators -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::default_builder_grants_soracloud_management_to_validator_runtime_signers -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::default_builder_sets_parseable_nexus_account_literals -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::default_builder_uses_localnet_pipeline_time -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::explicit_pipeline_time_injects_sumeragi_params -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::block_sync_gossip_period_override_is_applied -- --exact --nocapture`
+    `cargo test -p iroha_test_network --lib tests::genesis_is_cached_and_deterministic -- --exact --nocapture`
+  - grouped regression shards:
+    `cargo test -p iroha_test_network --lib tests::config_layers_ -- --nocapture`
+    `cargo test -p iroha_test_network --lib tests::default_builder_ -- --nocapture`
+
 ## 2026-04-21 Follow-up: first-release canonical Norito submission cleanup
 - Torii MCP transaction/query submission now accepts only canonical
   `body_base64` bytes for versioned `SignedTransaction` and `SignedQuery`
