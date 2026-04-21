@@ -102,26 +102,22 @@ fn render_text<T: Write>(
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
+    use std::{fs, path::PathBuf};
 
+    use iroha_data_model::{ChainId, parameter::system::SumeragiConsensusMode};
+    use iroha_genesis::GenesisBuilder;
     use tempfile::NamedTempFile;
 
     use super::*;
 
     fn minimal_genesis() -> NamedTempFile {
         let genesis_file = NamedTempFile::new().expect("create temp genesis");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Permissioned",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        File::create(genesis_file.path())
-            .and_then(|mut f| f.write_all(genesis_json.as_bytes()))
-            .expect("write genesis json");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
+        fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         genesis_file
     }
 
