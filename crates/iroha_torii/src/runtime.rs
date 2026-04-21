@@ -848,6 +848,62 @@ pub async fn handle_node_query_projection_shard_export(
 }
 
 #[cfg(feature = "app_api")]
+fn build_query_projection_uploaded_archives(
+    state: &iroha_core::state::State,
+    shards: Vec<NodeProjectionCheckpointPublishShardRef>,
+) -> Result<Vec<QueryProjectionUploadedShardArchive>, crate::Error> {
+    let mut uploads = Vec::with_capacity(shards.len());
+
+    for (index, shard) in shards.into_iter().enumerate() {
+        validate_projection_partition_id(shard.partition_id)?;
+
+        let archive = match shard.resource.trim().to_ascii_lowercase().as_str() {
+            "accounts" => build_accounts_projection_shard_archive(
+                state,
+                shard.partition_id,
+                shard.archive_emitted_at_unix,
+            )?,
+            "asset_holders" => {
+                let selector = shard
+                    .asset_definition_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        projection_export_conversion_error(format!(
+                            "asset_definition_id is required for asset_holders checkpoint shard `shards[{index}]`"
+                        ))
+                    })?;
+                build_asset_holders_projection_shard_archive(
+                    state,
+                    selector,
+                    shard.partition_id,
+                    shard.archive_emitted_at_unix,
+                )?
+            }
+            other => {
+                return Err(projection_export_conversion_error(format!(
+                    "unsupported projection resource `{other}`; expected `accounts` or `asset_holders`"
+                )));
+            }
+        };
+
+        let manifest_field = format!("shards[{index}].manifest_digest_hex");
+        let storage_ticket_field = format!("shards[{index}].storage_ticket_hex");
+        let manifest_digest = parse_blob_digest_hex(&shard.manifest_digest_hex, &manifest_field)?;
+        let storage_ticket =
+            parse_storage_ticket_hex(&shard.storage_ticket_hex, &storage_ticket_field)?;
+        uploads.push(QueryProjectionUploadedShardArchive::new(
+            archive,
+            manifest_digest,
+            storage_ticket,
+        ));
+    }
+
+    Ok(uploads)
+}
+
+#[cfg(feature = "app_api")]
 fn build_projection_shard_catalog_response(
     resource: QueryProjectionResourceKind,
     indexed_height: u64,
@@ -1952,6 +2008,42 @@ mod tests {
         assert_eq!(
             response.shards[0].blob_hash_hex,
             hex::encode(persisted.shards[0].blob_hash.as_bytes())
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition() {
+        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+        let state = State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let err = build_query_projection_uploaded_archives(
+            &state,
+            vec![NodeProjectionCheckpointPublishShardRef {
+                resource: "asset_holders".to_string(),
+                partition_id: 0,
+                asset_definition_id: None,
+                archive_emitted_at_unix: 1_714_001_444,
+                manifest_digest_hex: hex::encode([0x51; 32]),
+                storage_ticket_hex: hex::encode([0x61; 32]),
+            }],
+        )
+        .expect_err("missing asset_definition_id must fail");
+
+        let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+            message,
+        ))) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("asset_definition_id is required for asset_holders checkpoint shard"),
+            "unexpected conversion error: {message}"
         );
     }
 
