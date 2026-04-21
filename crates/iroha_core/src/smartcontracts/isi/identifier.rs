@@ -701,7 +701,10 @@ mod tests {
         metadata::Metadata,
         nexus::UniversalAccountId,
         prelude::Domain,
-        ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy},
+        ram_lfe::{
+            RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeProgramPolicy,
+            RamLfeReceiptAttestation,
+        },
     };
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;

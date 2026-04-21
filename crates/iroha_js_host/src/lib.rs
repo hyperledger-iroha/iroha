@@ -113,8 +113,9 @@ use iroha_data_model::{
     ministry::AgendaProposalV1,
     name::Name,
     nexus::{
-        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
-        TouchManifest, compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId,
+        LaneRelayEnvelope, TouchManifest, compute_descriptor_binding, compute_settlement_hash,
+        validate_descriptor,
     },
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,

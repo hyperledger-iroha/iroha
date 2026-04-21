@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-21
 
+## 2026-04-21 Follow-up: iroha_core identifier and lane relay test compile unblock
+- Cleared the reported `iroha_core` test-build regressions in
+  `crates/iroha_core/src/smartcontracts/isi/identifier.rs` and
+  `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
+- The identifier ISI tests now import `RamLfeReceiptAttestation` explicitly,
+  which restores the two receipt-attestation references used by the claim
+  validation regressions.
+- The lane relay instruction registration test now computes the expected
+  `FastPQ` proof digest before consuming `LaneRelayEnvelope` with
+  `with_fastpq_proof_material(...)`, removing the moved-value error without
+  adding an unnecessary clone.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --tests`
+
 ## 2026-04-21 Follow-up: first-release SDK compatibility cleanup
 - Java/Kotlin Connect envelope decoding is canonical Norito-only now; the
   alternate raw/body compatibility decoder branches were removed.
