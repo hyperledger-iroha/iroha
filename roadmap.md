@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii api_router_for_tests loopback ConnectInfo injection):
+The reported `domains_endpoints_exist` red is fixed.
+`crates/iroha_torii/src/lib.rs` now has `Torii::api_router_for_tests()`
+inject loopback `ConnectInfo<SocketAddr>` only when a helper-based test request
+does not already provide transport metadata, so direct `oneshot(...)` smokes
+exercise the mounted handlers instead of Axum's missing-request-extension
+`500` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test domains_endpoints domains_endpoints_exist -- --nocapture`
+  - `cargo test -p iroha_torii --test router_feature_matrix router_builds_under_current_features -- --nocapture`
+  - `cargo test -p iroha_torii --test app_api_router_smoke app_api_router_smoke -- --nocapture`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints asset_definitions_endpoints_return_name_and_alias -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the helper-based smoke regressions
+
 Latest sync (2026-04-22 Torii connect gating request metadata alignment):
 The reported `connect_gating` reds are fixed. The direct router probes in
 `crates/iroha_torii/tests/connect_gating.rs` now attach loopback
