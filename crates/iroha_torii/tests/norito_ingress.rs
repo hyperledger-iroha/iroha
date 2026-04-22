@@ -150,6 +150,60 @@ async fn norito_transaction_returns_submission_receipt() {
 }
 
 #[tokio::test]
+async fn norito_transaction_rejects_invalid_signature_without_decode_panic() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_core::tx::SignatureRejectionCode;
+    use iroha_torii_shared::{ErrorEnvelope, uri};
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::TRANSACTION)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(Body::from(
+                    norito_rpc_harness::sample_invalid_signature_transaction_bytes(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some(SignatureRejectionCode::InvalidSignature.as_str())
+    );
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("decode error envelope");
+    assert_eq!(
+        envelope.code(),
+        SignatureRejectionCode::InvalidSignature.as_str()
+    );
+    assert!(envelope.message().contains("failed to accept transaction"));
+    assert!(
+        !envelope.message().contains("panic during decode"),
+        "unexpected decode panic response: {}",
+        envelope.message()
+    );
+}
+
+#[tokio::test]
 async fn public_transaction_route_rejects_internal_entrypoint_payload() {
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
@@ -225,6 +279,51 @@ async fn norito_query_accepts_versioned_signed_query_payload() {
     let text = String::from_utf8_lossy(&body);
 
     assert_eq!(status, StatusCode::OK, "unexpected error body: {text}");
+}
+
+#[tokio::test]
+async fn norito_query_rejects_invalid_signature_without_decode_panic() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::QUERY)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(Body::from(
+                    norito_rpc_harness::sample_invalid_signature_query_bytes(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("response text");
+    assert!(
+        text.contains("Query request signature is not valid"),
+        "unexpected error body: {text}"
+    );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
 }
 
 #[tokio::test]
