@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: default genesis structured-instruction compatibility
+- `crates/iroha_genesis/src/lib.rs` now preserves staged Sumeragi
+  `NextMode`/`ModeActivationHeight` fields when stripping injected handshake
+  metadata, so `normalize()` correctly rejects unpaired activation heights
+  instead of silently dropping the staging parameter during parse.
+- The genesis structured-instruction decoder now accepts legacy raw public-key
+  account literals in addition to canonical I105 account ids, and the
+  regression coverage includes a direct structured-account manifest test for
+  that fallback path.
+- `defaults/genesis.json` was refreshed just enough to match the current
+  structured instruction grammar again: the stale non-I105 Carpenter account
+  literal was replaced with its canonical I105 form, the mint destinations now
+  carry full asset bucket literals, and the default genesis transfer source now
+  uses the canonical I105 genesis account literal expected by the parser.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_genesis`
+
 ## 2026-04-22 Follow-up: lane commitment Norito fixture resync
 - `fixtures/nexus/lane_commitments/cbdc_private_lane_commitment.to` and
   `fixtures/nexus/lane_commitments/default_public_lane_commitment.to` were

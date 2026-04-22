@@ -1123,9 +1123,13 @@ pub mod genesis_instructions_json {
     }
 
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
-        AccountId::parse_encoded(value)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
+        match AccountId::parse_encoded(value) {
+            Ok(parsed) => Ok(parsed.into_account_id()),
+            Err(err) => value
+                .parse::<iroha_crypto::PublicKey>()
+                .map(AccountId::new)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {err}"))),
+        }
     }
 
     fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {
@@ -1854,6 +1858,16 @@ pub mod genesis_instructions_json {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
             let raw = std::fs::read_to_string(&path).expect("read defaults/genesis.json");
             let value: Value = norito::json::from_str(&raw).expect("parse defaults genesis JSON");
+            let chain_discriminant = value
+                .as_object()
+                .and_then(|obj| obj.get("chain_discriminant"))
+                .cloned()
+                .and_then(|value| norito::json::value::from_value::<u16>(value).ok())
+                .expect("chain_discriminant");
+            let _chain_discriminant =
+                iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                    chain_discriminant,
+                );
             let transactions = value
                 .as_object()
                 .and_then(|obj| obj.get("transactions"))
@@ -4631,8 +4645,8 @@ impl RawGenesisTransaction {
             tx.instructions
                 .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
             if let Some(parameters) = &mut tx.parameters {
-                let filtered_parameters = parameters
-                    .parameters()
+                let filtered_parameters = parameters_with_staging(parameters)
+                    .into_iter()
                     .filter(|parameter| {
                         !matches!(
                             parameter,
@@ -5479,7 +5493,8 @@ mod tests {
         let executor_path = tmp_dir.path().join("executor.to");
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
+            iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap()
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
@@ -5513,6 +5528,40 @@ mod tests {
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;
         RawGenesisTransaction::from_path(&genesis_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_genesis_accepts_legacy_public_key_account_literals() -> Result<()> {
+        init_instruction_registry();
+
+        let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
+        let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let genesis = format!(
+            r#"{{
+                "chain":"00000000-0000-0000-0000-000000000000",
+                "chain_discriminant":{},
+                "executor":null,
+                "ivm_dir":".",
+                "consensus_mode":"Permissioned",
+                "transactions":[{{
+                    "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
+                }}]
+            }}"#,
+            iroha_data_model::account::address::chain_discriminant(),
+        );
+
+        let decoded: RawGenesisTransaction = norito::json::from_str(&genesis)?;
+        let account = decoded.transactions[0].instructions[0]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .and_then(|register| match register {
+                RegisterBox::Account(account) => Some(account.object().id().clone()),
+                _ => None,
+            })
+            .expect("account registration");
+        assert_eq!(account, account_id);
+
         Ok(())
     }
 
