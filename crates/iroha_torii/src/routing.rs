@@ -63840,7 +63840,10 @@ mod nexus_dataspaces_summary_tests {
         account::Account,
         block::BlockHeader,
         domain::Domain,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{
+            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+            ManifestVersion, UniversalAccountId,
+        },
     };
     use iroha_test_samples::ALICE_ID;
 
@@ -63895,6 +63898,104 @@ mod nexus_dataspaces_summary_tests {
     }
 
     #[test]
+    fn manifest_summary_json_reports_pending_expired_and_revoked_states() {
+        let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
+        let pending_payload = manifest_summary_json(Some(&pending));
+        let pending_obj = pending_payload
+            .as_object()
+            .expect("pending manifest summary object");
+        assert_eq!(
+            pending_obj.get("status").and_then(Value::as_str),
+            Some("Pending")
+        );
+        assert_eq!(
+            pending_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            pending_obj
+                .get("activated_epoch")
+                .is_some_and(Value::is_null)
+        );
+        assert!(pending_obj.get("expired_epoch").is_some_and(Value::is_null));
+        assert!(pending_obj.get("revoked_epoch").is_some_and(Value::is_null));
+
+        let mut expired = sample_manifest_record();
+        expired.lifecycle.mark_expired(222);
+        let expired_payload = manifest_summary_json(Some(&expired));
+        let expired_obj = expired_payload
+            .as_object()
+            .expect("expired manifest summary object");
+        assert_eq!(
+            expired_obj.get("status").and_then(Value::as_str),
+            Some("Expired")
+        );
+        assert_eq!(
+            expired_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            expired_obj.get("activated_epoch").and_then(Value::as_u64),
+            Some(121)
+        );
+        assert_eq!(
+            expired_obj.get("expired_epoch").and_then(Value::as_u64),
+            Some(222)
+        );
+        assert!(expired_obj.get("revoked_epoch").is_some_and(Value::is_null));
+
+        let mut revoked = sample_manifest_record();
+        revoked
+            .lifecycle
+            .mark_revoked(333, Some("operator request".to_owned()));
+        let revoked_payload = manifest_summary_json(Some(&revoked));
+        let revoked_obj = revoked_payload
+            .as_object()
+            .expect("revoked manifest summary object");
+        assert_eq!(
+            revoked_obj.get("status").and_then(Value::as_str),
+            Some("Revoked")
+        );
+        assert_eq!(
+            revoked_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            revoked_obj.get("revoked_epoch").and_then(Value::as_u64),
+            Some(333)
+        );
+        assert_eq!(
+            revoked_obj.get("revoked_reason").and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[test]
+    fn commitments_summary_json_reports_empty_snapshot() {
+        let payload = commitments_summary_json(&[]);
+        let obj = payload.as_object().expect("commitment summary object");
+        assert_eq!(obj.get("entries").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("tx_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("total_chunks").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("rbc_bytes_total").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("teu_total").and_then(Value::as_u64), Some(0));
+        assert!(obj.get("last_block_height").is_some_and(Value::is_null));
+        assert!(obj.get("last_block_hash").is_some_and(Value::is_null));
+        assert_eq!(
+            obj.get("lane_ids")
+                .and_then(Value::as_array)
+                .expect("lane ids"),
+            &Vec::<Value>::new()
+        );
+        assert_eq!(
+            obj.get("details")
+                .and_then(Value::as_array)
+                .expect("details"),
+            &Vec::<Value>::new()
+        );
+    }
+
+    #[test]
     fn commitments_summary_json_aggregates_totals_and_latest() {
         let commitments = vec![
             status::DataspaceCommitmentSnapshot {
@@ -63945,6 +64046,113 @@ mod nexus_dataspaces_summary_tests {
         assert_eq!(lane_ids.len(), 2);
         assert_eq!(lane_ids[0].as_u64(), Some(1));
         assert_eq!(lane_ids[1].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn commitments_summary_json_sorts_equal_heights_by_lane_id() {
+        let lower_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+        let higher_lane_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
+        let lower_lane_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; Hash::LENGTH]));
+        let commitments = vec![
+            status::DataspaceCommitmentSnapshot {
+                block_height: 5,
+                lane_id: 9,
+                dataspace_id: 42,
+                tx_count: 1,
+                total_chunks: 2,
+                rbc_bytes_total: 20,
+                teu_total: 10,
+                block_hash: lower_hash,
+            },
+            status::DataspaceCommitmentSnapshot {
+                block_height: 9,
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 3,
+                total_chunks: 6,
+                rbc_bytes_total: 60,
+                teu_total: 30,
+                block_hash: higher_lane_hash,
+            },
+            status::DataspaceCommitmentSnapshot {
+                block_height: 9,
+                lane_id: 1,
+                dataspace_id: 42,
+                tx_count: 4,
+                total_chunks: 8,
+                rbc_bytes_total: 80,
+                teu_total: 40,
+                block_hash: lower_lane_hash,
+            },
+        ];
+
+        let payload = commitments_summary_json(&commitments);
+        let obj = payload.as_object().expect("commitment summary object");
+        let expected_hash = format!("{lower_lane_hash}");
+        assert_eq!(
+            obj.get("last_block_height").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            obj.get("last_block_hash").and_then(Value::as_str),
+            Some(expected_hash.as_str())
+        );
+
+        let details = obj
+            .get("details")
+            .and_then(Value::as_array)
+            .expect("details array");
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0]["block_height"].as_u64(), Some(9));
+        assert_eq!(details[0]["lane_id"].as_u64(), Some(1));
+        assert_eq!(details[1]["block_height"].as_u64(), Some(9));
+        assert_eq!(details[1]["lane_id"].as_u64(), Some(7));
+        assert_eq!(details[2]["block_height"].as_u64(), Some(5));
+        assert_eq!(details[2]["lane_id"].as_u64(), Some(9));
+    }
+
+    #[test]
+    fn upsert_dataspace_summary_reuses_existing_entry_and_alias_lookup() {
+        let dataspace_id = DataSpaceId::new(42);
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let alias_lookup = DataspaceAliasLookup::new(catalog);
+        let mut summaries = BTreeMap::new();
+
+        {
+            let summary = upsert_dataspace_summary(&mut summaries, dataspace_id, &alias_lookup);
+            assert_eq!(summary.dataspace_id, dataspace_id);
+            assert_eq!(summary.dataspace_alias.as_deref(), Some("retail"));
+            summary.portfolio_accounts = 2;
+            summary.asset_definitions.insert("rose".to_owned());
+        }
+
+        {
+            let summary = upsert_dataspace_summary(&mut summaries, dataspace_id, &alias_lookup);
+            assert_eq!(summary.portfolio_accounts, 2);
+            assert_eq!(summary.asset_definitions.len(), 1);
+            assert_eq!(summary.dataspace_alias.as_deref(), Some("retail"));
+        }
+
+        {
+            let summary =
+                upsert_dataspace_summary(&mut summaries, DataSpaceId::new(404), &alias_lookup);
+            assert_eq!(summary.dataspace_id, DataSpaceId::new(404));
+            assert!(summary.dataspace_alias.is_none());
+        }
+
+        assert_eq!(summaries.len(), 2);
     }
 
     #[tokio::test]

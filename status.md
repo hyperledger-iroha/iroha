@@ -2,6 +2,70 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Torii nexus dataspaces summary merge coverage expansion
+- `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now adds two more
+  handler-level regressions for the same endpoint slice: one proves an
+  uncataloged dataspace renders `dataspace_alias: null` when the post-commit
+  world snapshot contains a bound/manifested dataspace outside the catalog, and
+  one proves the joined summary merges a second bound account plus multiple
+  consensus commitments into a single dataspace row and totals block.
+- These cases extend endpoint coverage beyond the earlier happy path and
+  inactive-manifest checks by exercising alias-null rendering, `accounts_bound`
+  diverging from `portfolio_accounts`, and multi-entry consensus aggregation in
+  the final JSON payload.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib nexus_dataspaces_summary_tests --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii nexus dataspaces summary helper coverage expansion
+- `crates/iroha_torii/src/routing.rs` now has additional local summary-helper
+  unit coverage for the same endpoint area: `manifest_summary_json(...)` now
+  exercises `Pending` / `Expired` / `Revoked` lifecycle states in addition to
+  the existing `Missing` / `Active` cases, `commitments_summary_json(...)` now
+  covers the empty-input path plus same-height lane-id tie ordering for
+  `last_block_hash` / `details`, and `upsert_dataspace_summary(...)` now has a
+  focused reuse test that proves alias lookup and entry preservation on repeat
+  inserts.
+- Together with the endpoint integration file, this extends coverage across the
+  joined-summary response construction rather than only request parsing and
+  happy-path aggregation.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `./target/debug/deps/iroha_torii-cdb5859f08d08f7c --nocapture nexus_dataspaces_summary_tests`
+  - `./target/debug/deps/nexus_dataspaces_summary-2182b6f7a9ff2a6d --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii nexus dataspaces summary coverage expansion
+- `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now covers three more
+  summary branches around the same endpoint: successful requests for existing
+  accounts without a `uaid`, portfolio-only aggregation that falls back to the
+  universal dataspace when no bindings/manifests are present, and inactive
+  manifest lifecycles (`Pending` / `Expired` / `Revoked`) where bindings are
+  rebuilt away and unrelated consensus commitments are ignored.
+- The new cases also assert trimmed positive account-literal handling, zeroed
+  totals for the no-`uaid` path, empty consensus detail payloads, and the
+  merged row shape when only inactive manifests remain alongside the universal
+  portfolio fallback row.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii nexus dataspaces summary fixture explicit asset name
+- `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now seeds its test
+  asset definition through an explicit `NewAssetDefinition` with the human
+  name set to `xor`, matching the current registration contract that rejects
+  blank asset-definition names.
+- This fixes the reported
+  `nexus_dataspaces_summary_endpoint_returns_joined_snapshot` panic during test
+  setup without changing the endpoint logic itself; the regression was a stale
+  fixture assumption after asset-definition name validation tightened.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+
 ## 2026-04-22 Follow-up: default genesis structured-instruction compatibility
 - `crates/iroha_genesis/src/lib.rs` now preserves staged Sumeragi
   `NextMode`/`ModeActivationHeight` fields when stripping injected handshake

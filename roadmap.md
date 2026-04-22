@@ -2,6 +2,93 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii nexus dataspaces summary merge coverage expansion):
+The same `nexus_dataspaces_summary` endpoint slice now has two more focused
+integration regressions in
+`crates/iroha_torii/tests/nexus_dataspaces_summary.rs`: one covers the
+uncataloged-dataspace path where the joined response must emit
+`dataspace_alias: null`, and one covers a merged dataspace row containing a
+second bound account plus multiple consensus commitments so the handler totals
+exercise `accounts_bound`, consensus rollups, and the combined account list.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib nexus_dataspaces_summary_tests --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary helper coverage expansion):
+The same `nexus_dataspaces_summary` slice now has deeper routing-level unit
+coverage in `crates/iroha_torii/src/routing.rs`. The new tests exercise the
+remaining summary-helper branches that the endpoint file did not hit directly:
+`manifest_summary_json(...)` now covers `Pending` / `Expired` / `Revoked`
+statuses, `commitments_summary_json(...)` now covers empty snapshots plus
+same-height lane-id tie ordering for `last_block_hash` and detail rows, and
+`upsert_dataspace_summary(...)` now proves alias lookup plus accumulator reuse
+without resetting previously collected state.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `./target/debug/deps/iroha_torii-cdb5859f08d08f7c --nocapture nexus_dataspaces_summary_tests`
+  - `./target/debug/deps/nexus_dataspaces_summary-2182b6f7a9ff2a6d --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary helper/unit
+    coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary coverage expansion):
+The `nexus_dataspaces_summary` coverage window is broader now.
+`crates/iroha_torii/tests/nexus_dataspaces_summary.rs` adds focused endpoint
+regressions for three previously untested branches: a successful summary for an
+existing account without a `uaid`, a portfolio-only summary that falls back to
+the universal dataspace when there are no active bindings/manifests, and a
+mixed inactive-manifest snapshot (`Pending` / `Expired` / `Revoked`) that
+proves inactive manifests still render while account bindings are rebuilt away
+and unrelated consensus commitments are ignored.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary fixture explicit asset name):
+The reported `nexus_dataspaces_summary_endpoint_returns_joined_snapshot` red is
+fixed. `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now seeds its
+fixture asset definition via an explicit `NewAssetDefinition` carrying the
+required non-blank human-facing `xor` name, so the test setup matches the
+current asset-definition registration contract instead of tripping
+`invalid asset definition name: asset name must not be blank`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported nexus dataspaces summary regression
+
 Latest sync (2026-04-22 default genesis structured-instruction compatibility):
 The reported `iroha_genesis` reds are fixed. `crates/iroha_genesis/src/lib.rs`
 now keeps staged Sumeragi cutover parameters intact while filtering injected
