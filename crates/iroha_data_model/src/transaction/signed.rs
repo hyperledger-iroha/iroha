@@ -1135,6 +1135,27 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validation() {
+        let mut invalid_tx = sample_signed_transaction();
+        let mut signature = invalid_tx.signature().0.payload().to_vec();
+        let last = signature
+            .last_mut()
+            .expect("test signature payload is non-empty");
+        *last ^= 0xFF;
+        invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&signature),
+        ));
+
+        let decoded = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
+            .expect("well-formed transaction with invalid signature must still decode");
+        let err = decoded
+            .verify_signature()
+            .expect_err("invalid transaction signature must fail verification");
+
+        assert!(matches!(err, TransactionSignatureError::CryptoError(_)));
+    }
+
+    #[test]
     fn transaction_entrypoint_versioned_decode_rejects_trailing_bytes() {
         let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
         let mut bytes = entrypoint.encode_versioned();
