@@ -81,6 +81,22 @@ function loadAssetIdFromFixture(name) {
   return destination;
 }
 
+function withMissingNativeBinding(callback) {
+  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+  process.env.IROHA_JS_NATIVE_DIR = "/definitely/missing/iroha-js-native";
+  __resetNativeStateForTests();
+  try {
+    return callback();
+  } finally {
+    if (previousNativeDir === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
+    }
+    __resetNativeStateForTests();
+  }
+}
+
 test("noritoEncodeInstruction returns canonical bytes", () => {
   const encoded = noritoEncodeInstruction(REGISTER_DOMAIN);
   assert.ok(Buffer.isBuffer(encoded));
@@ -134,8 +150,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-baseTest("norito instruction encode/decode falls back to pure JS when native binding is unavailable", () => {
-  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+baseTest("noritoEncodeInstruction requires native binding for instruction JSON", () => {
   const instruction = {
     Transfer: {
       Asset: {
@@ -145,20 +160,31 @@ baseTest("norito instruction encode/decode falls back to pure JS when native bin
       },
     },
   };
-  process.env.IROHA_JS_NATIVE_DIR = "/definitely/missing/iroha-js-native";
-  __resetNativeStateForTests();
-  try {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.ok(Buffer.isBuffer(encoded));
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
-  } finally {
-    if (previousNativeDir === undefined) {
-      delete process.env.IROHA_JS_NATIVE_DIR;
-    } else {
-      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
-    }
-    __resetNativeStateForTests();
-  }
+  withMissingNativeBinding(() => {
+    assert.throws(
+      () => noritoEncodeInstruction(instruction),
+      /Native binding required/,
+    );
+  });
+});
+
+baseTest("noritoDecodeInstruction requires native binding for canonical bytes", () => {
+  const bytes = loadInstructionBytes("mint_asset_numeric.json");
+  withMissingNativeBinding(() => {
+    assert.throws(
+      () => noritoDecodeInstruction(bytes),
+      /Native binding required/,
+    );
+  });
+});
+
+baseTest("noritoEncodeInstruction passes pre-encoded payloads through without native binding", () => {
+  const payload = Buffer.from([1, 2, 3, 4]);
+  withMissingNativeBinding(() => {
+    assert.strictEqual(noritoEncodeInstruction(payload), payload);
+    assert.deepEqual(noritoEncodeInstruction(payload.toString("base64")), payload);
+    assert.deepEqual(noritoEncodeInstruction(`0x${payload.toString("hex")}`), payload);
+  });
 });
 
 test("norito encode/decode supports ExecuteTrigger instructions", () => {
