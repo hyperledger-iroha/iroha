@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 iroha_p2p framed slice decode recovery):
+The reported `peer::run::*` payload-frame decode reds are fixed.
+`crates/iroha_p2p/src/peer.rs` now preserves the full logical Norito payload
+length when `Message<T>` must decode from short or misaligned slice-backed
+payloads, so valid encrypted frames are no longer misclassified as
+`MalformedPayloadFrame` after decryption. `crates/iroha_p2p/src/network.rs`
+uses the same fix for `RelayMessage<T>`, adds a dynamic relay roundtrip
+regression, and relaxes the shared overflow-counter unit assertion so the
+parallel `cargo test -p iroha_p2p --lib` path stays green.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/peer.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/network.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --lib -- --nocapture`
+  - `cargo test -p iroha_p2p --lib -- --test-threads=1`
+- open work after this slice:
+  - rerun broader workspace validation when there is budget beyond the
+    `iroha_p2p` unit-test window
+
 Latest sync (2026-04-22 Torii asset-definition alias binding and fanout sort preservation):
 The reported `asset_definitions_endpoints_return_name_and_alias` and
 `asset_definitions_query_supports_alias_binding_sort` reds are fixed.

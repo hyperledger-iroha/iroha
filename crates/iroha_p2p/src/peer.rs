@@ -3802,11 +3802,21 @@ mod run {
         T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
     {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            let archived = ncore::archived_from_slice::<Self>(bytes)?;
-            let archived_bytes = archived.bytes();
-            let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+            use std::borrow::Cow;
+
+            let min_size = core::mem::size_of::<ncore::Archived<Self>>();
+            let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
+                let mut padded = Vec::with_capacity(min_size);
+                padded.extend_from_slice(bytes);
+                padded.resize(min_size, 0);
+                Cow::Owned(padded)
+            } else {
+                Cow::Borrowed(bytes)
+            };
+            let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
+            let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
             let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
-            Ok((value, archived_bytes.len()))
+            Ok((value, bytes.len()))
         }
     }
 
