@@ -43,6 +43,7 @@ use norito::{
     NoritoDeserialize,
     codec::{Decode, Encode},
 };
+use tempfile::tempdir;
 
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
@@ -2196,8 +2197,44 @@ fn lane_commitment_fixtures_roundtrip() {
         "lane commitment fixtures directory {fixtures_dir:?} must exist"
     );
 
+    let seen = process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Verify);
+
+    assert!(
+        seen > 0,
+        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+    );
+}
+
+#[test]
+#[ignore = "regenerates lane commitment Norito fixtures"]
+fn regenerate_lane_commitment_fixtures() {
+    let fixtures_dir = workspace_root()
+        .join("fixtures")
+        .join("nexus")
+        .join("lane_commitments");
+    assert!(
+        fixtures_dir.is_dir(),
+        "lane commitment fixtures directory {fixtures_dir:?} must exist"
+    );
+
+    let seen =
+        process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+
+    assert!(
+        seen > 0,
+        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaneCommitmentFixtureMode {
+    Verify,
+    Regenerate,
+}
+
+fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFixtureMode) -> usize {
     let mut seen = 0usize;
-    for entry in fs::read_dir(&fixtures_dir).expect("read lane commitment fixtures") {
+    for entry in fs::read_dir(fixtures_dir).expect("read lane commitment fixtures") {
         let entry = entry.expect("fixture entry");
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -2230,28 +2267,250 @@ fn lane_commitment_fixtures_roundtrip() {
             .and_then(|name| name.to_str())
             .expect("fixture stem");
         let to_path = fixtures_dir.join(format!("{stem}.to"));
-        if to_path.is_file() {
-            let fixture_bytes = fs::read(&to_path)
-                .unwrap_or_else(|err| panic!("read Norito bytes {to_path:?}: {err}"));
-            let archived_file =
-                norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes).expect("archive fixture");
-            let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
-                .expect("deserialize fixture Norito bytes");
-            assert_eq!(
-                commitment, decoded_from_file,
-                "Norito fixture bytes mismatch for {to_path:?}"
-            );
-            assert_eq!(
-                norito_bytes, fixture_bytes,
-                "canonical Norito bytes do not match fixture {to_path:?}"
-            );
+        match mode {
+            LaneCommitmentFixtureMode::Verify => {
+                if to_path.is_file() {
+                    let fixture_bytes = fs::read(&to_path)
+                        .unwrap_or_else(|err| panic!("read Norito bytes {to_path:?}: {err}"));
+                    let archived_file = norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes)
+                        .expect("archive fixture");
+                    let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
+                        .expect("deserialize fixture Norito bytes");
+                    assert_eq!(
+                        commitment, decoded_from_file,
+                        "Norito fixture bytes mismatch for {to_path:?}"
+                    );
+                    assert_eq!(
+                        norito_bytes, fixture_bytes,
+                        "canonical Norito bytes do not match fixture {to_path:?}"
+                    );
+                }
+            }
+            LaneCommitmentFixtureMode::Regenerate => {
+                fs::write(&to_path, &norito_bytes).unwrap_or_else(|err| {
+                    panic!("write lane commitment fixture {to_path:?}: {err}")
+                });
+            }
         }
         seen += 1;
     }
+    seen
+}
 
+fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
+    let receipt = LaneSettlementReceipt {
+        source_id: [0xAB; 32],
+        local_amount_micro: 4_000_000,
+        xor_due_micro: 1_620_000,
+        xor_after_haircut_micro: 1_600_000,
+        xor_variance_micro: 20_000,
+        timestamp_ms: 1_726_296_400_000,
+    };
+
+    LaneBlockCommitment {
+        block_height: 8_642,
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(7),
+        tx_count: 1,
+        total_local_micro: receipt.local_amount_micro,
+        total_xor_due_micro: receipt.xor_due_micro,
+        total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
+        total_xor_variance_micro: receipt.xor_variance_micro,
+        swap_metadata: Some(iroha_data_model::block::consensus::LaneSwapMetadata {
+            epsilon_bps: 25,
+            twap_window_seconds: 60,
+            liquidity_profile: iroha_data_model::block::consensus::LaneLiquidityProfile::Tier1,
+            twap_local_per_xor: "8123.445500".to_owned(),
+            volatility_class: iroha_data_model::block::consensus::LaneVolatilityClass::Stable,
+        }),
+        receipts: vec![receipt],
+    }
+}
+
+fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
+    LaneBlockCommitment {
+        block_height: 8_643,
+        lane_id: LaneId::new(2),
+        dataspace_id: DataSpaceId::new(9),
+        tx_count: 0,
+        total_local_micro: 0,
+        total_xor_due_micro: 0,
+        total_xor_after_haircut_micro: 0,
+        total_xor_variance_micro: 0,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    }
+}
+
+fn write_lane_commitment_json_fixture(
+    fixtures_dir: &Path,
+    stem: &str,
+    commitment: &LaneBlockCommitment,
+) -> PathBuf {
+    let path = fixtures_dir.join(format!("{stem}.json"));
+    let json = norito::json::to_json_pretty(commitment).expect("serialize lane commitment fixture");
+    fs::write(&path, json)
+        .unwrap_or_else(|err| panic!("write lane commitment fixture {path:?}: {err}"));
+    path
+}
+
+fn assert_lane_commitment_to_fixture_matches(
+    json_path: &Path,
+    commitment: &LaneBlockCommitment,
+    context: &str,
+) {
+    let to_path = json_path.with_extension("to");
+    let expected_bytes = norito::to_bytes(commitment).expect("encode canonical Norito bytes");
+    let actual_bytes = fs::read(&to_path).expect("read Norito fixture companion");
+    assert_eq!(
+        actual_bytes, expected_bytes,
+        "{context}: Norito companion bytes must match canonical encoding"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_skips_non_json_and_missing_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let ignored_path = fixtures_dir.join("notes.txt");
+    fs::write(&ignored_path, "not a fixture").expect("write ignored file");
+
+    let seen = process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(seen, 1, "only JSON fixtures should be counted");
+
+    let to_path = json_path.with_extension("to");
     assert!(
-        seen > 0,
-        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+        !to_path.exists(),
+        "verify mode must not create missing Norito fixture companions"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_returns_zero_for_empty_directory() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    let regenerated =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+
+    assert_eq!(
+        verified, 0,
+        "empty directories should not report fixtures in verify mode"
+    );
+    assert_eq!(
+        regenerated, 0,
+        "empty directories should not report fixtures in regenerate mode"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let to_path = json_path.with_extension("to");
+    fs::write(&to_path, b"stale").expect("write stale Norito fixture");
+
+    let seen =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+    assert_eq!(seen, 1, "regenerate mode should process the JSON fixture");
+
+    assert_lane_commitment_to_fixture_matches(
+        &json_path,
+        &commitment,
+        "regenerate mode must overwrite stale Norito fixture bytes",
+    );
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(
+        verified, 1,
+        "regenerated fixture should verify successfully"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let stale_commitment = sample_lane_commitment_fixture_without_metadata();
+    let to_path = json_path.with_extension("to");
+    let stale_bytes = norito::to_bytes(&stale_commitment).expect("encode stale Norito fixture");
+    fs::write(&to_path, stale_bytes).expect("write stale decodable Norito fixture");
+
+    let result = std::panic::catch_unwind(|| {
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify)
+    });
+    assert!(
+        result.is_err(),
+        "verify mode must fail when a decodable companion fixture is stale"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fixtures() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let with_metadata = sample_lane_commitment_fixture();
+    let without_metadata = sample_lane_commitment_fixture_without_metadata();
+    let with_metadata_path =
+        write_lane_commitment_json_fixture(fixtures_dir, "with_metadata", &with_metadata);
+    let without_metadata_path =
+        write_lane_commitment_json_fixture(fixtures_dir, "without_metadata", &without_metadata);
+
+    let regenerated =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+    assert_eq!(
+        regenerated, 2,
+        "regenerate mode should process every JSON lane commitment fixture"
+    );
+
+    assert_lane_commitment_to_fixture_matches(
+        &with_metadata_path,
+        &with_metadata,
+        "regenerate mode should create a .to companion for metadata fixtures",
+    );
+    assert_lane_commitment_to_fixture_matches(
+        &without_metadata_path,
+        &without_metadata,
+        "regenerate mode should create a .to companion for metadata-free fixtures",
+    );
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(
+        verified, 2,
+        "generated companions should verify for every fixture"
+    );
+}
+
+#[test]
+fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
+    let commitment = sample_lane_commitment_fixture_without_metadata();
+
+    let json = norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
+    let replay: LaneBlockCommitment =
+        norito::json::from_str(&json).expect("parse reserialized commitment");
+    assert_eq!(
+        replay, commitment,
+        "JSON roundtrip must preserve commitments without optional metadata"
+    );
+
+    let norito_bytes = norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
+    let archived = norito::from_bytes::<LaneBlockCommitment>(&norito_bytes)
+        .expect("archive metadata-free commitment");
+    let decoded =
+        NoritoDeserialize::try_deserialize(archived).expect("deserialize metadata-free commitment");
+    assert_eq!(
+        decoded, commitment,
+        "Norito roundtrip must preserve commitments without receipts"
     );
 }
 

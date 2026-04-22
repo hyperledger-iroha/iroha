@@ -2478,6 +2478,14 @@ mod sorafs_tests {
         ManifestDigest::new([0xBB; 32])
     }
 
+    fn third_digest() -> ManifestDigest {
+        ManifestDigest::new([0xCC; 32])
+    }
+
+    fn fourth_digest() -> ManifestDigest {
+        ManifestDigest::new([0xDD; 32])
+    }
+
     pub(super) fn alias_binding_for(
         digest: ManifestDigest,
         namespace: &str,
@@ -2672,6 +2680,40 @@ mod sorafs_tests {
             council_envelope_digest: None,
         };
         approve.execute(&alice(), stx).expect("approve manifest");
+    }
+
+    fn insert_manifest_with_status(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        chunk_digest: [u8; 32],
+        successor_of: Option<ManifestDigest>,
+        status: PinStatus,
+    ) {
+        let mut record = PinManifestRecord::new(
+            digest,
+            default_chunker(),
+            chunk_digest,
+            default_policy(),
+            alice(),
+            5,
+            None,
+            successor_of,
+            Metadata::default(),
+        );
+        match status {
+            PinStatus::Pending => {}
+            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Retired(epoch) => record.retire(epoch, None),
+        }
+        stx.world.pin_manifests.insert(digest, record);
+    }
+
+    fn insert_pending_manifest(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        chunk_digest: [u8; 32],
+    ) {
+        insert_manifest_with_status(stx, digest, chunk_digest, None, PinStatus::Pending);
     }
 
     fn default_alias_binding() -> ManifestAliasBinding {
@@ -3588,6 +3630,45 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn register_manifest_rejects_duplicate_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("first manifest registration succeeds");
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEE; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("duplicate manifest digest must be rejected");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("already registered"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
     fn register_manifest_rejects_alias_proof_manifest_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -3652,6 +3733,248 @@ mod sorafs_tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn register_manifest_with_approved_predecessor_persists_successor_of() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        RegisterPinManifest {
+            digest: second_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEE; 32],
+            policy: default_policy(),
+            submitted_epoch: 4,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register predecessor manifest");
+
+        RegisterPinManifest {
+            digest: third_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEF; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register successor manifest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&third_digest())
+            .expect("successor manifest stored");
+        assert_eq!(stored.successor_of, Some(second_digest()));
+        assert_eq!(stored.status, PinStatus::Approved(6));
+    }
+
+    #[test]
+    fn register_manifest_rejects_self_successor_reference() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(default_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject self successor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("cannot declare itself as successor"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_unregistered_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject missing predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("is not registered"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_pending_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, second_digest(), [0xEE; 32]);
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject pending predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("must be approved before registering successor"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_retired_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            None,
+            PinStatus::Retired(7),
+        );
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 8,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject retired predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("was retired at epoch 7"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_successor_cycle_closure() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            Some(third_digest()),
+            PinStatus::Approved(5),
+        );
+
+        let err = RegisterPinManifest {
+            digest: third_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEF; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject cycle closure");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("would create a cycle"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_existing_cycle_in_predecessor_chain() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            Some(third_digest()),
+            PinStatus::Approved(5),
+        );
+        insert_manifest_with_status(
+            &mut stx,
+            third_digest(),
+            [0xEF; 32],
+            Some(second_digest()),
+            PinStatus::Approved(5),
+        );
+
+        let err = RegisterPinManifest {
+            digest: fourth_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xF0; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject malformed existing cycle");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("forms a cycle"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[test]
@@ -3863,6 +4186,388 @@ mod sorafs_tests {
         };
         assert!(
             message.contains("approval digest mismatch"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_provided_digest_mismatch_with_envelope() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let stored_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (envelope, _) = build_envelope(&stored_record, &council_key);
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(envelope),
+            council_envelope_digest: Some([0x24; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject provided digest mismatch with envelope");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("approval digest mismatch with provided envelope"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_unknown_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject unknown manifest");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("not registered"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_different_epoch_for_auto_approved_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 7,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject different epoch");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("already approved with different epoch"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_accepts_stored_digest_without_payload() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let expected_digest = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .council_envelope_digest
+            .expect("digest recorded");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("re-approval should reuse stored digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(stored.council_envelope_digest, Some(expected_digest));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_accepts_matching_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let expected_digest = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .council_envelope_digest
+            .expect("digest recorded");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some(expected_digest),
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("re-approval should accept matching stored digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(stored.council_envelope_digest, Some(expected_digest));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_rejects_mismatched_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some([0x77; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval must reject mismatched stored digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("stored digest"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_requires_payload_without_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval must require payload when no digest is stored");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("re-approval requires council envelope payload"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_pending_manifest_accepts_provided_digest_without_envelope() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: None,
+            council_envelope_digest: Some([0x66; 32]),
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("pending approval should accept provided digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert!(matches!(stored.status, PinStatus::Approved(9)));
+        assert_eq!(stored.council_envelope_digest, Some([0x66; 32]));
+    }
+
+    #[test]
+    fn approve_pending_manifest_requires_envelope_or_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("pending approval should require envelope or digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("approval requires council envelope payload"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_rejects_digest_without_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some([0x12; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval should reject digest-only input without stored digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("because no digest is stored"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_retired_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let retire = RetirePinManifest {
+            digest: default_digest(),
+            retired_epoch: 8,
+            reason: Some("superseded".into()),
+        };
+        retire.execute(&alice(), &mut stx).expect("retire manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 8,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject retired manifest");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("is retired and cannot be approved"),
             "unexpected error message: {message}"
         );
     }

@@ -2279,6 +2279,25 @@ async fn inject_remote_addr_header(
     Ok(next.run(req).await)
 }
 
+async fn inject_loopback_connect_info_when_missing(
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    if req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .is_none()
+    {
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
+    }
+
+    Ok(next.run(req).await)
+}
+
 async fn enforce_preauth(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -14053,27 +14072,30 @@ fn merged_list_response(
     payloads: Vec<Value>,
     routed_by: &'static str,
 ) -> Result<Response, Response> {
-    let mut dedupe = BTreeMap::<Vec<u8>, Value>::new();
+    let mut seen = BTreeSet::<Vec<u8>>::new();
+    let mut merged_items = Vec::new();
     for payload in payloads {
         let Some(obj) = payload.as_object() else {
             return Err(torii_internal_json_error(
                 "expected JSON object payload while merging list response",
             ));
         };
-        let Some(items) = obj.get("items").and_then(Value::as_array) else {
+        let Some(payload_items) = obj.get("items").and_then(Value::as_array) else {
             return Err(torii_internal_json_error(
                 "expected `items` array while merging list response",
             ));
         };
-        for item in items {
-            dedupe.insert(canonical_json_bytes(item)?, item.clone());
+        for item in payload_items {
+            let key = canonical_json_bytes(item)?;
+            if seen.insert(key) {
+                merged_items.push(item.clone());
+            }
         }
     }
 
-    let items = dedupe.into_values().collect::<Vec<_>>();
     let mut root = norito::json::Map::new();
-    root.insert("items".into(), Value::Array(items.clone()));
-    root.insert("total".into(), Value::from(items.len() as u64));
+    root.insert("total".into(), Value::from(merged_items.len() as u64));
+    root.insert("items".into(), Value::Array(merged_items));
     let mut response =
         crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
     insert_routed_by_header(&mut response, routed_by);
@@ -15166,6 +15188,34 @@ mod torii_routed_read_tests {
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
         assert_eq!(json["total"].as_u64(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn merged_list_response_preserves_first_seen_order() {
+        let response = merged_list_response(
+            vec![
+                norito::json!({
+                    "items": [{"id": "b"}, {"id": "a"}],
+                    "total": 2
+                }),
+                norito::json!({
+                    "items": [{"id": "a"}, {"id": "c"}],
+                    "total": 2
+                }),
+            ],
+            "proxy",
+        )
+        .expect("list merge should succeed");
+
+        let json = response_json(response).await;
+        let items = json["items"]
+            .as_array()
+            .expect("merged response should include items");
+        let ids: Vec<&str> = items
+            .iter()
+            .map(|item| item["id"].as_str().expect("each item should have an id"))
+            .collect();
+        assert_eq!(ids, vec!["b", "a", "c"]);
     }
 
     #[tokio::test]
@@ -31592,8 +31642,12 @@ impl Torii {
     /// Public helper to get the API router for integration tests without starting an HTTP server.
     ///
     /// This keeps test code decoupled from server start and avoids binding to a TCP port.
+    /// Requests that do not supply `ConnectInfo` receive a loopback socket address so handlers
+    /// that depend on transport metadata behave like the bound server path.
     pub fn api_router_for_tests(&self) -> axum::Router {
-        self.create_api_router()
+        self.create_api_router().layer(axum::middleware::from_fn(
+            inject_loopback_connect_info_when_missing,
+        ))
     }
 
     /// Expose the push bridge to tests so registration side effects can be inspected.

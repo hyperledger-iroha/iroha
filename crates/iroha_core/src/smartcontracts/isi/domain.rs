@@ -25,7 +25,7 @@ pub mod isi {
             curve::{CurveId, CurveRegistryError},
         },
         asset::definition::{
-            validate_asset_alias, validate_asset_description, validate_asset_name,
+            validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
@@ -49,6 +49,21 @@ pub mod isi {
 
     fn alias_grace_until_ms(lease_expiry_ms: Option<u64>) -> Option<u64> {
         lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
+    }
+
+    fn validate_alias_for_asset_definition(
+        alias: Option<&AssetDefinitionAlias>,
+        definition: &AssetDefinition,
+    ) -> Result<(), InstructionExecutionError> {
+        let mut allowed_stems = vec![definition.name().as_str()];
+        if let Some(projected_name) = definition.id().try_name() {
+            allowed_stems.push(projected_name.as_ref());
+        }
+        validate_asset_alias_against_names(alias, allowed_stems).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid asset definition alias: {err}").into(),
+            )
+        })
     }
 
     fn upsert_account_rekey_record(
@@ -324,13 +339,7 @@ pub mod isi {
                 format!("invalid asset definition description: {err}").into(),
             )
         })?;
-        validate_asset_alias(asset_definition.alias().as_ref(), asset_definition.name()).map_err(
-            |err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid asset definition alias: {err}").into(),
-                )
-            },
-        )?;
+        validate_alias_for_asset_definition(asset_definition.alias().as_ref(), asset_definition)?;
         Ok(())
     }
 
@@ -2268,18 +2277,13 @@ pub mod isi {
                 .into());
             }
 
-            // Ensure definition exists and validate alias semantics against the required human name.
+            // Ensure definition exists and validate the alias against the display label and any
+            // projected ID name carried by the stored definition.
             let definition = state_transaction
                 .world
                 .asset_definition(&asset_definition_id)
                 .map_err(Error::from)?;
-            if let Some(alias) = alias.as_ref() {
-                validate_asset_alias(Some(alias), definition.name()).map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid asset definition alias: {err}").into(),
-                    )
-                })?;
-            }
+            validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
 
             if let Some(alias) = alias {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();

@@ -2,6 +2,836 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 bridge anchor-mutator and empty-helper coverage expansion):
+The same bridge test slice in `crates/iroha_data_model/src/bridge.rs` now also
+covers the remaining state-transition and helper behavior around finality
+verification. The unit module now includes the direct empty-roster
+`validate_commit_qc(...)` helper path, a successful verifier case after
+rotating both the validator-set and epoch anchors together, and a regression
+proving that a validator-set hash-version change applied through
+`set_validator_set_anchor(...)` is actually enforced on the next proof.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the bridge verifier coverage work
+
+Latest sync (2026-04-22 bridge quorum/domain/hash-guard coverage expansion):
+The same bridge test slice in `crates/iroha_data_model/src/bridge.rs` now also
+covers the remaining bitmap/domain/hash paths that were still lightly tested.
+The unit module now includes sparse signer bitmap decoding across multiple
+bytes, a successful exact-quorum verifier case using only a subset of the
+validator roster, a successful verifier case for the NPoS consensus-domain tag,
+and a rejection proving the certificate's declared `block_hash` must still
+match the bridged header hash even when the QC proof hash is otherwise valid.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the bridge verifier coverage work
+
+Latest sync (2026-04-22 bridge serialization-default and verifier-state coverage expansion):
+The same bridge test slice in `crates/iroha_data_model/src/bridge.rs` now also
+covers the remaining local serialization-default and stateful verifier paths
+that were still unpinned. The test module now includes a direct transparent-ZK
+`BridgeProof` roundtrip, a `BridgeFinalityProof` roundtrip with
+`validator_set_pops` omitted on the wire, a minimal `BridgeCommitment`
+roundtrip with all optional MMR fields absent, the empty-roster
+`signer_indices_from_bitmap(...)` helper path, and a stateful verifier
+regression proving a rejected height-2 proof does not advance `latest_height`
+before the corrected height-2 proof is accepted.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the bridge state/serialization coverage work
+
+Latest sync (2026-04-22 bridge helper and bundle coverage expansion):
+The bridge test slice in `crates/iroha_data_model/src/bridge.rs` now covers the
+remaining local helper/data-model paths around the finality verifier work. The
+test module now exercises `BridgeProofRange` helper semantics, backend-label
+selection for both ICS and transparent-ZK proofs, `BridgeProofRecord`
+roundtrip, the `consensus_domain(...)` and `commit_vote_preimage(...)` helper
+outputs, and a direct `BridgeFinalityBundle` roundtrip that populates MMR
+fields and `next_authority_set` so `BridgeAuthoritySet`,
+`BridgeCommitment`, and `BridgeCommitmentJustification` are all covered in the
+same unit slice.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the bridge helper coverage work
+
+Latest sync (2026-04-22 bridge finality verifier coverage expansion):
+The bridge finality verifier slice in `crates/iroha_data_model/src/bridge.rs`
+now has broader unit coverage. In addition to the existing anchor and replay
+cases, the test module now exercises the remaining verifier guard branches for
+certificate height/phase mismatches, block-hash mismatches, unsupported
+validator-set hash versions, and empty validator sets; it also adds direct
+coverage for the private bitmap/quorum helpers and the commit-QC failure paths
+for bitmap length/index errors, insufficient signers, missing aggregate
+signatures, invalid aggregate payloads, and non-BLS validator keys. The same
+slice now also covers the `with_validator_set(...)` constructor flow where an
+epoch anchor is supplied later before verification succeeds.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the bridge verifier coverage work
+
+Latest sync (2026-04-22 bridge finality proof consensus-hash fixture alignment):
+The reported `iroha_data_model` bridge verifier reds are fixed.
+`crates/iroha_data_model/src/bridge.rs` now constructs its test-only
+`BridgeFinalityProof` fixtures with `BlockHeader::hash()` so the proof field
+and commit certificate use the same consensus hash that production verification
+recomputes from the header. That keeps the bridge tests aligned with the
+current block-hash semantics where `result_merkle_root` is excluded from the
+consensus hash, and restores the expected verifier error ordering for anchor,
+validator-set, and PoP checks.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the reported bridge regression
+Latest sync (2026-04-22 Sorafs pin-register helper and duplicate-registration coverage):
+The same Sorafs register/discovery slice now has one more inward-facing
+coverage pass. `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` adds the
+missing `RegisterPinManifest` duplicate-digest rejection test, while
+`crates/iroha_torii/src/routing.rs` now directly tests the pin-register helper
+logic underneath the route: storage-class policy conversion and
+`parse_hex_array(...)` success/error handling.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs_pin_tests --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` / `cargo test -p iroha_core ...`
+    window when there is budget beyond the focused Sorafs coverage work
+  - if another pass stays in this area, target remaining public validation
+    branches adjacent to `pin/register` or move down into more helper-level
+    coverage around Torii SoraFS routing conversions
+
+Latest sync (2026-04-22 Sorafs pin-register route validation coverage expansion):
+The same Sorafs discovery/register slice now has another small batch of
+user-facing route coverage. `crates/iroha_torii/tests/sorafs_discovery.rs`
+now directly exercises `POST /v1/sorafs/pin/register` rejection for chunker
+descriptor mismatches and invalid pin-policy payloads, and it also verifies the
+success path that accepts `0x`-prefixed manifest/chunk digest inputs while
+returning the canonical manifest digest and computed `chunker_handle`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused Sorafs route-coverage work
+  - if another pass stays in this area, move inward to direct helper coverage
+    for `parse_hex_array(...)` and related `routing.rs` manifest DTO handling,
+    or outward to remaining public validation branches on adjacent Sorafs
+    endpoints
+
+Latest sync (2026-04-22 Sorafs successor-chain register coverage expansion):
+The same Sorafs discovery/register/approval area now has direct core coverage
+for the remaining `RegisterPinManifest` successor-chain branches.
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now tests the
+approved-predecessor success path plus the dedicated rejection branches for
+self-successor input, missing predecessors, pending predecessors, retired
+predecessors, cycle-closing successor registrations, and malformed
+already-cyclic predecessor chains.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - if another pass stays in this area, move outward to route-level validation
+    coverage for the remaining `pin/register` field validators or inward to
+    helper-level provider-admission coverage in `crates/sorafs_manifest`
+
+Latest sync (2026-04-22 Sorafs hex-parse and approval-guard coverage expansion):
+The same Sorafs discovery/register/approval slice now has one more small
+coverage pass. `crates/iroha_torii/tests/sorafs_discovery.rs` adds direct
+request-validation regressions for malformed `manifest_digest_hex` input and
+wrong-sized `chunk_digest_sha3_256_hex` input on `POST /v1/sorafs/pin/register`,
+while `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly tests
+two remaining approval guards: rejecting approvals for unknown manifests and
+rejecting a supplied `council_envelope_digest` when it does not match the
+verified envelope payload.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - if another pass stays in this area, move inward to direct helper-level
+    coverage in `crates/sorafs_manifest/src/provider_admission.rs` rather than
+    continuing to stack more route/instruction regressions on the same files
+
+Latest sync (2026-04-22 Sorafs decode-path and pending-approval coverage expansion):
+The same Sorafs discovery/approval slice now has another small batch of
+targeted coverage. `crates/iroha_torii/tests/sorafs_discovery.rs` adds direct
+extractor-path regressions for malformed JSON and malformed Norito
+`pin/register` requests, while
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now exercises the nearby
+pending/retired approval branches that were still uncovered after the previous
+pass: pending approval with a provided digest, pending approval missing both
+digest and envelope, same-epoch re-approval with a provided digest but no
+stored digest, and approval rejection for retired manifests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs approval and request
+    parsing branches
+  - if the next coverage pass stays in this area, target the remaining
+    provider-admission helper branches directly inside `sorafs_manifest`
+    instead of expanding more end-to-end fixture tests
+
+Latest sync (2026-04-22 Sorafs discovery and approval branch coverage expansion):
+The same Sorafs discovery/provider-admission slice now has broader targeted
+coverage without changing runtime behavior. `crates/iroha_torii/tests/
+sorafs_discovery.rs` adds the missing `pin/register` route-gating regression so
+storage-disabled configs return `404` for the unmounted POST route, while
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly exercises the
+approval-state branches around current auto-approval semantics: different-epoch
+rejection for already approved manifests, same-epoch re-approval with stored
+digest reuse, stored-digest mismatch rejection, and the no-stored-digest
+payload requirement. `crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+also now asserts the regenerated renewal/revocation metadata sidecars.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` or `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - add more route-level malformed-input coverage around the same `pin/register`
+    handler if the next pass targets Torii request parsing rather than core
+    approval semantics
+
+Latest sync (2026-04-22 Sorafs discovery fixture and auto-approval refresh):
+The reported `sorafs_discovery` reds are fixed. The integration file now
+enables `sorafs_storage` in the malformed `pin/register` route tests so they
+exercise the mounted handler again, and its shared manifest setup helper now
+matches current core behavior by relying on `RegisterPinManifest` auto-approval
+at `submitted_epoch` rather than pushing a second approval with a different
+epoch. The provider-admission fixture set under
+`fixtures/sorafs_manifest/provider_admission/` has also been regenerated from
+the current generator output, and the generator test now asserts the refreshed
+deterministic digests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/metadata.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/proposal_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/proposal_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/renewal_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/renewal_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/revocation_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/revocation_v1.to`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `cargo test -p sorafs_car --features cli --bin provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused Sorafs discovery regression set
+  - refresh any other consumers that pin provider-admission fixture digests
+    directly if they still assume the pre-regeneration values
+
+Latest sync (2026-04-22 Torii SNS registrar lifecycle coverage expansion):
+The same SNS registrar slice now has broader lifecycle-path coverage.
+`crates/iroha_core/src/sns.rs` adds direct tests for `set_name_lease_expiry(...)`
+past/future validation plus the active-record conflict branch in
+`unfreeze_name(...)`, while `crates/iroha_torii/tests/sns_registrar.rs` now
+covers missing-name `404`s for transfer/freeze/unfreeze mutations and the
+active-name unfreeze `409` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib set_name_lease_expiry_ -- --nocapture`
+  - `cargo test -p iroha_core --lib unfreeze_name_rejects_active_record -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar conflict and namespace coverage expansion):
+The same SNS registrar slice now has broader conflict-path and namespace-helper
+coverage. `crates/iroha_core/src/sns.rs` adds direct tests for namespace-path
+parsing variants and failures plus duplicate domain-registration conflicts,
+`crates/iroha_torii/src/sns.rs` now covers the numeric metric-namespace
+fallback and the `BadRequest` / `Conflict` HTTP mappings, and
+`crates/iroha_torii/tests/sns_registrar.rs` now covers duplicate registration
+`409`s plus missing-name `404`s for controller updates and renewals.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sns_namespace_from_ -- --nocapture`
+  - `cargo test -p iroha_core --lib register_name_rejects_duplicate_domain_registration -- --nocapture`
+  - `cargo test -p iroha_torii --lib core_error_maps_to_http_status_family -- --nocapture`
+  - `cargo test -p iroha_torii --lib metric_namespace_uses_numeric_fallback_for_unknown_suffix_id -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar validation coverage expansion):
+The same SNS registrar slice now has broader malformed-input and missing-entity
+coverage. `crates/iroha_core/src/sns.rs` adds direct tests for dataspace
+selector canonicalization, direct bare-domain selector rejection, unsupported
+suffix-id rejection during registration, and empty-controller rejection during
+controller updates, while `crates/iroha_torii/tests/sns_registrar.rs` now
+covers the matching HTTP `400`/`404` paths for unsupported suffix ids, missing
+names, unknown namespaces, and empty controller-update payloads.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_core --lib selector_for_namespace_literal_ -- --nocapture`
+  - `cargo test -p iroha_core --lib register_name_rejects_unknown_suffix_id -- --nocapture`
+  - `cargo test -p iroha_core --lib update_name_controllers_rejects_empty_controller_set -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar canonicalization coverage expansion):
+The same SNS registrar slice now has broader canonicalization-path coverage.
+`crates/iroha_core/src/sns.rs` adds direct tests for the reserved-label release
+boundary, the matching-assignee allow branch, domain/account-alias selector
+canonicalization, and the remaining `reserved_label_key(...)` branches, while
+`crates/iroha_torii/tests/sns_registrar.rs` now covers mixed-case domain
+payload canonicalization, mixed-case domain path lookup success, and the
+missing-policy `404` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar reserved-label coverage expansion):
+The same SNS registrar slice now has deeper focused coverage without changing
+behavior. `crates/iroha_core/src/sns.rs` adds direct tests for reserved-label
+label-key matching, exact fully qualified literal matching, the unassigned
+reservation conflict path, and the released-reservation allow path, while
+`crates/iroha_torii/tests/sns_registrar.rs` now covers the matching HTTP `400`
+paths for bare domain literals in both register requests and domain lookup
+paths.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar domain canonicalization and reserved label guard):
+The reported `sns_registrar` reds are fixed. The Torii registrar integration
+file now targets canonical fully qualified domain literals
+(`label.universal`) so it exercises the same domain-name lease storage path as
+the core SNS ownership helpers, and `crates/iroha_core/src/sns.rs` now seeds
+the default domain policy with the reserved `treasury` label plus a guard that
+rejects non-steward registrations while still allowing the steward account to
+claim that label.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_domain_name_rejects_bare_domain_literal -- --nocapture`
+  - `cargo test -p iroha_core --lib register_domain_name_reserved_label_requires_steward -- --nocapture`
+  - `cargo test -p iroha_core --lib seed_default_namespace_policies_populates_fixed_suffixes -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` window when there is budget
+    beyond the reported SNS registrar regression
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary merge coverage expansion):
+The same `nexus_dataspaces_summary` endpoint slice now has two more focused
+integration regressions in
+`crates/iroha_torii/tests/nexus_dataspaces_summary.rs`: one covers the
+uncataloged-dataspace path where the joined response must emit
+`dataspace_alias: null`, and one covers a merged dataspace row containing a
+second bound account plus multiple consensus commitments so the handler totals
+exercise `accounts_bound`, consensus rollups, and the combined account list.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib nexus_dataspaces_summary_tests --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary helper coverage expansion):
+The same `nexus_dataspaces_summary` slice now has deeper routing-level unit
+coverage in `crates/iroha_torii/src/routing.rs`. The new tests exercise the
+remaining summary-helper branches that the endpoint file did not hit directly:
+`manifest_summary_json(...)` now covers `Pending` / `Expired` / `Revoked`
+statuses, `commitments_summary_json(...)` now covers empty snapshots plus
+same-height lane-id tie ordering for `last_block_hash` and detail rows, and
+`upsert_dataspace_summary(...)` now proves alias lookup plus accumulator reuse
+without resetting previously collected state.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `./target/debug/deps/iroha_torii-cdb5859f08d08f7c --nocapture nexus_dataspaces_summary_tests`
+  - `./target/debug/deps/nexus_dataspaces_summary-2182b6f7a9ff2a6d --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary helper/unit
+    coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary coverage expansion):
+The `nexus_dataspaces_summary` coverage window is broader now.
+`crates/iroha_torii/tests/nexus_dataspaces_summary.rs` adds focused endpoint
+regressions for three previously untested branches: a successful summary for an
+existing account without a `uaid`, a portfolio-only summary that falls back to
+the universal dataspace when there are no active bindings/manifests, and a
+mixed inactive-manifest snapshot (`Pending` / `Expired` / `Revoked`) that
+proves inactive manifests still render while account bindings are rebuilt away
+and unrelated consensus commitments are ignored.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused nexus dataspaces summary coverage work
+
+Latest sync (2026-04-22 Torii nexus dataspaces summary fixture explicit asset name):
+The reported `nexus_dataspaces_summary_endpoint_returns_joined_snapshot` red is
+fixed. `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now seeds its
+fixture asset definition via an explicit `NewAssetDefinition` carrying the
+required non-blank human-facing `xor` name, so the test setup matches the
+current asset-definition registration contract instead of tripping
+`invalid asset definition name: asset name must not be blank`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test nexus_dataspaces_summary --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported nexus dataspaces summary regression
+Latest sync (2026-04-22 Sumeragi same-epoch RBC roster active-topology override):
+The reported
+`sumeragi::main_loop::tests::rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_known_same_epoch`
+red is fixed. `crates/iroha_core/src/sumeragi/main_loop.rs` now bypasses
+generic historical vote rosters once a future same-epoch RBC session has an
+authoritative local payload, so the session rejoins the current active
+topology instead of sticking to a stale partial roster. The focused unit
+coverage in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now also pins
+the adjacent negative cases: same-epoch partial RBC sessions stay blocked, and
+later-epoch authoritative RBC payloads still do not unlock the fallback. The
+same slice now covers the helper branches around cached `Init` rosters and the
+permissioned/NPoS `allow_unverified_rbc_roster(...)` gate as well, plus the
+early-return paths in `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)`, so the same-epoch/future-epoch
+fallback rules are exercised both at the roster derivation layer and at the
+init-roster admission layer. The helper coverage now also includes the cached
+authoritative `ensure_rbc_session_roster(...)` branch, the no-cache/no-derived
+empty branch, direct cache seeding from authoritative same-epoch RBC metadata,
+refresh promotion of a matching cached `Init` roster, the direct successful
+promotion path for an authoritative same-epoch `Init` roster, and the helper
+path that flushes stashed READY/DELIVER immediately once
+`promote_rbc_session_roster_and_retry(...)` can upgrade the roster to
+authoritative. The same slice now also covers the no-pending promotion path
+where `promote_rbc_session_roster_and_retry(...)` upgrades the source and then
+emits local READY/DELIVER directly from a complete same-epoch authoritative
+session, plus the READY-already-sent variant where the same helper only needs
+to emit local DELIVER, plus the delivered-session false path where refresh can
+derive an authoritative roster candidate but the cached `Init` source still
+cannot be promoted in place, plus the direct
+`flush_pending_rbc_if_roster_ready(...)` gate for no-pending, unresolved, and
+cache-seeding success cases, plus the direct cached-roster replay path for
+pending chunks and the direct cached-roster replay path for stashed
+READY/DELIVER bundles. `refresh_derived_rbc_session_roster(...)` now also
+covers the future-epoch no-derived `None` path plus the no-cache/no-derived
+`None` variant, and
+`record_rbc_session_roster(...)` now covers both the same-roster
+`Init -> Derived` source-promotion path and the change-path resets for
+`Init -> Init` refreshes versus `Init -> Derived` promotions, plus the
+same-roster/same-source authoritative no-op branch, the empty-roster
+early-return branch, and the auxiliary repair/rebroadcast/deferral cleanup
+branches for both `Init -> Init` and `Derived -> Derived` refreshes, so the
+cache-update behavior is exercised for preserved-pending, cleared-pending, and
+untouched-cache cases as well. The same record-roster slice now also covers
+vacant `Init` cache seeding, the same-roster/same-source `Init` no-op path,
+the direct `clear_rbc_session_roster(...)` cache-eviction helper, and the
+`RbcRosterSource` merge rules that decide when cached sources become
+authoritative. The same helper cluster now also covers degraded-cache fallback
+where a cached roster exists without a `session_roster_sources` entry:
+`ensure_rbc_session_roster(...)` keeps the cached roster when derivation is
+still unavailable, while `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` restore the missing source as
+authoritative once same-epoch local payload knowledge exists. The same
+degraded-cache slice now also covers the successful `ensure_rbc_session_roster(...)`
+promotion path and the direct `record_rbc_session_roster(...)` same-roster
+missing-source behavior for both `Init` no-op updates and `Derived` source
+restoration without session reset. The same slice now also covers the direct
+`refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` false paths when a missing source
+still cannot derive an authoritative roster, plus the changed-roster
+missing-source `record_rbc_session_roster(...)` behavior for `Init` refreshes
+versus `Derived` promotions.
+`promote_rbc_session_roster_and_retry(...)` now also covers the matching
+delivered-session same-roster path where source promotion succeeds without any
+READY/DELIVER retry work, and `allow_unverified_rbc_roster(...)` now covers the
+permissioned next-slot false path once the active roster is already available.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib rbc_roster_for_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib record_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib clear_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_roster_source_merge -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` window when there is budget
+    beyond the reported same-epoch RBC roster regression
+
+Latest sync (2026-04-22 default genesis structured-instruction compatibility):
+The reported `iroha_genesis` reds are fixed. `crates/iroha_genesis/src/lib.rs`
+now keeps staged Sumeragi cutover parameters intact while filtering injected
+handshake metadata, the structured decoder accepts legacy raw public-key
+account literals for backward-compatible genesis manifests, and
+`defaults/genesis.json` now matches the current structured instruction grammar
+for account and asset destinations again.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_genesis/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/defaults/genesis.json`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_genesis`
+- open work after this slice:
+  - budget a broader shipped-genesis manifest refresh separately if the older
+    non-default manifests need to be brought onto the same structured grammar
+    as `defaults/genesis.json`
+
+Latest sync (2026-04-22 Torii api_router_for_tests loopback ConnectInfo injection):
+The reported `domains_endpoints_exist` red is fixed.
+`crates/iroha_torii/src/lib.rs` now has `Torii::api_router_for_tests()`
+inject loopback `ConnectInfo<SocketAddr>` only when a helper-based test request
+does not already provide transport metadata, so direct `oneshot(...)` smokes
+exercise the mounted handlers instead of Axum's missing-request-extension
+`500` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test domains_endpoints domains_endpoints_exist -- --nocapture`
+  - `cargo test -p iroha_torii --test router_feature_matrix router_builds_under_current_features -- --nocapture`
+  - `cargo test -p iroha_torii --test app_api_router_smoke app_api_router_smoke -- --nocapture`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints asset_definitions_endpoints_return_name_and_alias -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the helper-based smoke regressions
+
+Latest sync (2026-04-22 Torii connect gating request metadata alignment):
+The reported `connect_gating` reds are fixed. The direct router probes in
+`crates/iroha_torii/tests/connect_gating.rs` now attach loopback
+`ConnectInfo<SocketAddr>` so the existing remote-address injection middleware
+can synthesize `x-iroha-remote-addr`, and the WS integration cases now serve
+the router via `into_make_service_with_connect_info::<SocketAddr>()` just like
+the real Torii server. That restores the expected `404`/`200`/`401` behavior
+without weakening the production connect-session and WS authorization checks.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/connect_gating.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test connect_gating -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported connect-gating regression
+
+Latest sync (2026-04-22 lane commitment Norito fixture resync):
+The reported `lane_commitment_fixtures_roundtrip` red is fixed. The checked-in
+lane commitment `.to` fixtures under `fixtures/nexus/lane_commitments/` were
+stale hybrids: their Norito headers advertised `COMPACT_LEN`, but the payload
+body still used the older fixed-width nested length prefixes. Regenerating the
+binaries from the canonical JSON fixtures restored a coherent wire image, and
+`crates/iroha_data_model/tests/consensus_roundtrip.rs` now ships an ignored
+`regenerate_lane_commitment_fixtures` helper to repeat that refresh
+deterministically. The same test slice now also covers helper-only branches for
+skipping non-JSON entries, leaving missing `.to` companions untouched in verify
+mode, and overwriting stale `.to` payloads in regenerate mode. Additional
+focused regressions now cover the stale-but-decodable verify failure path and a
+metadata-free `LaneBlockCommitment` roundtrip (`swap_metadata: None`,
+`receipts: []`). The helper slice now also covers the empty-directory case and
+multi-fixture regeneration where missing `.to` companions are created and then
+verified across mixed fixture shapes.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/consensus_roundtrip.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/nexus/lane_commitments/cbdc_private_lane_commitment.to`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/nexus/lane_commitments/default_public_lane_commitment.to`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip regenerate_lane_commitment_fixtures -- --ignored --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment -- --nocapture`
+- open work after this slice:
+  - rerun a broader `iroha_data_model` fixture sweep when there is budget
+    beyond the reported lane commitment regression
+
+Latest sync (2026-04-22 iroha_p2p framed slice decode recovery):
+The reported `peer::run::*` payload-frame decode reds are fixed.
+`crates/iroha_p2p/src/peer.rs` now preserves the full logical Norito payload
+length when `Message<T>` must decode from short or misaligned slice-backed
+payloads, so valid encrypted frames are no longer misclassified as
+`MalformedPayloadFrame` after decryption. `crates/iroha_p2p/src/network.rs`
+uses the same fix for `RelayMessage<T>`, adds a dynamic relay roundtrip
+regression, and relaxes the shared overflow-counter unit assertion so the
+parallel `cargo test -p iroha_p2p --lib` path stays green.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/peer.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_p2p/src/network.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --lib -- --nocapture`
+  - `cargo test -p iroha_p2p --lib -- --test-threads=1`
+- open work after this slice:
+  - rerun broader workspace validation when there is budget beyond the
+    `iroha_p2p` unit-test window
+
+Latest sync (2026-04-22 bridge finality endpoint verifier parity):
+The reported `bridge_finality_endpoint_roundtrips_into_verifier` red is fixed.
+`crates/iroha_torii/tests/bridge_finality_endpoint.rs` now seeds the same
+loopback request metadata, validator PoP state, chain id, and canonical
+single-signer aggregate-signature bytes that the mounted endpoint expects, and
+`crates/iroha_data_model/src/bridge.rs` now verifies endpoint proofs against
+the consensus header hash plus the full commit-vote preimage used by Sumeragi.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/bridge_finality_endpoint.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model verifier_accepts_consensus_hash_when_result_merkle_root_is_present -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint --features telemetry -- --nocapture`
+- open work after this slice:
+  - investigate the JSON bridge-finality response path separately if client
+    workflows need proof verification from the JSON representation as well;
+    this fix kept the endpoint smoke on the canonical typed Norito response
+
+Latest sync (2026-04-22 Torii asset-definition alias binding and fanout sort preservation):
+The reported `asset_definitions_endpoints_return_name_and_alias` and
+`asset_definitions_query_supports_alias_binding_sort` reds are fixed.
+Asset-definition alias validation now accepts either the display-name stem or
+the projected asset-id stem with ASCII case-insensitive matching, the direct
+Torii endpoint smoke now attaches loopback `ConnectInfo<SocketAddr>` so it hits
+the mounted handlers, and the fanout list merge now preserves the first-seen
+handler order instead of re-sorting deduplicated items by canonical JSON bytes.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/asset/definition.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/filter.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/asset_definitions_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture`
+  - `cargo test -p iroha_data_model asset_alias_validation -- --nocapture`
+  - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture`
+  - `cargo test -p iroha_torii merged_list_response_preserves_first_seen_order -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported asset-definition regression
+
 Latest sync (2026-04-22 AXT asset-handle golden resync):
 The reported `asset_handle_roundtrip_matches_golden` red is fixed.
 `crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current
@@ -21478,3 +22308,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## 2026-04-19 Integration Failure Sweep Follow-up
 1. Completed: the reported `fast_dsl`, scheduler TEU default-lane, and threshold escrow contract-state regressions are fixed and covered by focused integration validation.
 2. No additional roadmap item was opened from this sweep; the remaining validation gap is the normal multi-hour full workspace test run.
+
+## 2026-04-22 MCP Writer-Profile Test Alignment Follow-up
+1. Completed: `crates/iroha_torii/tests/mcp_endpoints.rs` now opts mutation-capable MCP scenarios into `ToriiMcpProfile::Writer`, matching the documented default `read_only` policy instead of assuming those tools dispatch under the default test config.
+2. No additional roadmap item was opened from this fix; `cargo test -p iroha_torii --test mcp_endpoints` is green.

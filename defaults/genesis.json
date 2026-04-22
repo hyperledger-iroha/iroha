@@ -81,7 +81,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
+              "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "label": null,
               "metadata": {},
               "uaid": null
@@ -198,7 +198,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -206,7 +206,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -216,7 +216,7 @@
             "AssetDefinition": {
               "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGf7KNpNpWoBsunpaw15xULDLeEEtcehDJrgChTacL4HyMruA"
+              "source": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
         },

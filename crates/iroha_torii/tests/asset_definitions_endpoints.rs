@@ -5,6 +5,7 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -103,6 +104,10 @@ fn build_app(state: Arc<State>) -> axum::Router {
     .api_router_for_tests()
 }
 
+fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
+    ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+}
+
 fn commit_alias_lease(
     state: &Arc<State>,
     authority: &dm::AccountId,
@@ -144,6 +149,7 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
         .oneshot(
             Request::builder()
                 .uri("/v1/assets/definitions?offset=0")
+                .extension(loopback_connect_info())
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -174,6 +180,7 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
         .oneshot(
             Request::builder()
                 .uri(format!("/v1/assets/definitions/{cbdc_id}"))
+                .extension(loopback_connect_info())
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -202,6 +209,7 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
                 .method("POST")
                 .uri("/v1/assets/definitions/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(loopback_connect_info())
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -280,6 +288,7 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
                 .method("POST")
                 .uri("/v1/assets/definitions/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(loopback_connect_info())
                 .body(axum::body::Body::from(
                     r#"{
                         "sort":[{"key":"alias_binding.bound_at_ms","order":"desc"}]
