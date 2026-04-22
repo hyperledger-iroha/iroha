@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 AXT asset-handle golden resync):
+The reported `asset_handle_roundtrip_matches_golden` red is fixed.
+`crates/iroha_data_model/tests/fixtures/axt_golden.rs` now carries the current
+framed `AXT_HANDLE` bytes again after the account-literal UTF-8 payload bytes
+drifted, which had changed the Norito checksum and payload contents without
+changing the logical sample handle used by the test.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/fixtures/axt_golden.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures -- --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_data_model ...` package window when
+    there is budget beyond this targeted golden-fixture regression
+
 Latest sync (2026-04-22 SDK transaction receipt and status parity fixes):
 The reviewed SDK regressions from `2ea428ea7e` are fixed. Kotlin now uses the
 authoritative Torii transaction-hash receipt header for subsequent status
