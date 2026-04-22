@@ -2,6 +2,168 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii SNS registrar lifecycle coverage expansion):
+The same SNS registrar slice now has broader lifecycle-path coverage.
+`crates/iroha_core/src/sns.rs` adds direct tests for `set_name_lease_expiry(...)`
+past/future validation plus the active-record conflict branch in
+`unfreeze_name(...)`, while `crates/iroha_torii/tests/sns_registrar.rs` now
+covers missing-name `404`s for transfer/freeze/unfreeze mutations and the
+active-name unfreeze `409` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib set_name_lease_expiry_ -- --nocapture`
+  - `cargo test -p iroha_core --lib unfreeze_name_rejects_active_record -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar conflict and namespace coverage expansion):
+The same SNS registrar slice now has broader conflict-path and namespace-helper
+coverage. `crates/iroha_core/src/sns.rs` adds direct tests for namespace-path
+parsing variants and failures plus duplicate domain-registration conflicts,
+`crates/iroha_torii/src/sns.rs` now covers the numeric metric-namespace
+fallback and the `BadRequest` / `Conflict` HTTP mappings, and
+`crates/iroha_torii/tests/sns_registrar.rs` now covers duplicate registration
+`409`s plus missing-name `404`s for controller updates and renewals.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sns_namespace_from_ -- --nocapture`
+  - `cargo test -p iroha_core --lib register_name_rejects_duplicate_domain_registration -- --nocapture`
+  - `cargo test -p iroha_torii --lib core_error_maps_to_http_status_family -- --nocapture`
+  - `cargo test -p iroha_torii --lib metric_namespace_uses_numeric_fallback_for_unknown_suffix_id -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar validation coverage expansion):
+The same SNS registrar slice now has broader malformed-input and missing-entity
+coverage. `crates/iroha_core/src/sns.rs` adds direct tests for dataspace
+selector canonicalization, direct bare-domain selector rejection, unsupported
+suffix-id rejection during registration, and empty-controller rejection during
+controller updates, while `crates/iroha_torii/tests/sns_registrar.rs` now
+covers the matching HTTP `400`/`404` paths for unsupported suffix ids, missing
+names, unknown namespaces, and empty controller-update payloads.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_core --lib selector_for_namespace_literal_ -- --nocapture`
+  - `cargo test -p iroha_core --lib register_name_rejects_unknown_suffix_id -- --nocapture`
+  - `cargo test -p iroha_core --lib update_name_controllers_rejects_empty_controller_set -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar canonicalization coverage expansion):
+The same SNS registrar slice now has broader canonicalization-path coverage.
+`crates/iroha_core/src/sns.rs` adds direct tests for the reserved-label release
+boundary, the matching-assignee allow branch, domain/account-alias selector
+canonicalization, and the remaining `reserved_label_key(...)` branches, while
+`crates/iroha_torii/tests/sns_registrar.rs` now covers mixed-case domain
+payload canonicalization, mixed-case domain path lookup success, and the
+missing-policy `404` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar reserved-label coverage expansion):
+The same SNS registrar slice now has deeper focused coverage without changing
+behavior. `crates/iroha_core/src/sns.rs` adds direct tests for reserved-label
+label-key matching, exact fully qualified literal matching, the unassigned
+reservation conflict path, and the released-reservation allow path, while
+`crates/iroha_torii/tests/sns_registrar.rs` now covers the matching HTTP `400`
+paths for bare domain literals in both register requests and domain lookup
+paths.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib reserved_label -- --nocapture`
+  - `cargo test -p iroha_core --lib find_active_reserved_domain -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused SNS registrar coverage work
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
+Latest sync (2026-04-22 Torii SNS registrar domain canonicalization and reserved label guard):
+The reported `sns_registrar` reds are fixed. The Torii registrar integration
+file now targets canonical fully qualified domain literals
+(`label.universal`) so it exercises the same domain-name lease storage path as
+the core SNS ownership helpers, and `crates/iroha_core/src/sns.rs` now seeds
+the default domain policy with the reserved `treasury` label plus a guard that
+rejects non-steward registrations while still allowing the steward account to
+claim that label.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sns.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sns_registrar.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_domain_name_rejects_bare_domain_literal -- --nocapture`
+  - `cargo test -p iroha_core --lib register_domain_name_reserved_label_requires_steward -- --nocapture`
+  - `cargo test -p iroha_core --lib seed_default_namespace_policies_populates_fixed_suffixes -- --nocapture`
+  - `cargo test -p iroha_torii --test sns_registrar --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` window when there is budget
+    beyond the reported SNS registrar regression
+  - align CLI/docs selector examples with fully qualified domain literals if
+    the public SNS operator UX slice is picked up separately
+
 Latest sync (2026-04-22 Torii nexus dataspaces summary merge coverage expansion):
 The same `nexus_dataspaces_summary` endpoint slice now has two more focused
 integration regressions in
