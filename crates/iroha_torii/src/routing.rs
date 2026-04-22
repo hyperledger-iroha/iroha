@@ -26911,6 +26911,85 @@ mod sorafs_pin_tests {
             .expect("manifest")
     }
 
+    #[test]
+    fn manifest_policy_helpers_round_trip_all_storage_classes() {
+        use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
+
+        let cases = [
+            (
+                PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Hot,
+                DmStorageClass::Hot,
+            ),
+            (
+                PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Warm,
+                DmStorageClass::Warm,
+            ),
+            (
+                PinPolicyStorageClassDto::Cold,
+                ManifestStorageClass::Cold,
+                DmStorageClass::Cold,
+            ),
+        ];
+
+        for (dto_storage_class, manifest_storage_class, dm_storage_class) in cases {
+            let dto = PinPolicyDto {
+                min_replicas: 3,
+                storage_class: dto_storage_class,
+                retention_epoch: 42,
+            };
+            let manifest_policy = manifest_policy_from_dto(&dto);
+            assert_eq!(manifest_policy.min_replicas, 3);
+            assert_eq!(manifest_policy.storage_class, manifest_storage_class);
+            assert_eq!(manifest_policy.retention_epoch, 42);
+
+            let dm_policy = convert_manifest_policy(&manifest_policy);
+            assert_eq!(dm_policy.min_replicas, 3);
+            assert_eq!(dm_policy.storage_class, dm_storage_class);
+            assert_eq!(dm_policy.retention_epoch, 42);
+        }
+    }
+
+    #[test]
+    fn parse_hex_array_accepts_prefixed_hex() {
+        let parsed = parse_hex_array::<4>("0xdeadbeef", "manifest_digest_hex")
+            .expect("prefixed hex should parse");
+        assert_eq!(parsed, [0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn parse_hex_array_rejects_invalid_hex_with_field_name() {
+        let err = parse_hex_array::<4>("zz", "manifest_digest_hex")
+            .expect_err("invalid hex must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("manifest_digest_hex"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_hex_array_rejects_wrong_length_with_expected_size() {
+        let err = parse_hex_array::<4>("abcd", "chunk_digest_sha3_256")
+            .expect_err("wrong-sized hex must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("chunk_digest_sha3_256") && message.contains("4 bytes"),
+            "unexpected error message: {message}"
+        );
+    }
+
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
@@ -57441,6 +57520,64 @@ mod asset_definitions_query_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
     }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn asset_definition_sort_key_orders_alias_binding_bound_at_desc() {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let older = AssetDefinitionListItem {
+            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+                "550e8400e29b41d4a7164466554400dd",
+            ))
+            .with_name("CBDC".to_owned())
+            .build(&authority),
+            id: "older".to_owned(),
+            name: "CBDC".to_owned(),
+            alias: Some("cbdc#centralbank".to_owned()),
+            alias_binding: Some(AssetAliasBindingDto {
+                alias: "cbdc#centralbank".to_owned(),
+                status: "permanent".to_owned(),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            }),
+        };
+        let newer = AssetDefinitionListItem {
+            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+                "550e8400e29b41d4a7164466554400ee",
+            ))
+            .with_name("USD".to_owned())
+            .build(&authority),
+            id: "newer".to_owned(),
+            name: "USD".to_owned(),
+            alias: Some("usd#lease".to_owned()),
+            alias_binding: Some(AssetAliasBindingDto {
+                alias: "usd#lease".to_owned(),
+                status: "leased_active".to_owned(),
+                lease_expiry_ms: Some(5_000),
+                grace_until_ms: Some(1_328_405_000),
+                bound_at_ms: 1_000,
+            }),
+        };
+
+        let selectors = compile_asset_definition_sort_spec(&[crate::filter::SortKey {
+            key: crate::filter::FieldPath("alias_binding.bound_at_ms".into()),
+            order: crate::filter::Order::Desc,
+        }]);
+        let older_key = asset_definition_sort_key(&older, &selectors);
+        let newer_key = asset_definition_sort_key(&newer, &selectors);
+
+        assert!(newer_key < older_key, "newer binding must sort first");
+
+        let (items, total) = collect_page_streaming(
+            vec![(older_key, "older"), (newer_key, "newer")],
+            0,
+            None,
+            None,
+        );
+        assert_eq!(total, 2);
+        assert_eq!(items, vec!["newer", "older"]);
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -63782,7 +63919,10 @@ mod nexus_dataspaces_summary_tests {
         account::Account,
         block::BlockHeader,
         domain::Domain,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{
+            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+            ManifestVersion, UniversalAccountId,
+        },
     };
     use iroha_test_samples::ALICE_ID;
 
@@ -63837,6 +63977,104 @@ mod nexus_dataspaces_summary_tests {
     }
 
     #[test]
+    fn manifest_summary_json_reports_pending_expired_and_revoked_states() {
+        let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
+        let pending_payload = manifest_summary_json(Some(&pending));
+        let pending_obj = pending_payload
+            .as_object()
+            .expect("pending manifest summary object");
+        assert_eq!(
+            pending_obj.get("status").and_then(Value::as_str),
+            Some("Pending")
+        );
+        assert_eq!(
+            pending_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            pending_obj
+                .get("activated_epoch")
+                .is_some_and(Value::is_null)
+        );
+        assert!(pending_obj.get("expired_epoch").is_some_and(Value::is_null));
+        assert!(pending_obj.get("revoked_epoch").is_some_and(Value::is_null));
+
+        let mut expired = sample_manifest_record();
+        expired.lifecycle.mark_expired(222);
+        let expired_payload = manifest_summary_json(Some(&expired));
+        let expired_obj = expired_payload
+            .as_object()
+            .expect("expired manifest summary object");
+        assert_eq!(
+            expired_obj.get("status").and_then(Value::as_str),
+            Some("Expired")
+        );
+        assert_eq!(
+            expired_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            expired_obj.get("activated_epoch").and_then(Value::as_u64),
+            Some(121)
+        );
+        assert_eq!(
+            expired_obj.get("expired_epoch").and_then(Value::as_u64),
+            Some(222)
+        );
+        assert!(expired_obj.get("revoked_epoch").is_some_and(Value::is_null));
+
+        let mut revoked = sample_manifest_record();
+        revoked
+            .lifecycle
+            .mark_revoked(333, Some("operator request".to_owned()));
+        let revoked_payload = manifest_summary_json(Some(&revoked));
+        let revoked_obj = revoked_payload
+            .as_object()
+            .expect("revoked manifest summary object");
+        assert_eq!(
+            revoked_obj.get("status").and_then(Value::as_str),
+            Some("Revoked")
+        );
+        assert_eq!(
+            revoked_obj.get("active").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            revoked_obj.get("revoked_epoch").and_then(Value::as_u64),
+            Some(333)
+        );
+        assert_eq!(
+            revoked_obj.get("revoked_reason").and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[test]
+    fn commitments_summary_json_reports_empty_snapshot() {
+        let payload = commitments_summary_json(&[]);
+        let obj = payload.as_object().expect("commitment summary object");
+        assert_eq!(obj.get("entries").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("tx_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("total_chunks").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("rbc_bytes_total").and_then(Value::as_u64), Some(0));
+        assert_eq!(obj.get("teu_total").and_then(Value::as_u64), Some(0));
+        assert!(obj.get("last_block_height").is_some_and(Value::is_null));
+        assert!(obj.get("last_block_hash").is_some_and(Value::is_null));
+        assert_eq!(
+            obj.get("lane_ids")
+                .and_then(Value::as_array)
+                .expect("lane ids"),
+            &Vec::<Value>::new()
+        );
+        assert_eq!(
+            obj.get("details")
+                .and_then(Value::as_array)
+                .expect("details"),
+            &Vec::<Value>::new()
+        );
+    }
+
+    #[test]
     fn commitments_summary_json_aggregates_totals_and_latest() {
         let commitments = vec![
             status::DataspaceCommitmentSnapshot {
@@ -63887,6 +64125,113 @@ mod nexus_dataspaces_summary_tests {
         assert_eq!(lane_ids.len(), 2);
         assert_eq!(lane_ids[0].as_u64(), Some(1));
         assert_eq!(lane_ids[1].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn commitments_summary_json_sorts_equal_heights_by_lane_id() {
+        let lower_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+        let higher_lane_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
+        let lower_lane_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; Hash::LENGTH]));
+        let commitments = vec![
+            status::DataspaceCommitmentSnapshot {
+                block_height: 5,
+                lane_id: 9,
+                dataspace_id: 42,
+                tx_count: 1,
+                total_chunks: 2,
+                rbc_bytes_total: 20,
+                teu_total: 10,
+                block_hash: lower_hash,
+            },
+            status::DataspaceCommitmentSnapshot {
+                block_height: 9,
+                lane_id: 7,
+                dataspace_id: 42,
+                tx_count: 3,
+                total_chunks: 6,
+                rbc_bytes_total: 60,
+                teu_total: 30,
+                block_hash: higher_lane_hash,
+            },
+            status::DataspaceCommitmentSnapshot {
+                block_height: 9,
+                lane_id: 1,
+                dataspace_id: 42,
+                tx_count: 4,
+                total_chunks: 8,
+                rbc_bytes_total: 80,
+                teu_total: 40,
+                block_hash: lower_lane_hash,
+            },
+        ];
+
+        let payload = commitments_summary_json(&commitments);
+        let obj = payload.as_object().expect("commitment summary object");
+        let expected_hash = format!("{lower_lane_hash}");
+        assert_eq!(
+            obj.get("last_block_height").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            obj.get("last_block_hash").and_then(Value::as_str),
+            Some(expected_hash.as_str())
+        );
+
+        let details = obj
+            .get("details")
+            .and_then(Value::as_array)
+            .expect("details array");
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0]["block_height"].as_u64(), Some(9));
+        assert_eq!(details[0]["lane_id"].as_u64(), Some(1));
+        assert_eq!(details[1]["block_height"].as_u64(), Some(9));
+        assert_eq!(details[1]["lane_id"].as_u64(), Some(7));
+        assert_eq!(details[2]["block_height"].as_u64(), Some(5));
+        assert_eq!(details[2]["lane_id"].as_u64(), Some(9));
+    }
+
+    #[test]
+    fn upsert_dataspace_summary_reuses_existing_entry_and_alias_lookup() {
+        let dataspace_id = DataSpaceId::new(42);
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let alias_lookup = DataspaceAliasLookup::new(catalog);
+        let mut summaries = BTreeMap::new();
+
+        {
+            let summary = upsert_dataspace_summary(&mut summaries, dataspace_id, &alias_lookup);
+            assert_eq!(summary.dataspace_id, dataspace_id);
+            assert_eq!(summary.dataspace_alias.as_deref(), Some("retail"));
+            summary.portfolio_accounts = 2;
+            summary.asset_definitions.insert("rose".to_owned());
+        }
+
+        {
+            let summary = upsert_dataspace_summary(&mut summaries, dataspace_id, &alias_lookup);
+            assert_eq!(summary.portfolio_accounts, 2);
+            assert_eq!(summary.asset_definitions.len(), 1);
+            assert_eq!(summary.dataspace_alias.as_deref(), Some("retail"));
+        }
+
+        {
+            let summary =
+                upsert_dataspace_summary(&mut summaries, DataSpaceId::new(404), &alias_lookup);
+            assert_eq!(summary.dataspace_id, DataSpaceId::new(404));
+            assert!(summary.dataspace_alias.is_none());
+        }
+
+        assert_eq!(summaries.len(), 2);
     }
 
     #[tokio::test]

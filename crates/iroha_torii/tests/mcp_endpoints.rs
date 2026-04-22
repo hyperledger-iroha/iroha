@@ -310,6 +310,11 @@ fn assert_tool_error(response: &Value, context: &str) {
     );
 }
 
+fn enable_writer_mcp(cfg: &mut iroha_config::parameters::actual::Root) {
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
+}
+
 fn assert_openai_compatible_top_level_input_schema(tool_name: &str, schema: &norito::json::Map) {
     assert_eq!(
         schema.get("type").and_then(Value::as_str),
@@ -1259,7 +1264,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_commit_certificates_accepts
 async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
@@ -1426,7 +1431,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
 async fn mcp_jsonrpc_tools_call_agent_alias_da_ingest_accepts_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -1470,7 +1475,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_ingest_accepts_body() {
 async fn mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name) in [
@@ -1520,7 +1525,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body
 async fn mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name) in [
@@ -1618,7 +1623,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
 async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
@@ -1873,7 +1878,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_proofs_endpoints_dispatch() {
 async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
@@ -4449,7 +4454,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope
 async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -4912,7 +4917,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_list_accepts_fla
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_plans_create_accepts_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -4974,7 +4979,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_list_accepts_flat_quer
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5043,7 +5048,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subsc
 async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_flat_subscription_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5082,7 +5087,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_flat_su
 async fn mcp_jsonrpc_tools_call_agent_alias_subscription_actions_accept_flat_subscription_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     for (id, tool_name) in [
@@ -5321,7 +5326,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arg
 async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_accepts_flat_alias_shortcut() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5365,7 +5370,7 @@ async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_accepts_flat_alias_shortcu
 async fn mcp_jsonrpc_tools_call_agent_aliases_resolve_index_accepts_flat_index_shortcut() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5568,7 +5573,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_rejects_unknown_payload
 async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs008_accepts_xml_shortcut() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5606,7 +5611,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs008_accepts_xml_shortcu
 async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs009_accepts_xml_shortcut() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -5722,7 +5727,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_erro
 async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
@@ -5807,7 +5812,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
 async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
@@ -5855,7 +5860,7 @@ async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
 async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitted() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
@@ -5907,7 +5912,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitte
 async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
@@ -5957,7 +5962,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
 async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
@@ -6185,7 +6190,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
 async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
+    enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);

@@ -514,11 +514,21 @@ where
     T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let archived = ncore::archived_from_slice::<Self>(bytes)?;
-        let archived_bytes = archived.bytes();
-        let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+        use std::borrow::Cow;
+
+        let min_size = core::mem::size_of::<ncore::Archived<Self>>();
+        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
+            let mut padded = Vec::with_capacity(min_size);
+            padded.extend_from_slice(bytes);
+            padded.resize(min_size, 0);
+            Cow::Owned(padded)
+        } else {
+            Cow::Borrowed(bytes)
+        };
+        let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
+        let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
         let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
-        Ok((value, archived_bytes.len()))
+        Ok((value, bytes.len()))
     }
 }
 
@@ -676,6 +686,11 @@ mod data_frame_wire_len_tests {
         tag: u8,
     }
 
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DynamicDummy {
+        body: Vec<u8>,
+    }
+
     #[test]
     fn data_frame_wire_len_matches_manual_envelope() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -735,6 +750,37 @@ mod data_frame_wire_len_tests {
         assert_eq!(decoded.ttl, 5);
         assert_eq!(decoded.priority, message::Priority::High);
         assert_eq!(decoded.payload.tag, payload.tag);
+        match decoded.target {
+            RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
+            RelayTarget::Broadcast => panic!("expected direct relay target"),
+        }
+    }
+
+    #[test]
+    fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = DynamicDummy {
+            body: vec![1u8, 2, 3, 4],
+        };
+        let frame = RelayMessage::new(
+            origin.clone(),
+            RelayTarget::Direct(target.clone()),
+            6,
+            message::Priority::Low,
+            payload.clone(),
+        );
+
+        let bytes = frame.encode();
+        let (decoded, used) =
+            <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode relay message");
+
+        assert_eq!(used, bytes.len(), "should consume full payload");
+        assert_eq!(decoded.origin, origin);
+        assert_eq!(decoded.ttl, 6);
+        assert_eq!(decoded.priority, message::Priority::Low);
+        assert_eq!(decoded.payload.body, payload.body);
         match decoded.target {
             RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
@@ -4667,12 +4713,18 @@ mod accept_stream_tests {
         super::inc_post_overflow_for(Consensus);
         super::inc_post_overflow_for_prio(Consensus, false);
 
-        assert_eq!(super::post_overflow_count(), base_total + 2);
-        assert_eq!(
-            super::post_overflow_consensus_high_count(),
-            base_hi_cons + 1
+        assert!(
+            super::post_overflow_count() >= base_total + 2,
+            "global overflow counter should reflect at least this test's increments"
         );
-        assert_eq!(super::post_overflow_consensus_low_count(), base_lo_cons + 1);
+        assert!(
+            super::post_overflow_consensus_high_count() >= base_hi_cons + 1,
+            "high-priority consensus overflow counter should reflect this test's increment"
+        );
+        assert!(
+            super::post_overflow_consensus_low_count() >= base_lo_cons + 1,
+            "low-priority consensus overflow counter should reflect this test's increment"
+        );
     }
 
     #[test]
