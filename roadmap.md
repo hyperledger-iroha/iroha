@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 default genesis structured-instruction compatibility):
+The reported `iroha_genesis` reds are fixed. `crates/iroha_genesis/src/lib.rs`
+now keeps staged Sumeragi cutover parameters intact while filtering injected
+handshake metadata, the structured decoder accepts legacy raw public-key
+account literals for backward-compatible genesis manifests, and
+`defaults/genesis.json` now matches the current structured instruction grammar
+for account and asset destinations again.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_genesis/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/defaults/genesis.json`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_genesis`
+- open work after this slice:
+  - budget a broader shipped-genesis manifest refresh separately if the older
+    non-default manifests need to be brought onto the same structured grammar
+    as `defaults/genesis.json`
+
 Latest sync (2026-04-22 lane commitment Norito fixture resync):
 The reported `lane_commitment_fixtures_roundtrip` red is fixed. The checked-in
 lane commitment `.to` fixtures under `fixtures/nexus/lane_commitments/` were
