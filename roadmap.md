@@ -24,7 +24,49 @@ refresh promotion of a matching cached `Init` roster, the direct successful
 promotion path for an authoritative same-epoch `Init` roster, and the helper
 path that flushes stashed READY/DELIVER immediately once
 `promote_rbc_session_roster_and_retry(...)` can upgrade the roster to
-authoritative.
+authoritative. The same slice now also covers the no-pending promotion path
+where `promote_rbc_session_roster_and_retry(...)` upgrades the source and then
+emits local READY/DELIVER directly from a complete same-epoch authoritative
+session, plus the READY-already-sent variant where the same helper only needs
+to emit local DELIVER, plus the delivered-session false path where refresh can
+derive an authoritative roster candidate but the cached `Init` source still
+cannot be promoted in place, plus the direct
+`flush_pending_rbc_if_roster_ready(...)` gate for no-pending, unresolved, and
+cache-seeding success cases, plus the direct cached-roster replay path for
+pending chunks and the direct cached-roster replay path for stashed
+READY/DELIVER bundles. `refresh_derived_rbc_session_roster(...)` now also
+covers the future-epoch no-derived `None` path plus the no-cache/no-derived
+`None` variant, and
+`record_rbc_session_roster(...)` now covers both the same-roster
+`Init -> Derived` source-promotion path and the change-path resets for
+`Init -> Init` refreshes versus `Init -> Derived` promotions, plus the
+same-roster/same-source authoritative no-op branch, the empty-roster
+early-return branch, and the auxiliary repair/rebroadcast/deferral cleanup
+branches for both `Init -> Init` and `Derived -> Derived` refreshes, so the
+cache-update behavior is exercised for preserved-pending, cleared-pending, and
+untouched-cache cases as well. The same record-roster slice now also covers
+vacant `Init` cache seeding, the same-roster/same-source `Init` no-op path,
+the direct `clear_rbc_session_roster(...)` cache-eviction helper, and the
+`RbcRosterSource` merge rules that decide when cached sources become
+authoritative. The same helper cluster now also covers degraded-cache fallback
+where a cached roster exists without a `session_roster_sources` entry:
+`ensure_rbc_session_roster(...)` keeps the cached roster when derivation is
+still unavailable, while `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` restore the missing source as
+authoritative once same-epoch local payload knowledge exists. The same
+degraded-cache slice now also covers the successful `ensure_rbc_session_roster(...)`
+promotion path and the direct `record_rbc_session_roster(...)` same-roster
+missing-source behavior for both `Init` no-op updates and `Derived` source
+restoration without session reset. The same slice now also covers the direct
+`refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` false paths when a missing source
+still cannot derive an authoritative roster, plus the changed-roster
+missing-source `record_rbc_session_roster(...)` behavior for `Init` refreshes
+versus `Derived` promotions.
+`promote_rbc_session_roster_and_retry(...)` now also covers the matching
+delivered-session same-roster path where source promotion succeeds without any
+READY/DELIVER retry work, and `allow_unverified_rbc_roster(...)` now covers the
+permissioned next-slot false path once the active roster is already available.
 
 - shipped in:
   - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
@@ -38,6 +80,10 @@ authoritative.
   - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
   - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
   - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib record_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib clear_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_roster_source_merge -- --nocapture`
   - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
   - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
 - open work after this slice:

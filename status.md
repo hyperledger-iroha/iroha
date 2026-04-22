@@ -25,10 +25,60 @@ Last updated: 2026-04-22
   roster cache, promoting a matching same-epoch `Init` roster to `Derived`,
   and flushing stashed READY/DELIVER directly through
   `promote_rbc_session_roster_and_retry(...)` once authoritative session
-  metadata appears, and
+  metadata appears. The same helper cluster now also has a direct no-pending
+  promotion path where `promote_rbc_session_roster_and_retry(...)` upgrades the
+  roster source and then emits local READY/DELIVER from a complete
+  authoritative same-epoch session, plus the READY-already-sent variant where
+  promotion only needs to emit local DELIVER, plus the delivered-session guard
+  false path where promotion refreshes the derived roster candidate but still
+  stops because the cached `Init` roster cannot be upgraded in place, plus
+  direct
+  `flush_pending_rbc_if_roster_ready(...)` coverage for the no-pending false
+  path, the unresolved-roster false path, the same-epoch authoritative
+  cache-seeding success path, the direct cached-roster replay path for pending
+  chunks, and the direct cached-roster replay path for stashed READY/DELIVER
+  bundles. `refresh_derived_rbc_session_roster(...)` now also has a
+  direct no-derived-roster `None` path for future-epoch sessions that still
+  cannot derive an authoritative roster, plus the no-cache/no-derived `None`
+  variant that confirms refresh does not seed cache state opportunistically.
+  `promote_rbc_session_roster_and_retry(...)` also now covers the matching
+  delivered-session same-roster path where source promotion should still report
+  progress without retrying READY/DELIVER, while `record_rbc_session_roster(...)`
+  now has a direct same-roster `Init -> Derived` source-promotion regression
+  that confirms authoritative source upgrades do not reset session state when
+  the roster bytes themselves do not change, plus direct change-path coverage
+  for unverified `Init -> Init` refreshes that preserve pending state and for
+  `Init -> Derived` promotions that clear pending state and reset session
+  replay metadata when the roster bytes themselves change, plus the auxiliary
+  cleanup branches that clear repair/rebroadcast/deferral bookkeeping on both
+  `Init -> Init` and `Derived -> Derived` refreshes, plus the
+  same-roster/same-source authoritative no-op path and the empty-roster
+  early-return path that leave cached state untouched, plus the vacant-`Init`
+  cache-seeding path, the same-roster/same-source `Init` no-op path, the
+  direct `clear_rbc_session_roster(...)` cache-eviction helper, and the
+  `RbcRosterSource` merge semantics that promote cached sources to
+  authoritative state. The same helper slice now also covers degraded cache
+  recovery where a cached roster exists but the `session_roster_sources` entry
+  is missing: `ensure_rbc_session_roster(...)` keeps the cached roster when no
+  authoritative same-epoch derivation is available, while
+  `refresh_derived_rbc_session_roster(...)` and
+  `promote_rbc_session_roster_and_retry(...)` both treat that missing source as
+  an implicit `Init` roster and restore the authoritative `Derived` source once
+  same-epoch local payload knowledge becomes available. The same degraded-cache
+  slice now also covers the successful `ensure_rbc_session_roster(...)`
+  promotion path once authoritative payload knowledge exists, plus the direct
+  `record_rbc_session_roster(...)` same-roster behavior with a missing source
+  entry for both `Init` no-op updates and `Derived` source restoration without
+  resetting session state. It now also covers the direct
+  `refresh_derived_rbc_session_roster(...)` and
+  `promote_rbc_session_roster_and_retry(...)` false paths when that missing
+  source still cannot derive an authoritative roster, plus the
+  `record_rbc_session_roster(...)` changed-roster behavior for missing-source
+  `Init` refreshes versus missing-source `Derived` promotions, and
   `allow_unverified_rbc_roster(...)` now has direct permissioned and NPoS
-  coverage for both the future-height empty-derived case and the same-epoch
-  authoritative-payload case that disables the init-roster escape hatch.
+  coverage for the future-height empty-derived case, the permissioned next-slot
+  active-roster false path, and the same-epoch authoritative-payload case that
+  disables the init-roster escape hatch.
 - This fixes
   `sumeragi::main_loop::tests::rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_known_same_epoch`:
   complete local RBC sessions now unlock the same in-epoch active-topology
@@ -41,6 +91,10 @@ Last updated: 2026-04-22
   - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
   - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
   - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib record_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib clear_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_roster_source_merge -- --nocapture`
   - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
   - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
 
