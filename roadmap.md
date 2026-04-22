@@ -2,6 +2,164 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii sanitizer spawn and reader coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now covers two
+more failure branches in
+`crates/iroha_torii/tests/zk_attachments_subprocess.rs`: missing child
+executables that fail at spawn time, and successful child exits where stdout
+never closes before the timeout window. The module tests in
+`crates/iroha_torii/src/zk_attachments.rs` also add direct coverage for
+`read_limited(...)` timing out before the first read, wrapping reader failures
+as checksum rejects, and enforcing the low-level expanded-byte cap.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/zk_attachments.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii read_limited -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused sanitizer spawn and reader
+    coverage
+
+Latest sync (2026-04-22 Torii sanitizer child-entry coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now covers more of
+the dedicated child binary itself in
+`crates/iroha_torii/tests/zk_attachments_subprocess.rs`. The integration file
+adds end-to-end malformed gzip and malformed zstd rejects, then invokes the
+real `attachment_sanitizer` binary directly to pin the env-gated entrypoint,
+the oversized-stdin request failure, and the invalid-request decode path that
+writes an encoded error response to stdout.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused sanitizer child-entry
+    coverage
+
+Latest sync (2026-04-22 Torii sanitizer expansion-path coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now has more
+real-child integration coverage for the `type` and `expansion` reject paths in
+`crates/iroha_torii/tests/zk_attachments_subprocess.rs`: one case keeps plain
+bytes declared as `application/octet-stream` to pin the allowlist reject, one
+compressed payload trips the expanded-byte ceiling, and one nested gzip payload
+trips the archive-depth ceiling. The direct decode helper in
+`crates/iroha_torii/src/zk_attachments.rs` also now has an explicit success
+response unit test alongside the reject cases.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/zk_attachments.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii decode_sanitizer_response_bytes -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused sanitizer subprocess
+    expansion coverage
+
+Latest sync (2026-04-22 Torii sanitizer response-decode coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now has direct
+unit coverage in `crates/iroha_torii/src/zk_attachments.rs` for the wire decode
+branches after child completion, including typed child rejects, unknown reject
+reason fallback, and malformed responses missing required fields. The
+integration coverage in
+`crates/iroha_torii/tests/zk_attachments_subprocess.rs` also adds a real-child
+unsupported-media regression using the actual `attachment_sanitizer` binary.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/zk_attachments.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii decode_sanitizer_response_bytes -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused sanitizer subprocess decode
+    coverage
+
+Latest sync (2026-04-22 Torii sanitizer launcher and timeout coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now has direct
+unit coverage in `crates/iroha_torii/src/zk_attachments.rs` for wrapper
+selection and no-wrapper fallback, plus another focused integration regression
+for the slow-child timeout branch in
+`crates/iroha_torii/tests/zk_attachments_subprocess.rs`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/zk_attachments.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii sandboxed_sanitizer_command -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused subprocess launcher coverage
+
+Latest sync (2026-04-22 Torii attachment sanitizer subprocess coverage expansion):
+The same `iroha_torii` attachment sanitizer subprocess slice now has broader
+focused integration coverage in `crates/iroha_torii/tests/zk_attachments_subprocess.rs`.
+The file now keeps the plain JSON happy path, adds a gzip-compressed success
+case that proves subprocess sanitization stores decompressed JSON metadata, and
+pins two failure branches for invalid child stdout and nonzero child exit
+statuses.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused sanitizer subprocess coverage
+
+Latest sync (2026-04-22 Torii attachment sanitizer subprocess fallback):
+The `iroha_torii` attachment sanitize path now keeps working in `subprocess`
+mode on hosts that do not ship `bwrap` or `sandbox-exec`. The launcher still
+prefers the OS wrapper when available, but otherwise falls back to the
+dedicated sanitizer child with the same wire protocol and child-side resource
+limits. The same slice now has a focused unit test for the fallback env wiring,
+and the subprocess integration test prints the response body on failure.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/zk_attachments.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_attachments_subprocess.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/docs/zk_app_api.md`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess attachments_sanitize_via_subprocess -- --nocapture`
+  - `cargo test -p iroha_torii direct_sanitizer_command_sets_required_env -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused attachment sanitizer fix
+
 Latest sync (2026-04-22 Torii manifest direct-routing coverage expansion):
 The same `iroha_torii` space-directory manifest slice now has three more
 direct tests around `routing::handle_v1_space_directory_manifests(...)`. The
