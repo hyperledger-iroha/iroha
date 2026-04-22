@@ -10695,7 +10695,8 @@ fn contract_state_logical_path_exists(
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
     let Some(schema) = registry.get(logical_path) else {
-        let Some((base, key, key_suffix)) = contract_state_logical_map_parts(registry, logical_path)
+        let Some((base, key, key_suffix)) =
+            contract_state_logical_map_parts(registry, logical_path)
         else {
             return false;
         };
@@ -11306,11 +11307,9 @@ mod contract_state_tests {
         );
 
         let logical_key = "cf793f7d78c9c80f01ea2633d15951e0c51136aa24e385e78e85f8910d8a2ed9/0";
-        let stored_key = contract_state_stored_map_key_suffix(
-            &ivm::EmbeddedStateType::Name,
-            logical_key,
-        )
-        .expect("name map key should encode");
+        let stored_key =
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
+                .expect("name map key should encode");
         let value_payload = norito::to_bytes(&5_i64).expect("encode tranche index");
         let storage = BTreeMap::from([(
             format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
@@ -11339,11 +11338,9 @@ mod contract_state_tests {
         );
 
         let logical_key = "beneficiary-lookup/1";
-        let stored_key = contract_state_stored_map_key_suffix(
-            &ivm::EmbeddedStateType::Name,
-            logical_key,
-        )
-        .expect("name map key should encode");
+        let stored_key =
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
+                .expect("name map key should encode");
         let stored_path = format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}");
 
         assert!(contract_state_logical_path_exists(
