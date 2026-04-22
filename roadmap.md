@@ -21647,3 +21647,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## 2026-04-19 Integration Failure Sweep Follow-up
 1. Completed: the reported `fast_dsl`, scheduler TEU default-lane, and threshold escrow contract-state regressions are fixed and covered by focused integration validation.
 2. No additional roadmap item was opened from this sweep; the remaining validation gap is the normal multi-hour full workspace test run.
+
+## 2026-04-22 MCP Writer-Profile Test Alignment Follow-up
+1. Completed: `crates/iroha_torii/tests/mcp_endpoints.rs` now opts mutation-capable MCP scenarios into `ToriiMcpProfile::Writer`, matching the documented default `read_only` policy instead of assuming those tools dispatch under the default test config.
+2. No additional roadmap item was opened from this fix; `cargo test -p iroha_torii --test mcp_endpoints` is green.
