@@ -26575,3 +26575,10 @@ Last updated: 2026-04-22
   - `cargo test -p integration_tests queue_uses_default_lane_when_no_rule_matches -- --nocapture`
   - `cargo test -p integration_tests threshold_escrow -- --nocapture`
   - `cargo test -p integration_tests workspace_builds_with_fast_dsl_feature -- --nocapture`
+
+## 2026-04-22 MCP Writer-Profile Test Alignment
+- Updated `crates/iroha_torii/tests/mcp_endpoints.rs` so mutation-capable MCP route tests explicitly opt into `ToriiMcpProfile::Writer` instead of relying on the default `read_only` profile.
+- This restores the expected MCP tool-result path for connect session lifecycle helpers, DA ingest/commitment/pin-intent mutations, runtime upgrade mutations, governance mutations, subscription mutations, ISO 20022 submit helpers, account onboarding, and POST-based alias resolution coverage.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test mcp_endpoints`
