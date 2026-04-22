@@ -2,6 +2,48 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Sumeragi same-epoch RBC roster active-topology override):
+The reported
+`sumeragi::main_loop::tests::rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_known_same_epoch`
+red is fixed. `crates/iroha_core/src/sumeragi/main_loop.rs` now bypasses
+generic historical vote rosters once a future same-epoch RBC session has an
+authoritative local payload, so the session rejoins the current active
+topology instead of sticking to a stale partial roster. The focused unit
+coverage in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now also pins
+the adjacent negative cases: same-epoch partial RBC sessions stay blocked, and
+later-epoch authoritative RBC payloads still do not unlock the fallback. The
+same slice now covers the helper branches around cached `Init` rosters and the
+permissioned/NPoS `allow_unverified_rbc_roster(...)` gate as well, plus the
+early-return paths in `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)`, so the same-epoch/future-epoch
+fallback rules are exercised both at the roster derivation layer and at the
+init-roster admission layer. The helper coverage now also includes the cached
+authoritative `ensure_rbc_session_roster(...)` branch, the no-cache/no-derived
+empty branch, direct cache seeding from authoritative same-epoch RBC metadata,
+refresh promotion of a matching cached `Init` roster, the direct successful
+promotion path for an authoritative same-epoch `Init` roster, and the helper
+path that flushes stashed READY/DELIVER immediately once
+`promote_rbc_session_roster_and_retry(...)` can upgrade the roster to
+authoritative.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib rbc_roster_for_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` window when there is budget
+    beyond the reported same-epoch RBC roster regression
+
 Latest sync (2026-04-22 default genesis structured-instruction compatibility):
 The reported `iroha_genesis` reds are fixed. `crates/iroha_genesis/src/lib.rs`
 now keeps staged Sumeragi cutover parameters intact while filtering injected
