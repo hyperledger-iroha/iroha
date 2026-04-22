@@ -10358,13 +10358,27 @@ fn contract_state_logical_map_entry_value(
     if let Some(Some(_)) = registry.get(logical_path) {
         return get_value(logical_path);
     }
-    let (base, key_suffix) = logical_path.rsplit_once('/')?;
-    let Some(Some(ivm::EmbeddedStateType::Map { key, .. })) = registry.get(base) else {
-        return None;
-    };
+    let (base, key, key_suffix) = contract_state_logical_map_parts(registry, logical_path)?;
     let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
         .unwrap_or_else(|| key_suffix.to_owned());
     get_value(&format!("{base}/{stored_key_suffix}"))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_logical_map_parts<'a>(
+    registry: &'a BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    logical_path: &'a str,
+) -> Option<(&'a str, &'a ivm::EmbeddedStateType, &'a str)> {
+    registry
+        .iter()
+        .filter_map(|(base, schema)| {
+            let key_suffix = logical_path.strip_prefix(&format!("{base}/"))?;
+            let Some(ivm::EmbeddedStateType::Map { key, .. }) = schema.as_ref() else {
+                return None;
+            };
+            Some((base.as_str(), key.as_ref(), key_suffix))
+        })
+        .max_by_key(|(base, _, _)| base.len())
 }
 
 #[cfg(feature = "app_api")]
@@ -10405,6 +10419,14 @@ fn decode_contract_state_scalar_json(
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Json => {
+            if tlv.type_id == PointerType::NoritoBytes {
+                if let Ok(value) = norito::decode_from_bytes(tlv.payload) {
+                    let value: iroha_primitives::json::Json = value;
+                    return value
+                        .try_into_any_norito::<norito::json::Value>()
+                        .map_err(|err| format!("convert json payload: {err}"));
+                }
+            }
             let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
             let value: iroha_primitives::json::Json =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
@@ -10597,29 +10619,18 @@ fn decode_contract_state_path_json(
         }
     }
 
-    let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+    let Some((base, key, key_suffix)) = contract_state_logical_map_parts(registry, logical_path)
+    else {
         return Err(format!(
             "no embedded state schema found for path `{logical_path}`"
         ));
     };
-    let Some(state_schema) = registry.get(base) else {
-        return Err(format!(
-            "no embedded state schema found for path `{logical_path}`"
-        ));
-    };
-    let Some(schema) = state_schema else {
+    let Some(Some(ivm::EmbeddedStateType::Map { value, .. })) = registry.get(base) else {
         return Err(format!("state schema for `{base}` is ambiguous"));
     };
-    match schema {
-        ivm::EmbeddedStateType::Map { key, value } => {
-            let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
-                .unwrap_or_else(|| key_suffix.to_owned());
-            decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
-        }
-        _ => Err(format!(
-            "path `{logical_path}` does not refer to a state map entry"
-        )),
-    }
+    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
+        .unwrap_or_else(|| key_suffix.to_owned());
+    decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
 }
 
 #[cfg(feature = "app_api")]
@@ -10684,14 +10695,15 @@ fn contract_state_logical_path_exists(
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
     let Some(schema) = registry.get(logical_path) else {
-        let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+        let Some((base, key, key_suffix)) = contract_state_logical_map_parts(registry, logical_path)
+        else {
             return false;
         };
         let Some(Some(state_schema)) = registry.get(base) else {
             return false;
         };
         return match state_schema {
-            ivm::EmbeddedStateType::Map { key, value } => {
+            ivm::EmbeddedStateType::Map { value, .. } => {
                 let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
                     .unwrap_or_else(|| key_suffix.to_owned());
                 contract_state_map_entry_exists(base, value, &stored_key_suffix, has_value)
@@ -11283,6 +11295,65 @@ mod contract_state_tests {
     }
 
     #[test]
+    fn decode_contract_state_path_json_resolves_name_map_keys_containing_slashes() {
+        let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
+        registry.insert(
+            "BeneficiaryTrancheIndexByLookupKey".to_owned(),
+            Some(ivm::EmbeddedStateType::Map {
+                key: Box::new(ivm::EmbeddedStateType::Name),
+                value: Box::new(ivm::EmbeddedStateType::Int),
+            }),
+        );
+
+        let logical_key = "cf793f7d78c9c80f01ea2633d15951e0c51136aa24e385e78e85f8910d8a2ed9/0";
+        let stored_key = contract_state_stored_map_key_suffix(
+            &ivm::EmbeddedStateType::Name,
+            logical_key,
+        )
+        .expect("name map key should encode");
+        let value_payload = norito::to_bytes(&5_i64).expect("encode tranche index");
+        let storage = BTreeMap::from([(
+            format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
+            make_tlv(PointerType::NoritoBytes, &value_payload),
+        )]);
+
+        let decoded = decode_contract_state_path_json(
+            &registry,
+            &format!("BeneficiaryTrancheIndexByLookupKey/{logical_key}"),
+            &|path| storage.get(path).cloned(),
+        )
+        .expect("decode slash-containing logical key");
+
+        assert_eq!(decoded, Value::from("5"));
+    }
+
+    #[test]
+    fn decode_contract_state_logical_path_exists_handles_name_keys_with_slashes() {
+        let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
+        registry.insert(
+            "BeneficiaryTrancheIndexByLookupKey".to_owned(),
+            Some(ivm::EmbeddedStateType::Map {
+                key: Box::new(ivm::EmbeddedStateType::Name),
+                value: Box::new(ivm::EmbeddedStateType::Int),
+            }),
+        );
+
+        let logical_key = "beneficiary-lookup/1";
+        let stored_key = contract_state_stored_map_key_suffix(
+            &ivm::EmbeddedStateType::Name,
+            logical_key,
+        )
+        .expect("name map key should encode");
+        let stored_path = format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}");
+
+        assert!(contract_state_logical_path_exists(
+            &registry,
+            &format!("BeneficiaryTrancheIndexByLookupKey/{logical_key}"),
+            &|path| path == stored_path
+        ));
+    }
+
+    #[test]
     fn decode_contract_state_scalar_json_unwraps_nested_json_payloads() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
@@ -11299,6 +11370,25 @@ mod contract_state_tests {
         let mut expected = Map::new();
         expected.insert("marketId".into(), Value::from("mkt-1"));
         expected.insert("status".into(), Value::from("open"));
+        assert_eq!(decoded, Value::Object(expected));
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_decodes_direct_norito_json_payloads() {
+        let json_value = iroha_primitives::json::Json::from_str_norito(
+            "{\"tranche_id\":\"bisp-1\",\"beneficiary_account_id\":\"i105-user\"}",
+        )
+        .expect("valid json payload");
+        let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
+        let decoded = decode_contract_state_scalar_json(
+            &make_tlv(PointerType::NoritoBytes, &json_payload),
+            &ivm::EmbeddedStateType::Json,
+        )
+        .expect("decode direct json");
+
+        let mut expected = Map::new();
+        expected.insert("tranche_id".into(), Value::from("bisp-1"));
+        expected.insert("beneficiary_account_id".into(), Value::from("i105-user"));
         assert_eq!(decoded, Value::Object(expected));
     }
 }
