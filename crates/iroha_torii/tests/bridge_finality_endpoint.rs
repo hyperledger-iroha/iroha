@@ -5,6 +5,7 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use axum::{
     body::{Body, to_bytes},
+    extract::connect_info::ConnectInfo,
     http::Request,
 };
 use hyper::StatusCode;
@@ -71,10 +72,15 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(block).expect("store block");
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
+    let mut world = World::default();
+    let validator_pop =
+        iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("generate validator pop");
+    world.register_validator_pop_for_testing(kp.public_key().clone(), validator_pop);
+    let state = Arc::new(State::new_with_chain_for_testing(
+        world,
         kura.clone(),
         query,
+        chain_id.clone(),
     ));
 
     let validator_set = vec![peer_id.clone()];
@@ -94,6 +100,10 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     };
     let preimage = vote_preimage(&chain_id, mode_tag, &vote);
     let signature = Signature::new(kp.private_key(), &preimage);
+    let signature_payload = signature.payload().to_vec();
+    let aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&[signature_payload.as_slice()])
+            .expect("aggregate signature");
     let cert = Qc {
         phase: Phase::Commit,
         height: 1,
@@ -109,7 +119,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         validator_set,
         aggregate: QcAggregate {
             signers_bitmap: vec![1],
-            bls_aggregate_signature: signature.payload().to_vec(),
+            bls_aggregate_signature: aggregate_signature,
         },
     };
     record_commit_qc(cert);
@@ -136,22 +146,35 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     );
     let app = torii.api_router_for_tests();
 
-    let req = Request::builder()
+    let mut req = Request::builder()
         .uri("/v1/bridge/finality/1")
+        .header(axum::http::header::ACCEPT, "application/x-norito")
         .body(Body::empty())
         .expect("request");
+    req.extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     let resp = app.oneshot(req).await.expect("response");
-    if !cfg!(feature = "telemetry") {
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        return;
-    }
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("body bytes");
+    if !cfg!(feature = "telemetry") {
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "unexpected body: {}",
+            String::from_utf8_lossy(&body)
+        );
+        return;
+    }
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
     let proof: iroha_data_model::bridge::BridgeFinalityProof =
-        norito::json::from_slice(&body).expect("decode proof");
+        norito::decode_from_bytes(&body).expect("decode proof");
 
     let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
         chain_id,
