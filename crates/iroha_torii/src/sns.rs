@@ -307,7 +307,20 @@ mod tests {
     }
 
     #[test]
+    fn metric_namespace_uses_numeric_fallback_for_unknown_suffix_id() {
+        assert_eq!(metric_namespace_from_suffix_id(0xFFFF), "65535");
+    }
+
+    #[test]
     fn core_error_maps_to_http_status_family() {
+        let bad_request: SnsError = CoreSnsError::BadRequest("bad".to_owned()).into();
+        let response = bad_request.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let conflict: SnsError = CoreSnsError::Conflict("conflict".to_owned()).into();
+        let response = conflict.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
         let not_found: SnsError = CoreSnsError::NotFound("missing".to_owned()).into();
         let response = not_found.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);

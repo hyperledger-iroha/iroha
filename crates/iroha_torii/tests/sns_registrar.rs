@@ -151,7 +151,8 @@ fn build_payment_with(payer: AccountId) -> PaymentProofV1 {
 }
 
 fn build_register_request_with(label: &str, owner: &AccountId) -> RegisterNameRequestV1 {
-    let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, label).expect("selector");
+    let selector =
+        NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_literal(label)).expect("selector");
     RegisterNameRequestV1 {
         selector,
         owner: owner.clone(),
@@ -189,7 +190,11 @@ async fn register_name(app: &Router, payload: RegisterNameRequestV1) -> Register
 }
 
 fn domain_name_path(label: &str) -> String {
-    format!("/v1/sns/names/domain/{label}")
+    format!("/v1/sns/names/domain/{}", domain_literal(label))
+}
+
+fn domain_literal(label: &str) -> String {
+    format!("{label}.universal")
 }
 
 #[tokio::test]
@@ -199,7 +204,7 @@ async fn sns_register_and_fetch_round_trip() {
     let register_response = register_name(&app, payload).await;
     assert_eq!(
         register_response.name_record.selector.normalized_label(),
-        "makoto"
+        domain_literal("makoto")
     );
     assert!(matches!(
         register_response.name_record.status,
@@ -228,6 +233,401 @@ async fn sns_register_and_fetch_round_trip() {
         .await
         .unwrap();
     assert_eq!(policy_resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sns_registration_canonicalizes_noncanonical_domain_payload() {
+    let app = test_router();
+    let owner = sample_owner();
+    let payload = RegisterNameRequestV1 {
+        selector: NameSelectorV1 {
+            version: NameSelectorV1::VERSION,
+            suffix_id: DOMAIN_NAME_SUFFIX_ID,
+            label: "MiXeD.Universal".to_owned(),
+        },
+        owner: owner.clone(),
+        controllers: vec![controller_for(&owner)],
+        term_years: 1,
+        pricing_class_hint: Some(0),
+        payment: build_payment_with(owner),
+        governance: None,
+        metadata: Metadata::default(),
+    };
+
+    let register_response = register_name(&app, payload).await;
+    assert_eq!(
+        register_response.name_record.selector.normalized_label(),
+        "mixed.universal"
+    );
+}
+
+#[tokio::test]
+async fn sns_registration_rejects_bare_domain_literal() {
+    let app = test_router();
+    let owner = sample_owner();
+    let payload = RegisterNameRequestV1 {
+        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "bare-domain").expect("selector"),
+        owner: owner.clone(),
+        controllers: vec![controller_for(&owner)],
+        term_years: 1,
+        pricing_class_hint: Some(0),
+        payment: build_payment_with(owner),
+        governance: None,
+        metadata: Metadata::default(),
+    };
+    let body = norito::json::to_vec(&payload).expect("serialize register payload");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("register response");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_registration_rejects_unknown_suffix_id() {
+    let app = test_router();
+    let owner = sample_owner();
+    let payload = RegisterNameRequestV1 {
+        selector: NameSelectorV1 {
+            version: NameSelectorV1::VERSION,
+            suffix_id: 0xFFFF,
+            label: "unknown".to_owned(),
+        },
+        owner: owner.clone(),
+        controllers: vec![controller_for(&owner)],
+        term_years: 1,
+        pricing_class_hint: Some(0),
+        payment: build_payment_with(owner),
+        governance: None,
+        metadata: Metadata::default(),
+    };
+    let body = norito::json::to_vec(&payload).expect("serialize register payload");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("register response");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_duplicate_registration_returns_conflict() {
+    let app = test_router();
+    let owner = sample_owner();
+    register_name(&app, build_register_request_with("duplicate", &owner)).await;
+
+    let payload = build_register_request_with("duplicate", &owner);
+    let body = norito::json::to_vec(&payload).expect("serialize register payload");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("register response");
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn sns_fetch_rejects_bare_domain_literal() {
+    let app = test_router();
+    let owner = sample_owner();
+    register_name(&app, build_register_request_with("lookupcanon", &owner)).await;
+
+    let record_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/lookupcanon")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_fetch_missing_name_returns_not_found() {
+    let app = test_router();
+    let record_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
+    let app = test_router();
+    let owner = sample_owner();
+    register_name(&app, build_register_request_with("casepath", &owner)).await;
+
+    let record_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/CASEPATH.UNIVERSAL")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_resp.status(), StatusCode::OK);
+    let record: NameRecordV1 =
+        norito::json::from_slice(&record_resp.into_body().collect().await.unwrap().to_bytes())
+            .expect("decode record");
+    assert_eq!(record.selector.normalized_label(), "casepath.universal");
+}
+
+#[tokio::test]
+async fn sns_fetch_rejects_unknown_namespace() {
+    let app = test_router();
+    let record_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/not-a-namespace/casepath.universal")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_missing_policy_returns_not_found() {
+    let app = test_router();
+    let policy_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/policies/65535")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(policy_resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_update_controllers_rejects_empty_list() {
+    let app = test_router();
+    let owner = sample_owner();
+    register_name(
+        &app,
+        build_register_request_with("emptycontrollers", &owner),
+    )
+    .await;
+
+    let payload = UpdateControllersRequestV1 {
+        controllers: Vec::new(),
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{}/controllers",
+                    domain_name_path("emptycontrollers")
+                ))
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize controllers"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sns_update_controllers_missing_name_returns_not_found() {
+    let app = test_router();
+    let owner = sample_owner();
+    let payload = UpdateControllersRequestV1 {
+        controllers: vec![controller_for(&owner)],
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal/controllers")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize controllers"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_renew_missing_name_returns_not_found() {
+    let app = test_router();
+    let owner = sample_owner();
+    let payload = RenewNameRequestV1 {
+        term_years: 1,
+        payment: build_payment_with(owner),
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal/renew")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize renew"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_transfer_missing_name_returns_not_found() {
+    let app = test_router();
+    let payload = TransferNameRequestV1 {
+        new_owner: secondary_owner(),
+        governance: GovernanceHookV1 {
+            proposal_id: "proposal-missing-transfer".into(),
+            council_vote_hash: Json::from("council-hash"),
+            dao_vote_hash: Json::from("dao-hash"),
+            steward_ack: Json::from("steward-ack"),
+            guardian_clearance: None,
+        },
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal/transfer")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize transfer"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_freeze_missing_name_returns_not_found() {
+    let app = test_router();
+    let payload = FreezeNameRequestV1 {
+        reason: "missing-name".into(),
+        until_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .saturating_add(60_000)
+            .try_into()
+            .unwrap_or(u64::MAX),
+        guardian_ticket: Json::from("ticket"),
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal/freeze")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize freeze"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sns_unfreeze_active_name_returns_conflict() {
+    let app = test_router();
+    let owner = sample_owner();
+    register_name(&app, build_register_request_with("alreadyactive", &owner)).await;
+
+    let payload = GovernanceHookV1 {
+        proposal_id: "proposal-active-unfreeze".into(),
+        council_vote_hash: Json::from("council-hash"),
+        dao_vote_hash: Json::from("dao-hash"),
+        steward_ack: Json::from("steward-ack"),
+        guardian_clearance: Some(Json::from("guardian")),
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/alreadyactive.universal/freeze")
+                .method("DELETE")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize unfreeze"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn sns_unfreeze_missing_name_returns_not_found() {
+    let app = test_router();
+    let payload = GovernanceHookV1 {
+        proposal_id: "proposal-missing-unfreeze".into(),
+        council_vote_hash: Json::from("council-hash"),
+        dao_vote_hash: Json::from("dao-hash"),
+        steward_ack: Json::from("steward-ack"),
+        guardian_clearance: Some(Json::from("guardian")),
+    };
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sns/names/domain/missing.universal/freeze")
+                .method("DELETE")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    norito::json::to_vec(&payload).expect("serialize unfreeze"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[cfg(feature = "telemetry")]
