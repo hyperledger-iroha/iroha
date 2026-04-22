@@ -88,6 +88,93 @@ current asset-definition registration contract instead of tripping
 - open work after this slice:
   - rerun a broader `cargo test -p iroha_torii ...` package-target window when
     there is budget beyond the reported nexus dataspaces summary regression
+Latest sync (2026-04-22 Sumeragi same-epoch RBC roster active-topology override):
+The reported
+`sumeragi::main_loop::tests::rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_known_same_epoch`
+red is fixed. `crates/iroha_core/src/sumeragi/main_loop.rs` now bypasses
+generic historical vote rosters once a future same-epoch RBC session has an
+authoritative local payload, so the session rejoins the current active
+topology instead of sticking to a stale partial roster. The focused unit
+coverage in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now also pins
+the adjacent negative cases: same-epoch partial RBC sessions stay blocked, and
+later-epoch authoritative RBC payloads still do not unlock the fallback. The
+same slice now covers the helper branches around cached `Init` rosters and the
+permissioned/NPoS `allow_unverified_rbc_roster(...)` gate as well, plus the
+early-return paths in `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)`, so the same-epoch/future-epoch
+fallback rules are exercised both at the roster derivation layer and at the
+init-roster admission layer. The helper coverage now also includes the cached
+authoritative `ensure_rbc_session_roster(...)` branch, the no-cache/no-derived
+empty branch, direct cache seeding from authoritative same-epoch RBC metadata,
+refresh promotion of a matching cached `Init` roster, the direct successful
+promotion path for an authoritative same-epoch `Init` roster, and the helper
+path that flushes stashed READY/DELIVER immediately once
+`promote_rbc_session_roster_and_retry(...)` can upgrade the roster to
+authoritative. The same slice now also covers the no-pending promotion path
+where `promote_rbc_session_roster_and_retry(...)` upgrades the source and then
+emits local READY/DELIVER directly from a complete same-epoch authoritative
+session, plus the READY-already-sent variant where the same helper only needs
+to emit local DELIVER, plus the delivered-session false path where refresh can
+derive an authoritative roster candidate but the cached `Init` source still
+cannot be promoted in place, plus the direct
+`flush_pending_rbc_if_roster_ready(...)` gate for no-pending, unresolved, and
+cache-seeding success cases, plus the direct cached-roster replay path for
+pending chunks and the direct cached-roster replay path for stashed
+READY/DELIVER bundles. `refresh_derived_rbc_session_roster(...)` now also
+covers the future-epoch no-derived `None` path plus the no-cache/no-derived
+`None` variant, and
+`record_rbc_session_roster(...)` now covers both the same-roster
+`Init -> Derived` source-promotion path and the change-path resets for
+`Init -> Init` refreshes versus `Init -> Derived` promotions, plus the
+same-roster/same-source authoritative no-op branch, the empty-roster
+early-return branch, and the auxiliary repair/rebroadcast/deferral cleanup
+branches for both `Init -> Init` and `Derived -> Derived` refreshes, so the
+cache-update behavior is exercised for preserved-pending, cleared-pending, and
+untouched-cache cases as well. The same record-roster slice now also covers
+vacant `Init` cache seeding, the same-roster/same-source `Init` no-op path,
+the direct `clear_rbc_session_roster(...)` cache-eviction helper, and the
+`RbcRosterSource` merge rules that decide when cached sources become
+authoritative. The same helper cluster now also covers degraded-cache fallback
+where a cached roster exists without a `session_roster_sources` entry:
+`ensure_rbc_session_roster(...)` keeps the cached roster when derivation is
+still unavailable, while `refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` restore the missing source as
+authoritative once same-epoch local payload knowledge exists. The same
+degraded-cache slice now also covers the successful `ensure_rbc_session_roster(...)`
+promotion path and the direct `record_rbc_session_roster(...)` same-roster
+missing-source behavior for both `Init` no-op updates and `Derived` source
+restoration without session reset. The same slice now also covers the direct
+`refresh_derived_rbc_session_roster(...)` and
+`promote_rbc_session_roster_and_retry(...)` false paths when a missing source
+still cannot derive an authoritative roster, plus the changed-roster
+missing-source `record_rbc_session_roster(...)` behavior for `Init` refreshes
+versus `Derived` promotions.
+`promote_rbc_session_roster_and_retry(...)` now also covers the matching
+delivered-session same-roster path where source promotion succeeds without any
+READY/DELIVER retry work, and `allow_unverified_rbc_roster(...)` now covers the
+permissioned next-slot false path once the active roster is already available.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib rbc_roster_for_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib record_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib clear_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_roster_source_merge -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` window when there is budget
+    beyond the reported same-epoch RBC roster regression
 
 Latest sync (2026-04-22 default genesis structured-instruction compatibility):
 The reported `iroha_genesis` reds are fixed. `crates/iroha_genesis/src/lib.rs`
