@@ -2279,6 +2279,25 @@ async fn inject_remote_addr_header(
     Ok(next.run(req).await)
 }
 
+async fn inject_loopback_connect_info_when_missing(
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    if req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .is_none()
+    {
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
+    }
+
+    Ok(next.run(req).await)
+}
+
 async fn enforce_preauth(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -31623,8 +31642,12 @@ impl Torii {
     /// Public helper to get the API router for integration tests without starting an HTTP server.
     ///
     /// This keeps test code decoupled from server start and avoids binding to a TCP port.
+    /// Requests that do not supply `ConnectInfo` receive a loopback socket address so handlers
+    /// that depend on transport metadata behave like the bound server path.
     pub fn api_router_for_tests(&self) -> axum::Router {
-        self.create_api_router()
+        self.create_api_router().layer(axum::middleware::from_fn(
+            inject_loopback_connect_info_when_missing,
+        ))
     }
 
     /// Expose the push bridge to tests so registration side effects can be inspected.
