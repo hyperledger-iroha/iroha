@@ -23,6 +23,48 @@ for account and asset destinations again.
     non-default manifests need to be brought onto the same structured grammar
     as `defaults/genesis.json`
 
+Latest sync (2026-04-22 Torii api_router_for_tests loopback ConnectInfo injection):
+The reported `domains_endpoints_exist` red is fixed.
+`crates/iroha_torii/src/lib.rs` now has `Torii::api_router_for_tests()`
+inject loopback `ConnectInfo<SocketAddr>` only when a helper-based test request
+does not already provide transport metadata, so direct `oneshot(...)` smokes
+exercise the mounted handlers instead of Axum's missing-request-extension
+`500` path.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test domains_endpoints domains_endpoints_exist -- --nocapture`
+  - `cargo test -p iroha_torii --test router_feature_matrix router_builds_under_current_features -- --nocapture`
+  - `cargo test -p iroha_torii --test app_api_router_smoke app_api_router_smoke -- --nocapture`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints asset_definitions_endpoints_return_name_and_alias -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the helper-based smoke regressions
+
+Latest sync (2026-04-22 Torii connect gating request metadata alignment):
+The reported `connect_gating` reds are fixed. The direct router probes in
+`crates/iroha_torii/tests/connect_gating.rs` now attach loopback
+`ConnectInfo<SocketAddr>` so the existing remote-address injection middleware
+can synthesize `x-iroha-remote-addr`, and the WS integration cases now serve
+the router via `into_make_service_with_connect_info::<SocketAddr>()` just like
+the real Torii server. That restores the expected `404`/`200`/`401` behavior
+without weakening the production connect-session and WS authorization checks.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/connect_gating.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test connect_gating -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported connect-gating regression
+
 Latest sync (2026-04-22 lane commitment Norito fixture resync):
 The reported `lane_commitment_fixtures_roundtrip` red is fixed. The checked-in
 lane commitment `.to` fixtures under `fixtures/nexus/lane_commitments/` were
