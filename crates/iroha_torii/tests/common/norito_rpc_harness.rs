@@ -140,6 +140,12 @@ pub fn sample_transaction_bytes() -> Vec<u8> {
     sample_signed_transaction().encode_versioned()
 }
 
+/// Construct a bare signed-transaction payload used to assert legacy ingress rejection.
+#[allow(dead_code)]
+pub fn sample_bare_transaction_bytes() -> Vec<u8> {
+    norito::to_bytes(&sample_signed_transaction()).expect("encode bare signed transaction")
+}
+
 /// Construct a versioned external transaction with a valid wire shape but invalid signature.
 #[allow(dead_code)]
 pub fn sample_invalid_signature_transaction_bytes() -> Vec<u8> {
