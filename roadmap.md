@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 lane commitment Norito fixture resync):
+The reported `lane_commitment_fixtures_roundtrip` red is fixed. The checked-in
+lane commitment `.to` fixtures under `fixtures/nexus/lane_commitments/` were
+stale hybrids: their Norito headers advertised `COMPACT_LEN`, but the payload
+body still used the older fixed-width nested length prefixes. Regenerating the
+binaries from the canonical JSON fixtures restored a coherent wire image, and
+`crates/iroha_data_model/tests/consensus_roundtrip.rs` now ships an ignored
+`regenerate_lane_commitment_fixtures` helper to repeat that refresh
+deterministically. The same test slice now also covers helper-only branches for
+skipping non-JSON entries, leaving missing `.to` companions untouched in verify
+mode, and overwriting stale `.to` payloads in regenerate mode. Additional
+focused regressions now cover the stale-but-decodable verify failure path and a
+metadata-free `LaneBlockCommitment` roundtrip (`swap_metadata: None`,
+`receipts: []`). The helper slice now also covers the empty-directory case and
+multi-fixture regeneration where missing `.to` companions are created and then
+verified across mixed fixture shapes.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_data_model/tests/consensus_roundtrip.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/nexus/lane_commitments/cbdc_private_lane_commitment.to`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/fixtures/nexus/lane_commitments/default_public_lane_commitment.to`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip regenerate_lane_commitment_fixtures -- --ignored --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment -- --nocapture`
+- open work after this slice:
+  - rerun a broader `iroha_data_model` fixture sweep when there is budget
+    beyond the reported lane commitment regression
+
 Latest sync (2026-04-22 iroha_p2p framed slice decode recovery):
 The reported `peer::run::*` payload-frame decode reds are fixed.
 `crates/iroha_p2p/src/peer.rs` now preserves the full logical Norito payload

@@ -2,6 +2,37 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: lane commitment Norito fixture resync
+- `fixtures/nexus/lane_commitments/cbdc_private_lane_commitment.to` and
+  `fixtures/nexus/lane_commitments/default_public_lane_commitment.to` were
+  regenerated from the checked-in JSON commitments with the current Norito
+  encoder. The stale binaries were advertising `COMPACT_LEN` in the Norito
+  header while still carrying the older fixed-width nested length prefixes, so
+  `lane_commitment_fixtures_roundtrip` failed during
+  `NoritoDeserialize::try_deserialize`.
+- `crates/iroha_data_model/tests/consensus_roundtrip.rs` now includes an
+  ignored `regenerate_lane_commitment_fixtures` helper so future wire-layout
+  updates can refresh the binary fixtures from the canonical JSON source
+  without ad-hoc scripts.
+- The same test file now covers the nearby helper branches with tempdir-backed
+  regressions: non-JSON files are ignored, verify mode leaves missing `.to`
+  companions untouched, and regenerate mode overwrites stale `.to` bytes before
+  the follow-up verify pass.
+- Coverage in the same slice now also includes a metadata-free
+  `LaneBlockCommitment` JSON/Norito roundtrip (`swap_metadata: None`,
+  `receipts: []`) and a `catch_unwind` regression proving verify mode trips the
+  expected mismatch assertion when a `.to` companion is stale but still
+  decodable.
+- The helper coverage now also exercises the zero-fixture path and a
+  multi-fixture regenerate flow where missing `.to` companions are created for
+  both metadata-bearing and metadata-free commitments before a follow-up verify
+  pass.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip regenerate_lane_commitment_fixtures -- --ignored --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment_fixtures_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip lane_commitment -- --nocapture`
+
 ## 2026-04-22 Follow-up: iroha_p2p framed slice decode recovery
 - `crates/iroha_p2p/src/peer.rs` now decodes `Message<T>` from slice-backed
   Norito payloads with the full logical payload length preserved, even when the
