@@ -4599,9 +4599,34 @@ async fn handler_space_directory_manifests(
         .await?;
     }
 
+    let client_offset = query.offset.unwrap_or(0);
+    let client_limit = query.limit.filter(|&value| value > 0);
     if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
-        let route = torii_route_for_dataspace_id(app.as_ref(), dataspace_id)?;
         let query_string = encode_torii_proxy_query(&query)?;
+        let route = match resolve_torii_route_for_dataspace_id(app.as_ref(), dataspace_id) {
+            Ok(route) => route,
+            Err(
+                queue::RoutingResolveError::UnknownDataspace { .. }
+                | queue::RoutingResolveError::NoLaneForDataspace { .. },
+            ) => {
+                return Ok(execute_torii_fanout_space_directory_manifests_read(
+                    &app,
+                    uaid_literal,
+                    query_string,
+                    client_offset,
+                    client_limit,
+                )
+                .await);
+            }
+            Err(error) => {
+                return Err(Error::PushIntoQueue {
+                    source: Box::new(queue::Error::UnresolvedRoute {
+                        reason: error.to_string(),
+                    }),
+                    backpressure: current_torii_backpressure(app.as_ref()),
+                });
+            }
+        };
         return Ok(execute_torii_single_route_read(
             &app,
             route,
@@ -4613,8 +4638,6 @@ async fn handler_space_directory_manifests(
         .await);
     }
 
-    let client_offset = query.offset.unwrap_or(0);
-    let client_limit = query.limit.filter(|&value| value > 0);
     let fanout_query = crate::routing::SpaceDirectoryManifestQuery {
         dataspace: None,
         status: query.status.clone(),
@@ -14287,6 +14310,8 @@ fn merged_space_directory_manifests_response(
     routed_by: &'static str,
 ) -> Result<Response, Response> {
     let mut uaid: Option<String> = None;
+    let mut explicit_total = 0u64;
+    let mut saw_explicit_total = false;
     let mut manifests = BTreeMap::<(u64, String), Value>::new();
 
     for payload in payloads {
@@ -14307,6 +14332,10 @@ fn merged_space_directory_manifests_response(
                 None => uaid = Some(value.to_owned()),
                 Some(_) => {}
             }
+        }
+        if let Some(total) = obj.get("total").and_then(Value::as_u64) {
+            saw_explicit_total = true;
+            explicit_total = explicit_total.saturating_add(total);
         }
         let Some(rows) = obj.get("manifests").and_then(Value::as_array) else {
             return Err(torii_internal_json_error(
@@ -14339,7 +14368,11 @@ fn merged_space_directory_manifests_response(
         }
     }
 
-    let total = manifests.len() as u64;
+    let total = if saw_explicit_total {
+        explicit_total
+    } else {
+        manifests.len() as u64
+    };
     let mut merged = manifests.into_values().collect::<Vec<_>>();
     let offset = usize::try_from(offset).unwrap_or(usize::MAX);
     if offset >= merged.len() {
@@ -15310,6 +15343,7 @@ mod torii_routed_read_tests {
             vec![
                 norito::json!({
                     "uaid": "uaid:alice",
+                    "total": 1,
                     "manifests": [{
                         "dataspace_id": 2,
                         "manifest_hash": "aaaa",
@@ -15318,6 +15352,7 @@ mod torii_routed_read_tests {
                 }),
                 norito::json!({
                     "uaid": "uaid:alice",
+                    "total": 1,
                     "manifests": [{
                         "dataspace_id": 7,
                         "manifest_hash": "bbbb",
@@ -15364,6 +15399,271 @@ mod torii_routed_read_tests {
         assert_eq!(manifests[0]["dataspace_id"].as_u64(), Some(7));
         assert_eq!(manifests[0]["manifest_hash"].as_str(), Some("bbbb"));
         assert_eq!(manifests[0]["status"].as_str(), Some("Revoked"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_uses_route_totals_before_status_filtering() {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!({
+                "uaid": "uaid:alice",
+                "total": 2,
+                "manifests": [{
+                    "dataspace_id": 7,
+                    "manifest_hash": "bbbb",
+                    "status": "Revoked"
+                }]
+            })],
+            0,
+            None,
+            "proxy",
+        )
+        .expect("manifest merge should succeed");
+
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some("uaid:alice"));
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            1
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_deduplicates_identical_rows_without_explicit_totals()
+     {
+        let response = merged_space_directory_manifests_response(
+            vec![
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 7,
+                        "manifest_hash": "bbbb",
+                        "status": "Revoked"
+                    }]
+                }),
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 7,
+                        "manifest_hash": "bbbb",
+                        "status": "Revoked"
+                    }]
+                }),
+            ],
+            0,
+            None,
+            "proxy",
+        )
+        .expect("manifest merge should succeed");
+
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some("uaid:alice"));
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0]["manifest_hash"].as_str(), Some("bbbb"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_clears_page_when_offset_exceeds_merged_len()
+    {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!({
+                "uaid": "uaid:alice",
+                "total": 2,
+                "manifests": [{
+                    "dataspace_id": 2,
+                    "manifest_hash": "aaaa",
+                    "status": "Active"
+                }, {
+                    "dataspace_id": 7,
+                    "manifest_hash": "bbbb",
+                    "status": "Revoked"
+                }]
+            })],
+            5,
+            None,
+            "proxy",
+        )
+        .expect("manifest merge should succeed");
+
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some("uaid:alice"));
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_conflicting_uaid_roots() {
+        let response = merged_space_directory_manifests_response(
+            vec![
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": []
+                }),
+                norito::json!({
+                    "uaid": "uaid:bob",
+                    "manifests": []
+                }),
+            ],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("conflicting UAID roots should fail");
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_conflict")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_conflicting_duplicate_rows() {
+        let response = merged_space_directory_manifests_response(
+            vec![
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 7,
+                        "manifest_hash": "bbbb",
+                        "status": "Active"
+                    }]
+                }),
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 7,
+                        "manifest_hash": "bbbb",
+                        "status": "Revoked"
+                    }]
+                }),
+            ],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("conflicting manifest rows should fail");
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_conflict")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_non_object_payloads() {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!(["not-an-object"])],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("non-object manifest payloads should fail");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_missing_manifests_array() {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!({
+                "uaid": "uaid:alice",
+                "total": 1
+            })],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("manifest payloads without manifests array should fail");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_missing_dataspace_id() {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!({
+                "uaid": "uaid:alice",
+                "manifests": [{
+                    "manifest_hash": "bbbb",
+                    "status": "Revoked"
+                }]
+            })],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("manifest rows without dataspace ids should fail");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_rejects_missing_manifest_hash() {
+        let response = merged_space_directory_manifests_response(
+            vec![norito::json!({
+                "uaid": "uaid:alice",
+                "manifests": [{
+                    "dataspace_id": 7,
+                    "status": "Revoked"
+                }]
+            })],
+            0,
+            None,
+            "proxy",
+        )
+        .expect_err("manifest rows without manifest hashes should fail");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
     }
 
     #[tokio::test]
@@ -36726,6 +37026,204 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-route-dataspace-id")
                 .is_none(),
             "global account fanout should not expose a singular dataspace",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn routing_space_directory_manifests_reports_inactive_pending_and_uncataloged_expired_rows()
+     {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid =
+            UniversalAccountId::from_hash(Hash::new(b"torii::space-directory-manifest-inactive"));
+        let pending_dataspace = DataSpaceId::new(10);
+        let expired_dataspace = DataSpaceId::new(11);
+        let mut world = world_with_account(&authority);
+
+        let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
+        bindings.bind_account(pending_dataspace, authority.clone());
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+
+        let pending_manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::V1,
+            uaid,
+            dataspace: pending_dataspace,
+            issued_ms: 1_710_000_000_000,
+            activation_epoch: 10,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let pending_record =
+            iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord::new(pending_manifest);
+
+        let expired_manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::V1,
+            uaid,
+            dataspace: expired_dataspace,
+            issued_ms: 1_710_000_000_100,
+            activation_epoch: 20,
+            expiry_epoch: Some(30),
+            entries: Vec::new(),
+        };
+        let mut expired_record =
+            iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord::new(expired_manifest);
+        expired_record.lifecycle.mark_activated(21);
+        expired_record.lifecycle.mark_expired(31);
+
+        let mut set = iroha_core::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(pending_record);
+        set.upsert(expired_record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let mut app = mk_app_state_for_tests_with_world(world);
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            state.nexus.get_mut().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                    iroha_data_model::nexus::DataSpaceMetadata::default(),
+                    iroha_data_model::nexus::DataSpaceMetadata {
+                        id: pending_dataspace,
+                        alias: "restricted".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog");
+        }
+
+        let response = routing::handle_v1_space_directory_manifests(
+            app.state.clone(),
+            AxPath(uaid.to_string()),
+            crate::NoritoQuery(routing::SpaceDirectoryManifestQuery {
+                dataspace: None,
+                status: Some("Inactive".to_owned()),
+                limit: None,
+                offset: None,
+            }),
+            app.telemetry.clone(),
+        )
+        .await
+        .expect("inactive manifest read should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("inactive manifest body");
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("inactive manifest json");
+        assert_eq!(json["total"].as_u64(), Some(2));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 2);
+
+        let pending = manifests
+            .iter()
+            .find(|row| row["dataspace_id"].as_u64() == Some(pending_dataspace.as_u64()))
+            .expect("pending manifest row");
+        assert_eq!(pending["status"].as_str(), Some("Pending"));
+        assert_eq!(pending["dataspace_alias"].as_str(), Some("restricted"));
+        assert_eq!(
+            pending["accounts"][0].as_str(),
+            Some(authority.to_string().as_str())
+        );
+
+        let expired = manifests
+            .iter()
+            .find(|row| row["dataspace_id"].as_u64() == Some(expired_dataspace.as_u64()))
+            .expect("expired manifest row");
+        assert_eq!(expired["status"].as_str(), Some("Expired"));
+        assert!(expired["dataspace_alias"].is_null());
+        assert_eq!(
+            expired["accounts"]
+                .as_array()
+                .expect("expired accounts array")
+                .len(),
+            0,
+            "uncataloged/unbound dataspaces should report empty account bindings",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn handler_space_directory_manifests_executes_configured_dataspace_route_locally() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid =
+            UniversalAccountId::from_hash(Hash::new(b"torii::space-directory-manifest-route"));
+        let mut world =
+            world_with_account_bound_to_dataspace(&authority, uaid, restricted_dataspace);
+        let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
+        bindings.bind_account(restricted_dataspace, authority.clone());
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+
+        let mut app = mk_app_state_for_tests_with_world(world);
+        let (restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let response = super::handler_space_directory_manifests(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(uaid.to_string()),
+            AxQuery(routing::SpaceDirectoryManifestQuery {
+                dataspace: Some(restricted_dataspace.as_u64()),
+                status: Some("Active".to_owned()),
+                limit: Some(1),
+                offset: Some(0),
+            }),
+        )
+        .await
+        .expect("manifest handler should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local"),
+            "configured dataspace route should execute locally in unit tests",
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-lane-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(restricted_lane.as_u32().to_string().as_str())
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(restricted_dataspace.as_u64().to_string().as_str())
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("manifest handler body");
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("manifest handler json");
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(
+            manifests[0]["dataspace_id"].as_u64(),
+            Some(restricted_dataspace.as_u64())
+        );
+        assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
+        assert_eq!(
+            manifests[0]["accounts"][0].as_str(),
+            Some(authority.to_string().as_str())
         );
     }
 

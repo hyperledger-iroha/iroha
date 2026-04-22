@@ -56771,6 +56771,317 @@ fn bindings_for_dataspace(
 
     Value::Array(Vec::new())
 }
+
+#[cfg(all(test, feature = "app_api"))]
+mod space_directory_manifest_helper_tests {
+    use std::sync::Arc;
+
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+    };
+
+    use super::*;
+
+    fn sample_manifest_record() -> SpaceDirectoryManifestRecord {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x44; Hash::LENGTH]));
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace: DataSpaceId::new(7),
+            issued_ms: 1_710_000_123_456,
+            activation_epoch: 12,
+            expiry_epoch: Some(24),
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(13);
+        record
+    }
+
+    fn manifest_state(world: World, catalog: Option<DataSpaceCatalog>) -> Arc<CoreState> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let mut state = CoreState::new_for_testing(world, kura, query);
+        if let Some(catalog) = catalog {
+            state.nexus.get_mut().dataspace_catalog = catalog;
+        }
+        Arc::new(state)
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        norito::json::from_slice(&body).expect("response body should decode as JSON")
+    }
+
+    #[test]
+    fn space_directory_manifest_status_parsing_is_case_insensitive_and_rejects_unknown_values() {
+        assert_eq!(
+            "ACTIVE".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::Active)
+        );
+        assert_eq!(
+            "inactive".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::Inactive)
+        );
+        assert_eq!(
+            "AlL".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::All)
+        );
+        assert_eq!(
+            "stale".parse::<SpaceDirectoryManifestStatus>(),
+            Err("status must be one of: active, inactive, all")
+        );
+    }
+
+    #[test]
+    fn manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows() {
+        let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
+        assert_eq!(manifest_status(&pending), "Pending");
+        assert!(manifest_status_matches(
+            &pending,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(!manifest_status_matches(
+            &pending,
+            SpaceDirectoryManifestStatus::Active
+        ));
+
+        let active = sample_manifest_record();
+        assert_eq!(manifest_status(&active), "Active");
+        assert!(manifest_status_matches(
+            &active,
+            SpaceDirectoryManifestStatus::Active
+        ));
+        assert!(!manifest_status_matches(
+            &active,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+
+        let mut expired = sample_manifest_record();
+        expired.lifecycle.mark_expired(25);
+        assert_eq!(manifest_status(&expired), "Expired");
+        assert!(manifest_status_matches(
+            &expired,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(!manifest_status_matches(
+            &expired,
+            SpaceDirectoryManifestStatus::Active
+        ));
+
+        let mut revoked = sample_manifest_record();
+        revoked
+            .lifecycle
+            .mark_revoked(26, Some("operator request".to_owned()));
+        assert_eq!(manifest_status(&revoked), "Revoked");
+        assert!(manifest_status_matches(
+            &revoked,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(manifest_status_matches(
+            &revoked,
+            SpaceDirectoryManifestStatus::All
+        ));
+    }
+
+    #[test]
+    fn manifest_lifecycle_json_keeps_reasonless_revocation_shape() {
+        let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
+        lifecycle.mark_activated(13);
+        lifecycle.mark_revoked(21, None);
+
+        let payload = manifest_lifecycle_json(&lifecycle);
+        let obj = payload.as_object().expect("manifest lifecycle object");
+        assert_eq!(obj.get("activated_epoch").and_then(Value::as_u64), Some(13));
+        assert!(obj.get("expired_epoch").is_some_and(Value::is_null));
+
+        let revocation = obj
+            .get("revocation")
+            .and_then(Value::as_object)
+            .expect("revocation object");
+        assert_eq!(revocation.get("epoch").and_then(Value::as_u64), Some(21));
+        assert!(
+            revocation.get("reason").is_some_and(Value::is_null),
+            "reasonless revocations should keep an explicit null reason field",
+        );
+    }
+
+    #[test]
+    fn bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings() {
+        let dataspace = DataSpaceId::new(7);
+        let other_dataspace = DataSpaceId::new(8);
+        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace, primary_account.clone());
+        bindings.bind_account(dataspace, secondary_account.clone());
+        bindings.bind_account(other_dataspace, other_account.clone());
+
+        let matching = bindings_for_dataspace(Some(&bindings), dataspace);
+        let matching = matching.as_array().expect("matching bindings array");
+        assert_eq!(matching.len(), 2);
+        assert_eq!(
+            matching[0].as_str(),
+            Some(crate::account_literal::display_literal(&primary_account).as_str())
+        );
+        assert_eq!(
+            matching[1].as_str(),
+            Some(crate::account_literal::display_literal(&secondary_account).as_str())
+        );
+
+        let non_matching = bindings_for_dataspace(Some(&bindings), DataSpaceId::new(999));
+        assert_eq!(
+            non_matching
+                .as_array()
+                .expect("non-matching bindings array")
+                .len(),
+            0
+        );
+
+        let missing = bindings_for_dataspace(None, dataspace);
+        assert_eq!(missing.as_array().expect("missing bindings array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_returns_empty_payload_when_manifest_set_is_missing()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x55; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("missing manifest set should still return 200")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let uaid_literal = uaid.to_string();
+        assert_eq!(json["uaid"].as_str(), Some(uaid_literal.as_str()));
+        assert_eq!(json["total"].as_u64(), Some(0));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_rejects_invalid_status_queries() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x56; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("DefinitelyNotAStatus".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid manifest status should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_keeps_prefilter_total_when_status_and_offset_clear_page()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
+        let active_dataspace = DataSpaceId::new(7);
+        let revoked_dataspace = DataSpaceId::new(8);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut active_manifest = AssetPermissionManifest {
+            dataspace: active_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        active_manifest.uaid = uaid;
+        let mut active_record = SpaceDirectoryManifestRecord::new(active_manifest);
+        active_record.lifecycle.mark_activated(13);
+
+        let mut revoked_manifest = AssetPermissionManifest {
+            dataspace: revoked_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        revoked_manifest.uaid = uaid;
+        let mut revoked_record = SpaceDirectoryManifestRecord::new(revoked_manifest);
+        revoked_record.lifecycle.mark_activated(14);
+        revoked_record.lifecycle.mark_revoked(15, None);
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(active_dataspace, account);
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(active_record);
+        set.upsert(revoked_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: active_dataspace,
+                alias: "active".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: revoked_dataspace,
+                alias: "revoked".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("Active".to_owned()),
+                limit: Some(1),
+                offset: Some(1),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("active manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0,
+            "offset is applied after status filtering, but total stays pre-filter",
+        );
+    }
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod accounts_query_tests {
     use std::sync::Arc;
