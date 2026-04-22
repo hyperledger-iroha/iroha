@@ -14,6 +14,30 @@ use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use tower::ServiceExt;
 
+fn request_with_loopback_connect_info(
+    request: Request<axum::body::Body>,
+) -> Request<axum::body::Body> {
+    let mut request = request;
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    request
+}
+
+fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+}
+
 #[allow(clippy::too_many_lines)]
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::actual as A;
@@ -1324,24 +1348,24 @@ async fn connect_endpoints_hidden_when_disabled() {
     // /v1/connect/ws should be 404 when disabled
     let resp = app
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // /v1/connect/status should be 404 when disabled
     let resp = app
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -1751,14 +1775,14 @@ async fn connect_session_delete_endpoint_removes_tokens() {
     .expect("json serialization");
     let create_resp = app
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body.clone()))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(create_resp.status(), StatusCode::OK);
@@ -1820,7 +1844,7 @@ async fn connect_session_delete_rejects_ws_attach() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     // Use a second router handle for in-process REST calls.
     let app2 = torii.api_router_for_tests();
@@ -1833,14 +1857,14 @@ async fn connect_session_delete_rejects_ws_attach() {
     .expect("json serialization");
     let create_resp = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(create_resp.status(), StatusCode::OK);
@@ -1912,7 +1936,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     // Create a session via in-process router call to obtain tokens and sid
     let app2 = torii.api_router_for_tests();
@@ -1925,14 +1949,14 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -1983,7 +2007,7 @@ async fn connect_ws_accepts_protocol_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -1995,14 +2019,14 @@ async fn connect_ws_accepts_protocol_token() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2056,7 +2080,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -2068,14 +2092,14 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2218,7 +2242,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -2230,14 +2254,14 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2417,7 +2441,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xB4u8; 32]);
@@ -2428,14 +2452,14 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2595,7 +2619,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xC5u8; 32]);
@@ -2606,14 +2630,14 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2740,7 +2764,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xD6u8; 32]);
@@ -2751,14 +2775,14 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2914,7 +2938,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xE7u8; 32]);
@@ -2925,14 +2949,14 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -3082,7 +3106,7 @@ async fn connect_ws_rejects_query_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let sid = B64.encode([0x72u8; 32]);
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
@@ -3114,7 +3138,7 @@ async fn connect_ws_handshake_fails_when_disabled() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
     // Attempt WS connect directly; expect failure
     let url = format!(
         "ws://{}/v1/connect/ws?sid={}&role=app",

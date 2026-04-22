@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Torii connect gating request metadata alignment
+- `crates/iroha_torii/tests/connect_gating.rs` now injects loopback
+  `ConnectInfo<SocketAddr>` for its direct `oneshot(...)` probes and serves its
+  ephemeral WS test server with
+  `into_make_service_with_connect_info::<SocketAddr>()`, matching the mounted
+  Torii router path that populates `x-iroha-remote-addr`.
+- This fixes the reported `connect_endpoints_hidden_when_disabled` `500` and
+  the `connect_session_*` / `connect_ws_*` `400 connect: remote addr
+  unavailable` regressions without relaxing the production connect gating
+  checks.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test connect_gating -- --nocapture`
+
 ## 2026-04-22 Follow-up: lane commitment Norito fixture resync
 - `fixtures/nexus/lane_commitments/cbdc_private_lane_commitment.to` and
   `fixtures/nexus/lane_commitments/default_public_lane_commitment.to` were
