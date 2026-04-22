@@ -331,6 +331,13 @@ function resolveNative(method) {
   return native;
 }
 
+function encodeNormalizedInstruction(normalized) {
+  const native = resolveNative("noritoEncodeInstruction");
+  const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+  cacheInstructionRoundTrip(encoded, normalized);
+  return encoded;
+}
+
 function cacheInstructionRoundTrip(bytes, instruction) {
   try {
     instructionCache.set(
@@ -382,7 +389,6 @@ function canonicalizeInstructionForCache(instruction) {
  * @returns {Buffer}
  */
 export function noritoEncodeInstruction(instruction) {
-  const native = resolveNative("noritoEncodeInstruction");
   if (isBinaryLike(instruction)) {
     return toBuffer(instruction);
   }
@@ -391,15 +397,14 @@ export function noritoEncodeInstruction(instruction) {
     try {
       const parsed = JSON.parse(trimmed);
       const normalized = normalizeInstructionJsonValue(parsed);
-      const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
-      cacheInstructionRoundTrip(encoded, normalized);
-      return encoded;
+      return encodeNormalizedInstruction(normalized);
     } catch (error) {
       if (error instanceof SyntaxError) {
         const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
         if (decoded) {
           return decoded;
         }
+        const native = resolveNative("noritoEncodeInstruction");
         const encoded = native.noritoEncodeInstruction(instruction);
         try {
           cacheInstructionRoundTrip(encoded, JSON.parse(instruction));
@@ -412,9 +417,7 @@ export function noritoEncodeInstruction(instruction) {
     }
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
-  cacheInstructionRoundTrip(encoded, normalized);
-  return encoded;
+  return encodeNormalizedInstruction(normalized);
 }
 
 /**
