@@ -11,11 +11,13 @@ import static org.junit.Assert.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.junit.Test;
@@ -89,6 +91,36 @@ public final class OkHttpTransportExecutorTests {
     } finally {
       client.dispatcher().executorService().shutdownNow();
       OkHttpClientProvider.resetForTests();
+    }
+  }
+
+  @Test
+  public void defaultFactoryInvalidationCancelsOnlyExecutorCalls() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(new MockResponse().setBody("slow").setBodyDelay(5, TimeUnit.SECONDS));
+      server.start();
+
+      final OkHttpClient client = new OkHttpClient();
+      OkHttpClientProvider.installForTests(client);
+      try {
+        final HttpTransportExecutor executor = OkHttpTransportExecutorFactory.createDefault();
+        final TransportRequest request =
+            TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(server.url("/slow").uri())
+                .build();
+
+        final CompletableFuture<TransportResponse> future = executor.execute(request);
+        executor.invalidateAndCancel();
+
+        final ExecutionException error =
+            assertThrows(ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
+        assertNotNull(error.getCause());
+        assertFalse(client.dispatcher().executorService().isShutdown());
+      } finally {
+        client.dispatcher().executorService().shutdownNow();
+        OkHttpClientProvider.resetForTests();
+      }
     }
   }
 

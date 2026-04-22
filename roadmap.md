@@ -1,6 +1,31 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-21
+Last updated: 2026-04-22
+
+Latest sync (2026-04-22 SDK transaction receipt and status parity fixes):
+The reviewed SDK regressions from `2ea428ea7e` are fixed. Kotlin now uses the
+authoritative Torii transaction-hash receipt header for subsequent status
+polling, Android shared OkHttp invalidation cancels this executor's calls
+without shutting down the shared dispatcher, and Swift synthetic terminal
+events preserve `status.block_height` from polled snapshots.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt`
+  - `/Users/takemiyamakoto/dev/iroha/kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/client/okhttp/OkHttpTransportExecutor.java`
+  - `/Users/takemiyamakoto/dev/iroha/java/iroha_android/android/src/test/java/org/hyperledger/iroha/android/client/okhttp/OkHttpTransportExecutorTests.java`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`
+  - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status:
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd IrohaSwift && swift test`
+  - `git diff --check`
+- open work after this slice:
+  - no Rust workspace validation was run for this SDK-only patch; run broader
+    workspace checks when combining it with Rust changes
 
 Latest sync (2026-04-21 Torii accounts portfolio fixture registration and route smoke refresh):
 The reported `accounts_portfolio_*` reds are fixed.

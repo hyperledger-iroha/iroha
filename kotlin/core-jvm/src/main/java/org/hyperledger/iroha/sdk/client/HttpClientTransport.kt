@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.Arrays
 import java.util.LinkedHashMap
+import java.util.Locale
 import java.util.Optional
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
@@ -222,7 +223,7 @@ class HttpClientTransport(
                 val cause = if (throwable is CompletionException) throwable.cause else throwable
                 notifyFailure(request, cause!!); return@handle scheduleRetry(transaction, hashHex, attempt, request, null, cause)
             }
-            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, hashHex, extractRejectCode(response))
+            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, extractTransactionHash(response) ?: hashHex, extractRejectCode(response))
             if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
                 if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) return@handle scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null)
                 if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode)) {
@@ -450,6 +451,28 @@ class HttpClientTransport(
         private fun buildRetryErrorCode(lastResponse: ClientResponse?, lastError: Throwable?): String = lastResponse?.statusCode?.toString() ?: lastError?.javaClass?.simpleName ?: "unknown"
         private fun resolveRoute(request: TransportRequest?): String = request?.uri?.rawPath ?: ""
         private fun extractRejectCode(response: TransportResponse?): String? = if (response == null) null else HttpErrorMessageExtractor.extractRejectCode(response.headers, "x-iroha-reject-code")
+        private fun extractTransactionHash(response: TransportResponse?): String? {
+            if (response == null) return null
+            for (headerName in listOf("x-iroha-transaction-hash", "x-iroha-tx-hash")) {
+                val values = response.headers[headerName] ?: continue
+                for (value in values) {
+                    val normalized = normalizeTransactionHashHeader(value)
+                    if (normalized != null) return normalized
+                }
+            }
+            return null
+        }
+        private fun normalizeTransactionHashHeader(value: String?): String? {
+            var normalized = value?.trim() ?: return null
+            if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+                normalized = normalized.substring(2)
+            }
+            if (normalized.length != 64) return null
+            if (!normalized.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                return null
+            }
+            return normalized.lowercase(Locale.ROOT)
+        }
         private fun resolveAuthority(request: TransportRequest?): String {
             if (request == null) return ""; val uri = request.uri; if (uri != null && uri.authority != null) return uri.authority
             val host = request.headers["Host"]; return if (host.isNullOrEmpty()) "" else host[0]

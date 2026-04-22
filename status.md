@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-04-21
+Last updated: 2026-04-22
+
+## 2026-04-22 Follow-up: SDK transaction receipt and status parity fixes
+- Kotlin transaction submission now honors Torii's authoritative
+  `x-iroha-transaction-hash` / `x-iroha-tx-hash` receipt headers, normalizes
+  valid 32-byte hex values, and reuses that server hash for status polling.
+- Android OkHttp default-client invalidation now cancels only this executor's
+  tracked calls when the underlying shared client is not owned by the executor,
+  leaving the shared dispatcher available for other SDK clients.
+- Swift pipeline status polling now decodes `status.block_height` and carries it
+  into synthetic terminal transaction events created from status snapshots.
+- Focused validation for this slice:
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `cd IrohaSwift && swift test`
+  - `git diff --check`
 
 ## 2026-04-21 Follow-up: Torii accounts portfolio fixture registration and route smoke refresh
 - `crates/iroha_torii/tests/accounts_portfolio.rs` now registers fixture asset

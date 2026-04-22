@@ -12,6 +12,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.tx.SignedTransaction
+import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
     @Test
@@ -340,8 +344,58 @@ class HttpClientTransportTest {
         assertNotNull(error.cause)
     }
 
+    @Test
+    fun submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling() {
+        val transaction = sampleTransaction(0x11)
+        val localHash = SignedTransactionHasher.hashHex(transaction)
+        val authoritativeHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        val executor = TrackingExecutor(
+            expectedHash = authoritativeHash,
+            submitHeaderHash = authoritativeHash.uppercase(),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
+        )
+
+        val response = transport.submitTransaction(transaction).join()
+
+        assertFalse(localHash == response.hashHex())
+        assertEquals(authoritativeHash, response.hashHex())
+
+        val payload = transport
+            .waitForTransactionStatus(response.hashHex()!!, PipelineStatusOptions(intervalMillis = 0L))
+            .join()
+
+        assertEquals("Committed", PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
+        assertTrue(executor.observedExpectedHash)
+    }
+
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
+
+    private fun sampleTransaction(seed: Int): SignedTransaction {
+        val codec = NoritoJavaCodecAdapter()
+        val encoded = codec.encodeTransaction(
+            TransactionPayload(
+                chainId = String.format("%08x", seed),
+                creationTimeMs = 1_700_000_000_000L + seed,
+                timeToLiveMs = 5_000L,
+                nonce = seed + 1,
+                metadata = mapOf("note" to "tx-$seed"),
+            ),
+        )
+        val signature = ByteArray(64) { (seed + 1).toByte() }
+        val publicKey = ByteArray(32) { (seed + 2).toByte() }
+        return SignedTransaction(
+            encoded,
+            signature,
+            publicKey,
+            codec.schemaName(),
+        )
+    }
 
     private open class CapturingExecutor : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest
@@ -363,6 +417,43 @@ class HttpClientTransportTest {
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),
             )
+        }
+    }
+
+    private class TrackingExecutor(
+        private val expectedHash: String,
+        private val submitHeaderHash: String?,
+    ) : HttpTransportExecutor {
+        var observedExpectedHash = false
+            private set
+        private var pollCount = 0
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            if (request.method == "POST") {
+                val builder = TransportResponse.builder()
+                    .setStatusCode(202)
+                    .setBody(byteArrayOf())
+                if (submitHeaderHash != null) {
+                    builder.addHeader("x-iroha-transaction-hash", submitHeaderHash)
+                }
+                return CompletableFuture.completedFuture(builder.build())
+            }
+            if (request.method == "GET") {
+                if (request.uri.query?.contains("hash=$expectedHash") == true) {
+                    observedExpectedHash = true
+                }
+                val kind = if (pollCount++ == 0) "Pending" else "Committed"
+                return CompletableFuture.completedFuture(
+                    TransportResponse.builder()
+                        .setStatusCode(200)
+                        .setBody(
+                            """{"kind":"Transaction","content":{"status":{"kind":"$kind"}}}"""
+                                .toByteArray(StandardCharsets.UTF_8),
+                        )
+                        .build(),
+                )
+            }
+            throw IllegalStateException("Unexpected HTTP method ${request.method}")
         }
     }
 }
