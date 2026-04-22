@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: iroha_p2p framed slice decode recovery
+- `crates/iroha_p2p/src/peer.rs` now decodes `Message<T>` from slice-backed
+  Norito payloads with the full logical payload length preserved, even when the
+  archived enum header must be temporarily zero-padded for short or misaligned
+  slices. This fixes the reported `LengthMismatch` /
+  `MalformedPayloadFrame` regressions in the peer frame reader and keeps valid
+  encrypted frames readable after a malformed predecessor is dropped.
+- `crates/iroha_p2p/src/network.rs` applies the same logical-length-preserving
+  slice decode path to `RelayMessage<T>`, adds a dynamic-payload roundtrip
+  regression for relay envelopes, and hardens the
+  `overflow_counters_high_low_per_topic` assertion so the parallel `iroha_p2p`
+  unit suite no longer races on shared global overflow counters.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_p2p --lib -- --nocapture`
+  - `cargo test -p iroha_p2p --lib -- --test-threads=1`
+
 ## 2026-04-22 Follow-up: Torii asset-definition alias binding and fanout sort preservation
 - `crates/iroha_data_model/src/asset/definition.rs` now validates asset-definition
   aliases against one or more allowed stems with ASCII case-insensitive
