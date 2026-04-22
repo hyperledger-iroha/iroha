@@ -3671,11 +3671,21 @@ export class ToriiClient {
       body: rawPayload,
       retryProfile: "pipeline",
     };
-    const response = await this._request(
+    let response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
+    if (response.status === 404 || response.status === 405) {
+      const native = resolveNativeBinding();
+      if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
+        throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
+      }
+      response = await this._request("POST", "/transaction", {
+        ...requestOptions,
+        body: Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
+      });
+    }
     await this._expectStatus(response, [200, 201, 202, 204]);
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");

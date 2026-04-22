@@ -2779,6 +2779,61 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
+    /// Decode a typed pointer-ABI TLV from any readable VM region.
+    ///
+    /// This variant accepts heap-backed envelopes in addition to INPUT and
+    /// literal/code pointers, which is required for staged deployment helpers
+    /// that reconstruct large lifecycle requests outside the 64 KiB INPUT
+    /// window before queueing the final ISI.
+    ///
+    /// # Errors
+    /// Returns an error if the pointer does not resolve to a TLV in a readable
+    /// region, the type is not allowed by the active ABI policy, or the Norito
+    /// payload cannot be decoded.
+    pub fn decode_tlv_typed_any_region<T>(
+        vm: &IVM,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<T, ivm::VMError>
+    where
+        T: for<'de> NoritoDeserialize<'de>,
+    {
+        let hdr = vm
+            .memory
+            .load_region(ptr, 7)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
+        if type_id != expected as u16 || hdr[2] != 1 {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|size| size.checked_add(Hash::LENGTH))
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let envelope = vm
+            .memory
+            .load_region(ptr, total as u64)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        if tlv.type_id != expected {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if !is_type_allowed_for_policy(vm.syscall_policy(), expected) {
+            return Err(ivm::VMError::AbiTypeNotAllowed {
+                abi: vm.abi_version(),
+                type_id: expected as u16,
+            });
+        }
+        match decode_from_bytes(tlv.payload) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                let owned = tlv.payload.to_vec();
+                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
+            }
+        }
+    }
+
     /// Decode a blob pointer-ABI TLV into owned bytes.
     ///
     /// # Errors
@@ -5660,7 +5715,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
                 let ptr = vm.register(10);
                 let request: scode::RegisterSmartContractBytes =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    Self::decode_tlv_typed_any_region(vm, ptr, PointerType::NoritoBytes)?;
                 let instr = InstructionBox::from(request);
                 Ok(self.queue_instruction(instr))
             }
@@ -8210,6 +8265,48 @@ mod pointer_abi_tests {
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload tlv");
         vm.set_register(10, ivm::Memory::INPUT_START);
+
+        let res = host.syscall(
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            &mut vm,
+        );
+        let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn register_contract_bytes_syscall_accepts_heap_tlv() {
+        let mut vm = ivm::IVM::new(1_000);
+        let kp = KeyPair::random();
+        let (public_key, _) = kp.into_parts();
+        let authority = AccountId::of(public_key);
+        let mut host = CoreHost::new(authority);
+
+        let code_hash = IrohaHash::new(b"heap-bytecode");
+        let request = scode::RegisterSmartContractBytes {
+            code_hash,
+            code: vec![0xAA, 0xBB, 0xCC],
+        };
+        let payload = norito::to_bytes(&request).expect("encode request");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let ptr = vm
+            .alloc_heap(tlv.len() as u64)
+            .expect("allocate heap pointer");
+        vm.store_bytes(ptr, &tlv).expect("store heap tlv");
+        let heap_bytes = vm
+            .memory
+            .load_region(ptr, tlv.len() as u64)
+            .expect("read heap tlv bytes");
+        let tlv_view =
+            pointer_abi::validate_tlv_bytes(heap_bytes).expect("validate heap tlv bytes");
+        assert_eq!(tlv_view.type_id, PointerType::NoritoBytes);
+        let decoded: scode::RegisterSmartContractBytes =
+            CoreHost::decode_tlv_typed_any_region(&vm, ptr, PointerType::NoritoBytes)
+                .expect("decode heap register request");
+        assert_eq!(decoded, request);
+        vm.set_register(10, ptr);
 
         let res = host.syscall(
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
