@@ -2,6 +2,102 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: bridge anchor-mutator and empty-helper coverage expansion
+- `crates/iroha_data_model/src/bridge.rs` now adds another narrow unit-test
+  batch for bridge finality verifier state transitions that were still only
+  indirectly covered. The new cases pin the direct
+  `validate_commit_qc(...)` empty-roster helper path, successful verification
+  after a combined validator-set-and-epoch anchor rotation, and enforcement of
+  a validator-set hash-version change applied through `set_validator_set_anchor(...)`.
+- This extends the same bridge slice with explicit coverage for the public
+  anchor mutators and the remaining private helper path that public
+  `verify(...)` intentionally short-circuits with `EmptyValidatorSet`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: bridge quorum/domain/hash-guard coverage expansion
+- `crates/iroha_data_model/src/bridge.rs` now adds another focused bridge
+  unit-test slice around the finality verifier helpers and acceptance paths.
+  The new cases cover sparse signer bitmap decoding across multiple bytes,
+  successful verification with an exact-quorum signer subset, successful
+  verification when the commit certificate uses the NPoS consensus domain tag,
+  and rejection when the certificate's declared block hash diverges from the
+  bridged header hash even though the QC proof hash matches.
+- This extends the same bridge coverage area with both additional positive
+  verifier paths and the remaining certificate-side hash-consistency guard, so
+  the helper bitmap logic and domain-specific signature preimage are pinned by
+  direct unit tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: bridge serialization-default and verifier-state coverage expansion
+- `crates/iroha_data_model/src/bridge.rs` now adds another focused batch of
+  bridge unit tests for the same slice: direct `BridgeProof` transparent-ZK
+  roundtrip coverage, `BridgeFinalityProof` roundtrip coverage for the
+  empty-`validator_set_pops` default/omitted wire path, a minimal
+  `BridgeCommitment` roundtrip with all optional MMR fields absent, the
+  `signer_indices_from_bitmap(...)` empty-roster helper path, and a stateful
+  verifier regression proving that a failed height-2 proof does not advance
+  internal `latest_height`, so the corrected height-2 proof is still accepted.
+- This extends the previous bridge helper coverage by pinning the defaulted
+  serialization shape for finality proofs and the verifier's state-preservation
+  behavior after rejected proofs.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: bridge helper and bundle coverage expansion
+- `crates/iroha_data_model/src/bridge.rs` now has additional unit coverage for
+  the bridge helper/data-model surface around the finality verifier tests. The
+  new cases cover `BridgeProofRange` helper semantics, `BridgeProof::backend_label()`
+  for both ICS and transparent-ZK payloads, `BridgeProofRecord` roundtrip, the
+  `consensus_domain(...)` and `commit_vote_preimage(...)` helper outputs, and a
+  direct `BridgeFinalityBundle` roundtrip that exercises
+  `BridgeAuthoritySet`, `BridgeCommitment`, and `BridgeCommitmentJustification`
+  with optional MMR and next-authority fields populated.
+- This expands coverage in the same bridge slice beyond verifier error paths so
+  the local helper behavior and bundle serialization shapes are pinned directly
+  in the unit module.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: bridge finality verifier coverage expansion
+- `crates/iroha_data_model/src/bridge.rs` now has additional unit coverage
+  around the bridge finality verifier and its private helpers. The new tests
+  cover the remaining early verifier guards for certificate height/phase,
+  block-hash mismatches, unsupported validator-set hash versions, and empty
+  validator sets, plus the commit-QC validation paths for sparse bitmap decode,
+  quorum thresholds, bitmap length/index failures, missing aggregate
+  signatures, invalid aggregate payloads, and non-BLS validator keys.
+- The same slice now also covers the `with_validator_set(...)` constructor path
+  by proving a verifier anchored only to the validator set still rejects proofs
+  until the epoch anchor is supplied, after which the same proof verifies
+  successfully.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: bridge finality proof consensus-hash fixture alignment
+- `crates/iroha_data_model/src/bridge.rs` now builds its test-only
+  `BridgeFinalityProof` fixtures with `BlockHeader::hash()` instead of
+  `HashOf::new(&header)`, matching the production verifier's consensus-hash
+  semantics that intentionally ignore `result_merkle_root`.
+- This fixes the reported `bridge::*` verifier reds where otherwise valid proofs
+  failed early with `BlockHashMismatch`, which in turn masked the expected
+  anchor, validator-set-hash, and PoP-length errors in the surrounding tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model --lib`
+  - `git diff --check`
+
 ## 2026-04-22 Follow-up: Torii nexus dataspaces summary merge coverage expansion
 - `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` now adds two more
   handler-level regressions for the same endpoint slice: one proves an
