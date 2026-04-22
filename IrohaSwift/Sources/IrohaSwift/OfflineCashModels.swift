@@ -939,7 +939,12 @@ public enum ToriiOfflineCashCodec {
                 counterpartyOfflinePublicKey: receipt.counterpartyOfflinePublicKey,
                 amount: try canonicalAmountString(receipt.amount),
                 authorization: receipt.authorization,
-                deviceProof: receipt.deviceProof,
+                attestation: TransferReceiptAttestationPayload(
+                    keyId: receipt.deviceProof.attestationKeyId,
+                    counter: receipt.deviceProof.counter ?? 0,
+                    assertionBase64: receipt.deviceProof.assertionBase64,
+                    challengeHashHex: receipt.deviceProof.challengeHashHex
+                ),
                 sourcePayload: receipt.sourcePayload,
                 createdAtMs: receipt.createdAtMs
             )
@@ -1051,7 +1056,7 @@ private extension ToriiOfflineCashCodec {
         let counterpartyOfflinePublicKey: String
         let amount: String
         let authorization: ToriiOfflineSpendAuthorization?
-        let deviceProof: ToriiOfflineDeviceProof
+        let attestation: TransferReceiptAttestationPayload
         let sourcePayload: String?
         let createdAtMs: UInt64
 
@@ -1076,9 +1081,23 @@ private extension ToriiOfflineCashCodec {
             case counterpartyOfflinePublicKey = "counterparty_offline_public_key"
             case amount
             case authorization
-            case deviceProof = "device_proof"
+            case attestation
             case sourcePayload = "source_payload"
             case createdAtMs = "created_at_ms"
+        }
+    }
+
+    struct TransferReceiptAttestationPayload: Encodable {
+        let keyId: String
+        let counter: UInt64
+        let assertionBase64: String
+        let challengeHashHex: String
+
+        enum CodingKeys: String, CodingKey {
+            case keyId = "key_id"
+            case counter
+            case assertionBase64 = "assertion_base64"
+            case challengeHashHex = "challenge_hash_hex"
         }
     }
 
