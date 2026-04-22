@@ -2,6 +2,133 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii manifest direct-routing coverage expansion):
+The same `iroha_torii` space-directory manifest slice now has three more
+direct tests around `routing::handle_v1_space_directory_manifests(...)`. The
+new cases pin the missing-manifest-set branch, the direct invalid-status error
+path, and the semantics where `total` remains pre-filter while
+`status=Active` plus pagination clears the returned page.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib space_directory_manifest_helper_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii manifest routing coverage work
+
+Latest sync (2026-04-22 Torii manifest helper coverage expansion):
+The same `iroha_torii` space-directory manifest slice now has direct helper
+coverage in `crates/iroha_torii/src/routing.rs`. The new unit cases pin
+case-insensitive `SpaceDirectoryManifestStatus` parsing, unknown-status
+rejection, helper status classification/matching across pending-active-expired-
+revoked records, the reasonless-revocation JSON shape from
+`manifest_lifecycle_json(...)`, and filtered/missing account bindings behavior
+from `bindings_for_dataspace(...)`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib space_directory_manifest_helper_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii manifest helper coverage work
+
+Latest sync (2026-04-22 Torii manifest handler routing/status coverage expansion):
+The same `iroha_torii` space-directory manifest slice now has direct handler
+coverage beyond the merge helper. The runtime-handler test module now pins the
+successful configured-`dataspace` single-route path, including the local routed
+headers that should accompany that read, and it also covers the direct
+`status=Inactive` manifest response for `Pending` and `Expired` rows. That same
+inactive-status case also locks in the uncataloged `dataspace_alias: null`
+branch and the empty-account-bindings branch for a dataspace without bound
+accounts.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib handler_space_directory_manifests_executes_configured_dataspace_route_locally -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing_space_directory_manifests_reports_inactive_pending_and_uncataloged_expired_rows -- --nocapture`
+  - `cargo test -p iroha_torii --lib merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii manifest coverage work
+
+Latest sync (2026-04-22 Torii manifest malformed-payload coverage expansion):
+The same `iroha_torii` space-directory manifest merge slice now covers the
+remaining malformed-payload guards. The unit module now directly rejects
+non-object payloads, payloads missing the `manifests` array, manifest rows
+missing `dataspace_id`, and manifest rows missing `manifest_hash`, so the
+`invalid_proxy_response` structural-validation paths are pinned as well.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii merge-coverage work
+
+Latest sync (2026-04-22 Torii space-directory manifest coverage expansion):
+The same `iroha_torii` manifest-read slice now has broader direct coverage
+around the fanout merge and dataspace-filter routing behavior. The unit module
+now covers deduplication when route totals are absent, page clearing when
+`offset` exceeds the merged result length, and both route-conflict branches for
+UAID-root and manifest-row mismatches. The integration test file now also pins
+the configured-dataspace/no-lane fallback path, the `total=0` behavior for
+unknown dataspace filters, and rejection of invalid manifest-status filters.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/tests/space_directory_manifests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii coverage work
+
+Latest sync (2026-04-22 Torii space-directory manifest routing/merge fix):
+The `iroha_torii` space-directory manifest read path now preserves the
+expected app-router semantics for filtered manifest reads. The
+`/v1/space-directory/uaids/{uaid}/manifests` handler no longer turns an
+unknown/unrouted `dataspace` filter into the previous `400` regression, and
+the fanout merge now preserves each route payload's reported `total` so
+`status=Inactive` and similar filtered reads keep the pre-filter manifest count
+that the direct routing handler already exposed. The same slice also now has a
+focused unit regression covering the merge-total behavior.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader workspace `cargo test` / `cargo clippy --workspace --all-targets -- -D warnings` window when there is budget beyond the focused Torii manifest fix
+
 Latest sync (2026-04-22 bridge anchor-mutator and empty-helper coverage expansion):
 The same bridge test slice in `crates/iroha_data_model/src/bridge.rs` now also
 covers the remaining state-transition and helper behavior around finality

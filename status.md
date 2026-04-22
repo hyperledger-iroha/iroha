@@ -2,6 +2,107 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Torii manifest direct-routing coverage expansion
+- `crates/iroha_torii/src/routing.rs` now adds three more direct tests for
+  `handle_v1_space_directory_manifests(...)` on top of the helper-level cases.
+  The new coverage pins the empty-manifest-set branch, the direct invalid
+  `status` rejection path, and the pre-filter `total` behavior when
+  `status=Active` plus `offset` clears the returned page.
+- This expands the same space-directory manifest read slice at the routing
+  layer itself, so the direct handler semantics are covered independently of
+  the outer Torii wrapper and fanout merge logic.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib space_directory_manifest_helper_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii manifest helper coverage expansion
+- `crates/iroha_torii/src/routing.rs` now has direct unit coverage for the
+  remaining space-directory manifest helper branches in the read path. The new
+  tests pin case-insensitive `status` parsing and unknown-value rejection,
+  cover `manifest_status(...)` plus `manifest_status_matches(...)` across
+  pending/active/expired/revoked rows, assert the reasonless-revocation shape
+  emitted by `manifest_lifecycle_json(...)`, and verify
+  `bindings_for_dataspace(...)` returns only the requested dataspace accounts
+  while handling missing bindings cleanly.
+- This keeps expanding coverage in the same manifest-read area, but now from
+  the routing helper layer rather than only through outer Torii handlers and
+  fanout merge tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib space_directory_manifest_helper_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii manifest handler routing/status coverage expansion
+- `crates/iroha_torii/src/lib.rs` now adds two more focused runtime-handler
+  tests around the same space-directory manifest read slice. One pins the
+  configured `dataspace=` single-route path so the outer handler proves it
+  executes locally with the expected routed headers when a lane exists. The
+  other exercises the direct manifest read with `status=Inactive`, covering
+  `Pending` and `Expired` rows together with the uncataloged-alias and
+  empty-bindings branches.
+- This broadens coverage beyond the merge helper and the no-lane fallback,
+  while staying inside the same Torii manifest endpoint area.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib handler_space_directory_manifests_executes_configured_dataspace_route_locally -- --nocapture`
+  - `cargo test -p iroha_torii --lib routing_space_directory_manifests_reports_inactive_pending_and_uncataloged_expired_rows -- --nocapture`
+  - `cargo test -p iroha_torii --lib merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii manifest malformed-payload coverage expansion
+- `crates/iroha_torii/src/lib.rs` now extends the same
+  space-directory-manifest merge unit-test slice with the remaining malformed
+  payload guards. The new tests pin rejection of non-object merge payloads,
+  payloads missing the `manifests` array, manifest rows missing `dataspace_id`,
+  and manifest rows missing `manifest_hash`, all through the
+  `invalid_proxy_response` error path.
+- This keeps the focused coverage expansion in the same area instead of adding
+  broader unrelated Torii tests, and it now exercises the merge helper's
+  remaining structural validation branches directly.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii space-directory manifest coverage expansion
+- `crates/iroha_torii/src/lib.rs` now has a broader unit-test slice around the
+  space-directory manifest fanout merge. The added cases cover deduplication of
+  identical manifest rows when route payloads omit explicit totals, clearing
+  paged results when `offset` exceeds the merged row count while preserving the
+  reported `total`, and the conflict paths for mismatched UAID roots and
+  mismatched duplicate manifest rows.
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now also pins the
+  app-router behavior for a configured dataspace that has no lane route
+  (exercising the `NoLaneForDataspace` fanout fallback), preserves the empty
+  filter `total=0` expectation for unknown dataspaces, and rejects invalid
+  manifest `status` filters with `400`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Torii space-directory manifest routing/merge fix
+- `crates/iroha_torii/src/lib.rs` now keeps
+  `/v1/space-directory/uaids/{uaid}/manifests?dataspace=...` from failing
+  early when the filtered dataspace has no configured route, and it also makes
+  the fanout merge preserve each route payload's reported manifest `total`
+  instead of recomputing `total` from the already filtered merged rows.
+- The same file now includes a focused unit regression proving the merged
+  response keeps route totals even when the returned manifest rows were reduced
+  by status filtering, which keeps fanout behavior aligned with the direct
+  single-route handler semantics.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii merged_space_directory_manifests_response -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-22 Follow-up: bridge anchor-mutator and empty-helper coverage expansion
 - `crates/iroha_data_model/src/bridge.rs` now adds another narrow unit-test
   batch for bridge finality verifier state transitions that were still only
