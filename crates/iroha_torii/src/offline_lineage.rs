@@ -10,6 +10,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
+use iroha_config::parameters::actual::Offline as OfflineSettlementConfig;
 #[cfg(feature = "zk-stark")]
 use iroha_core::zk_stark::{
     STARK_HASH_SHA256_V1, StarkCompositionTermV1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
@@ -4483,6 +4484,24 @@ fn validate_android_cash_device_binding(
     expected_device_id: &str,
     expected_offline_public_key: &str,
 ) -> Result<(), Error> {
+    validate_android_cash_device_binding_with_config(
+        latest_block_timestamp_ms(app),
+        &app.state.settlement().offline,
+        account_id,
+        binding,
+        expected_device_id,
+        expected_offline_public_key,
+    )
+}
+
+fn validate_android_cash_device_binding_with_config(
+    latest_block_timestamp_ms: u64,
+    settlement_cfg: &OfflineSettlementConfig,
+    account_id: &str,
+    binding: &OfflineCashAndroidDeviceBinding,
+    expected_device_id: &str,
+    expected_offline_public_key: &str,
+) -> Result<(), Error> {
     if !binding.platform.eq_ignore_ascii_case("android") {
         return Err(conversion_error(
             "offline cash device binding platform must be android".to_owned(),
@@ -4496,10 +4515,6 @@ fn validate_android_cash_device_binding(
     ensure_non_empty(
         &binding.offline_public_key,
         "device_binding.offline_public_key",
-    )?;
-    ensure_non_empty(
-        &binding.attestation_report_base64,
-        "device_binding.attestation_report_base64",
     )?;
     if binding.device_id != expected_device_id {
         return Err(conversion_error(
@@ -4521,6 +4536,14 @@ fn validate_android_cash_device_binding(
         ));
     }
 
+    if settlement_cfg.skip_platform_attestation {
+        return Ok(());
+    }
+
+    ensure_non_empty(
+        &binding.attestation_report_base64,
+        "device_binding.attestation_report_base64",
+    )?;
     let challenge_hash_hex = sha256_hex(&canonical_json_bytes(
         &AndroidDeviceBindingChallengePayload {
             account_id,
@@ -4531,11 +4554,7 @@ fn validate_android_cash_device_binding(
     )?);
     let expected_challenge = decode_challenge_hash_hex(&challenge_hash_hex)?;
     let chain = decode_android_attestation_chain(&binding.attestation_report_base64)?;
-    let leaf = verify_android_chain(
-        &chain,
-        latest_block_timestamp_ms(app),
-        &app.state.settlement().offline,
-    )?;
+    let leaf = verify_android_chain(&chain, latest_block_timestamp_ms, settlement_cfg)?;
     let key_description = parse_android_key_description(&leaf)?;
     if key_description.attestation_challenge.as_slice() != expected_challenge.as_slice() {
         return Err(conversion_error(
@@ -5394,6 +5413,56 @@ mod tests {
         assert!(!payload_str.contains("ios_team_id"));
         assert!(!payload_str.contains("ios_bundle_id"));
         assert!(!payload_str.contains("ios_environment"));
+    }
+
+    fn android_binding_for_test(public_key_bytes: [u8; 32]) -> OfflineCashAndroidDeviceBinding {
+        let offline_public_key = BASE64_STANDARD.encode(public_key_bytes);
+        OfflineCashAndroidDeviceBinding {
+            platform: "android".to_owned(),
+            attestation_key_id: sha256_hex(&public_key_bytes),
+            device_id: "android-device-1".to_owned(),
+            offline_public_key,
+            attestation_report_base64: "e2e-offline-insecure".to_owned(),
+            ios_team_id: None,
+            ios_bundle_id: None,
+            ios_environment: None,
+        }
+    }
+
+    #[test]
+    fn android_device_binding_skips_platform_attestation_when_configured() {
+        let mut settlement_cfg = OfflineSettlementConfig::default();
+        settlement_cfg.skip_platform_attestation = true;
+        let public_key_bytes = [7u8; 32];
+        let binding = android_binding_for_test(public_key_bytes);
+
+        validate_android_cash_device_binding_with_config(
+            1,
+            &settlement_cfg,
+            TEST_ACCOUNT_I105,
+            &binding,
+            "android-device-1",
+            &BASE64_STANDARD.encode(public_key_bytes),
+        )
+        .expect("skip_platform_attestation should accept simulator Android binding");
+    }
+
+    #[test]
+    fn android_device_binding_requires_platform_attestation_by_default() {
+        let settlement_cfg = OfflineSettlementConfig::default();
+        let public_key_bytes = [7u8; 32];
+        let mut binding = android_binding_for_test(public_key_bytes);
+        binding.attestation_report_base64.clear();
+
+        validate_android_cash_device_binding_with_config(
+            1,
+            &settlement_cfg,
+            TEST_ACCOUNT_I105,
+            &binding,
+            "android-device-1",
+            &BASE64_STANDARD.encode(public_key_bytes),
+        )
+        .expect_err("production mode must require Android hardware attestation material");
     }
 
     #[test]
