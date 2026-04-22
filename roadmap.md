@@ -2,6 +2,204 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Sorafs pin-register helper and duplicate-registration coverage):
+The same Sorafs register/discovery slice now has one more inward-facing
+coverage pass. `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` adds the
+missing `RegisterPinManifest` duplicate-digest rejection test, while
+`crates/iroha_torii/src/routing.rs` now directly tests the pin-register helper
+logic underneath the route: storage-class policy conversion and
+`parse_hex_array(...)` success/error handling.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs_pin_tests --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` / `cargo test -p iroha_core ...`
+    window when there is budget beyond the focused Sorafs coverage work
+  - if another pass stays in this area, target remaining public validation
+    branches adjacent to `pin/register` or move down into more helper-level
+    coverage around Torii SoraFS routing conversions
+
+Latest sync (2026-04-22 Sorafs pin-register route validation coverage expansion):
+The same Sorafs discovery/register slice now has another small batch of
+user-facing route coverage. `crates/iroha_torii/tests/sorafs_discovery.rs`
+now directly exercises `POST /v1/sorafs/pin/register` rejection for chunker
+descriptor mismatches and invalid pin-policy payloads, and it also verifies the
+success path that accepts `0x`-prefixed manifest/chunk digest inputs while
+returning the canonical manifest digest and computed `chunker_handle`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused Sorafs route-coverage work
+  - if another pass stays in this area, move inward to direct helper coverage
+    for `parse_hex_array(...)` and related `routing.rs` manifest DTO handling,
+    or outward to remaining public validation branches on adjacent Sorafs
+    endpoints
+
+Latest sync (2026-04-22 Sorafs successor-chain register coverage expansion):
+The same Sorafs discovery/register/approval area now has direct core coverage
+for the remaining `RegisterPinManifest` successor-chain branches.
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now tests the
+approved-predecessor success path plus the dedicated rejection branches for
+self-successor input, missing predecessors, pending predecessors, retired
+predecessors, cycle-closing successor registrations, and malformed
+already-cyclic predecessor chains.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - if another pass stays in this area, move outward to route-level validation
+    coverage for the remaining `pin/register` field validators or inward to
+    helper-level provider-admission coverage in `crates/sorafs_manifest`
+
+Latest sync (2026-04-22 Sorafs hex-parse and approval-guard coverage expansion):
+The same Sorafs discovery/register/approval slice now has one more small
+coverage pass. `crates/iroha_torii/tests/sorafs_discovery.rs` adds direct
+request-validation regressions for malformed `manifest_digest_hex` input and
+wrong-sized `chunk_digest_sha3_256_hex` input on `POST /v1/sorafs/pin/register`,
+while `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly tests
+two remaining approval guards: rejecting approvals for unknown manifests and
+rejecting a supplied `council_envelope_digest` when it does not match the
+verified envelope payload.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - if another pass stays in this area, move inward to direct helper-level
+    coverage in `crates/sorafs_manifest/src/provider_admission.rs` rather than
+    continuing to stack more route/instruction regressions on the same files
+
+Latest sync (2026-04-22 Sorafs decode-path and pending-approval coverage expansion):
+The same Sorafs discovery/approval slice now has another small batch of
+targeted coverage. `crates/iroha_torii/tests/sorafs_discovery.rs` adds direct
+extractor-path regressions for malformed JSON and malformed Norito
+`pin/register` requests, while
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now exercises the nearby
+pending/retired approval branches that were still uncovered after the previous
+pass: pending approval with a provided digest, pending approval missing both
+digest and envelope, same-epoch re-approval with a provided digest but no
+stored digest, and approval rejection for retired manifests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` / `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs approval and request
+    parsing branches
+  - if the next coverage pass stays in this area, target the remaining
+    provider-admission helper branches directly inside `sorafs_manifest`
+    instead of expanding more end-to-end fixture tests
+
+Latest sync (2026-04-22 Sorafs discovery and approval branch coverage expansion):
+The same Sorafs discovery/provider-admission slice now has broader targeted
+coverage without changing runtime behavior. `crates/iroha_torii/tests/
+sorafs_discovery.rs` adds the missing `pin/register` route-gating regression so
+storage-disabled configs return `404` for the unmounted POST route, while
+`crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly exercises the
+approval-state branches around current auto-approval semantics: different-epoch
+rejection for already approved manifests, same-epoch re-approval with stored
+digest reuse, stored-digest mismatch rejection, and the no-stored-digest
+payload requirement. `crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+also now asserts the regenerated renewal/revocation metadata sidecars.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core ...` or `cargo test -p iroha_torii ...`
+    window when there is budget beyond the focused Sorafs branch-coverage work
+  - add more route-level malformed-input coverage around the same `pin/register`
+    handler if the next pass targets Torii request parsing rather than core
+    approval semantics
+
+Latest sync (2026-04-22 Sorafs discovery fixture and auto-approval refresh):
+The reported `sorafs_discovery` reds are fixed. The integration file now
+enables `sorafs_storage` in the malformed `pin/register` route tests so they
+exercise the mounted handler again, and its shared manifest setup helper now
+matches current core behavior by relying on `RegisterPinManifest` auto-approval
+at `submitted_epoch` rather than pushing a second approval with a different
+epoch. The provider-admission fixture set under
+`fixtures/sorafs_manifest/provider_admission/` has also been regenerated from
+the current generator output, and the generator test now asserts the refreshed
+deterministic digests.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `/home/mtakemiya/dev/iroha/crates/sorafs_manifest/tests/provider_admission_fixtures.rs`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/advert_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/envelope_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/metadata.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/proposal_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/proposal_v2.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/renewal_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/renewal_v1.to`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/revocation_v1.json`
+  - `/home/mtakemiya/dev/iroha/fixtures/sorafs_manifest/provider_admission/revocation_v1.to`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `cargo test -p sorafs_car --features cli --bin provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the focused Sorafs discovery regression set
+  - refresh any other consumers that pin provider-admission fixture digests
+    directly if they still assume the pre-regeneration values
+
 Latest sync (2026-04-22 Torii SNS registrar lifecycle coverage expansion):
 The same SNS registrar slice now has broader lifecycle-path coverage.
 `crates/iroha_core/src/sns.rs` adds direct tests for `set_name_lease_expiry(...)`
