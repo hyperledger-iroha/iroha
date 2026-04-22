@@ -26911,6 +26911,85 @@ mod sorafs_pin_tests {
             .expect("manifest")
     }
 
+    #[test]
+    fn manifest_policy_helpers_round_trip_all_storage_classes() {
+        use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
+
+        let cases = [
+            (
+                PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Hot,
+                DmStorageClass::Hot,
+            ),
+            (
+                PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Warm,
+                DmStorageClass::Warm,
+            ),
+            (
+                PinPolicyStorageClassDto::Cold,
+                ManifestStorageClass::Cold,
+                DmStorageClass::Cold,
+            ),
+        ];
+
+        for (dto_storage_class, manifest_storage_class, dm_storage_class) in cases {
+            let dto = PinPolicyDto {
+                min_replicas: 3,
+                storage_class: dto_storage_class,
+                retention_epoch: 42,
+            };
+            let manifest_policy = manifest_policy_from_dto(&dto);
+            assert_eq!(manifest_policy.min_replicas, 3);
+            assert_eq!(manifest_policy.storage_class, manifest_storage_class);
+            assert_eq!(manifest_policy.retention_epoch, 42);
+
+            let dm_policy = convert_manifest_policy(&manifest_policy);
+            assert_eq!(dm_policy.min_replicas, 3);
+            assert_eq!(dm_policy.storage_class, dm_storage_class);
+            assert_eq!(dm_policy.retention_epoch, 42);
+        }
+    }
+
+    #[test]
+    fn parse_hex_array_accepts_prefixed_hex() {
+        let parsed = parse_hex_array::<4>("0xdeadbeef", "manifest_digest_hex")
+            .expect("prefixed hex should parse");
+        assert_eq!(parsed, [0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn parse_hex_array_rejects_invalid_hex_with_field_name() {
+        let err = parse_hex_array::<4>("zz", "manifest_digest_hex")
+            .expect_err("invalid hex must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("manifest_digest_hex"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_hex_array_rejects_wrong_length_with_expected_size() {
+        let err = parse_hex_array::<4>("abcd", "chunk_digest_sha3_256")
+            .expect_err("wrong-sized hex must be rejected");
+        let message = match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("chunk_digest_sha3_256") && message.contains("4 bytes"),
+            "unexpected error message: {message}"
+        );
+    }
+
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
