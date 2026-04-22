@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: bridge finality endpoint verifier parity
+- `crates/iroha_data_model/src/bridge.rs` now validates bridge-finality
+  proofs against the consensus block-header hash (`BlockHeader::hash()`) and
+  the canonical commit-vote preimage including parent/post state roots, which
+  fixes verifier rejection of real Torii endpoint proofs once blocks carry
+  execution-result roots.
+- `crates/iroha_data_model/src/bridge.rs` also has a focused regression proving
+  the verifier accepts proofs whose headers have `result_merkle_root`
+  populated while still using the consensus hash advertised by the QC.
+- `crates/iroha_torii/tests/bridge_finality_endpoint.rs` now attaches loopback
+  `ConnectInfo<SocketAddr>`, seeds the validator PoP into the test world,
+  builds the state with the same chain id as Torii, aggregates the single BLS
+  signature into canonical QC aggregate bytes, and requests
+  `application/x-norito` so the endpoint smoke exercises the typed wire format
+  the verifier actually consumes.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model verifier_accepts_consensus_hash_when_result_merkle_root_is_present -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint --features telemetry -- --nocapture`
+
 ## 2026-04-22 Follow-up: Torii asset-definition alias binding and fanout sort preservation
 - `crates/iroha_data_model/src/asset/definition.rs` now validates asset-definition
   aliases against one or more allowed stems with ASCII case-insensitive
