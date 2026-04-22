@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Torii api_router_for_tests loopback ConnectInfo injection
+- `crates/iroha_torii/src/lib.rs` now wraps `Torii::api_router_for_tests()`
+  with a test-helper-only middleware that injects loopback
+  `ConnectInfo<SocketAddr>` when a direct `oneshot(...)` request did not supply
+  one already.
+- This restores mounted-handler behavior for helper-based integration smoke
+  tests like `domains_endpoints_exist` and `router_builds_under_current_features`
+  without weakening production routing or overwriting tests that intentionally
+  set a non-loopback remote address.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test domains_endpoints domains_endpoints_exist -- --nocapture`
+  - `cargo test -p iroha_torii --test router_feature_matrix router_builds_under_current_features -- --nocapture`
+  - `cargo test -p iroha_torii --test app_api_router_smoke app_api_router_smoke -- --nocapture`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints asset_definitions_endpoints_return_name_and_alias -- --nocapture`
+
 ## 2026-04-22 Follow-up: Torii connect gating request metadata alignment
 - `crates/iroha_torii/tests/connect_gating.rs` now injects loopback
   `ConnectInfo<SocketAddr>` for its direct `oneshot(...)` probes and serves its
