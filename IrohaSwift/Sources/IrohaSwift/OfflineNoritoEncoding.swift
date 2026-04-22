@@ -395,6 +395,103 @@ struct OfflineNoritoWriter {
     }
 }
 
+struct OfflineCompactNoritoWriter {
+    private(set) var data = Data()
+
+    mutating func writeUInt8(_ value: UInt8) {
+        data.append(value)
+    }
+
+    mutating func writeUInt16LE(_ value: UInt16) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeUInt32LE(_ value: UInt32) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeUInt64LE(_ value: UInt64) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeLength(_ value: UInt64) {
+        var remaining = value
+        while remaining >= 0x80 {
+            data.append(UInt8(remaining & 0x7F) | 0x80)
+            remaining >>= 7
+        }
+        data.append(UInt8(remaining))
+    }
+
+    mutating func writeBytes(_ bytes: Data) {
+        data.append(bytes)
+    }
+
+    mutating func writeField(_ payload: Data) {
+        writeLength(UInt64(payload.count))
+        writeBytes(payload)
+    }
+}
+
+enum OfflineCompactNorito {
+    static func encodeString(_ value: String) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        let bytes = Data(value.utf8)
+        writer.writeLength(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    static func encodeUInt8(_ value: UInt8) -> Data {
+        Data([value])
+    }
+
+    static func encodeUInt16(_ value: UInt16) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt16LE(value)
+        return writer.data
+    }
+
+    static func encodeUInt32(_ value: UInt32) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt32LE(value)
+        return writer.data
+    }
+
+    static func encodeUInt64(_ value: UInt64) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(value)
+        return writer.data
+    }
+
+    static func encodeOption<T>(_ value: T?, encode: (T) throws -> Data) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        guard let value else {
+            writer.writeUInt8(0)
+            return writer.data
+        }
+        writer.writeUInt8(1)
+        writer.writeField(try encode(value))
+        return writer.data
+    }
+
+    static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeLength(UInt64(values.count))
+        for value in values {
+            writer.writeField(try encode(value))
+        }
+        return writer.data
+    }
+
+    static func encodeHash(_ bytes: Data) throws -> Data {
+        try OfflineNorito.encodeHash(bytes)
+    }
+}
+
 public enum OfflineNorito {
     static let maxNumericScale: UInt32 = 28
     static let maxBigIntBytes = 64

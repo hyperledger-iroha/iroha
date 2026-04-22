@@ -5835,13 +5835,11 @@ fn parse_encrypted_identifier_ciphertext(
             "encrypted identifier ciphertext is not valid hex: {err}"
         ))
     })?;
-    let archived =
-        norito::from_bytes::<iroha_crypto::BfvIdentifierCiphertext>(&bytes).map_err(|err| {
-            identifier_conversion_error(format!(
-                "encrypted identifier ciphertext is not valid Norito BFV data: {err}"
-            ))
-        })?;
-    Ok(norito::core::NoritoDeserialize::deserialize(archived))
+    norito::decode_from_bytes::<iroha_crypto::BfvIdentifierCiphertext>(&bytes).map_err(|err| {
+        identifier_conversion_error(format!(
+            "encrypted identifier ciphertext is not valid Norito BFV data: {err}"
+        ))
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -11352,6 +11350,7 @@ fn transaction_submission_response(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0);
+    let tx_hash_header = tx_hash.to_string();
     let payload = TransactionSubmissionReceiptPayload {
         tx_hash,
         submitted_at_ms,
@@ -11360,6 +11359,11 @@ fn transaction_submission_response(
     };
     let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
     let mut response = (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response();
+    if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-iroha-transaction-hash"), header);
+    }
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
@@ -35350,6 +35354,7 @@ pub(crate) mod tests_runtime_handlers {
             .with_instructions([Log::new(Level::INFO, "rate-limit-2".to_string())])
             .sign(keypair.private_key());
         let headers = HeaderMap::new();
+        let submitted_hash = tx1.hash().to_string();
 
         let ok = super::handler_post_transaction(
             State(app.clone()),
@@ -35360,6 +35365,12 @@ pub(crate) mod tests_runtime_handlers {
         .expect("accepted");
         let ok_response = ok.into_response();
         assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
+        let hash_header = ok_response
+            .headers()
+            .get("x-iroha-transaction-hash")
+            .and_then(|value| value.to_str().ok())
+            .expect("transaction hash header must be present");
+        assert_eq!(hash_header, submitted_hash);
         let lane_header = ok_response
             .headers()
             .get("x-iroha-route-lane-id")
@@ -51117,6 +51128,100 @@ mod tests {
         assert_eq!(dto.payload.account_id, authority.to_string());
         assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
         assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
+        let world = World::with(
+            [Domain::new(domain_id).build(&authority)],
+            [Account::new(authority.clone()).build(&authority)],
+            [],
+        );
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
+        let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
+            &authority,
+            &signer,
+            &policy_id,
+            IdentifierNormalization::Exact,
+            &public_parameters,
+        );
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+            let mut block = app.state.block(header);
+            let mut tx = block.transaction();
+            register_and_activate_identifier_policy_bundle(
+                &authority,
+                &mut tx,
+                &policy,
+                &program_policy,
+            );
+            tx.apply();
+            block.commit().expect("commit block");
+        }
+
+        let mut malformed = norito::to_bytes(
+            &encrypt_identifier_from_seed(
+                &public_parameters,
+                b"ab",
+                b"identifier-route-bfv-malformed-ciphertext",
+            )
+            .expect("encrypt BFV identifier input"),
+        )
+        .expect("encode BFV identifier ciphertext");
+        let payload_start = norito::core::Header::SIZE;
+        assert!(malformed.len() > payload_start + 1);
+        let mut payload = malformed[payload_start..].to_vec();
+        payload.pop();
+        let payload_len = u64::try_from(payload.len())
+            .expect("payload length fits u64")
+            .to_le_bytes();
+        let checksum = norito::hardware_crc64(&payload).to_le_bytes();
+        malformed.truncate(payload_start);
+        malformed[23..31].copy_from_slice(&payload_len);
+        malformed[31..39].copy_from_slice(&checksum);
+        malformed.extend_from_slice(&payload);
+
+        let err = handler_identifier_resolve(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy_id.to_string(),
+                input: None,
+                encrypted_input: Some(hex::encode(malformed)),
+            }),
+        )
+        .await
+        .expect_err("malformed ciphertext should be rejected");
+
+        let message = match &err {
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message.as_str(),
+            other => panic!("expected conversion error, got {other:?}"),
+        };
+        assert!(
+            message.contains("encrypted identifier ciphertext is not valid Norito BFV data"),
+            "unexpected conversion message: {message}"
+        );
     }
 
     #[cfg(feature = "app_api")]

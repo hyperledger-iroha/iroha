@@ -28,9 +28,19 @@ public final class OkHttpTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final OkHttpClient client;
+  private final boolean ownsClient;
 
   public OkHttpTransportExecutor(final OkHttpClient client) {
+    this(client, true);
+  }
+
+  static OkHttpTransportExecutor shared(final OkHttpClient client) {
+    return new OkHttpTransportExecutor(client, false);
+  }
+
+  private OkHttpTransportExecutor(final OkHttpClient client, final boolean ownsClient) {
     this.client = Objects.requireNonNull(client, "client");
+    this.ownsClient = ownsClient;
   }
 
   @Override
@@ -127,6 +137,9 @@ public final class OkHttpTransportExecutor
 
   @Override
   public void invalidateAndCancel() {
+    if (!ownsClient) {
+      return;
+    }
     client.dispatcher().cancelAll();
     client.connectionPool().evictAll();
     final var cache = client.cache();

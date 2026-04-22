@@ -333,7 +333,9 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
 mod tests {
     use std::str::FromStr;
 
-    use iroha_crypto::{KeyPair, RamLfeBackend, RamLfeVerificationMode};
+    use iroha_crypto::{
+        KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+    };
 
     use super::*;
 
@@ -392,5 +394,70 @@ mod tests {
         signature
             .verify(signer.public_key(), &payload)
             .expect("signature should verify against bare encode bytes");
+    }
+
+    #[test]
+    fn live_identifier_resolution_receipt_signature_fixture_verifies() {
+        let payload = IdentifierResolutionReceiptPayload {
+            policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
+            execution: RamLfeExecutionReceiptPayload {
+                program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+                program_digest: Hash::from_str(
+                    "fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
+                )
+                .expect("valid hash"),
+                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: RamLfeVerificationMode::Signed,
+                output_hash: Hash::from_str(
+                    "72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
+                )
+                .expect("valid hash"),
+                associated_data_hash: Hash::from_str(
+                    "35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
+                )
+                .expect("valid hash"),
+                executed_at_ms: 1_776_812_470_694,
+                expires_at_ms: Some(1_776_812_500_694),
+            },
+            opaque_id: OpaqueAccountId::from_str(
+                "opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
+            )
+            .expect("valid opaque id"),
+            receipt_hash: Hash::from_str(
+                "51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
+            )
+            .expect("valid hash"),
+            uaid: UniversalAccountId::from_str(
+                "uaid:471b620a99c608af1c7a47199f27b3368ae0ea889a497dd774b52a8287a58393",
+            )
+            .expect("valid uaid"),
+            account_id: AccountId::parse_encoded(
+                "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463",
+            )
+            .expect("valid i105 account")
+            .account_id()
+            .clone(),
+        };
+        let receipt = IdentifierResolutionReceipt {
+            payload,
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::from_hex(
+                    "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00",
+                )
+                .expect("valid signature"),
+            ),
+        };
+        let resolver_key = PublicKey::from_str(
+            "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
+        )
+        .expect("valid resolver key");
+
+        println!(
+            "live receipt payload hex {}",
+            hex::encode_upper(receipt.payload_bytes())
+        );
+        receipt
+            .verify(&resolver_key)
+            .expect("live receipt signature should verify");
     }
 }
