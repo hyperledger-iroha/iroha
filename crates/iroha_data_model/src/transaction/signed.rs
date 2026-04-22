@@ -1135,6 +1135,49 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_versioned_decode_rejects_empty_payload_without_body_decode() {
+        let err = SignedTransaction::decode_all_versioned(&[])
+            .expect_err("empty signed transaction payload must be rejected");
+
+        assert!(matches!(err, iroha_version::error::Error::NotVersioned));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "empty payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_version_only_payload_without_decode_panic() {
+        let err = SignedTransaction::decode_all_versioned(&[1])
+            .expect_err("version-only signed transaction payload must be rejected");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "truncated payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_unsupported_version_without_body_decode() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = signed_tx.encode_versioned();
+        bytes[0] = 2;
+
+        let err = SignedTransaction::decode_all_versioned(&bytes)
+            .expect_err("unsupported signed transaction version must be rejected");
+
+        assert!(matches!(
+            err,
+            iroha_version::error::Error::UnsupportedVersion(_)
+        ));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "unsupported versions should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
     fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validation() {
         let mut invalid_tx = sample_signed_transaction();
         let mut signature = invalid_tx.signature().0.payload().to_vec();

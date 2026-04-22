@@ -2357,6 +2357,73 @@ mod json_roundtrip_tests {
     }
 
     #[test]
+    fn signed_query_versioned_decode_rejects_empty_payload_without_decode_panic() {
+        let err = match SignedQuery::decode_all_versioned(&[]) {
+            Ok(_) => panic!("empty signed query payload must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NotVersioned));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "empty payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_version_only_payload_without_decode_panic() {
+        let err = match SignedQuery::decode_all_versioned(&[1]) {
+            Ok(_) => panic!("version-only signed query payload must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "truncated payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_trailing_bytes() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut bytes = signed.encode_versioned();
+        bytes.push(0);
+
+        let err = match SignedQuery::decode_all_versioned(&bytes) {
+            Ok(_) => panic!("versioned signed query decoder must reject trailing bytes"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_unsupported_version_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut bytes = signed.encode_versioned();
+        bytes[0] = 2;
+
+        let err = match SignedQuery::decode_all_versioned(&bytes) {
+            Ok(_) => panic!("unsupported signed query version must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            iroha_version::error::Error::UnsupportedVersion(_)
+        ));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "unsupported versions should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
     fn signed_query_versioned_decode_rejects_invalid_signature_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_authority(ALICE_ID.clone())

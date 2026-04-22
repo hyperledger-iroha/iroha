@@ -39,6 +39,51 @@ fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     )
 }
 
+async fn post_ga_norito(path: &str, body: impl Into<axum::body::Body>) -> axum::response::Response {
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(body.into())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+async fn response_text(resp: axum::response::Response) -> String {
+    use http_body_util::BodyExt;
+
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    String::from_utf8(body.to_vec()).expect("response text")
+}
+
+fn assert_versioned_decode_rejection_without_panic(text: &str) {
+    assert!(
+        text.contains("Could not decode versioned request"),
+        "unexpected error body: {text}"
+    );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
 #[tokio::test]
 async fn missing_content_type_is_rejected() {
     let harness = NoritoRpcHarness::new(|cfg| {
@@ -242,6 +287,126 @@ async fn public_transaction_route_rejects_internal_entrypoint_payload() {
         text.contains("Could not decode versioned request"),
         "unexpected error body: {text}"
     );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
+#[tokio::test]
+async fn public_transaction_route_rejects_bare_signed_transaction_payload() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::TRANSACTION)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(Body::from(
+                    norito_rpc_harness::sample_bare_transaction_bytes(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("response text");
+    assert!(
+        text.contains("Could not decode versioned request"),
+        "unexpected error body: {text}"
+    );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
+#[tokio::test]
+async fn public_transaction_route_rejects_unsupported_version_without_decode_panic() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+    let mut bytes = norito_rpc_harness::sample_transaction_bytes();
+    bytes[0] = 2;
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::TRANSACTION)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(Body::from(bytes))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("response text");
+    assert!(
+        text.contains("Could not decode versioned request"),
+        "unexpected error body: {text}"
+    );
+    assert!(
+        text.contains("version") || text.contains("Version"),
+        "version failure should be visible in response: {text}"
+    );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
+#[tokio::test]
+async fn public_transaction_route_rejects_empty_body_without_decode_panic() {
+    use iroha_torii_shared::uri;
+
+    let resp = post_ga_norito(uri::TRANSACTION, Vec::new()).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let text = response_text(resp).await;
+    assert_versioned_decode_rejection_without_panic(&text);
+}
+
+#[tokio::test]
+async fn public_transaction_route_rejects_version_only_body_without_decode_panic() {
+    use iroha_torii_shared::uri;
+
+    let resp = post_ga_norito(uri::TRANSACTION, vec![1_u8]).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let text = response_text(resp).await;
+    assert_versioned_decode_rejection_without_panic(&text);
 }
 
 #[tokio::test]
@@ -360,6 +525,81 @@ async fn public_query_route_rejects_bare_signed_query_payload() {
         .to_bytes();
     let text = String::from_utf8(body.to_vec()).expect("response text");
     assert!(text.contains("versioned"), "unexpected error body: {text}");
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
+#[tokio::test]
+async fn public_query_route_rejects_unsupported_version_without_decode_panic() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_torii_shared::uri;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+    let mut bytes = norito_rpc_harness::sample_query_bytes();
+    bytes[0] = 2;
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::QUERY)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .extension(norito_rpc_harness::loopback_connect_info())
+                .body(Body::from(bytes))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("response text");
+    assert!(
+        text.contains("Could not decode versioned request"),
+        "unexpected error body: {text}"
+    );
+    assert!(
+        text.contains("version") || text.contains("Version"),
+        "version failure should be visible in response: {text}"
+    );
+    assert!(
+        !text.contains("panic during decode"),
+        "unexpected decode panic response: {text}"
+    );
+}
+
+#[tokio::test]
+async fn public_query_route_rejects_empty_body_without_decode_panic() {
+    use iroha_torii_shared::uri;
+
+    let resp = post_ga_norito(uri::QUERY, Vec::new()).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let text = response_text(resp).await;
+    assert_versioned_decode_rejection_without_panic(&text);
+}
+
+#[tokio::test]
+async fn public_query_route_rejects_version_only_body_without_decode_panic() {
+    use iroha_torii_shared::uri;
+
+    let resp = post_ga_norito(uri::QUERY, vec![1_u8]).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let text = response_text(resp).await;
+    assert_versioned_decode_rejection_without_panic(&text);
 }
 
 #[tokio::test]
