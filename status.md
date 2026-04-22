@@ -25,6 +25,18 @@ Last updated: 2026-04-22
   - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture`
   - `cargo test -p iroha_torii merged_list_response_preserves_first_seen_order -- --nocapture`
 
+## 2026-04-22 Follow-up: AXT asset-handle golden resync
+- `crates/iroha_data_model/tests/fixtures/axt_golden.rs` now matches the
+  current `AssetHandle` Norito framing again. The stale `AXT_HANDLE` fixture
+  was still carrying the older account-literal UTF-8 bytes inside the handle
+  subject payload, which changed the framed checksum and payload bytes while
+  leaving the logical sample handle unchanged.
+- The focused `axt_policy_vectors` regression is green again, and the JSON AXT
+  fixture generator check remains in sync without additional fixture rewrites.
+- Focused validation for this slice:
+  - `cargo test -p iroha_data_model --test axt_policy_vectors -- --nocapture`
+  - `cargo run -p iroha_data_model --features test-fixtures --bin axt_fixtures -- --check`
+
 ## 2026-04-22 Follow-up: SDK transaction receipt and status parity fixes
 - Kotlin transaction submission now honors Torii's authoritative
   `x-iroha-transaction-hash` / `x-iroha-tx-hash` receipt headers, normalizes

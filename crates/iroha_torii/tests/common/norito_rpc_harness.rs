@@ -15,13 +15,15 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::Log,
     query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
-    transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{
+        SignedTransaction, TransactionBuilder, TransactionEntrypoint, signed::TransactionSignature,
+    },
 };
 use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
@@ -138,6 +140,27 @@ pub fn sample_transaction_bytes() -> Vec<u8> {
     sample_signed_transaction().encode_versioned()
 }
 
+/// Construct a bare signed-transaction payload used to assert legacy ingress rejection.
+#[allow(dead_code)]
+pub fn sample_bare_transaction_bytes() -> Vec<u8> {
+    norito::to_bytes(&sample_signed_transaction()).expect("encode bare signed transaction")
+}
+
+/// Construct a versioned external transaction with a valid wire shape but invalid signature.
+#[allow(dead_code)]
+pub fn sample_invalid_signature_transaction_bytes() -> Vec<u8> {
+    let mut tx = sample_signed_transaction();
+    let mut signature = tx.signature().0.payload().to_vec();
+    let last = signature
+        .last_mut()
+        .expect("sample transaction signature payload is non-empty");
+    *last ^= 0xFF;
+    tx.set_signature(TransactionSignature(SignatureOf::from_signature(
+        Signature::from_bytes(&signature),
+    )));
+    tx.encode_versioned()
+}
+
 /// Construct a versioned internal entrypoint payload for negative public-ingress tests.
 #[allow(dead_code)]
 pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
@@ -158,6 +181,25 @@ pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
 #[allow(dead_code)]
 pub fn sample_query_bytes() -> Vec<u8> {
     sample_signed_query().encode_versioned()
+}
+
+/// Construct a versioned signed query with a valid wire shape but invalid signature.
+#[allow(dead_code)]
+pub fn sample_invalid_signature_query_bytes() -> Vec<u8> {
+    let signed = sample_signed_query();
+    let mut signature = signed.signature.0.payload().to_vec();
+    let last = signature
+        .last_mut()
+        .expect("sample query signature payload is non-empty");
+    *last ^= 0xFF;
+
+    iroha_data_model::query::SignedQuery {
+        signature: iroha_data_model::query::QuerySignature(SignatureOf::from_signature(
+            Signature::from_bytes(&signature),
+        )),
+        payload: signed.payload,
+    }
+    .encode_versioned()
 }
 
 /// Construct a bare signed-query payload used to assert legacy ingress rejection.
