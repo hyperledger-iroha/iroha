@@ -23,8 +23,8 @@ use iroha_data_model::{
         AuctionKind, FreezeNameRequestV1, GovernanceHookV1, NameAuctionStateV1, NameControllerV1,
         NameFrozenStateV1, NameRecordV1, NameSelectorError, NameSelectorV1, NameStatus,
         NameTombstoneStateV1, PaymentProofV1, PriceTierV1, RegisterNameRequestV1,
-        RenewNameRequestV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
-        TransferNameRequestV1, UpdateControllersRequestV1, fixtures,
+        RenewNameRequestV1, ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1,
+        SuffixStatus, TokenValue, TransferNameRequestV1, UpdateControllersRequestV1, fixtures,
     },
     transaction::Executable,
 };
@@ -441,6 +441,12 @@ fn default_namespace_policy(namespace: SnsNamespace, steward: &AccountId) -> Suf
         redemption_period_days: 60,
         referral_cap_bps: 0,
         reserved_labels: match namespace {
+            SnsNamespace::Domain => vec![ReservedNameV1 {
+                normalized_label: "treasury".to_owned(),
+                assigned_to: Some(steward.clone()),
+                release_at_ms: None,
+                note: "Protocol reserved domain label".to_owned(),
+            }],
             SnsNamespace::Dataspace => vec![iroha_data_model::sns::ReservedNameV1 {
                 normalized_label: RESERVED_UNIVERSAL_DATASPACE_ALIAS.to_owned(),
                 assigned_to: Some(steward.clone()),
@@ -743,6 +749,55 @@ fn registration_record(
     })
 }
 
+fn reserved_label_key(namespace: SnsNamespace, selector: &NameSelectorV1) -> &str {
+    let literal = selector.normalized_label();
+    match namespace {
+        SnsNamespace::AccountAlias => literal.split_once('@').map_or(literal, |(label, _)| label),
+        SnsNamespace::Domain => literal.split_once('.').map_or(literal, |(label, _)| label),
+        SnsNamespace::Dataspace => literal,
+    }
+}
+
+fn find_active_reserved_label<'a>(
+    namespace: SnsNamespace,
+    policy: &'a SuffixPolicyV1,
+    selector: &NameSelectorV1,
+    now_ms: u64,
+) -> Option<&'a ReservedNameV1> {
+    let literal = selector.normalized_label();
+    let label_key = reserved_label_key(namespace, selector);
+    policy.reserved_labels.iter().find(|reserved| {
+        reserved
+            .release_at_ms
+            .is_none_or(|release_at_ms| now_ms < release_at_ms)
+            && (reserved.normalized_label == literal || reserved.normalized_label == label_key)
+    })
+}
+
+fn enforce_reserved_label_assignment(
+    namespace: SnsNamespace,
+    policy: &SuffixPolicyV1,
+    selector: &NameSelectorV1,
+    owner: &AccountId,
+    now_ms: u64,
+) -> Result<(), SnsError> {
+    let Some(reserved) = find_active_reserved_label(namespace, policy, selector, now_ms) else {
+        return Ok(());
+    };
+
+    match &reserved.assigned_to {
+        Some(assignee) if assignee == owner => Ok(()),
+        Some(assignee) => Err(SnsError::Conflict(format!(
+            "label `{}` is reserved for `{assignee}`",
+            reserved.normalized_label
+        ))),
+        None => Err(SnsError::Conflict(format!(
+            "label `{}` is reserved",
+            reserved.normalized_label
+        ))),
+    }
+}
+
 fn is_reserved_universal_selector(selector: &NameSelectorV1) -> bool {
     selector.suffix_id == DATASPACE_ALIAS_SUFFIX_ID
         && selector.normalized_label() == RESERVED_UNIVERSAL_DATASPACE_ALIAS
@@ -842,11 +897,13 @@ pub fn register_name(
         metadata,
     } = request;
 
-    let (_namespace, canonical_selector) =
+    let (namespace, canonical_selector) =
         canonicalize_request_selector(selector, &state_transaction.nexus.dataspace_catalog)?;
     ensure_selector_is_mutable(&canonical_selector)?;
     let policy = policy_or_not_found(state_transaction.world(), canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, &owner, now_ms)?;
     let key = record_storage_key(&canonical_selector);
     if state_transaction
         .world
@@ -860,7 +917,6 @@ pub fn register_name(
         )));
     }
     let tier = pick_pricing_tier(&policy, &canonical_selector, pricing_class_hint)?;
-    let now_ms = state_transaction.block_unix_timestamp_ms();
     let record = registration_record(
         canonical_selector,
         owner,
@@ -1355,10 +1411,40 @@ mod tests {
     }
 
     #[test]
+    fn sns_namespace_from_path_accepts_account_alias_spelling_variants() {
+        assert_eq!(
+            SnsNamespace::from_path("account-alias").expect("hyphenated namespace"),
+            SnsNamespace::AccountAlias
+        );
+        assert_eq!(
+            SnsNamespace::from_path("account_alias").expect("underscored namespace"),
+            SnsNamespace::AccountAlias
+        );
+    }
+
+    #[test]
+    fn sns_namespace_from_path_rejects_unknown_value() {
+        let err = SnsNamespace::from_path("mystery").expect_err("unknown path must fail");
+        assert!(
+            err.to_string().contains("unknown SNS namespace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sns_namespace_from_suffix_id_rejects_unknown_value() {
+        let err = SnsNamespace::from_suffix_id(0xFFFF).expect_err("unknown suffix id must fail");
+        assert!(
+            err.to_string().contains("unsupported SNS suffix id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn active_dataspace_owner_reads_from_world_storage() {
         let catalog = dataspace_catalog();
         let selector = selector_for_dataspace_alias("banking").expect("selector");
-        let owner = owner();
+        let owner = another_owner();
         let address = AccountAddress::from_account_id(&owner).expect("account address");
         let record = NameRecordV1::new(
             selector.clone(),
@@ -1392,7 +1478,15 @@ mod tests {
         let view = world.view();
 
         assert!(policy_by_id(&view, ACCOUNT_ALIAS_SUFFIX_ID).is_some());
-        assert!(policy_by_id(&view, DOMAIN_NAME_SUFFIX_ID).is_some());
+        let domain_policy =
+            policy_by_id(&view, DOMAIN_NAME_SUFFIX_ID).expect("domain policy should be seeded");
+        assert!(
+            domain_policy
+                .reserved_labels
+                .iter()
+                .any(|entry| entry.normalized_label == "treasury"),
+            "default domain policy should keep the reserved treasury label"
+        );
         assert!(policy_by_id(&view, DATASPACE_ALIAS_SUFFIX_ID).is_some());
     }
 
@@ -1517,7 +1611,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         state.nexus.write().dataspace_catalog = dataspace_catalog();
-        let owner = owner();
+        let owner = another_owner();
 
         let record = apply_with_state_block(&state, |tx| {
             register_name(
@@ -1545,6 +1639,64 @@ mod tests {
 
         assert_eq!(fetched.owner, owner);
         assert_eq!(fetched.selector.label, "treasury@banking");
+    }
+
+    #[test]
+    fn register_name_rejects_duplicate_domain_registration() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "duplicate.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("first registration");
+
+        let err = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "duplicate.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect_err("duplicate registration must fail");
+
+        assert!(
+            err.to_string().contains("already registered"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1722,6 +1874,513 @@ mod tests {
 
         assert!(
             err.to_string().contains("domain.dataspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn register_domain_name_reserved_label_requires_steward() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = another_owner();
+        let steward = fixtures::steward_account();
+
+        let err = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "treasury.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect_err("non-steward should not claim reserved domain label");
+        assert!(
+            err.to_string().contains("reserved"),
+            "unexpected error: {err}"
+        );
+
+        let record = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "treasury.universal".to_owned(),
+                    },
+                    owner: steward.clone(),
+                    controllers: vec![controller(&steward)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&steward, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("steward should keep reserved domain label");
+        assert_eq!(record.owner, steward);
+    }
+
+    #[test]
+    fn find_active_reserved_domain_label_matches_label_key() {
+        let steward = fixtures::steward_account();
+        let policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let selector =
+            NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "treasury.universal").expect("selector");
+
+        let reserved = find_active_reserved_label(SnsNamespace::Domain, &policy, &selector, 0)
+            .expect("domain label reservation should match the label key");
+
+        assert_eq!(reserved.normalized_label, "treasury");
+    }
+
+    #[test]
+    fn find_active_reserved_domain_label_matches_fully_qualified_literal() {
+        let steward = fixtures::steward_account();
+        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        policy.reserved_labels = vec![ReservedNameV1 {
+            normalized_label: "ops.universal".to_owned(),
+            assigned_to: Some(steward),
+            release_at_ms: None,
+            note: "Explicit fully qualified reservation".to_owned(),
+        }];
+        let selector =
+            NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "ops.universal").expect("selector");
+
+        let reserved = find_active_reserved_label(SnsNamespace::Domain, &policy, &selector, 0)
+            .expect("fully qualified domain literal should match directly");
+
+        assert_eq!(reserved.normalized_label, "ops.universal");
+    }
+
+    #[test]
+    fn find_active_reserved_domain_label_honors_release_boundary() {
+        let steward = fixtures::steward_account();
+        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        policy.reserved_labels = vec![ReservedNameV1 {
+            normalized_label: "ops".to_owned(),
+            assigned_to: Some(steward),
+            release_at_ms: Some(10),
+            note: "Scheduled release".to_owned(),
+        }];
+        let selector =
+            NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "ops.universal").expect("selector");
+
+        assert!(
+            find_active_reserved_label(SnsNamespace::Domain, &policy, &selector, 9).is_some(),
+            "reservation should still be active before the release timestamp"
+        );
+        assert!(
+            find_active_reserved_label(SnsNamespace::Domain, &policy, &selector, 10).is_none(),
+            "reservation should stop matching at the release timestamp"
+        );
+    }
+
+    #[test]
+    fn enforce_reserved_label_assignment_rejects_unassigned_domain_label() {
+        let steward = fixtures::steward_account();
+        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        policy.reserved_labels = vec![ReservedNameV1 {
+            normalized_label: "custody".to_owned(),
+            assigned_to: None,
+            release_at_ms: None,
+            note: "Unassigned reserved label".to_owned(),
+        }];
+        let owner = another_owner();
+        let selector =
+            NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "custody.universal").expect("selector");
+
+        let err =
+            enforce_reserved_label_assignment(SnsNamespace::Domain, &policy, &selector, &owner, 0)
+                .expect_err("unassigned reserved labels must reject registration");
+
+        assert!(
+            err.to_string().contains("label `custody` is reserved"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn enforce_reserved_label_assignment_allows_matching_assignee() {
+        let steward = fixtures::steward_account();
+        let policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let selector =
+            NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "treasury.universal").expect("selector");
+
+        enforce_reserved_label_assignment(SnsNamespace::Domain, &policy, &selector, &steward, 0)
+            .expect("matching assignee should be allowed");
+    }
+
+    #[test]
+    fn register_domain_name_allows_released_reserved_label() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let steward = fixtures::steward_account();
+        let mut policy = {
+            let view = state.view();
+            policy_by_id(view.world(), DOMAIN_NAME_SUFFIX_ID).expect("seeded domain policy")
+        };
+        policy.reserved_labels = vec![ReservedNameV1 {
+            normalized_label: "treasury".to_owned(),
+            assigned_to: Some(steward),
+            release_at_ms: Some(0),
+            note: "Released reservation".to_owned(),
+        }];
+        state
+            .world
+            .smart_contract_state
+            .insert(policy_storage_key(DOMAIN_NAME_SUFFIX_ID), policy.encode());
+
+        let owner = another_owner();
+        let record = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "treasury.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("released reserved labels should allow registration");
+
+        assert_eq!(record.owner, owner);
+    }
+
+    #[test]
+    fn selector_for_namespace_literal_canonicalizes_domain_literal() {
+        let selector = selector_for_namespace_literal(
+            SnsNamespace::Domain,
+            "TreAsury.Universal",
+            &dataspace_catalog(),
+        )
+        .expect("domain selector");
+
+        assert_eq!(selector.normalized_label(), "treasury.universal");
+    }
+
+    #[test]
+    fn selector_for_namespace_literal_canonicalizes_account_alias_literal() {
+        let selector = selector_for_namespace_literal(
+            SnsNamespace::AccountAlias,
+            "Treasury@Banking",
+            &dataspace_catalog(),
+        )
+        .expect("account alias selector");
+
+        assert_eq!(selector.normalized_label(), "treasury@banking");
+    }
+
+    #[test]
+    fn selector_for_namespace_literal_canonicalizes_dataspace_literal() {
+        let selector = selector_for_namespace_literal(
+            SnsNamespace::Dataspace,
+            "Banking",
+            &dataspace_catalog(),
+        )
+        .expect("dataspace selector");
+
+        assert_eq!(selector.normalized_label(), "banking");
+    }
+
+    #[test]
+    fn selector_for_namespace_literal_rejects_bare_domain_literal() {
+        let err =
+            selector_for_namespace_literal(SnsNamespace::Domain, "treasury", &dataspace_catalog())
+                .expect_err("bare domain literal must fail");
+
+        assert!(
+            err.to_string().contains("domain.dataspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn reserved_label_key_extracts_account_alias_local_label() {
+        let selector = NameSelectorV1 {
+            version: NameSelectorV1::VERSION,
+            suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+            label: "treasury@banking".to_owned(),
+        };
+
+        assert_eq!(
+            reserved_label_key(SnsNamespace::AccountAlias, &selector),
+            "treasury"
+        );
+    }
+
+    #[test]
+    fn reserved_label_key_keeps_dataspace_literal() {
+        let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, "banking").expect("selector");
+
+        assert_eq!(
+            reserved_label_key(SnsNamespace::Dataspace, &selector),
+            "banking"
+        );
+    }
+
+    #[test]
+    fn register_name_rejects_unknown_suffix_id() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let owner = owner();
+
+        let err = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: 0xFFFF,
+                        label: "mystery".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect_err("unknown suffix ids must be rejected");
+
+        assert!(
+            err.to_string().contains("unsupported SNS suffix id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn update_name_controllers_rejects_empty_controller_set() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "ops.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        let err = apply_with_state_block(&state, |tx| {
+            update_name_controllers(
+                tx,
+                SnsNamespace::Domain,
+                "ops.universal",
+                UpdateControllersRequestV1 {
+                    controllers: Vec::new(),
+                },
+            )
+        })
+        .expect_err("empty controllers must fail");
+
+        assert!(
+            err.to_string().contains("at least one controller"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_name_lease_expiry_rejects_past_timestamp() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "leasepast.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        let err = apply_with_state_block(&state, |tx| {
+            set_name_lease_expiry(tx, SnsNamespace::Domain, "leasepast.universal", 0)
+        })
+        .expect_err("past expiry must fail");
+
+        assert!(
+            err.to_string().contains("lease_expiry_ms must be greater"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_name_lease_expiry_updates_lifecycle_windows() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "leasefuture.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        let future_expiry_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_millis() as u64
+            + 60_000;
+        let record = apply_with_state_block(&state, |tx| {
+            set_name_lease_expiry(
+                tx,
+                SnsNamespace::Domain,
+                "leasefuture.universal",
+                future_expiry_ms,
+            )
+        })
+        .expect("lease expiry update");
+
+        assert_eq!(record.expires_at_ms, future_expiry_ms);
+        assert_eq!(
+            record.grace_expires_at_ms,
+            future_expiry_ms + 30 * MS_PER_DAY
+        );
+        assert_eq!(
+            record.redemption_expires_at_ms,
+            future_expiry_ms + 90 * MS_PER_DAY
+        );
+    }
+
+    #[test]
+    fn unfreeze_name_rejects_active_record() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "activeunfreeze.universal".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        let err = apply_with_state_block(&state, |tx| {
+            unfreeze_name(
+                tx,
+                SnsNamespace::Domain,
+                "activeunfreeze.universal",
+                GovernanceHookV1 {
+                    proposal_id: "proposal-1".into(),
+                    council_vote_hash: Json::from("council"),
+                    dao_vote_hash: Json::from("dao"),
+                    steward_ack: Json::from("steward"),
+                    guardian_clearance: Some(Json::from("guardian")),
+                },
+            )
+        })
+        .expect_err("active record must not unfreeze");
+
+        assert!(
+            err.to_string().contains("not currently frozen"),
             "unexpected error: {err}"
         );
     }
