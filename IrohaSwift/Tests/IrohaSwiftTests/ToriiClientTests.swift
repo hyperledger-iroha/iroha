@@ -9281,6 +9281,7 @@ id: 88
 
         XCTAssertEqual(event.hash, "deadbeef")
         XCTAssertEqual(event.status, "Applied")
+        XCTAssertEqual(event.blockHeight, 169)
         XCTAssertGreaterThanOrEqual(callCount, 2)
     }
 

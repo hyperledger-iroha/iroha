@@ -9473,11 +9473,13 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         public let kind: String
         public let content: String?
         public let rejectionReason: String?
+        public let blockHeight: UInt64?
 
         private enum CodingKeys: String, CodingKey {
             case kind
             case content
             case rejectionReason = "rejection_reason"
+            case blockHeight = "block_height"
         }
 
         public var state: PipelineTransactionState {
@@ -9604,7 +9606,7 @@ public struct ToriiPipelineTransactionEvent: Decodable, Sendable {
             event: snapshot.kind,
             hash: snapshot.content.hash.isEmpty ? hashHex : snapshot.content.hash,
             status: snapshot.content.status.kind,
-            blockHeight: nil,
+            blockHeight: snapshot.content.status.blockHeight,
             dataspaceId: nil,
             laneId: nil,
             eventName: nil,
