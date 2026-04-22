@@ -238,10 +238,40 @@ async fn space_directory_manifest_endpoint_returns_records() {
     assert_eq!(resp.status(), StatusCode::OK);
     let filtered = resp.into_body().collect().await.unwrap().to_bytes();
     let filtered_doc: Value = json::from_slice(&filtered).expect("filter payload");
+    assert_eq!(filtered_doc["total"], Value::from(0));
     assert_eq!(
         filtered_doc["manifests"].as_array().unwrap().len(),
         0,
         "filter removes non-matching dataspaces"
+    );
+
+    // Configured dataspace with no explicit lane route still falls back to fanout filtering.
+    let app = torii.api_router_for_tests();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
+                    dataspace.as_u64()
+                ))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let filtered_existing = resp.into_body().collect().await.unwrap().to_bytes();
+    let filtered_existing_doc: Value =
+        json::from_slice(&filtered_existing).expect("configured dataspace payload");
+    assert_eq!(filtered_existing_doc["total"], Value::from(1));
+    assert_eq!(
+        filtered_existing_doc["manifests"].as_array().unwrap().len(),
+        1,
+        "configured dataspace filter preserves the matching manifest"
+    );
+    assert_eq!(
+        filtered_existing_doc["manifests"][0]["manifest_hash"],
+        Value::from(expected_hash.as_str())
     );
 
     // Status filter (active) yields the entry, limit/offset paginate.
@@ -266,6 +296,21 @@ async fn space_directory_manifest_endpoint_returns_records() {
         1,
         "status=Active returns bindings"
     );
+
+    // Invalid status values are rejected by the manifest query parser.
+    let app = torii.api_router_for_tests();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/space-directory/uaids/{uaid}/manifests?status=DefinitelyNotAStatus"
+                ))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Build a revoked + second manifest world to test inactive/pagination.
     let cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
